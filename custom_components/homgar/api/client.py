@@ -228,3 +228,55 @@ class HomGarClient:
             if data.get("code") != 0:
                 raise HomGarApiError(f"Set device state API error: {data.get('msg')}")
             return True
+
+    async def control_work_mode(
+        self,
+        mid: int,
+        addr: int,
+        device_name: str,
+        product_key: str,
+        port: int,
+        mode: int,
+        duration: int,
+    ) -> str | None:
+        """Open or close a valve zone on a hub sub-device.
+
+        Args:
+            mid: Hub device ID.
+            addr: Sub-device address (e.g. 1 for the first RF valve).
+            device_name: Hub deviceName (MAC-based identifier).
+            product_key: Hub productKey.
+            port: Zone/port number (1-based).
+            mode: 1 = open, 0 = close.
+            duration: Run time in seconds (ignored when mode=0).
+
+        Returns:
+            The raw state payload string returned by the API (e.g. "11#...") so
+            the caller can optimistically update HA state, or None if the API
+            does not include a state in its response.
+        """
+        await self.ensure_logged_in()
+        url = f"{self._base_url}/app/device/controlWorkMode"
+        payload = {
+            "mid": mid,
+            "addr": addr,
+            "deviceName": device_name,
+            "productKey": product_key,
+            "port": port,
+            "mode": mode,
+            "duration": duration,
+        }
+        _LOGGER.debug("API call: control_work_mode URL=%s payload=%s", url, payload)
+        async with self._session.post(url, headers=self._auth_headers(), json=payload) as resp:
+            if resp.status != 200:
+                raise HomGarApiError(f"controlWorkMode HTTP {resp.status}")
+            data = await resp.json()
+        _LOGGER.debug("API response: control_work_mode data=%s", data)
+        if data.get("code") != 0:
+            raise HomGarApiError(f"controlWorkMode failed: {data}")
+        resp_data = data.get("data")
+        if isinstance(resp_data, dict):
+            return resp_data.get("state")
+        if isinstance(resp_data, str):
+            return resp_data
+        return None
