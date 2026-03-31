@@ -15,7 +15,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, MODEL_VALVE_HUB, MODEL_VALVE_213, MODEL_VALVE_245
 from .coordinator import HomGarCoordinator
 from .homgar_api import decode_valve_hub, decode_htv213frf_valve
-# build_valve_open_command / build_valve_close_command retained in homgar_api for reference
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -201,8 +200,8 @@ class HomGarValveEntity(CoordinatorEntity, ValveEntity):
     def _apply_response_state(self, raw_state: str | None) -> None:
         """Decode the state string returned by controlWorkMode and inject it
         into the coordinator data immediately, bypassing the poll cycle.
-        The API often returns a stale cached payload on the next poll so this
-        ensures HA reflects the actual device state without delay."""
+        The API returns the post-command hub state, so this reflects the actual
+        device state without waiting for the next poll."""
         if not raw_state:
             return
         model = self._sensor_info.get("model", "")
