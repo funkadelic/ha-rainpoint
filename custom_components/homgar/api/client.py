@@ -62,7 +62,10 @@ class HomGarClient:
         self._refresh_token = data.get(CONF_REFRESH_TOKEN)
         ts = data.get(CONF_TOKEN_EXPIRES_AT)
         if ts is not None:
-            self._token_expires_at = datetime.fromtimestamp(ts, tz=timezone.utc)
+            try:
+                self._token_expires_at = datetime.fromtimestamp(ts, tz=timezone.utc)
+            except (TypeError, ValueError, OSError):
+                self._token_expires_at = None
 
     def export_tokens(self) -> dict:
         """Export current token state as a dict for config entry updates."""
