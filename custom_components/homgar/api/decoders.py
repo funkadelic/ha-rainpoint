@@ -162,7 +162,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
     Known DP IDs:
       0x18              → hub online state (type 0xDC enforced, value 0x01=online)
       0x18+N (1≤N≤8)   → zone N open state (type 0xD8, value 0x01=open, 0x00=closed)
-      0x24+N (1≤N≤8)   → zone N duration in seconds (type 0xAD, 2-byte big-endian)
+      0x24+N (1≤N≤8)   → zone N duration in seconds (type 0xAD, 2-byte little-endian)
 
     Only DPs with type 0xD8 are treated as zone state records; other types on
     zone-range DP IDs (e.g. 0x1D/0x1E with type 0x20) are schedule fields, not
@@ -191,7 +191,9 @@ def _decode_htv213frf_hex(raw: str) -> dict:
             val_len = _TYPE_LENGTHS.get(type_byte)
             if val_len is not None and i + 2 + val_len <= len(b):
                 val_bytes = b[i + 2 : i + 2 + val_len]
-                dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, "big"))
+                # Duration DPs (0xAD type) are little-endian; all others big-endian
+                endian = "little" if type_byte == 0xAD else "big"
+                dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, endian))
                 i += 2 + val_len
             else:
                 _LOGGER.debug(
