@@ -248,12 +248,15 @@ class HomGarClient:
             product_key: Hub productKey.
             port: Zone/port number (1-based).
             mode: 1 = open, 0 = close.
-            duration: Run time in seconds (ignored when mode=0).
+            duration: Run time in seconds. Pass 0 when mode=0 — the device ignores
+                this field on close commands, but it must still be present in the request.
 
         Returns:
-            The raw state payload string returned by the API (e.g. "11#...") so
-            the caller can optimistically update HA state, or None if the API
-            does not include a state in its response.
+            The value of ``data["data"]`` if it is a string, or
+            ``data["data"]["state"]`` if ``data["data"]`` is a dict. Returns None
+            if neither condition produces a value (including when the dict response
+            omits the "state" key). Callers should treat None as "no optimistic
+            update available" rather than an error.
         """
         await self.ensure_logged_in()
         url = f"{self._base_url}/app/device/controlWorkMode"
@@ -276,7 +279,17 @@ class HomGarClient:
             raise HomGarApiError(f"controlWorkMode failed: {data}")
         resp_data = data.get("data")
         if isinstance(resp_data, dict):
-            return resp_data.get("state")
+            state = resp_data.get("state")
+            if state is None:
+                _LOGGER.warning(
+                    "controlWorkMode: 'data' dict has no 'state' key; full data: %s", resp_data
+                )
+            return state
         if isinstance(resp_data, str):
             return resp_data
+        if resp_data is not None:
+            _LOGGER.warning(
+                "controlWorkMode: unexpected 'data' type %s; value: %s",
+                type(resp_data).__name__, resp_data,
+            )
         return None

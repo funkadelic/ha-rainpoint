@@ -159,9 +159,9 @@ def _decode_htv213frf_hex(raw: str) -> dict:
       0xB7, 0x9F → 4 bytes  (schedule/timer extended fields)
 
     Known DP IDs:
-      0x18          → hub online state (type 0xDC, value 0x01=online)
-      0x18+N (N≥1)  → zone N open state (type 0xD8, value 0x01=open, 0x00=closed)
-      0x24+N (N≥1)  → zone N duration in seconds (type 0xAD, 2-byte big-endian)
+      0x18              → hub online state (type 0xDC enforced, value 0x01=online)
+      0x18+N (1≤N≤8)   → zone N open state (type 0xD8, value 0x01=open, 0x00=closed)
+      0x24+N (1≤N≤8)   → zone N duration in seconds (type 0xAD, 2-byte big-endian)
 
     Only DPs with type 0xD8 are treated as zone state records; other types on
     zone-range DP IDs (e.g. 0x1D/0x1E with type 0x20) are schedule fields, not
@@ -179,6 +179,8 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         # Scan the byte stream for DP records.
         # Unknown type bytes cause a 1-byte advance so parsing re-aligns on the
         # next potential DP record without skipping real data.
+        # If a dp_id appears more than once (e.g. after misalignment recovery),
+        # the last occurrence wins — this is intentional, not an oversight.
         dp_map: dict[int, tuple[int, int]] = {}  # dp_id → (type_byte, value_int)
         i = 0
         while i < len(b) - 2:
@@ -192,12 +194,23 @@ def _decode_htv213frf_hex(raw: str) -> dict:
             else:
                 i += 1
 
-        # Hub online: DP 0x18, type 0xDC, value 0x01 = online
+        # Hub online: DP 0x18, type 0xDC (enforced), value 0x01 = online
         hub_online = False
         hub_state_raw = None
         if 0x18 in dp_map:
-            _, hub_state_raw = dp_map[0x18]
-            hub_online = hub_state_raw == 0x01
+            hub_type, hub_state_raw = dp_map[0x18]
+            if hub_type == 0xDC:
+                hub_online = hub_state_raw == 0x01
+            else:
+                _LOGGER.warning(
+                    "HTV213FRF: hub DP 0x18 has unexpected type 0x%02X (expected 0xDC); ignoring hub state",
+                    hub_type,
+                )
+        else:
+            _LOGGER.warning(
+                "HTV213FRF: hub online DP (0x18) absent from payload %r; defaulting hub_online=False",
+                raw,
+            )
 
         # Zone states: DP 0x18+N with type 0xD8 only.
         # Other types on zone-range IDs are schedule/timer fields, not zone states.
@@ -239,7 +252,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         }
 
     except Exception as e:
-        _LOGGER.error("HTV213FRF decoder error: %s", e)
+        _LOGGER.error("HTV213FRF decoder error for payload %r: %s", raw, e, exc_info=True)
         return {
             "type": "valve_hub",
             "rssi_dbm": 0,
