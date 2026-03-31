@@ -18,7 +18,8 @@ def decode_htv213frf_valve(raw: str) -> dict:
     Decode HTV213FRF/HTV245FRF valve hub payload.
     
     These devices support two formats:
-    1. Hex format (11#...) - uses custom TLV structure
+    1. Hex format (11#...) - flat [dp_id][type_byte][value...] stream; value
+       length is inferred from the type byte (not a TLV with explicit length)
     2. ASCII format (1,-84,1;...) - uses comma-separated values
     """
     try:
@@ -31,7 +32,7 @@ def decode_htv213frf_valve(raw: str) -> dict:
             raise ValueError(f"Unexpected payload format: {raw}")
             
     except Exception as e:
-        _LOGGER.error("HTV213FRF decoder error: %s", e)
+        _LOGGER.error("HTV213FRF router error for payload %r: %s", raw, e, exc_info=True)
         return {
             "type": "valve_hub",
             "rssi_dbm": 0,
@@ -144,7 +145,7 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
         return result
         
     except Exception as e:
-        _LOGGER.error("HTV213FRF ASCII decoder error: %s", e)
+        _LOGGER.error("HTV213FRF ASCII decoder error for payload %r: %s", raw, e, exc_info=True)
         raise
 
 
@@ -177,13 +178,14 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         _LOGGER.debug(debug_with_version("HTV213FRF hex raw bytes: %s"), b)
 
         # Scan the byte stream for DP records.
-        # Unknown type bytes cause a 1-byte advance so parsing re-aligns on the
-        # next potential DP record without skipping real data.
+        # Unknown type bytes cause a 1-byte advance so parsing can re-align on
+        # the next potential DP record. Note: a misaligned multi-byte-value skip
+        # can still bypass trailing records — re-alignment is best-effort only.
         # If a dp_id appears more than once (e.g. after misalignment recovery),
         # the last occurrence wins — this is intentional, not an oversight.
-        dp_map: dict[int, tuple[int, int]] = {}  # dp_id → (type_byte, value_int)
+        dp_map: dict[int, tuple[int, int]] = {}  # dp_id → (type_byte, value_int); value_int is big-endian, up to 4 bytes
         i = 0
-        while i < len(b) - 2:
+        while i < len(b) - 2:  # need at least 3 bytes: dp_id + type_byte + 1 value byte
             dp_id = b[i]
             type_byte = b[i + 1]
             val_len = _TYPE_LENGTHS.get(type_byte)
@@ -192,6 +194,10 @@ def _decode_htv213frf_hex(raw: str) -> dict:
                 dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, "big"))
                 i += 2 + val_len
             else:
+                _LOGGER.debug(
+                    "HTV213FRF: unknown type byte 0x%02X at offset %d; advancing 1 byte for re-alignment",
+                    type_byte, i,
+                )
                 i += 1
 
         # Hub online: DP 0x18, type 0xDC (enforced), value 0x01 = online
@@ -252,16 +258,8 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         }
 
     except Exception as e:
-        _LOGGER.error("HTV213FRF decoder error for payload %r: %s", raw, e, exc_info=True)
-        return {
-            "type": "valve_hub",
-            "rssi_dbm": 0,
-            "raw_bytes": [],
-            "zones": {},
-            "tlv_raw": {},
-            "decoder": "htv213frf_error",
-            "error": str(e)
-        }
+        _LOGGER.error("HTV213FRF hex decoder error for payload %r: %s", raw, e, exc_info=True)
+        raise
 
 
 def decode_moisture_full(raw: str) -> dict:

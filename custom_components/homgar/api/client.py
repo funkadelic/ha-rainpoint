@@ -292,4 +292,6 @@ class HomGarClient:
                 "controlWorkMode: unexpected 'data' type %s; value: %s",
                 type(resp_data).__name__, resp_data,
             )
+        else:
+            _LOGGER.debug("controlWorkMode: API returned code=0 but no 'data' key; optimistic update skipped")
         return None
