@@ -233,13 +233,13 @@ def _decode_htv213frf_hex(raw: str) -> dict:
                 continue
             dur_val = dp_map.get(dur_dp, (None, 0))[1]
             zones[zone_num] = {
-                "open": state_val == 0x01,
+                "open": state_val != 0x00,  # any non-zero value = open/running
                 "duration_seconds": dur_val,
                 "state_raw": state_val,
             }
             _LOGGER.info(
                 "HTV213FRF Zone %d: open=%s duration=%ds state_raw=0x%02X",
-                zone_num, state_val == 0x01, dur_val, state_val,
+                zone_num, state_val != 0x00, dur_val, state_val,
             )
 
         _LOGGER.debug(

@@ -14,7 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MODEL_VALVE_HUB, MODEL_VALVE_213, MODEL_VALVE_245
 from .coordinator import HomGarCoordinator
-from .homgar_api import decode_valve_hub
+from .homgar_api import decode_valve_hub, decode_htv213frf_valve
 # build_valve_open_command / build_valve_close_command retained in homgar_api for reference
 
 _LOGGER = logging.getLogger(__name__)
@@ -205,7 +205,11 @@ class HomGarValveEntity(CoordinatorEntity, ValveEntity):
         ensures HA reflects the actual device state without delay."""
         if not raw_state:
             return
-        decoded = decode_valve_hub(raw_state)
+        model = self._sensor_info.get("model", "")
+        if model in (MODEL_VALVE_213, MODEL_VALVE_245):
+            decoded = decode_htv213frf_valve(raw_state)
+        else:
+            decoded = decode_valve_hub(raw_state)
         if not decoded:
             return
         current = dict(self.coordinator.data)
