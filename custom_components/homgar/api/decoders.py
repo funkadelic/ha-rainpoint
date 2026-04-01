@@ -482,7 +482,12 @@ def _decode_moisture_full_hex(raw: str) -> dict:
 def decode_hws019wrf_v2(raw: str) -> dict:
     """
     Decode HWS019WRF-V2 (Display Hub) CSV/semicolon payload.
-    Example: '1,0,1;788(788/777/1),68(68/64/1),P=9685(9684/9684/1),'
+    Example: '1,0,1;707(707/694/1),42(42/39/1),P=9709(9709/9701/1),'
+
+    Format: current_value(current/min/max/count)
+    - 707 = current temperature (70.7°F)
+    - 42 = current humidity (42%)
+    - P=9709 = current pressure (970.9 mb)
     """
     _LOGGER.debug("decode_hws019wrf_v2 called with raw: %r", raw)
     try:
@@ -495,12 +500,21 @@ def decode_hws019wrf_v2(raw: str) -> dict:
                 item = item.strip()
                 if not item:
                     continue
-                if '(' in item:
-                    key, val = item.split('(', 1)
-                    readings[key.strip()] = val.strip(')')
-                elif '=' in item:
-                    key, val = item.split('=', 1)
-                    readings[key.strip()] = val.strip()
+                if '=' in item:
+                    # Pressure format: P=9709(9709/9701/1)
+                    key, rest = item.split('=', 1)
+                    key = key.strip()
+                    if '(' in rest:
+                        readings[key] = rest.split('(')[0].strip()
+                    else:
+                        readings[key] = rest.strip()
+                elif '(' in item:
+                    # Temperature/Humidity: 707(707/694/1) — extract current value
+                    current_value = item.split('(')[0].strip()
+                    if 'temp' not in readings:
+                        readings['temp'] = current_value
+                    elif 'humidity' not in readings:
+                        readings['humidity'] = current_value
         result = {
             "type": "hws019wrf_v2",
             "flags": flags,
