@@ -18,7 +18,8 @@ def decode_htv213frf_valve(raw: str) -> dict:
     Decode HTV213FRF/HTV245FRF valve hub payload.
     
     These devices support two formats:
-    1. Hex format (11#...) - uses custom TLV structure
+    1. Hex format (11#...) - flat [dp_id][type_byte][value...] stream; value
+       length is inferred from the type byte (not a TLV with explicit length)
     2. ASCII format (1,-84,1;...) - uses comma-separated values
     """
     try:
@@ -31,7 +32,7 @@ def decode_htv213frf_valve(raw: str) -> dict:
             raise ValueError(f"Unexpected payload format: {raw}")
             
     except Exception as e:
-        _LOGGER.error("HTV213FRF decoder error: %s", e)
+        _LOGGER.error("HTV213FRF router error for payload %r: %s", raw, e, exc_info=True)
         return {
             "type": "valve_hub",
             "rssi_dbm": 0,
@@ -144,151 +145,123 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
         return result
         
     except Exception as e:
-        _LOGGER.error("HTV213FRF ASCII decoder error: %s", e)
+        _LOGGER.error("HTV213FRF ASCII decoder error for payload %r: %s", raw, e, exc_info=True)
         raise
 
 
 def _decode_htv213frf_hex(raw: str) -> dict:
     """
-    Decode HTV213FRF hex format payload.
-    
-    Format: 11#17E1CE0019D8001AD8001D201E2021B700000000...
-    Uses custom TLV structure with fixed-length records.
+    Decode HTV213FRF/HTV245FRF hex format payload (11# prefix).
+
+    The payload is a flat sequence of [dp_id][type_byte][value_bytes...] records.
+    The type byte determines value length:
+      0xDC, 0xD8 → 1 byte   (hub state, zone open/close state)
+      0x20, 0xAD → 2 bytes  (timer config, zone duration in seconds)
+      0xB7, 0x9F → 4 bytes  (schedule/timer extended fields)
+
+    Known DP IDs:
+      0x18              → hub online state (type 0xDC enforced, value 0x01=online)
+      0x18+N (1≤N≤8)   → zone N open state (type 0xD8, value 0x01=open, 0x00=closed)
+      0x24+N (1≤N≤8)   → zone N duration in seconds (type 0xAD, 2-byte little-endian)
+
+    Only DPs with type 0xD8 are treated as zone state records; other types on
+    zone-range DP IDs (e.g. 0x1D/0x1E with type 0x20) are schedule fields, not
+    active zone states.
     """
     from ..const import debug_with_version
-    
+
+    # Type byte → value byte count for known HomGar flat-DP types.
+    _TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
+
     try:
         b = _parse_homgar_payload(raw)
         _LOGGER.debug(debug_with_version("HTV213FRF hex raw bytes: %s"), b)
-        
-        zones = {}
-        
-        # Try to parse as standard TLV first (for debugging)
-        try:
-            tlv = _parse_tlv_payload(raw)
-            _LOGGER.info(debug_with_version("HTV213FRF TLV entries: %s"), {
-                f"0x{dp:02X}": (f"0x{type_byte:02X}", f"0x{value_int:02X}" if value_int < 256 else value_int, raw_bytes.hex())
-                for dp, (type_byte, value_int, raw_bytes) in tlv.items()
-            })
-        except Exception as e:
-            _LOGGER.info(debug_with_version("HTV213FRF TLV parsing failed: %s"), e)
-            tlv = {}
-        
-        # If standard TLV worked, use it
-        if tlv:
-            return decode_valve_hub(raw)
-        
-        # Custom HTV213FRF parsing based on observed patterns
-        # The payload seems to use fixed-length records:
-        # [zone_id][state][0x00][duration_high][duration_low][0x00][0x00]
-        
-        # Look for zone patterns in the raw bytes
-        # Based on the user's payload, zones appear to start at specific positions
-        if len(b) >= 20:  # Minimum length for zone data
-            # Try to extract zones from the pattern
-            # Zone 1: bytes 4-9 (19 D8 00 1A D8 00)
-            # Zone 2: bytes 10-15 (1D 20 1E 20 21 B7) - this looks different
-            
-            # Let's try a different approach - look for repeated patterns
-            # The pattern seems to be: [zone_id][state][0x00][duration][0x00][0x00]
-            
-            zone_data = []
-            # Scan through bytes looking for potential zone patterns
-            # The pattern [byte][byte][0x00][byte][byte][0x00] can match non-zone data
-            # Limit to first 2 patterns found, as most valve timers have 2 zones
-            # (HTV213FRF = 2 zones, HTV245FRF = 4-8 zones)
-            max_zones = 2  # Conservative limit to avoid false positives
-            i = 4  # Start after the header
-            
-            while i < len(b) - 6 and len(zone_data) < max_zones:
-                zone_id = b[i]
-                state = b[i + 1]
-                if b[i + 2] == 0x00 and b[i + 5] == 0x00:  # Pattern match
-                    duration = (b[i + 3] << 8) | b[i + 4]
-                    zone_data.append({
-                        'zone_id': zone_id,
-                        'state': state,
-                        'duration': duration,
-                        'position': i
-                    })
-                    _LOGGER.debug("Found zone pattern at position %d: zone_id=%d, state=%d, duration=%d", i, zone_id, state, duration)
-                    i += 6
-                else:
-                    i += 1
-            
-            # Convert zone data to expected format
-            # Map raw zone IDs to sequential zone numbers
-            zone_mapping = {}
-            sequential_zone = 1
-            
-            for zone in zone_data:
-                zone_num = sequential_zone  # Use sequential numbering
-                zone_mapping[sequential_zone] = {
-                    'raw_zone_id': zone['zone_id'],
-                    'open': zone['state'] != 0x00,
-                    'duration_seconds': zone['duration'],
-                    'raw_position': zone['position']
-                }
-                _LOGGER.info("HTV213FRF Zone %d (raw ID %d): state=%d, duration=%d, position=%d", 
-                           sequential_zone, zone['zone_id'], zone['state'], zone['duration'], zone['position'])
-                sequential_zone += 1
-            
-            zones = zone_mapping
-        
-        # Extract hub online state (looking for 0x18 pattern)
-        hub_online = False
-        _LOGGER.info(debug_with_version("HTV213FRF checking hub state - len(b)=%d, b[26]=0x%02X, b[27]=0x%02X"), 
-                     len(b), b[26] if len(b) > 26 else None, b[27] if len(b) > 27 else None)
-        
-        if len(b) >= 28 and b[26] == 0x18:
-            # Standard pattern: 0x18 at position 26
-            # For HTV213FRF, position 27 might use different values than 0x01
-            # Let's try multiple possibilities for "online"
-            if b[27] == 0x01:
-                hub_online = True
-                _LOGGER.info("Hub state (0x18 pattern, 0x01): %s (byte 27: 0x%02X)", hub_online, b[27])
-            elif b[27] == 0xDC:
-                # Based on user's payload, 0xDC might mean online for HTV213FRF
-                hub_online = True
-                _LOGGER.info("Hub state (0x18 pattern, 0xDC): %s (byte 27: 0x%02X)", hub_online, b[27])
+
+        # Scan the byte stream for DP records.
+        # Unknown type bytes cause a 1-byte advance so parsing can re-align on
+        # the next potential DP record. Note: a misaligned multi-byte-value skip
+        # can still bypass trailing records — re-alignment is best-effort only.
+        # If a dp_id appears more than once (e.g. after misalignment recovery),
+        # the last occurrence wins — this is intentional, not an oversight.
+        dp_map: dict[int, tuple[int, int]] = {}  # dp_id → (type_byte, value_int); value_int is big-endian, up to 4 bytes
+        i = 0
+        while i < len(b) - 2:  # need at least 3 bytes: dp_id + type_byte + 1 value byte
+            dp_id = b[i]
+            type_byte = b[i + 1]
+            val_len = _TYPE_LENGTHS.get(type_byte)
+            if val_len is not None and i + 2 + val_len <= len(b):
+                val_bytes = b[i + 2 : i + 2 + val_len]
+                # Duration DPs (0xAD type) are little-endian; all others big-endian
+                endian = "little" if type_byte == 0xAD else "big"
+                dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, endian))
+                i += 2 + val_len
             else:
-                hub_online = False
-                _LOGGER.info("Hub state (0x18 pattern, other): %s (byte 27: 0x%02X)", hub_online, b[27])
+                _LOGGER.debug(
+                    "HTV213FRF: unknown type byte 0x%02X at offset %d; advancing 1 byte for re-alignment",
+                    type_byte, i,
+                )
+                i += 1
+
+        # Hub online: DP 0x18, type 0xDC (enforced), value 0x01 = online
+        hub_online = False
+        hub_state_raw = None
+        if 0x18 in dp_map:
+            hub_type, hub_state_raw = dp_map[0x18]
+            if hub_type == 0xDC:
+                hub_online = hub_state_raw == 0x01
+            else:
+                _LOGGER.warning(
+                    "HTV213FRF: hub DP 0x18 has unexpected type 0x%02X (expected 0xDC); ignoring hub state",
+                    hub_type,
+                )
         else:
-            _LOGGER.warning("HTV213FRF: Could not determine hub state from payload")
-        
-        result = {
+            _LOGGER.warning(
+                "HTV213FRF: hub online DP (0x18) absent from payload %r; defaulting hub_online=False",
+                raw,
+            )
+
+        # Zone states: DP 0x18+N with type 0xD8 only.
+        # Other types on zone-range IDs are schedule/timer fields, not zone states.
+        # Zone durations: DP 0x24+N with type 0xAD (2-byte big-endian seconds).
+        zones: dict[int, dict] = {}
+        for zone_num in range(1, 9):
+            state_dp = 0x18 + zone_num
+            dur_dp = 0x24 + zone_num
+            if state_dp not in dp_map:
+                continue
+            state_type, state_val = dp_map[state_dp]
+            if state_type != 0xD8:
+                # Not a zone-state DP (schedule/timer field — skip)
+                continue
+            dur_val = dp_map.get(dur_dp, (None, 0))[1]
+            zones[zone_num] = {
+                "open": bool(state_val & 0x01),  # LSB: 1=open, 0=closed (device uses 0x21/0x20, not 0x01/0x00)
+                "duration_seconds": dur_val,
+                "state_raw": state_val,
+            }
+            _LOGGER.info(
+                "HTV213FRF Zone %d: open=%s duration=%ds state_raw=0x%02X",
+                zone_num, bool(state_val & 0x01), dur_val, state_val,
+            )
+
+        _LOGGER.debug(
+            debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s"),
+            len(zones), hub_online,
+        )
+        return {
             "type": "valve_hub",
             "rssi_dbm": _extract_rssi(b) if len(b) > 1 else 0,
             "raw_bytes": b,
             "zones": zones,
-            "tlv_raw": tlv,
-            "hub_online": hub_online,
-            "hub_state_raw": b[27] if len(b) > 27 else None,
-            "decoder": "htv213frf_custom",
-            "debug_info": {
-                "payload_length": len(b),
-                "hex_payload": raw,
-                "tlv_entries": len(tlv),
-                "zones_found": len(zones),
-                "zone_data": zone_data if 'zone_data' in locals() else []
-            }
-        }
-        
-        _LOGGER.debug(debug_with_version("HTV213FRF decoded: %d zones, hub_online=%s"), len(zones), hub_online)
-        return result
-        
-    except Exception as e:
-        _LOGGER.error("HTV213FRF decoder error: %s", e)
-        return {
-            "type": "valve_hub",
-            "rssi_dbm": 0,
-            "raw_bytes": [],
-            "zones": {},
             "tlv_raw": {},
-            "decoder": "htv213frf_error",
-            "error": str(e)
+            "hub_online": hub_online,
+            "hub_state_raw": hub_state_raw,
+            "decoder": "htv213frf_hex",
         }
+
+    except Exception as e:
+        _LOGGER.error("HTV213FRF hex decoder error for payload %r: %s", raw, e, exc_info=True)
+        raise
 
 
 def decode_moisture_full(raw: str) -> dict:

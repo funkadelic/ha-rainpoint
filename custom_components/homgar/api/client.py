@@ -284,7 +284,6 @@ class HomGarClient:
             )
         elif code != 0:
             raise HomGarApiError(f"controlWorkMode failed: {data}")
-
         resp_data = data.get("data")
         if isinstance(resp_data, dict):
             state = resp_data.get("state")
