@@ -30,35 +30,52 @@ def _parse_homgar_payload(raw: str) -> bytes:
 
 def _parse_tlv_payload(raw: str) -> dict:
     """
-    Parse TLV (Type-Length-Value) payload.
-    
+    Parse TLV payload for valve hub (11# prefix).
+
+    Format: DP_ID (1 byte) + TYPE (1 byte) + VALUE (variable length based on type).
+    There is no explicit length byte; the type byte determines the value width.
+
     Returns a dictionary mapping DP IDs to (type_byte, value_int, raw_bytes).
     """
+    # Type byte → value width in bytes
+    _TYPE_WIDTHS = {
+        0xD8: 1,   # zone state
+        0xDC: 1,   # hub state
+        0xAD: 2,   # zone duration (seconds, little-endian)
+        0x20: 2,   # timer/schedule config
+        0xE1: 2,
+        0xB7: 4,   # schedule/timer extended
+        0x9F: 4,   # schedule/timer extended
+        0xC4: 1,
+        0xC5: 1,
+        0xC6: 1,
+    }
+
     b = _parse_homgar_payload(raw)
     tlv = {}
     i = 0
-    
+
     while i < len(b):
-        if i + 2 >= len(b):
+        if i + 1 >= len(b):
             break
-            
+
         dp_id = b[i]
         type_byte = b[i + 1]
-        
-        if i + 2 >= len(b):
+
+        width = _TYPE_WIDTHS.get(type_byte)
+        if width is None:
+            # Unknown type — advance 1 byte to attempt re-sync
+            i += 1
+            continue
+
+        if i + 2 + width > len(b):
             break
-            
-        length = b[i + 2]
-        i += 3
-        
-        if i + length > len(b):
-            break
-            
-        raw_bytes = bytes(b[i : i + length])
-        value_int = int.from_bytes(raw_bytes, "big") if raw_bytes else 0
+
+        raw_bytes = bytes(b[i + 2 : i + 2 + width])
+        value_int = int.from_bytes(raw_bytes, "big") if width > 0 else None
         tlv[dp_id] = (type_byte, value_int, raw_bytes)
-        i += length
-        
+        i += 2 + width
+
     return tlv
 
 
