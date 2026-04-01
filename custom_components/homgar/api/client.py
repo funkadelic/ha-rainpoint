@@ -228,3 +228,70 @@ class HomGarClient:
             if data.get("code") != 0:
                 raise HomGarApiError(f"Set device state API error: {data.get('msg')}")
             return True
+
+    async def control_work_mode(
+        self,
+        mid: int,
+        addr: int,
+        device_name: str,
+        product_key: str,
+        port: int,
+        mode: int,
+        duration: int,
+    ) -> str | None:
+        """Open or close a valve zone on a hub sub-device.
+
+        Args:
+            mid: Hub device ID.
+            addr: Sub-device address (e.g. 1 for the first RF valve).
+            device_name: Hub deviceName (MAC-based identifier).
+            product_key: Hub productKey.
+            port: Zone/port number (1-based).
+            mode: 1 = open, 0 = close.
+            duration: Run time in seconds. Pass 0 when mode=0 — the device ignores
+                this field on close commands, but it must still be present in the request.
+
+        Returns:
+            The value of ``data["data"]`` if it is a string, or
+            ``data["data"]["state"]`` if ``data["data"]`` is a dict. Returns None
+            if neither condition produces a value (including when the dict response
+            omits the "state" key). Callers should treat None as "no optimistic
+            update available" rather than an error.
+        """
+        await self.ensure_logged_in()
+        url = f"{self._base_url}/app/device/controlWorkMode"
+        payload = {
+            "mid": mid,
+            "addr": addr,
+            "deviceName": device_name,
+            "productKey": product_key,
+            "port": port,
+            "mode": mode,
+            "duration": duration,
+        }
+        _LOGGER.debug("API call: control_work_mode URL=%s payload=%s", url, payload)
+        async with self._session.post(url, headers=self._auth_headers(), json=payload) as resp:
+            if resp.status != 200:
+                raise HomGarApiError(f"controlWorkMode HTTP {resp.status}")
+            data = await resp.json()
+        _LOGGER.debug("API response: control_work_mode data=%s", data)
+        if data.get("code") != 0:
+            raise HomGarApiError(f"controlWorkMode failed: {data}")
+        resp_data = data.get("data")
+        if isinstance(resp_data, dict):
+            state = resp_data.get("state")
+            if state is None:
+                _LOGGER.warning(
+                    "controlWorkMode: 'data' dict has no 'state' key; full data: %s", resp_data
+                )
+            return state
+        if isinstance(resp_data, str):
+            return resp_data
+        if resp_data is not None:
+            _LOGGER.warning(
+                "controlWorkMode: unexpected 'data' type %s; value: %s",
+                type(resp_data).__name__, resp_data,
+            )
+        else:
+            _LOGGER.debug("controlWorkMode: API returned code=0 but no 'data' key; optimistic update skipped")
+        return None

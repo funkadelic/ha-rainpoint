@@ -296,6 +296,8 @@ class HomGarCoordinator(DataUpdateCoordinator):
                         "sub_name": sub.get("name"),
                         "model": sub.get("model"),
                         "firmware_version": sub.get("softVer"),
+                        "device_name": hub.get("deviceName"),
+                        "product_key": hub.get("productKey"),
                         "raw_status": s,
                         "data": decoded,
                     }
