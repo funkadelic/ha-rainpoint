@@ -256,7 +256,10 @@ class HomGarClient:
             ``data["data"]["state"]`` if ``data["data"]`` is a dict. Returns None
             if neither condition produces a value (including when the dict response
             omits the "state" key). Callers should treat None as "no optimistic
-            update available" rather than an error.
+            update available" rather than an error. Also returns normally
+            (without raising) when the API returns code 4 (device already in
+            the requested state); callers cannot distinguish this from a
+            code-0 success based on the return value alone.
         """
         await self.ensure_logged_in()
         url = f"{self._base_url}/app/device/controlWorkMode"
@@ -275,7 +278,14 @@ class HomGarClient:
                 raise HomGarApiError(f"controlWorkMode HTTP {resp.status}")
             data = await resp.json()
         _LOGGER.debug("API response: control_work_mode data=%s", data)
-        if data.get("code") != 0:
+
+        code = data.get("code")
+        if code == 4:
+            # Code 4 = device already in requested state or transitioning — not fatal
+            _LOGGER.info(
+                "controlWorkMode: device already in requested state (code 4, idempotent): %s", data
+            )
+        elif code != 0:
             raise HomGarApiError(f"controlWorkMode failed: {data}")
         resp_data = data.get("data")
         if isinstance(resp_data, dict):

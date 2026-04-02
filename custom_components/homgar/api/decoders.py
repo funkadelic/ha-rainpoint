@@ -170,7 +170,8 @@ def _decode_htv213frf_hex(raw: str) -> dict:
     """
     from ..const import debug_with_version
 
-    # Type byte → value byte count for known HomGar flat-DP types.
+    # Type byte → value byte count for HTV213FRF/HTV245FRF.
+    # Subset of types relevant to these models; see _TYPE_WIDTHS in utils.py for the full set.
     _TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
 
     try:
@@ -183,7 +184,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         # can still bypass trailing records — re-alignment is best-effort only.
         # If a dp_id appears more than once (e.g. after misalignment recovery),
         # the last occurrence wins — this is intentional, not an oversight.
-        dp_map: dict[int, tuple[int, int]] = {}  # dp_id → (type_byte, value_int); value_int is big-endian, up to 4 bytes
+        dp_map: dict[int, tuple[int, int]] = {}  # dp_id → (type_byte, value_int); endianness depends on type (0xAD=LE, others=BE)
         i = 0
         while i < len(b) - 2:  # need at least 3 bytes: dp_id + type_byte + 1 value byte
             dp_id = b[i]
@@ -222,7 +223,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
 
         # Zone states: DP 0x18+N with type 0xD8 only.
         # Other types on zone-range IDs are schedule/timer fields, not zone states.
-        # Zone durations: DP 0x24+N with type 0xAD (2-byte big-endian seconds).
+        # Zone durations: DP 0x24+N with type 0xAD (2-byte little-endian seconds).
         zones: dict[int, dict] = {}
         for zone_num in range(1, 9):
             state_dp = 0x18 + zone_num
@@ -455,7 +456,12 @@ def _decode_moisture_full_hex(raw: str) -> dict:
 def decode_hws019wrf_v2(raw: str) -> dict:
     """
     Decode HWS019WRF-V2 (Display Hub) CSV/semicolon payload.
-    Example: '1,0,1;788(788/777/1),68(68/64/1),P=9685(9684/9684/1),'
+    Example: '1,0,1;707(707/694/1),42(42/39/1),P=9709(9709/9701/1),'
+
+    Format: current_value(current/min_or_max/count)
+    - 707 = current temperature (70.7°F)
+    - 42 = current humidity (42%)
+    - P=9709 = current pressure (970.9 mb)
     """
     _LOGGER.debug("decode_hws019wrf_v2 called with raw: %r", raw)
     try:
@@ -468,12 +474,21 @@ def decode_hws019wrf_v2(raw: str) -> dict:
                 item = item.strip()
                 if not item:
                     continue
-                if '(' in item:
-                    key, val = item.split('(', 1)
-                    readings[key.strip()] = val.strip(')')
-                elif '=' in item:
-                    key, val = item.split('=', 1)
-                    readings[key.strip()] = val.strip()
+                if '=' in item:
+                    # Pressure format: P=9709(9709/9701/1)
+                    key, rest = item.split('=', 1)
+                    key = key.strip()
+                    if '(' in rest:
+                        readings[key] = rest.split('(')[0].strip()
+                    else:
+                        readings[key] = rest.strip()
+                elif '(' in item:
+                    # Temperature/Humidity: 707(707/694/1) — extract current value
+                    current_value = item.split('(')[0].strip()
+                    if 'temp' not in readings:
+                        readings['temp'] = current_value
+                    elif 'humidity' not in readings:
+                        readings['humidity'] = current_value
         result = {
             "type": "hws019wrf_v2",
             "flags": flags,
@@ -482,8 +497,8 @@ def decode_hws019wrf_v2(raw: str) -> dict:
         }
         _LOGGER.debug("decode_hws019wrf_v2 result: %r", result)
         return result
-    except Exception as ex:
-        _LOGGER.warning("Failed to decode HWS019WRF-V2 payload: %s (raw: %r)", ex, raw)
+    except (ValueError, IndexError) as ex:
+        _LOGGER.error("Failed to decode HWS019WRF-V2 payload: %s (raw: %r)", ex, raw)
         return {"type": "hws019wrf_v2", "raw": raw, "error": str(ex)}
 
 
