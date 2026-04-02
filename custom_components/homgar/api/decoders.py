@@ -183,7 +183,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         # can still bypass trailing records — re-alignment is best-effort only.
         # If a dp_id appears more than once (e.g. after misalignment recovery),
         # the last occurrence wins — this is intentional, not an oversight.
-        dp_map: dict[int, tuple[int, int]] = {}  # dp_id → (type_byte, value_int); value_int is big-endian, up to 4 bytes
+        dp_map: dict[int, tuple[int, int]] = {}  # dp_id → (type_byte, value_int); endianness depends on type (0xAD=LE, others=BE)
         i = 0
         while i < len(b) - 2:  # need at least 3 bytes: dp_id + type_byte + 1 value byte
             dp_id = b[i]
@@ -222,7 +222,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
 
         # Zone states: DP 0x18+N with type 0xD8 only.
         # Other types on zone-range IDs are schedule/timer fields, not zone states.
-        # Zone durations: DP 0x24+N with type 0xAD (2-byte big-endian seconds).
+        # Zone durations: DP 0x24+N with type 0xAD (2-byte little-endian seconds).
         zones: dict[int, dict] = {}
         for zone_num in range(1, 9):
             state_dp = 0x18 + zone_num
@@ -457,7 +457,7 @@ def decode_hws019wrf_v2(raw: str) -> dict:
     Decode HWS019WRF-V2 (Display Hub) CSV/semicolon payload.
     Example: '1,0,1;707(707/694/1),42(42/39/1),P=9709(9709/9701/1),'
 
-    Format: current_value(current/min/max/count)
+    Format: current_value(current/min_or_max/count)
     - 707 = current temperature (70.7°F)
     - 42 = current humidity (42%)
     - P=9709 = current pressure (970.9 mb)
