@@ -279,8 +279,8 @@ class HomGarClient:
         code = data.get("code")
         if code == 4:
             # Code 4 = device already in requested state or transitioning — not fatal
-            _LOGGER.warning(
-                "controlWorkMode returned code 4 (busy/already in state): %s", data
+            _LOGGER.info(
+                "controlWorkMode: device already in requested state (code 4, idempotent): %s", data
             )
         elif code != 0:
             raise HomGarApiError(f"controlWorkMode failed: {data}")
