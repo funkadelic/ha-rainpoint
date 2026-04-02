@@ -170,7 +170,8 @@ def _decode_htv213frf_hex(raw: str) -> dict:
     """
     from ..const import debug_with_version
 
-    # Type byte → value byte count for known HomGar flat-DP types.
+    # Type byte → value byte count for HTV213FRF/HTV245FRF.
+    # Subset of types relevant to these models; see _TYPE_WIDTHS in utils.py for the full set.
     _TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
 
     try:
@@ -496,8 +497,8 @@ def decode_hws019wrf_v2(raw: str) -> dict:
         }
         _LOGGER.debug("decode_hws019wrf_v2 result: %r", result)
         return result
-    except Exception as ex:
-        _LOGGER.warning("Failed to decode HWS019WRF-V2 payload: %s (raw: %r)", ex, raw)
+    except (ValueError, IndexError) as ex:
+        _LOGGER.error("Failed to decode HWS019WRF-V2 payload: %s (raw: %r)", ex, raw)
         return {"type": "hws019wrf_v2", "raw": raw, "error": str(ex)}
 
 

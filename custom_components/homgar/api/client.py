@@ -256,7 +256,10 @@ class HomGarClient:
             ``data["data"]["state"]`` if ``data["data"]`` is a dict. Returns None
             if neither condition produces a value (including when the dict response
             omits the "state" key). Callers should treat None as "no optimistic
-            update available" rather than an error.
+            update available" rather than an error. Also returns normally
+            (without raising) when the API returns code 4 (device already in
+            the requested state); callers cannot distinguish this from a
+            code-0 success based on the return value alone.
         """
         await self.ensure_logged_in()
         url = f"{self._base_url}/app/device/controlWorkMode"

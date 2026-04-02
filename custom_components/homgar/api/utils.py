@@ -82,6 +82,9 @@ def _parse_tlv_payload(raw: str) -> dict:
         tlv[dp_id] = (type_byte, value_int, raw_bytes)
         i += 2 + width
 
+    if i < len(b):
+        _LOGGER.debug("_parse_tlv_payload: %d unparsed trailing bytes at offset %d: %s", len(b) - i, i, b[i:].hex())
+
     return tlv
 
 

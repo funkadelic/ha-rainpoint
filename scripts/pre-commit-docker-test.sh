@@ -112,7 +112,7 @@ sys.path.append('/config/custom_components')
 from custom_components.homgar.homgar_api import decode_htv213frf_valve
 result = decode_htv213frf_valve('1,-84,1;0,149,0,0,0,0|0,6,0,0,0,0')
 print(f'ASCII_TEST:{result[\"decoder\"]}:{len(result[\"zones\"])}')
-" 2>/dev/null)
+" 2>&1)
 
 if [[ $ASCII_TEST_RESULT == "ASCII_TEST:htv213frf_ascii:2" ]]; then
     echo "✅ ASCII format decoding test passed"
@@ -136,7 +136,7 @@ if 20.77 <= temp <= 20.79:
     print('SENSOR_TEST:hcs021frf_ascii:PASS')
 else:
     print(f'SENSOR_TEST:hcs021frf_ascii:FAIL:{temp}')
-" 2>/dev/null)
+" 2>&1)
 
 if [[ $SENSOR_TEST_RESULT == "SENSOR_TEST:hcs021frf_ascii:PASS" ]]; then
     echo "✅ Sensor ASCII format decoding test passed"
@@ -169,7 +169,7 @@ else:
         print('API_CLIENT_TEST:FAIL:ensure_logged_in is not async')
     else:
         print('API_CLIENT_TEST:PASS')
-" 2>/dev/null)
+" 2>&1)
 
 if [[ $API_CLIENT_TEST == "API_CLIENT_TEST:PASS" ]]; then
     echo "✅ API client methods test passed"
@@ -197,7 +197,7 @@ if temp == '707' and humidity == '42' and pressure == '9709':
     print('DISPLAY_HUB_TEST:PASS')
 else:
     print(f'DISPLAY_HUB_TEST:FAIL:temp={temp},humidity={humidity},pressure={pressure}')
-" 2>/dev/null)
+" 2>&1)
 
 if [[ $DISPLAY_HUB_TEST == "DISPLAY_HUB_TEST:PASS" ]]; then
     echo "✅ Display Hub decoder test passed"
@@ -230,7 +230,7 @@ except json.JSONDecodeError as e:
     print(f'TRANSLATION_TEST:FAIL:Invalid JSON: {e}')
 except Exception as e:
     print(f'TRANSLATION_TEST:FAIL:{e}')
-" 2>/dev/null)
+" 2>&1)
 
 if [[ $TRANSLATION_TEST == "TRANSLATION_TEST:PASS" ]]; then
     echo "✅ Translation files test passed"
