@@ -8,7 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .debug import HomGarDebugSwitchEntity
-from .coordinator import HomGarCoordinator
+from .coordinator import RainPointCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up HomGar switch entities."""
     data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: HomGarCoordinator = data["coordinator"]
+    coordinator: RainPointCoordinator = data["coordinator"]
 
     entities = []
 

@@ -1,10 +1,10 @@
 """
-HomGar API module.
+RainPoint API module.
 
-This module provides a clean, organized interface to the HomGar API functionality.
+This module provides a clean, organized interface to the RainPoint API functionality.
 """
 
-from .client import HomGarClient
+from .client import RainPointClient, RainPointApiError, HomGarApiError
 from .decoders import (
     decode_htv213frf_valve,
     decode_moisture_full,
@@ -63,7 +63,9 @@ from .utils import (
 
 __all__ = [
     # Client
-    "HomGarClient",
+    "RainPointClient",
+    "RainPointApiError",
+    "HomGarApiError",  # backward-compat alias
     # Decoders
     "decode_htv213frf_valve",
     "decode_moisture_full",

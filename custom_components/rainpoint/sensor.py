@@ -51,7 +51,7 @@ from .const import (
     MODEL_HCS888ARF_V1,
     MODEL_HCS0600ARF,
 )
-from .coordinator import HomGarCoordinator
+from .coordinator import RainPointCoordinator
 from .diagnostic_sensors import (
     HomGarRSSISensor,
     HomGarBatterySensor,
@@ -83,7 +83,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: HomGarCoordinator = data["coordinator"]
+    coordinator: RainPointCoordinator = data["coordinator"]
 
     sensors_cfg = coordinator.data.get("sensors", {})
     hubs_cfg = coordinator.data.get("hubs", [])
@@ -341,7 +341,7 @@ class HomGarSensorBase(CoordinatorEntity, SensorEntity):
 
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         sensor_key: str,
         sensor_info: dict,
         base_slug: str,
@@ -436,7 +436,7 @@ class HomGarMoisturePercentSensor(HomGarSensorBase):
 
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         sensor_key: str,
         sensor_info: dict,
         base_slug: str,
@@ -466,7 +466,7 @@ class HomGarTemperatureSensor(HomGarSensorBase):
 
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         sensor_key: str,
         sensor_info: dict,
         base_slug: str,
@@ -494,7 +494,7 @@ class HomGarIlluminanceSensor(HomGarSensorBase):
 
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         sensor_key: str,
         sensor_info: dict,
         base_slug: str,
@@ -522,7 +522,7 @@ class HomGarRainSensor(HomGarSensorBase):
 
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         sensor_key: str,
         sensor_info: dict,
         base_slug: str,
@@ -1144,7 +1144,7 @@ class HomGarRawPayloadSensor(HomGarSensorBase):
     
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         sensor_key: str,
         sensor_info: dict,
         base_slug: str,

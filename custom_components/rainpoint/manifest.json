@@ -1,17 +1,17 @@
 {
-    "domain": "homgar",
-    "name": "HomGar/RainPoint Cloud",
-    "version": "1.3.17",
-    "documentation": "https://github.com/brettmeyerowitz/homeassistant-homgar",
-    "issue_tracker": "https://github.com/brettmeyerowitz/homeassistant-homgar/issues",
+    "domain": "rainpoint",
+    "name": "RainPoint Cloud",
+    "version": "1.0.0",
+    "documentation": "https://github.com/funkadelic/ha-rainpoint",
+    "issue_tracker": "https://github.com/funkadelic/ha-rainpoint/issues",
     "requirements": [],
     "codeowners": [
-        "@brettmeyerowitz"
+        "@funkadelic"
     ],
     "config_flow": true,
     "iot_class": "cloud_polling",
     "integration_type": "hub",
     "loggers": [
-        "custom_components.homgar"
+        "custom_components.rainpoint"
     ]
 }

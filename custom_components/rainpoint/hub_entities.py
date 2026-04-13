@@ -10,7 +10,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import HomGarCoordinator
+from .coordinator import RainPointCoordinator
 from .device import HomGarHubDevice
 
 
@@ -22,7 +22,7 @@ class HomGarHubSensorBase(CoordinatorEntity, SensorEntity, HomGarHubDevice):
 
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         hub_info: dict,
     ) -> None:
         CoordinatorEntity.__init__(self, coordinator)
@@ -40,7 +40,7 @@ class HomGarHubRSSISensor(HomGarHubSensorBase):
     _attr_native_unit_of_measurement = "dBm"
     _attr_icon = "mdi:wifi"
 
-    def __init__(self, coordinator: HomGarCoordinator, hub_info: dict):
+    def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"{self._attr_unique_id}_rssi"
         self._attr_name = f"{self._attr_name} Signal Strength"
@@ -57,7 +57,7 @@ class HomGarHubDeviceIDSensor(HomGarHubSensorBase):
 
     _attr_icon = "mdi:identifier"
 
-    def __init__(self, coordinator: HomGarCoordinator, hub_info: dict):
+    def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"homgar_hub_{hub_info.get('hid', 'unknown')}_device_id"
         self._attr_name = f"{hub_info.get('name', 'HomGar Hub')} Device ID"
@@ -72,7 +72,7 @@ class HomGarHubFirmwareSensor(HomGarHubSensorBase):
 
     _attr_icon = "mdi:chip"
 
-    def __init__(self, coordinator: HomGarCoordinator, hub_info: dict):
+    def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"homgar_hub_{hub_info.get('hid', 'unknown')}_firmware"
         self._attr_name = f"{hub_info.get('name', 'HomGar Hub')} Firmware Version"
@@ -87,7 +87,7 @@ class HomGarHubMACSensor(HomGarHubSensorBase):
 
     _attr_icon = "mdi:network-outline"
 
-    def __init__(self, coordinator: HomGarCoordinator, hub_info: dict):
+    def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"homgar_hub_{hub_info.get('hid', 'unknown')}_mac"
         self._attr_name = f"{hub_info.get('name', 'HomGar Hub')} MAC Address"
@@ -103,7 +103,7 @@ class HomGarHubChannelSelect(CoordinatorEntity, SelectEntity, HomGarHubDevice):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:radio-tower"
 
-    def __init__(self, coordinator: HomGarCoordinator, hub_info: dict):
+    def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
         CoordinatorEntity.__init__(self, coordinator)
         HomGarHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"homgar_hub_{hub_info.get('hid', 'unknown')}_channel"
@@ -134,7 +134,7 @@ class HomGarHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, HomGarHubDevice)
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:clock-outline"
 
-    def __init__(self, coordinator: HomGarCoordinator, hub_info: dict):
+    def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
         CoordinatorEntity.__init__(self, coordinator)
         HomGarHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"homgar_hub_{hub_info.get('hid', 'unknown')}_broadcast"

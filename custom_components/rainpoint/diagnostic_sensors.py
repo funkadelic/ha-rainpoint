@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
 from homeassistant.const import EntityCategory, SIGNAL_STRENGTH_DECIBELS_MILLIWATT, PERCENTAGE
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .coordinator import HomGarCoordinator
+from .coordinator import RainPointCoordinator
 
 
 class HomGarDiagnosticSensorBase(CoordinatorEntity, SensorEntity):
@@ -23,7 +23,7 @@ class HomGarDiagnosticSensorBase(CoordinatorEntity, SensorEntity):
 
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         sensor_key: str,
         sensor_info: dict,
         base_slug: str,
@@ -57,7 +57,7 @@ class HomGarDiagnosticSensorBase(CoordinatorEntity, SensorEntity):
         return {
             "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},
             "name": sub_name,
-            "manufacturer": "HomGar",
+            "manufacturer": "RainPoint",
             "model": model,
         }
 

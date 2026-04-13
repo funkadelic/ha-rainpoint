@@ -12,7 +12,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MODEL_VALVE_HUB, MODEL_VALVE_213, MODEL_VALVE_245
-from .coordinator import HomGarCoordinator
+from .coordinator import RainPointCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: HomGarCoordinator = data["coordinator"]
+    coordinator: RainPointCoordinator = data["coordinator"]
 
     sensors_cfg = coordinator.data.get("sensors", {})
     entities: list[HomGarZoneDurationNumber] = []
@@ -71,7 +71,7 @@ class HomGarZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
 
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         sensor_key: str,
         sensor_info: dict,
         zone_num: int,
@@ -146,6 +146,6 @@ class HomGarZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
         return {
             "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},
             "name": sub_name,
-            "manufacturer": "HomGar",
+            "manufacturer": "RainPoint",
             "model": model,
         }
