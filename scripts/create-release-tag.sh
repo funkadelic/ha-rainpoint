@@ -6,7 +6,7 @@
 set -e
 
 # Get manifest version
-MANIFEST_VERSION=$(jq -r '.version' custom_components/homgar/manifest.json)
+MANIFEST_VERSION=$(jq -r '.version' custom_components/rainpoint/manifest.json)
 
 # Use provided version or manifest version
 VERSION=${1:-$MANIFEST_VERSION}
@@ -67,7 +67,7 @@ git push origin "v$VERSION"
 echo "✅ Tag v$VERSION created and pushed successfully!"
 echo ""
 echo "Next steps:"
-echo "1. Create GitHub release: https://github.com/brettmeyerowitz/homeassistant-homgar/releases/new"
+echo "1. Create GitHub release: https://github.com/funkadelic/ha-rainpoint/releases/new"
 echo "2. Tag: v$VERSION"
 echo "3. Target: main"
 echo "4. Add release notes from CHANGELOG.md"
