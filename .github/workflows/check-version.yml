@@ -39,7 +39,11 @@ jobs:
 
         if [ -n "$CHANGED" ]; then
           echo "changed=true" >> $GITHUB_OUTPUT
-          echo "files=$CHANGED" >> $GITHUB_OUTPUT
+          {
+            echo "files<<EOF"
+            echo "$CHANGED"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
         else
           echo "changed=false" >> $GITHUB_OUTPUT
         fi
@@ -51,13 +55,17 @@ jobs:
           # Get current version
           CURRENT_VERSION=$(jq -r '.version' custom_components/rainpoint/manifest.json)
 
-          # Get version from target branch
+          # Get version from target branch (may not exist if path was renamed)
           git fetch origin ${{ github.base_ref }}
-          git checkout origin/${{ github.base_ref }} -- custom_components/rainpoint/manifest.json
-          TARGET_VERSION=$(jq -r '.version' custom_components/rainpoint/manifest.json)
-
-          # Restore current manifest
-          git checkout HEAD -- custom_components/rainpoint/manifest.json
+          if git checkout origin/${{ github.base_ref }} -- custom_components/rainpoint/manifest.json 2>/dev/null; then
+            TARGET_VERSION=$(jq -r '.version' custom_components/rainpoint/manifest.json)
+            # Restore current manifest
+            git checkout HEAD -- custom_components/rainpoint/manifest.json
+          else
+            # Path doesn't exist on target branch (e.g., folder rename) — skip version comparison
+            echo "manifest.json not found on target branch at custom_components/rainpoint/ — skipping version bump check (likely a rename)"
+            exit 0
+          fi
         else
           # For pushes, compare with previous commit
           TARGET_VERSION=$(jq -r '.version' <(git show HEAD~1:custom_components/rainpoint/manifest.json))
