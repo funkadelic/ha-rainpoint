@@ -77,8 +77,10 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
         rssi_raw = int(header_parts[1])  # RSSI in dBm (negative number)
         _flags2 = int(header_parts[2])
 
-        # Extract RSSI (convert from negative to positive dBm)
-        rssi_dbm = rssi_raw if rssi_raw < 0 else 0
+        # Extract RSSI; positive values indicate a malformed payload.
+        if rssi_raw >= 0:
+            _LOGGER.warning("ASCII RSSI value %d is non-negative; expected negative dBm", rssi_raw)
+        rssi_dbm = rssi_raw if rssi_raw < 0 else None
 
         # Parse zone data: 0,149,0,0,0,0|0,6,0,0,0,0
         zone_sections = zone_part.split("|")
@@ -324,8 +326,10 @@ def _decode_moisture_full_ascii(raw: str) -> dict:
         rssi_raw = int(header_parts[1])  # RSSI in dBm (negative number)
         _flags2 = int(header_parts[2])
 
-        # Extract RSSI (convert from negative to positive dBm)
-        rssi_dbm = rssi_raw if rssi_raw < 0 else 0
+        # Extract RSSI; positive values indicate a malformed payload.
+        if rssi_raw >= 0:
+            _LOGGER.warning("ASCII RSSI value %d is non-negative; expected negative dBm", rssi_raw)
+        rssi_dbm = rssi_raw if rssi_raw < 0 else None
 
         # Parse sensor data: 694,70,G=292478
         sensor_parts = sensor_part.split(",")
