@@ -1,11 +1,10 @@
 """
-HomGar API client.
+RainPoint API client.
 
-This module contains the main HomGarClient class for communicating
-with the HomGar/RainPoint cloud API.
+This module contains the main RainPointClient class for communicating
+with the RainPoint cloud API.
 """
 
-import asyncio
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
@@ -15,23 +14,20 @@ import aiohttp
 _LOGGER = logging.getLogger(__name__)
 
 
-class HomGarApiError(Exception):
+class RainPointApiError(Exception):
     pass
 
 
-class HomGarClient:
-    def __init__(self, area_code: str, email: str, password: str, session: aiohttp.ClientSession, app_type: str = "homgar"):
+
+class RainPointClient:
+    def __init__(self, area_code: str, email: str, password: str, session: aiohttp.ClientSession):
         self._area_code = area_code
         self._email = email
         self._password = password  # cleartext, HA will store
         self._session = session
-        self._app_type = app_type
-        
-        # Import constants from const module
-        from ..const import APP_CODE_MAPPING
-        self._app_code = APP_CODE_MAPPING.get(app_type, "1")  # Default to homgar
-        
-        _LOGGER.info("HomGarClient initialized with app_type: %s, app_code: %s", self._app_type, self._app_code)
+        self._app_code = "2"
+
+        _LOGGER.info("RainPointClient initialized with app_code: %s", self._app_code)
 
         self._token: str | None = None
         self._refresh_token: str | None = None
@@ -45,11 +41,11 @@ class HomGarClient:
     def _auth_headers(self) -> dict:
         """Generate authentication headers for API calls."""
         if not self._token:
-            raise HomGarApiError("Token not available")
+            raise RainPointApiError("Token not available")
         return {
             "auth": self._token, 
             "lang": "en", 
-            "appCode": self._app_code,  # Use dynamic app_code based on user selection
+            "appCode": self._app_code,  # Hardcoded to RainPoint appCode "2"
             "version": "1.16.1065",
             "sceneType": "1"
         }
@@ -107,15 +103,16 @@ class HomGarClient:
             "deviceId": device_id,
         }
 
-        _LOGGER.debug("HomGar login request for %s with appCode=%s", self._email, self._app_code)
+        _LOGGER.debug("RainPoint login request for %s with appCode=%s", self._email, self._app_code)
 
         async with self._session.post(url, json=payload, headers={"Content-Type": "application/json", "lang": "en", "appCode": self._app_code}) as resp:
             if resp.status != 200:
-                raise HomGarApiError(f"Login HTTP {resp.status}")
+                raise RainPointApiError(f"Login HTTP {resp.status}")
             data = await resp.json()
 
         if data.get("code") != 0 or "data" not in data:
-            raise HomGarApiError(f"Login failed: {data}")
+            _LOGGER.debug("Login failed response: %s", data)
+            raise RainPointApiError(f"Login failed: code {data.get('code')}")
 
         d = data["data"]
         self._token = d["token"]
@@ -128,7 +125,7 @@ class HomGarClient:
             base = datetime.now(timezone.utc)
         self._token_expires_at = base + timedelta(seconds=token_expired_secs)
 
-        _LOGGER.info("HomGar login successful; token expires in %s seconds", token_expired_secs)
+        _LOGGER.info("RainPoint login successful; token expires in %s seconds", token_expired_secs)
 
     # --- API calls ---
 
@@ -138,11 +135,12 @@ class HomGarClient:
         _LOGGER.debug("API call: list_homes URL=%s", url)
         async with self._session.get(url, headers=self._auth_headers()) as resp:
             if resp.status != 200:
-                raise HomGarApiError(f"list_homes HTTP {resp.status}")
+                raise RainPointApiError(f"list_homes HTTP {resp.status}")
             data = await resp.json()
         _LOGGER.debug("API response: list_homes data=%s", data)
         if data.get("code") != 0:
-            raise HomGarApiError(f"list_homes failed: {data}")
+            _LOGGER.debug("list_homes failed response: %s", data)
+            raise RainPointApiError(f"list_homes failed: code {data.get('code')}")
         return data.get("data", [])
 
     async def get_devices_by_hid(self, hid: int) -> list[dict]:
@@ -152,11 +150,12 @@ class HomGarClient:
         _LOGGER.debug("API call: get_devices_by_hid URL=%s params=%s", url, params)
         async with self._session.get(url, headers=self._auth_headers(), params=params) as resp:
             if resp.status != 200:
-                raise HomGarApiError(f"getDeviceByHid HTTP {resp.status}")
+                raise RainPointApiError(f"getDeviceByHid HTTP {resp.status}")
             data = await resp.json()
         _LOGGER.debug("API response: get_devices_by_hid data=%s", data)
         if data.get("code") != 0:
-            raise HomGarApiError(f"getDeviceByHid failed: {data}")
+            _LOGGER.debug("getDeviceByHid failed response: %s", data)
+            raise RainPointApiError(f"getDeviceByHid failed: code {data.get('code')}")
         return data.get("data", [])
 
     async def get_multiple_device_status(self, devices: list[dict]) -> list[dict]:
@@ -177,11 +176,12 @@ class HomGarClient:
         _LOGGER.debug("API call: get_multiple_device_status URL=%s payload=%s", url, payload)
         async with self._session.post(url, json=payload, headers=self._auth_headers()) as resp:
             if resp.status != 200:
-                raise HomGarApiError(f"multipleDeviceStatus HTTP {resp.status}")
+                raise RainPointApiError(f"multipleDeviceStatus HTTP {resp.status}")
             data = await resp.json()
         _LOGGER.debug("API response: get_multiple_device_status data=%s", data)
         if data.get("code") != 0:
-            raise HomGarApiError(f"multipleDeviceStatus failed: {data}")
+            _LOGGER.debug("multipleDeviceStatus failed response: %s", data)
+            raise RainPointApiError(f"multipleDeviceStatus failed: code {data.get('code')}")
 
         # Convert response format to match individual device status format
         # Response has: [{"propVer": X, "status": [...], "mid": Y, "iotId": Z}, ...]
@@ -203,11 +203,12 @@ class HomGarClient:
         _LOGGER.debug("API call: get_device_status URL=%s params=%s", url, params)
         async with self._session.get(url, headers=self._auth_headers(), params=params) as resp:
             if resp.status != 200:
-                raise HomGarApiError(f"getDeviceStatus HTTP {resp.status}")
+                raise RainPointApiError(f"getDeviceStatus HTTP {resp.status}")
             data = await resp.json()
         _LOGGER.debug("API response: get_device_status data=%s", data)
         if data.get("code") != 0:
-            raise HomGarApiError(f"getDeviceStatus failed: {data}")
+            _LOGGER.debug("getDeviceStatus failed response: %s", data)
+            raise RainPointApiError(f"getDeviceStatus failed: code {data.get('code')}")
         return data.get("data", {})
 
     async def set_device_state(self, home_id: int, device_name: str, mid: int, product_key: str, state: dict) -> bool:
@@ -223,10 +224,10 @@ class HomGarClient:
         }
         async with self._session.post(url, headers=self._auth_headers(), json=payload) as resp:
             if resp.status != 200:
-                raise HomGarApiError(f"Failed to set device state: {resp.status}")
+                raise RainPointApiError(f"Failed to set device state: {resp.status}")
             data = await resp.json()
             if data.get("code") != 0:
-                raise HomGarApiError(f"Set device state API error: {data.get('msg')}")
+                raise RainPointApiError(f"Set device state API error: {data.get('msg')}")
             return True
 
     async def control_work_mode(
@@ -275,7 +276,7 @@ class HomGarClient:
         _LOGGER.debug("API call: control_work_mode URL=%s payload=%s", url, payload)
         async with self._session.post(url, headers=self._auth_headers(), json=payload) as resp:
             if resp.status != 200:
-                raise HomGarApiError(f"controlWorkMode HTTP {resp.status}")
+                raise RainPointApiError(f"controlWorkMode HTTP {resp.status}")
             data = await resp.json()
         _LOGGER.debug("API response: control_work_mode data=%s", data)
 
@@ -286,7 +287,8 @@ class HomGarClient:
                 "controlWorkMode: device already in requested state (code 4, idempotent): %s", data
             )
         elif code != 0:
-            raise HomGarApiError(f"controlWorkMode failed: {data}")
+            _LOGGER.debug("controlWorkMode failed response: %s", data)
+            raise RainPointApiError(f"controlWorkMode failed: code {code}")
         resp_data = data.get("data")
         if isinstance(resp_data, dict):
             state = resp_data.get("state")

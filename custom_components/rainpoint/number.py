@@ -12,7 +12,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MODEL_VALVE_HUB, MODEL_VALVE_213, MODEL_VALVE_245
-from .coordinator import HomGarCoordinator
+from .coordinator import RainPointCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,10 +28,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: HomGarCoordinator = data["coordinator"]
+    coordinator: RainPointCoordinator = data["coordinator"]
 
     sensors_cfg = coordinator.data.get("sensors", {})
-    entities: list[HomGarZoneDurationNumber] = []
+    entities: list[RainPointZoneDurationNumber] = []
 
     for key, info in sensors_cfg.items():
         model = info.get("model")
@@ -43,7 +43,7 @@ async def async_setup_entry(
 
         for zone_num in sorted(zones.keys()):
             entities.append(
-                HomGarZoneDurationNumber(coordinator, key, info, zone_num)
+                RainPointZoneDurationNumber(coordinator, key, info, zone_num)
             )
             _LOGGER.debug(
                 "Creating duration number entity: key=%s zone=%s",
@@ -54,7 +54,7 @@ async def async_setup_entry(
         async_add_entities(entities)
 
 
-class HomGarZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
+class RainPointZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
     """Configurable run duration (in minutes) for a single irrigation zone.
 
     The value is restored on HA restart via RestoreEntity.  When a valve is
@@ -71,7 +71,7 @@ class HomGarZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
 
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         sensor_key: str,
         sensor_info: dict,
         zone_num: int,
@@ -87,7 +87,7 @@ class HomGarZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
         addr = sensor_info["addr"]
         sub_name = sensor_info.get("sub_name") or f"Valve Hub {addr}"
 
-        self._attr_unique_id = f"homgar_{hid}_{mid}_{addr}_zone{zone_num}_duration"
+        self._attr_unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{zone_num}_duration"
         self._attr_name = f"{sub_name} Zone {zone_num} Duration"
 
     async def async_added_to_hass(self) -> None:
@@ -146,6 +146,6 @@ class HomGarZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
         return {
             "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},
             "name": sub_name,
-            "manufacturer": "HomGar",
+            "manufacturer": "RainPoint",
             "model": model,
         }

@@ -1,5 +1,5 @@
 """
-Validation functions for HomGar API.
+Validation functions for RainPoint API.
 
 This module contains functions for validating payloads, extracting data,
 and performing common validation operations.

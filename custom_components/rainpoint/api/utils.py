@@ -1,5 +1,5 @@
 """
-Utility functions for HomGar API.
+Utility functions for RainPoint API.
 
 This module contains helper functions for payload parsing, data conversion,
 and common operations used across the API.
@@ -10,13 +10,13 @@ import logging
 _LOGGER = logging.getLogger(__name__)
 
 
-def _parse_homgar_payload(raw: str) -> bytes:
-    """Parse a HomGar hex payload and return bytes."""
+def _parse_rainpoint_payload(raw: str) -> bytes:
+    """Parse a RainPoint hex payload and return bytes."""
     if "#" not in raw:
         raise ValueError("Payload missing '#' separator")
-    
+
     prefix, hex_data = raw.split("#", 1)
-    
+
     # Handle different formats
     if prefix == "10":
         # Standard format: 10#ABCDEF...
@@ -51,7 +51,7 @@ def _parse_tlv_payload(raw: str) -> dict:
         0xC6: 1,
     }
 
-    b = _parse_homgar_payload(raw)
+    b = _parse_rainpoint_payload(raw)
     tlv = {}
     i = 0
 

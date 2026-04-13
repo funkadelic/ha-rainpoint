@@ -1,4 +1,4 @@
-"""Device representation for HomGar hubs and sub-devices."""
+"""Device representation for RainPoint hubs and sub-devices."""
 from __future__ import annotations
 
 from typing import Any
@@ -8,16 +8,16 @@ from homeassistant.helpers.entity import Entity
 from .const import DOMAIN
 
 
-class HomGarHubDevice(Entity):
-    """Base class for HomGar hub devices."""
+class RainPointHubDevice(Entity):
+    """Base class for RainPoint hub devices."""
 
     def __init__(
         self,
         hub_info: dict,
     ) -> None:
         self._hub_info = hub_info
-        self._attr_unique_id = f"homgar_hub_{hub_info['hid']}"
-        self._attr_name = hub_info.get("name", "HomGar Hub")
+        self._attr_unique_id = f"{DOMAIN}_hub_{hub_info['hid']}"
+        self._attr_name = hub_info.get("name", "RainPoint Hub")
         self._attr_should_poll = False
 
     @property
@@ -25,7 +25,7 @@ class HomGarHubDevice(Entity):
         """Return device registry information for this hub."""
         return DeviceInfo(
             identifiers={(DOMAIN, f"hub_{self._hub_info['hid']}")},
-            name=self._hub_info.get("name", "HomGar Hub"),
+            name=self._hub_info.get("name", "RainPoint Hub"),
             manufacturer="RainPoint",  # RainPoint is the actual device manufacturer
             model=self._hub_info.get("model", "Unknown"),
             sw_version=self._hub_info.get("softVer"),
@@ -38,8 +38,8 @@ class HomGarHubDevice(Entity):
         return True  # Hub is always available if config exists
 
 
-class HomGarSubDevice(Entity):
-    """Base class for HomGar sub-devices (sensors, valves, etc.)."""
+class RainPointSubDevice(Entity):
+    """Base class for RainPoint sub-devices (sensors, valves, etc.)."""
 
     def __init__(
         self,

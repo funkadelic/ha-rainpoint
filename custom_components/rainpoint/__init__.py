@@ -8,12 +8,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DOMAIN, DEFAULT_SCAN_INTERVAL, CONF_APP_TYPE
-from .homgar_api import HomGarClient
+from .const import DOMAIN, DEFAULT_SCAN_INTERVAL
+from .api import RainPointClient
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["sensor", "valve", "number", "switch"]
+PLATFORMS: list[str] = ["sensor", "select", "valve", "number", "switch"]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -22,23 +22,21 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up HomGar from a config entry."""
+    """Set up RainPoint from a config entry."""
     session = async_get_clientsession(hass)
 
     area_code = entry.data["area_code"]
     email = entry.data["email"]
     password = entry.data["password"]
-    # Default existing users to HomGar for backward compatibility
-    app_type = entry.data.get(CONF_APP_TYPE, "homgar")
 
-    client = HomGarClient(area_code, email, password, session, app_type)
+    client = RainPointClient(area_code, email, password, session)
     # Restore tokens if present
     client.restore_tokens(entry.data)
 
     # Simple: one coordinator per config entry
-    from .coordinator import HomGarCoordinator
+    from .coordinator import RainPointCoordinator
 
-    coordinator = HomGarCoordinator(hass, client, entry)
+    coordinator = RainPointCoordinator(hass, client, entry)
 
     await coordinator.async_config_entry_first_refresh()
 
@@ -76,44 +74,44 @@ async def async_supports_reconfigure(hass: HomeAssistant, entry: ConfigEntry) ->
 
 
 async def async_setup_services(hass: HomeAssistant) -> None:
-    """Set up the HomGar services."""
+    """Set up the RainPoint services."""
     
     async def reload_service(call) -> None:
-        """Service to reload the HomGar integration."""
+        """Service to reload the RainPoint integration."""
         from homeassistant.components import persistent_notification
         
         entry_id = call.data.get("entry_id")
         
-        # If no entry_id provided, reload all HomGar entries
+        # If no entry_id provided, reload all RainPoint entries
         if not entry_id:
             entries = hass.config_entries.async_entries(DOMAIN)
             if not entries:
-                _LOGGER.error("No HomGar entries found to reload")
+                _LOGGER.error("No RainPoint entries found to reload")
                 persistent_notification.async_create(
                     hass,
-                    "No HomGar integrations found to reload",
-                    title="HomGar Reload Failed",
-                    notification_id="homgar_reload_error"
+                    "No RainPoint integrations found to reload",
+                    title="RainPoint Reload Failed",
+                    notification_id="rainpoint_reload_error"
                 )
-                raise ValueError("No HomGar integrations found to reload")
+                raise ValueError("No RainPoint integrations found to reload")
             
             # Reload all entries
             success_count = 0
             for entry in entries:
                 success = await async_reload_integration(hass, entry.entry_id)
                 if success:
-                    _LOGGER.info("HomGar integration '%s' reloaded successfully", entry.title)
+                    _LOGGER.info("RainPoint integration '%s' reloaded successfully", entry.title)
                     success_count += 1
                 else:
-                    _LOGGER.error("Failed to reload HomGar integration '%s'", entry.title)
+                    _LOGGER.error("Failed to reload RainPoint integration '%s'", entry.title)
             
-            message = f"Successfully reloaded {success_count} HomGar integration(s)"
+            message = f"Successfully reloaded {success_count} RainPoint integration(s)"
             if success_count == len(entries):
                 persistent_notification.async_create(
                     hass,
                     message,
-                    title="HomGar Reload Complete",
-                    notification_id="homgar_reload_success"
+                    title="RainPoint Reload Complete",
+                    notification_id="rainpoint_reload_success"
                 )
                 return {"message": message}
             else:
@@ -121,31 +119,31 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 persistent_notification.async_create(
                     hass,
                     error_msg,
-                    title="HomGar Reload Partial",
-                    notification_id="homgar_reload_partial"
+                    title="RainPoint Reload Partial",
+                    notification_id="rainpoint_reload_partial"
                 )
                 raise ValueError(error_msg)
         
         # Reload specific entry
         success = await async_reload_integration(hass, entry_id)
         if success:
-            _LOGGER.info("HomGar integration reloaded successfully via service")
+            _LOGGER.info("RainPoint integration reloaded successfully via service")
             persistent_notification.async_create(
                 hass,
-                "HomGar integration reloaded successfully",
-                title="HomGar Reload Complete",
-                notification_id="homgar_reload_success"
+                "RainPoint integration reloaded successfully",
+                title="RainPoint Reload Complete",
+                notification_id="rainpoint_reload_success"
             )
-            return {"message": "HomGar integration reloaded successfully"}
+            return {"message": "RainPoint integration reloaded successfully"}
         else:
-            _LOGGER.error("Failed to reload HomGar integration via service")
+            _LOGGER.error("Failed to reload RainPoint integration via service")
             persistent_notification.async_create(
                 hass,
-                "Failed to reload HomGar integration",
-                title="HomGar Reload Failed",
-                notification_id="homgar_reload_error"
+                "Failed to reload RainPoint integration",
+                title="RainPoint Reload Failed",
+                notification_id="rainpoint_reload_error"
             )
-            raise ValueError("Failed to reload HomGar integration")
+            raise ValueError("Failed to reload RainPoint integration")
     
     # Register the service with optional entry_id
     hass.services.async_register(
@@ -170,8 +168,8 @@ async def async_get_diagnostic_info(hass: HomeAssistant, entry: ConfigEntry) -> 
 
 
 async def async_reload_integration(hass: HomeAssistant, entry_id: str) -> bool:
-    """Reload the HomGar integration."""
-    _LOGGER.info("Reloading HomGar integration: %s", entry_id)
+    """Reload the RainPoint integration."""
+    _LOGGER.info("Reloading RainPoint integration: %s", entry_id)
     
     try:
         # Get the config entry
@@ -182,8 +180,8 @@ async def async_reload_integration(hass: HomeAssistant, entry_id: str) -> bool:
         
         # Reload the entry
         await hass.config_entries.async_reload(entry_id)
-        _LOGGER.info("Successfully reloaded HomGar integration")
+        _LOGGER.info("Successfully reloaded RainPoint integration")
         return True
     except Exception as ex:
-        _LOGGER.error("Failed to reload HomGar integration: %s", ex)
+        _LOGGER.error("Failed to reload RainPoint integration: %s", ex)
         return False

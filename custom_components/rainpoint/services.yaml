@@ -1,6 +1,6 @@
 reload:
   name: Reload Integration
-  description: Reload the HomGar integration without restarting Home Assistant. If no entry_id is provided, all HomGar integrations will be reloaded.
+  description: Reload the RainPoint integration without restarting Home Assistant. If no entry_id is provided, all RainPoint integrations will be reloaded.
   fields:
     entry_id:
       name: Entry ID

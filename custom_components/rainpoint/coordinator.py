@@ -9,8 +9,6 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from .const import (
-    APP_TYPE_HOMGAR,
-    APP_TYPE_RAINPOINT,
     CONF_AREA_CODE,
     CONF_EMAIL,
     CONF_HIDS,
@@ -19,6 +17,7 @@ from .const import (
     CONF_TOKEN_EXPIRES_AT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    ISSUE_URL,
     MODEL_MOISTURE_SIMPLE,
     MODEL_MOISTURE_FULL,
     MODEL_RAIN,
@@ -56,11 +55,12 @@ from .const import (
     VERSION,
     debug_with_version,
 )
-from .homgar_api import (
-    HomGarClient, HomGarApiError,
+from .api import (
+    RainPointClient, RainPointApiError,
     decode_moisture_simple, decode_moisture_full, decode_rain,
     decode_temphum, decode_flowmeter, decode_co2, decode_pool, decode_pool_plus,
     decode_valve_hub, decode_htv213frf_valve,
+    decode_hws019wrf_v2,
     # New HCS decoder functions
     decode_hcs005frf, decode_hcs003frf, decode_hcs024frf_v1,
     decode_hcs015arf, decode_hcs0528arf, decode_hcs027arf, decode_hcs016arf,
@@ -110,14 +110,14 @@ DECODER_REGISTRY = {
 }
 
 
-class HomGarCoordinator(DataUpdateCoordinator):
-    """Coordinator for HomGar polling."""
+class RainPointCoordinator(DataUpdateCoordinator):
+    """Coordinator for RainPoint polling."""
 
-    def __init__(self, hass: HomeAssistant, client: HomGarClient, entry):
+    def __init__(self, hass: HomeAssistant, client: RainPointClient, entry):
         super().__init__(
             hass,
             _LOGGER,
-            name="HomGar coordinator",
+            name="RainPoint coordinator",
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         )
         self._client = client
@@ -126,7 +126,7 @@ class HomGarCoordinator(DataUpdateCoordinator):
         self._notified_unknown_models: set[str] = set()
 
     async def _async_update_data(self):
-        """Fetch and decode data from HomGar/RainPoint."""
+        """Fetch and decode data from RainPoint."""
         try:
             homes = self._hids
             hubs: list[dict] = []
@@ -224,7 +224,6 @@ class HomGarCoordinator(DataUpdateCoordinator):
                             
                             # Special case: Display Hub uses different decoder
                             if model == MODEL_DISPLAY_HUB:
-                                from .homgar_api import decode_hws019wrf_v2
                                 decoded = decode_hws019wrf_v2(raw_value)
                             else:
                                 # Use decoder registry for all other models
@@ -241,28 +240,28 @@ class HomGarCoordinator(DataUpdateCoordinator):
                                     _LOGGER.warning(
                                         "="*60 + "\n"
                                         "UNSUPPORTED SENSOR MODEL DETECTED\n"
-                                        "Please report this to: https://github.com/brettmeyerowitz/homeassistant-homgar/issues\n"
+                                        "Please report this to: %s\n"
                                         "Include the following information:\n"
                                         "  Model: %s\n"
                                         "  Device ID (mid): %s\n"
                                         "  Address: %s\n"
                                         "  Raw Payload: %s\n"
                                         + "="*60,
-                                        model, mid, addr, raw_value
+                                        ISSUE_URL, model, mid, addr, raw_value
                                     )
                                     # Send persistent notification (once per model)
                                     if model and model not in self._notified_unknown_models:
                                         self._notified_unknown_models.add(model)
                                         async_create(
                                             self.hass,
-                                            f"HomGar detected an unsupported sensor model: **{model}**\n\n"
+                                            f"RainPoint detected an unsupported sensor model: **{model}**\n\n"
                                             f"To help add support for this sensor, please open an issue at:\n"
-                                            f"https://github.com/brettmeyerowitz/homeassistant-homgar/issues\n\n"
+                                            f"{ISSUE_URL}\n\n"
                                             f"Include the following raw payload data:\n"
                                             f"```\n{raw_value}\n```\n\n"
                                             f"You can also find this data in the sensor's attributes in Home Assistant.",
-                                            title="HomGar: Unsupported Sensor Detected",
-                                            notification_id=f"homgar_unsupported_{model}",
+                                            title="RainPoint: Unsupported Sensor Detected",
+                                            notification_id=f"rainpoint_unsupported_{model}",
                                         )
                             _LOGGER.debug(debug_with_version("Decoded data for mid=%s addr=%s: %s"), mid, addr, decoded)
                         except Exception as ex:  # noqa: BLE001
@@ -280,11 +279,11 @@ class HomGarCoordinator(DataUpdateCoordinator):
                     device_time = s.get("time")
                     if device_time:
                         try:
-                            dt = datetime.utcfromtimestamp(device_time / 1000).replace(tzinfo=timezone.utc)
+                            dt = datetime.fromtimestamp(device_time / 1000, tz=timezone.utc)
                             if decoded:
                                 decoded["device_timestamp"] = dt.isoformat()
                                 decoded["timestamp_source"] = "device"
-                        except (ValueError, TypeError, OSError):
+                        except (ValueError, TypeError, OSError, OverflowError):
                             pass
                     
                     decoded_sensors[sensor_key] = {
@@ -312,7 +311,8 @@ class HomGarCoordinator(DataUpdateCoordinator):
                 "status": status_by_mid,
                 "sensors": decoded_sensors,
             }
-        except HomGarApiError as err:
-            raise UpdateFailed(f"HomGar API error: {err}") from err
+        except RainPointApiError as err:
+            raise UpdateFailed(f"RainPoint API error: {err}") from err
         except Exception as err:  # noqa: BLE001
-            raise UpdateFailed(f"Unexpected HomGar error: {err}") from err
+            _LOGGER.exception("Unexpected RainPoint error while refreshing")
+            raise UpdateFailed(f"Unexpected RainPoint error: {err}") from err

@@ -1,10 +1,10 @@
 """
-HomGar API module.
+RainPoint API module.
 
-This module provides a clean, organized interface to the HomGar API functionality.
+This module provides a clean, organized interface to the RainPoint API functionality.
 """
 
-from .client import HomGarClient
+from .client import RainPointClient, RainPointApiError
 from .decoders import (
     decode_htv213frf_valve,
     decode_moisture_full,
@@ -54,7 +54,7 @@ from .validators import (
     _battery_status_to_percent,
 )
 from .utils import (
-    _parse_homgar_payload,
+    _parse_rainpoint_payload,
     _parse_tlv_payload,
     _le16,
     _f10_to_c,
@@ -63,7 +63,8 @@ from .utils import (
 
 __all__ = [
     # Client
-    "HomGarClient",
+    "RainPointClient",
+    "RainPointApiError",
     # Decoders
     "decode_htv213frf_valve",
     "decode_moisture_full",
@@ -111,7 +112,7 @@ __all__ = [
     "_extract_status_code",
     "_battery_status_to_percent",
     # Utils
-    "_parse_homgar_payload",
+    "_parse_rainpoint_payload",
     "_parse_tlv_payload",
     "_le16",
     "_f10_to_c",

@@ -12,8 +12,8 @@ This repository has automated checks to ensure the manifest version is properly 
 - Pull requests to main/master
 
 **Behavior:**
-- Checks if any files in `custom_components/` were changed
-- If changed, verifies that `custom_components/homgar/manifest.json` version was bumped
+- Checks if any files in `custom_components/rainpoint/` were changed
+- If changed, verifies that `custom_components/rainpoint/manifest.json` version was bumped
 - Blocks the commit/PR if version wasn't updated
 - Provides helpful error message with suggested version bump
 
@@ -32,12 +32,12 @@ This repository has automated checks to ensure the manifest version is properly 
 
 **Example Error:**
 ```
-❌ ERROR: Tag version does not match manifest version!
+ERROR: Tag version does not match manifest version!
 Tag version: 1.3.6
 Manifest version: 1.3.5
 
 To fix this:
-1. Update custom_components/homgar/manifest.json to version 1.3.6
+1. Update custom_components/rainpoint/manifest.json to version 1.3.6
 2. Commit and push the version bump
 3. Recreate the tag
 ```
@@ -90,7 +90,7 @@ git commit --no-verify -m "Add new sensor feature"
 - **Major (1.3.5 → 2.0.0):** Major architectural changes, breaking API changes
 
 ### How to Bump Version
-1. Edit `custom_components/homgar/manifest.json`
+1. Edit `custom_components/rainpoint/manifest.json`
 2. Update the `version` field
 3. Update `CHANGELOG.md` with changes
 4. Commit and push
@@ -128,7 +128,7 @@ git tag -d v1.3.6
 git push origin :refs/tags/v1.3.6
 
 # Fix manifest version
-# Edit custom_components/homgar/manifest.json
+# Edit custom_components/rainpoint/manifest.json
 
 # Create correct tag
 ./scripts/create-release-tag.sh

@@ -2,16 +2,12 @@
     "config": {
         "step": {
             "user": {
-                "title": "HomGar/RainPoint Cloud",
-                "description": "Log in with your HomGar/RainPoint account.",
+                "title": "RainPoint Cloud",
+                "description": "Log in with your RainPoint account.",
                 "data": {
                     "area_code": "Country code",
                     "email": "Email",
-                    "password": "Password",
-                    "app_type": "Mobile App Type"
-                },
-                "data_description": {
-                    "app_type": "Choose which mobile app you use with your devices."
+                    "password": "Password"
                 }
             },
             "select_homes": {
@@ -22,16 +18,12 @@
                 }
             },
             "reconfigure": {
-                "title": "Reconfigure HomGar/RainPoint",
-                "description": "Update your HomGar/RainPoint credentials.",
+                "title": "Reconfigure RainPoint",
+                "description": "Update your RainPoint credentials.",
                 "data": {
                     "area_code": "Country code",
                     "email": "Email",
-                    "password": "Password",
-                    "app_type": "Mobile App Type"
-                },
-                "data_description": {
-                    "app_type": "Choose which mobile app you use with your devices."
+                    "password": "Password"
                 }
             },
             "select_homes_reconfigure": {
@@ -44,14 +36,13 @@
         },
         "error": {
             "auth_failed": "Authentication failed. Please check your credentials.",
-            "cannot_connect": "Unable to connect to HomGar/RainPoint. Please try again.",
+            "cannot_connect": "Unable to connect to RainPoint. Please try again.",
             "no_homes": "No homes were found for this account.",
-            "select_at_least_one": "Please select a home.",
-            "invalid_app_type": "Invalid app type selected"
+            "select_at_least_one": "Please select a home."
         },
         "abort": {
             "already_configured": "This account is already configured.",
-            "reconfigure_successful": "HomGar/RainPoint integration has been successfully reconfigured."
+            "reconfigure_successful": "RainPoint integration has been successfully reconfigured."
         }
     }
 }

@@ -3,9 +3,10 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.const import __version__ as HA_VERSION
@@ -16,6 +17,7 @@ from .const import (
     CONF_DEBUG_LAST_SUBMISSION,
     DEBUG_SUBMISSION_INTERVAL,
     DEBUG_WORKER_URL,
+    DOMAIN,
     VERSION,
     debug_with_version,
 )
@@ -23,8 +25,8 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class HomGarDebugSwitchEntity(SwitchEntity):
-    """Switch for submitting HomGar debug data."""
+class RainPointDebugSwitchEntity(SwitchEntity):
+    """Switch for submitting RainPoint debug data."""
 
     def __init__(self, hass: HomeAssistant, coordinator, integration_entry):
         """Initialize the debug switch."""
@@ -32,7 +34,7 @@ class HomGarDebugSwitchEntity(SwitchEntity):
         self.coordinator = coordinator
         self.integration_entry = integration_entry
         self._attr_is_on = False
-        self._attr_unique_id = f"homgar_debug_{integration_entry.entry_id}"
+        self._attr_unique_id = f"rainpoint_debug_{integration_entry.entry_id}"
         self._attr_name = "Submit Debug Data"
         self._attr_icon = "mdi:bug"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -41,9 +43,9 @@ class HomGarDebugSwitchEntity(SwitchEntity):
     def device_info(self) -> DeviceInfo:
         """Return device info for this entity."""
         return DeviceInfo(
-            identifiers={("homgar", self.integration_entry.entry_id)},
-            name="HomGar Integration",
-            manufacturer="HomGar/RainPoint",
+            identifiers={(DOMAIN, self.integration_entry.entry_id)},
+            name="RainPoint Integration",
+            manufacturer="RainPoint",
             model="Cloud Integration",
             sw_version=VERSION,
         )
@@ -65,7 +67,7 @@ class HomGarDebugSwitchEntity(SwitchEntity):
             self.hass.async_create_task(
                 self._show_notification(
                     "✅ Debug data submitted successfully!\n\n"
-                    "Thank you for helping improve the HomGar integration. "
+                    "Thank you for helping improve the RainPoint integration. "
                     "Your anonymous device data will help us discover new patterns "
                     "and improve decoder accuracy for everyone.",
                     "success"
@@ -121,7 +123,7 @@ class HomGarDebugSwitchEntity(SwitchEntity):
             await self._update_last_submission_time()
 
     async def _collect_device_data(self) -> list:
-        """Collect data from all HomGar devices."""
+        """Collect data from all RainPoint devices."""
         devices = []
         
         # Debug coordinator state
@@ -208,32 +210,35 @@ class HomGarDebugSwitchEntity(SwitchEntity):
 
     async def _post_to_worker(self, data: dict):
         """Post data to debug worker."""
-        timeout = aiohttp.ClientTimeout(total=10)
-        
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            headers = {
-                "User-Agent": f"HomeAssistant-HomGar/{VERSION}",
-                "Content-Type": "application/json",
-            }
-            
-            _LOGGER.debug(debug_with_version(f"Submitting to worker: {DEBUG_WORKER_URL}"))
-            
-            async with session.post(DEBUG_WORKER_URL, json=data, headers=headers) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise Exception(f"Worker returned status {response.status}: {error_text}")
-                
-                result = await response.json()
-                if result.get("status") != "success":
-                    raise Exception(result.get("message", "Unknown error from worker"))
-                
-                _LOGGER.debug(debug_with_version(f"Worker response: {result}"))
+        if not DEBUG_WORKER_URL:
+            raise ValueError("Debug worker URL is not configured")
+
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        session = async_get_clientsession(self.hass)
+        headers = {
+            "User-Agent": f"HomeAssistant-RainPoint/{VERSION}",
+            "Content-Type": "application/json",
+        }
+
+        _LOGGER.debug(debug_with_version(f"Submitting to worker: {DEBUG_WORKER_URL}"))
+
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with session.post(DEBUG_WORKER_URL, json=data, headers=headers, timeout=timeout) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(f"Worker returned status {response.status}: {error_text}")
+
+            result = await response.json()
+            if result.get("status") != "success":
+                raise Exception(result.get("message", "Unknown error from worker"))
+
+            _LOGGER.debug(debug_with_version(f"Worker response: {result}"))
 
     async def _update_last_submission_time(self):
         """Update the last submission time in config entry."""
         try:
             new_data = self.integration_entry.data.copy()
-            new_data[CONF_DEBUG_LAST_SUBMISSION] = datetime.utcnow().isoformat()
+            new_data[CONF_DEBUG_LAST_SUBMISSION] = datetime.now(timezone.utc).isoformat()
             
             self.hass.config_entries.async_update_entry(
                 self.integration_entry,
@@ -245,9 +250,9 @@ class HomGarDebugSwitchEntity(SwitchEntity):
 
     async def _show_notification(self, message: str, notification_type: str = "info"):
         """Show notification to user."""
-        await async_create(
+        async_create(
             self.hass,
             message,
-            title="HomGar Debug Data",
-            notification_id=f"homgar_debug_{notification_type}",
+            title="RainPoint Debug Data",
+            notification_id=f"rainpoint_debug_{notification_type}",
         )

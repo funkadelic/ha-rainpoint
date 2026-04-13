@@ -13,8 +13,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MODEL_VALVE_HUB, MODEL_VALVE_213, MODEL_VALVE_245
-from .coordinator import HomGarCoordinator
-from .homgar_api import decode_valve_hub, decode_htv213frf_valve
+from .coordinator import RainPointCoordinator
+from .api import decode_valve_hub, decode_htv213frf_valve
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,10 +29,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: HomGarCoordinator = data["coordinator"]
+    coordinator: RainPointCoordinator = data["coordinator"]
 
     sensors_cfg = coordinator.data.get("sensors", {})
-    entities: list[HomGarValveEntity] = []
+    entities: list[RainPointValveEntity] = []
 
     for key, info in sensors_cfg.items():
         model = info.get("model")
@@ -47,7 +47,7 @@ async def async_setup_entry(
         # if the device reports fewer zones than the model name implies.
         for zone_num in sorted(zones.keys()):
             entities.append(
-                HomGarValveEntity(coordinator, key, info, zone_num)
+                RainPointValveEntity(coordinator, key, info, zone_num)
             )
             _LOGGER.debug(
                 "Creating valve entity: key=%s zone=%s model=%s",
@@ -58,8 +58,8 @@ async def async_setup_entry(
         async_add_entities(entities)
 
 
-class HomGarValveEntity(CoordinatorEntity, ValveEntity):
-    """Represents a single irrigation zone on a HomGar valve hub."""
+class RainPointValveEntity(CoordinatorEntity, ValveEntity):
+    """Represents a single irrigation zone on a RainPoint valve hub."""
 
     _attr_should_poll = False
     _attr_reports_position = False
@@ -67,7 +67,7 @@ class HomGarValveEntity(CoordinatorEntity, ValveEntity):
 
     def __init__(
         self,
-        coordinator: HomGarCoordinator,
+        coordinator: RainPointCoordinator,
         sensor_key: str,
         sensor_info: dict,
         zone_num: int,
@@ -82,7 +82,7 @@ class HomGarValveEntity(CoordinatorEntity, ValveEntity):
         addr = sensor_info["addr"]
         sub_name = sensor_info.get("sub_name") or f"Valve Hub {addr}"
 
-        self._attr_unique_id = f"homgar_{hid}_{mid}_{addr}_zone{zone_num}"
+        self._attr_unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{zone_num}"
         self._attr_name = f"{sub_name} Zone {zone_num}"
 
     # ------------------------------------------------------------------
@@ -161,7 +161,7 @@ class HomGarValveEntity(CoordinatorEntity, ValveEntity):
         return {
             "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},
             "name": sub_name,
-            "manufacturer": "HomGar",
+            "manufacturer": "RainPoint",
             "model": model,
         }
 
@@ -180,9 +180,9 @@ class HomGarValveEntity(CoordinatorEntity, ValveEntity):
         hid = self._sensor_info["hid"]
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
-        unique_id = f"homgar_{hid}_{mid}_{addr}_zone{self._zone_num}_duration"
+        unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{self._zone_num}_duration"
         registry = er.async_get(self.hass)
-        entity_id = registry.async_get_entity_id("number", "homgar", unique_id)
+        entity_id = registry.async_get_entity_id("number", "rainpoint", unique_id)
         if entity_id:
             state = self.hass.states.get(entity_id)
             if state is not None:
