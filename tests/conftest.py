@@ -34,12 +34,17 @@ _HA_STUBS = [
     "homeassistant.helpers.update_coordinator",
     "homeassistant.helpers.entity",
     "homeassistant.components",
+    "homeassistant.components.persistent_notification",
+    "homeassistant.components.select",
     "homeassistant.components.valve",
     "homeassistant.components.sensor",
     "homeassistant.components.number",
     "homeassistant.components.switch",
     "homeassistant.const",
+    "homeassistant.data_entry_flow",
     "homeassistant.exceptions",
+    "homeassistant.helpers.device_registry",
+    "homeassistant.helpers.restore_state",
     "aiohttp",
 ]
 
