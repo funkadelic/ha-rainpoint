@@ -313,4 +313,5 @@ class RainPointCoordinator(DataUpdateCoordinator):
         except RainPointApiError as err:
             raise UpdateFailed(f"RainPoint API error: {err}") from err
         except Exception as err:  # noqa: BLE001
+            _LOGGER.exception("Unexpected RainPoint error while refreshing")
             raise UpdateFailed(f"Unexpected RainPoint error: {err}") from err

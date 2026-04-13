@@ -16,7 +16,7 @@ class RainPointHubDevice(Entity):
         hub_info: dict,
     ) -> None:
         self._hub_info = hub_info
-        self._attr_unique_id = f"rainpoint_hub_{hub_info['hid']}"
+        self._attr_unique_id = f"{DOMAIN}_hub_{hub_info['hid']}"
         self._attr_name = hub_info.get("name", "RainPoint Hub")
         self._attr_should_poll = False
 

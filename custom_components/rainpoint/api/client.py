@@ -111,7 +111,8 @@ class RainPointClient:
             data = await resp.json()
 
         if data.get("code") != 0 or "data" not in data:
-            raise RainPointApiError(f"Login failed: {data}")
+            _LOGGER.debug("Login failed response: %s", data)
+            raise RainPointApiError(f"Login failed: code {data.get('code')}")
 
         d = data["data"]
         self._token = d["token"]
@@ -138,7 +139,8 @@ class RainPointClient:
             data = await resp.json()
         _LOGGER.debug("API response: list_homes data=%s", data)
         if data.get("code") != 0:
-            raise RainPointApiError(f"list_homes failed: {data}")
+            _LOGGER.debug("list_homes failed response: %s", data)
+            raise RainPointApiError(f"list_homes failed: code {data.get('code')}")
         return data.get("data", [])
 
     async def get_devices_by_hid(self, hid: int) -> list[dict]:
@@ -152,7 +154,8 @@ class RainPointClient:
             data = await resp.json()
         _LOGGER.debug("API response: get_devices_by_hid data=%s", data)
         if data.get("code") != 0:
-            raise RainPointApiError(f"getDeviceByHid failed: {data}")
+            _LOGGER.debug("getDeviceByHid failed response: %s", data)
+            raise RainPointApiError(f"getDeviceByHid failed: code {data.get('code')}")
         return data.get("data", [])
 
     async def get_multiple_device_status(self, devices: list[dict]) -> list[dict]:
@@ -177,7 +180,8 @@ class RainPointClient:
             data = await resp.json()
         _LOGGER.debug("API response: get_multiple_device_status data=%s", data)
         if data.get("code") != 0:
-            raise RainPointApiError(f"multipleDeviceStatus failed: {data}")
+            _LOGGER.debug("multipleDeviceStatus failed response: %s", data)
+            raise RainPointApiError(f"multipleDeviceStatus failed: code {data.get('code')}")
 
         # Convert response format to match individual device status format
         # Response has: [{"propVer": X, "status": [...], "mid": Y, "iotId": Z}, ...]
@@ -203,7 +207,8 @@ class RainPointClient:
             data = await resp.json()
         _LOGGER.debug("API response: get_device_status data=%s", data)
         if data.get("code") != 0:
-            raise RainPointApiError(f"getDeviceStatus failed: {data}")
+            _LOGGER.debug("getDeviceStatus failed response: %s", data)
+            raise RainPointApiError(f"getDeviceStatus failed: code {data.get('code')}")
         return data.get("data", {})
 
     async def set_device_state(self, home_id: int, device_name: str, mid: int, product_key: str, state: dict) -> bool:
@@ -282,7 +287,8 @@ class RainPointClient:
                 "controlWorkMode: device already in requested state (code 4, idempotent): %s", data
             )
         elif code != 0:
-            raise RainPointApiError(f"controlWorkMode failed: {data}")
+            _LOGGER.debug("controlWorkMode failed response: %s", data)
+            raise RainPointApiError(f"controlWorkMode failed: code {code}")
         resp_data = data.get("data")
         if isinstance(resp_data, dict):
             state = resp_data.get("state")

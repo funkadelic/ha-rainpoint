@@ -31,7 +31,10 @@ fi
 
 echo "Docker container 'ha-test' is running"
 
-# Copy integration to Docker container
+# Remove stale files and copy integration to Docker container
+echo "Cleaning target directory in container..."
+docker exec ha-test rm -rf /config/custom_components/rainpoint > /dev/null 2>&1
+docker exec ha-test mkdir -p /config/custom_components/rainpoint > /dev/null 2>&1
 echo "Copying integration to Docker container..."
 docker cp custom_components/rainpoint ha-test:/config/custom_components/ > /dev/null 2>&1
 

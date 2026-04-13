@@ -13,7 +13,7 @@ from .api import RainPointClient
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["sensor", "valve", "number", "switch"]
+PLATFORMS: list[str] = ["sensor", "select", "valve", "number", "switch"]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:

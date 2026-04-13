@@ -110,8 +110,7 @@ class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDev
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_channel"
         self._attr_name = f"{hub_info.get('name', 'RainPoint Hub')} RF Channel"
         self._attr_options = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"]
-        # Channel 7 from your hub data
-        self._attr_current_option = "7"
+        self._attr_current_option = None  # Unknown until API supports reading
 
     @property
     def available(self) -> bool:
@@ -139,14 +138,14 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
         RainPointHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_broadcast"
         self._attr_name = f"{hub_info.get('name', 'RainPoint Hub')} Automatic Broadcast"
-        self._attr_is_on = True  # Default to on
+        self._attr_is_on = None  # Unknown until API supports reading
 
     @property
     def available(self) -> bool:
         return True
 
     @property
-    def is_on(self) -> bool:
+    def is_on(self) -> bool | None:
         return self._attr_is_on
 
     async def async_turn_on(self) -> None:

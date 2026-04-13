@@ -63,8 +63,6 @@ from .hub_entities import (
     RainPointHubDeviceIDSensor,
     RainPointHubFirmwareSensor,
     RainPointHubMACSensor,
-    RainPointHubChannelSelect,
-    RainPointHubBroadcastSwitch,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -105,22 +103,16 @@ async def async_setup_entry(
         entities.append(RainPointHubDeviceIDSensor(coordinator, hub_info))
         entities.append(RainPointHubFirmwareSensor(coordinator, hub_info))
         entities.append(RainPointHubMACSensor(coordinator, hub_info))
-        entities.append(RainPointHubChannelSelect(coordinator, hub_info))
-        entities.append(RainPointHubBroadcastSwitch(coordinator, hub_info))
 
     # Create sensor entities for sub-devices
     for key, info in sensors_cfg.items():
         model = info.get("model")
         sub_name = info.get("sub_name") or f"Sensor {info['addr']}"
-        home_name = info.get("home_name") or ""
-        brand = info.get("brand", "RainPoint")
-        base_slug_parts = []
-        if home_name:
-            base_slug_parts.append(_slugify(home_name))
-        base_slug_parts.append(_slugify(sub_name))
-        if brand != "RainPoint":
-            base_slug_parts.append(_slugify(brand.lower()))
-        base_slug = "_".join(base_slug_parts)
+        # Use stable hardware identifiers for unique IDs to survive renames
+        hid = info.get("hid", "")
+        mid = info.get("mid", "")
+        addr = info.get("addr", "")
+        base_slug = f"{hid}_{mid}_{addr}"
         _LOGGER.debug("Creating sensor entity: key=%s, model=%s, sub_name=%s, home_name=%s, base_slug=%s, info=%s", key, model, sub_name, home_name, base_slug, info)
 
         if model == MODEL_DISPLAY_HUB:

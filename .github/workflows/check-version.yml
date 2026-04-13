@@ -68,8 +68,15 @@ jobs:
           fi
         else
           # For pushes, compare with previous commit
-          TARGET_VERSION=$(jq -r '.version' <(git show HEAD~1:custom_components/rainpoint/manifest.json))
           CURRENT_VERSION=$(jq -r '.version' custom_components/rainpoint/manifest.json)
+          if git show HEAD~1:custom_components/rainpoint/manifest.json >/dev/null 2>&1; then
+            TARGET_VERSION=$(jq -r '.version' <(git show HEAD~1:custom_components/rainpoint/manifest.json))
+          elif git show HEAD~1:custom_components/homgar/manifest.json >/dev/null 2>&1; then
+            TARGET_VERSION=$(jq -r '.version' <(git show HEAD~1:custom_components/homgar/manifest.json))
+          else
+            echo "manifest.json not found in HEAD~1 at either path — skipping version bump check"
+            exit 0
+          fi
         fi
 
         echo "Target branch version: $TARGET_VERSION"

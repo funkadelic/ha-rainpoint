@@ -247,7 +247,7 @@ class RainPointDebugSwitchEntity(SwitchEntity):
 
     async def _show_notification(self, message: str, notification_type: str = "info"):
         """Show notification to user."""
-        await async_create(
+        async_create(
             self.hass,
             message,
             title="RainPoint Debug Data",
