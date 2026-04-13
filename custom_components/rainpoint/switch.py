@@ -1,4 +1,4 @@
-"""Switch entities for HomGar integration."""
+"""Switch entities for RainPoint integration."""
 
 import logging
 
@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .debug import HomGarDebugSwitchEntity
+from .debug import RainPointDebugSwitchEntity
 from .coordinator import RainPointCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -18,14 +18,14 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up HomGar switch entities."""
+    """Set up RainPoint switch entities."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
     entities = []
 
     # Add debug switch
-    debug_switch = HomGarDebugSwitchEntity(hass, coordinator, entry)
+    debug_switch = RainPointDebugSwitchEntity(hass, coordinator, entry)
     entities.append(debug_switch)
 
     _LOGGER.info(f"Added {len(entities)} switch entities")

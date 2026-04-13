@@ -82,7 +82,7 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
         addr = sensor_info["addr"]
         sub_name = sensor_info.get("sub_name") or f"Valve Hub {addr}"
 
-        self._attr_unique_id = f"homgar_{hid}_{mid}_{addr}_zone{zone_num}"
+        self._attr_unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{zone_num}"
         self._attr_name = f"{sub_name} Zone {zone_num}"
 
     # ------------------------------------------------------------------
@@ -180,9 +180,9 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
         hid = self._sensor_info["hid"]
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
-        unique_id = f"homgar_{hid}_{mid}_{addr}_zone{self._zone_num}_duration"
+        unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{self._zone_num}_duration"
         registry = er.async_get(self.hass)
-        entity_id = registry.async_get_entity_id("number", "homgar", unique_id)
+        entity_id = registry.async_get_entity_id("number", "rainpoint", unique_id)
         if entity_id:
             state = self.hass.states.get(entity_id)
             if state is not None:
