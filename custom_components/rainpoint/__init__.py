@@ -90,7 +90,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                     title="RainPoint Reload Failed",
                     notification_id="rainpoint_reload_error",
                 )
-                raise ValueError("No RainPoint integrations found to reload")
+                return {"success": False, "message": "No RainPoint integrations found to reload"}
 
             # Reload all entries
             success_count = 0

@@ -49,13 +49,13 @@ _HA_STUBS = [
 ]
 
 for _stub_name in _HA_STUBS:
+    # Ensure every ancestor package is present so that
+    # `from homeassistant.config_entries import ConfigEntry` resolves the
+    # parent package first without KeyError.
+    _parts = _stub_name.split(".")
+    for _i in range(1, len(_parts)):
+        _parent = ".".join(_parts[:_i])
+        if _parent not in sys.modules:
+            _make_stub(_parent)
     if _stub_name not in sys.modules:
         _make_stub(_stub_name)
-        # Ensure every ancestor package is also present so that
-        # `from homeassistant.config_entries import ConfigEntry` resolves the
-        # parent package first without KeyError.
-        _parts = _stub_name.split(".")
-        for _i in range(1, len(_parts)):
-            _parent = ".".join(_parts[:_i])
-            if _parent not in sys.modules:
-                _make_stub(_parent)

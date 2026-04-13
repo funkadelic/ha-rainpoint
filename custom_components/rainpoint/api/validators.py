@@ -50,19 +50,20 @@ def _extract_status_code(b: bytes, offset: int, offset2: int) -> int:
     return b[offset] | (b[offset2] << 8)
 
 
+_BATTERY_MAP = {
+    0x0FFF: 100,
+    0x0FFE: 90,
+    0x0FFD: 80,
+    0x0FFC: 70,
+    0x0FFB: 60,
+    0x0FFA: 50,
+    0x0FF9: 40,
+    0x0FF8: 30,
+    0x0FF7: 20,
+    0x0FF6: 10,
+}
+
+
 def _battery_status_to_percent(status_code: int) -> int:
     """Convert battery status code to percentage."""
-    # This is a simplified conversion - may need adjustment based on real data
-    _BATTERY_MAP = {
-        0x0FFF: 100,
-        0x0FFE: 90,
-        0x0FFD: 80,
-        0x0FFC: 70,
-        0x0FFB: 60,
-        0x0FFA: 50,
-        0x0FF9: 40,
-        0x0FF8: 30,
-        0x0FF7: 20,
-        0x0FF6: 10,
-    }
     return _BATTERY_MAP.get(status_code, 0)
