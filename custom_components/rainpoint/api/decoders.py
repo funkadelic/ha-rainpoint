@@ -144,7 +144,7 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
         }
 
         _LOGGER.info(
-            debug_with_version("HTV213FRF ASCII decoded: %d zones, hub_online=%s, rssi=%d"), len(zones), hub_online, rssi_dbm
+            debug_with_version("HTV213FRF ASCII decoded: %d zones, hub_online=%s, rssi=%s"), len(zones), hub_online, rssi_dbm
         )
         return result
 
@@ -384,7 +384,7 @@ def _decode_moisture_full_ascii(raw: str) -> dict:
         }
 
         _LOGGER.info(
-            debug_with_version("HCS021FRF ASCII decoded: temp=%.1f°C, moisture=%d%%, lux=%.1f, rssi=%d"),
+            debug_with_version("HCS021FRF ASCII decoded: temp=%.1f°C, moisture=%d%%, lux=%.1f, rssi=%s"),
             temp_c,
             moisture,
             lux,
