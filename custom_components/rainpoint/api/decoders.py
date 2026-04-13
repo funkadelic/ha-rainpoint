@@ -1,13 +1,13 @@
 """
-Decoder functions for HomGar API.
+Decoder functions for RainPoint API.
 
 This module contains all device-specific decoder functions for different
-HomGar and RainPoint device types.
+RainPoint device types.
 """
 
 import logging
 
-from .utils import _parse_homgar_payload, _parse_tlv_payload, _le16, _f10_to_c, _base_decoder_dict
+from .utils import _parse_rainpoint_payload, _parse_tlv_payload, _le16, _f10_to_c, _base_decoder_dict
 from .validators import _validate_payload, _validate_tag, _extract_rssi, _extract_status_code, _battery_status_to_percent
 
 _LOGGER = logging.getLogger(__name__)
@@ -175,7 +175,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
     _TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
 
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         _LOGGER.debug(debug_with_version("HTV213FRF hex raw bytes: %s"), b)
 
         # Scan the byte stream for DP records.
@@ -517,7 +517,7 @@ def decode_valve_hub(raw: str) -> dict:
     _DP_BASE_DURATION = 0x24  # zone N duration DP = 0x24 + N
 
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         _LOGGER.debug(debug_with_version("Valve hub raw bytes: %s"), b)
         
         tlv = _parse_tlv_payload(raw)
@@ -697,7 +697,7 @@ def decode_flow_meter(raw: str) -> dict:
     }
     
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
             result["rssi"] = _extract_rssi(b)
         
@@ -731,7 +731,7 @@ def decode_pool_plus(raw: str) -> dict:
     }
     
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
             result["rssi"] = _extract_rssi(b)
         
@@ -757,7 +757,7 @@ def decode_soil(raw: str) -> dict:
     }
     
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
@@ -781,7 +781,7 @@ def decode_temp_hum(raw: str) -> dict:
     }
     
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
@@ -805,7 +805,7 @@ def decode_temp_hum_full(raw: str) -> dict:
     }
     
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
@@ -829,7 +829,7 @@ def decode_co2(raw: str) -> dict:
     }
     
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
@@ -853,7 +853,7 @@ def decode_display(raw: str) -> dict:
     }
     
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
@@ -877,7 +877,7 @@ def decode_unknown(raw: str) -> dict:
     }
     
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
@@ -902,7 +902,7 @@ def decode_temphum(raw: str) -> dict:
     }
     
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
@@ -926,7 +926,7 @@ def decode_pool(raw: str) -> dict:
     }
     
     try:
-        b = _parse_homgar_payload(raw)
+        b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
