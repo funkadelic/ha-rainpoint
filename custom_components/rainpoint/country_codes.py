@@ -1,4 +1,4 @@
-"""Country code mapping for HomGar/RainPoint integration."""
+"""Country code mapping for the RainPoint Cloud integration."""
 
 # ISO 3166-1 alpha-2 → phone country code
 COUNTRY_TO_PHONE_CODE = {

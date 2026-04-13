@@ -18,9 +18,6 @@ class RainPointApiError(Exception):
     pass
 
 
-# Backward-compat alias
-HomGarApiError = RainPointApiError
-
 
 class RainPointClient:
     def __init__(self, area_code: str, email: str, password: str, session: aiohttp.ClientSession):

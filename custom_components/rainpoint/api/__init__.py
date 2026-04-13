@@ -4,7 +4,7 @@ RainPoint API module.
 This module provides a clean, organized interface to the RainPoint API functionality.
 """
 
-from .client import RainPointClient, RainPointApiError, HomGarApiError
+from .client import RainPointClient, RainPointApiError
 from .decoders import (
     decode_htv213frf_valve,
     decode_moisture_full,
@@ -65,7 +65,6 @@ __all__ = [
     # Client
     "RainPointClient",
     "RainPointApiError",
-    "HomGarApiError",  # backward-compat alias
     # Decoders
     "decode_htv213frf_valve",
     "decode_moisture_full",
