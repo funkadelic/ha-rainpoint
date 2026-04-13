@@ -115,7 +115,7 @@ async def async_setup_entry(
         if model == MODEL_DISPLAY_HUB:
             data = info.get("data", {})
             readings = data.get("readings", {}) if data else {}
-            for reading_key, reading_val in readings.items():
+            for reading_key, _reading_val in readings.items():
                 entities.append(DisplayHubReadingSensor(coordinator, key, info, base_slug, reading_key))
         elif model == MODEL_MOISTURE_SIMPLE:
             entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True))

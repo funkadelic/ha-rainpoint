@@ -278,7 +278,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                     device_time = s.get("time")
                     if device_time:
                         try:
-                            dt = datetime.utcfromtimestamp(device_time / 1000).replace(tzinfo=timezone.utc)
+                            dt = datetime.fromtimestamp(device_time / 1000, tz=timezone.utc)
                             if decoded:
                                 decoded["device_timestamp"] = dt.isoformat()
                                 decoded["timestamp_source"] = "device"

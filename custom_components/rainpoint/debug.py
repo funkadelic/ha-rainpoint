@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.persistent_notification import async_create
@@ -235,7 +235,7 @@ class RainPointDebugSwitchEntity(SwitchEntity):
         """Update the last submission time in config entry."""
         try:
             new_data = self.integration_entry.data.copy()
-            new_data[CONF_DEBUG_LAST_SUBMISSION] = datetime.utcnow().isoformat()
+            new_data[CONF_DEBUG_LAST_SUBMISSION] = datetime.now(timezone.utc).isoformat()
             
             self.hass.config_entries.async_update_entry(
                 self.integration_entry,

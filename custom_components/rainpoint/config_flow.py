@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -19,8 +20,7 @@ from .const import (
     CONF_HIDS,
 )
 from .country_codes import get_default_country_code
-from .api import RainPointClient
-from .api.client import RainPointApiError
+from .api import RainPointClient, RainPointApiError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,6 +42,9 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             email = user_input[CONF_EMAIL]
             password = user_input[CONF_PASSWORD]
 
+            # Normalize email for consistent deduplication
+            email = email.strip().lower()
+
             # Single account per HA instance
             await self.async_set_unique_id(f"{DOMAIN}_{email}")
             if self._reconfigure:
@@ -60,7 +63,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except RainPointApiError:
                 _LOGGER.exception("Error logging in to RainPoint")
                 errors["base"] = "auth_failed"
-            except aiohttp.ClientError:
+            except (aiohttp.ClientError, asyncio.TimeoutError):
                 _LOGGER.exception("Network error talking to RainPoint")
                 errors["base"] = "cannot_connect"
             else:
@@ -179,7 +182,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data_schema=data_schema,
                     errors={"base": "auth_failed"},
                 )
-            except aiohttp.ClientError:
+            except (aiohttp.ClientError, asyncio.TimeoutError):
                 _LOGGER.exception("Network error during reconfigure")
                 return self.async_show_form(
                     step_id="reconfigure",
@@ -194,7 +197,8 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         errors={"base": "no_homes"},
                     )
                 else:
-                    # Update unique_id for account deduplication
+                    # Normalize email and update unique_id for account deduplication
+                    email = email.strip().lower()
                     await self.async_set_unique_id(f"{DOMAIN}_{email}")
                     self._abort_if_unique_id_mismatch()
 

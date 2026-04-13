@@ -16,18 +16,6 @@ jobs:
       with:
         fetch-depth: 0  # Get full history for comparison
 
-    - name: Get changed files
-      id: changed-files
-      run: |
-        if [ "${{ github.event_name }}" = "pull_request" ]; then
-          # For PRs, compare with target branch
-          git diff --name-only origin/${{ github.base_ref }}..HEAD
-        else
-          # For pushes, compare with previous commit
-          git diff --name-only HEAD~1..HEAD
-        fi
-      continue-on-error: true
-
     - name: Check if custom_components changed
       id: check-changes
       run: |
@@ -58,10 +46,8 @@ jobs:
 
           # Get version from target branch (may not exist if path was renamed)
           git fetch origin "${{ github.base_ref }}"
-          if git checkout "origin/${{ github.base_ref }}" -- custom_components/rainpoint/manifest.json 2>/dev/null; then
-            TARGET_VERSION=$(jq -r '.version' custom_components/rainpoint/manifest.json)
-            # Restore current manifest
-            git checkout HEAD -- custom_components/rainpoint/manifest.json
+          if git show "origin/${{ github.base_ref }}:custom_components/rainpoint/manifest.json" >/dev/null 2>&1; then
+            TARGET_VERSION=$(git show "origin/${{ github.base_ref }}:custom_components/rainpoint/manifest.json" | jq -r '.version')
           else
             # Path doesn't exist on target branch (e.g., folder rename) — skip version comparison
             echo "manifest.json not found on target branch at custom_components/rainpoint/ — skipping version bump check (likely a rename)"
