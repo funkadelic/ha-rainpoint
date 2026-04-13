@@ -568,8 +568,8 @@ def decode_valve_hub(raw: str) -> dict:
                 zones[zone_num] = {
                     "open": zone_state,
                     "duration_seconds": zone_duration,
-                    "state_raw": state_raw if state_dp in tlv else None,
-                    "duration_raw": duration_raw if duration_dp in tlv else None,
+                    "state_raw": tlv[state_dp][1] if state_dp in tlv else None,
+                    "duration_raw": tlv[duration_dp][1] if duration_dp in tlv else None,
                 }
 
         result = {
