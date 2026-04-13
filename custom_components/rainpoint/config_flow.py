@@ -98,10 +98,6 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         _LOGGER.info("Available homes: %s", home_options)
 
         if user_input is not None:
-            selected_hids = user_input["hids"]
-            _LOGGER.info("Selected home IDs: %s", selected_hids)
-
-        if user_input is not None:
             selected = user_input.get(CONF_HIDS)
             if not selected:
                 errors["base"] = "select_at_least_one"
