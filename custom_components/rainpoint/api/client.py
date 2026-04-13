@@ -48,7 +48,7 @@ class RainPointClient:
         return {
             "auth": self._token, 
             "lang": "en", 
-            "appCode": self._app_code,  # Use dynamic app_code based on user selection
+            "appCode": self._app_code,  # Hardcoded to RainPoint appCode "2"
             "version": "1.16.1065",
             "sceneType": "1"
         }
