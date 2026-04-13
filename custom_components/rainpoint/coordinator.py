@@ -59,6 +59,7 @@ from .api import (
     decode_moisture_simple, decode_moisture_full, decode_rain,
     decode_temphum, decode_flowmeter, decode_co2, decode_pool, decode_pool_plus,
     decode_valve_hub, decode_htv213frf_valve,
+    decode_hws019wrf_v2,
     # New HCS decoder functions
     decode_hcs005frf, decode_hcs003frf, decode_hcs024frf_v1,
     decode_hcs015arf, decode_hcs0528arf, decode_hcs027arf, decode_hcs016arf,
@@ -222,7 +223,6 @@ class RainPointCoordinator(DataUpdateCoordinator):
                             
                             # Special case: Display Hub uses different decoder
                             if model == MODEL_DISPLAY_HUB:
-                                from .api import decode_hws019wrf_v2
                                 decoded = decode_hws019wrf_v2(raw_value)
                             else:
                                 # Use decoder registry for all other models

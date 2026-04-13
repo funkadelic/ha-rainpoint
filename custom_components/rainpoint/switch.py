@@ -31,7 +31,7 @@ async def async_setup_entry(
     else:
         hubs_dict = hubs_cfg
 
-    for hub_key, hub_info in hubs_dict.items():
+    for _hub_key, hub_info in hubs_dict.items():
         entities.append(RainPointHubBroadcastSwitch(coordinator, hub_info))
 
     # Only register the debug switch when the worker URL is configured

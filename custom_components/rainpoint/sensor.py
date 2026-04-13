@@ -95,10 +95,7 @@ async def async_setup_entry(
     else:
         hubs_dict = hubs_cfg
     
-    for hub_key, hub_info in hubs_dict.items():
-        hub_name = hub_info.get("name", "RainPoint Hub")
-        hub_slug = _slugify(f"hub_{hub_name}")
-        
+    for _hub_key, hub_info in hubs_dict.items():
         # Add hub sensors
         entities.append(RainPointHubDeviceIDSensor(coordinator, hub_info))
         entities.append(RainPointHubFirmwareSensor(coordinator, hub_info))
@@ -113,7 +110,7 @@ async def async_setup_entry(
         mid = info.get("mid", "")
         addr = info.get("addr", "")
         base_slug = f"{hid}_{mid}_{addr}"
-        _LOGGER.debug("Creating sensor entity: key=%s, model=%s, sub_name=%s, home_name=%s, base_slug=%s, info=%s", key, model, sub_name, home_name, base_slug, info)
+        _LOGGER.debug("Creating sensor entity: key=%s, model=%s, sub_name=%s, base_slug=%s", key, model, sub_name, base_slug)
 
         if model == MODEL_DISPLAY_HUB:
             data = info.get("data", {})

@@ -30,7 +30,7 @@ async def async_setup_entry(
     else:
         hubs_dict = hubs_cfg
 
-    for hub_key, hub_info in hubs_dict.items():
+    for _hub_key, hub_info in hubs_dict.items():
         entities.append(RainPointHubChannelSelect(coordinator, hub_info))
 
     _LOGGER.info("Added %d select entities", len(entities))

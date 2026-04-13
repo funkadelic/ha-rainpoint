@@ -195,7 +195,6 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                 else:
                     # Update unique_id for account deduplication
-                    entry = self._get_reconfigure_entry()
                     await self.async_set_unique_id(f"{DOMAIN}_{email}")
                     self._abort_if_unique_id_mismatch()
 

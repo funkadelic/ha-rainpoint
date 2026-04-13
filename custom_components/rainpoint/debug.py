@@ -221,15 +221,15 @@ class RainPointDebugSwitchEntity(SwitchEntity):
         _LOGGER.debug(debug_with_version(f"Submitting to worker: {DEBUG_WORKER_URL}"))
 
         async with session.post(DEBUG_WORKER_URL, json=data, headers=headers) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise Exception(f"Worker returned status {response.status}: {error_text}")
-                
-                result = await response.json()
-                if result.get("status") != "success":
-                    raise Exception(result.get("message", "Unknown error from worker"))
-                
-                _LOGGER.debug(debug_with_version(f"Worker response: {result}"))
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(f"Worker returned status {response.status}: {error_text}")
+
+            result = await response.json()
+            if result.get("status") != "success":
+                raise Exception(result.get("message", "Unknown error from worker"))
+
+            _LOGGER.debug(debug_with_version(f"Worker response: {result}"))
 
     async def _update_last_submission_time(self):
         """Update the last submission time in config entry."""
