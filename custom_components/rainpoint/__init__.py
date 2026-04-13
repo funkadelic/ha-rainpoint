@@ -113,7 +113,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 persistent_notification.async_create(
                     hass, error_msg, title="RainPoint Reload Partial", notification_id="rainpoint_reload_partial"
                 )
-                raise ValueError(error_msg)
+                return {"message": error_msg, "success": False}
 
         # Reload specific entry
         success = await async_reload_integration(hass, entry_id)
@@ -134,7 +134,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 title="RainPoint Reload Failed",
                 notification_id="rainpoint_reload_error",
             )
-            raise ValueError("Failed to reload RainPoint integration")
+            return {"message": "Failed to reload RainPoint integration", "success": False}
 
     # Register the service with optional entry_id
     hass.services.async_register(
