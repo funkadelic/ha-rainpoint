@@ -5,7 +5,6 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-import aiohttp
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.const import __version__ as HA_VERSION
@@ -209,17 +208,19 @@ class RainPointDebugSwitchEntity(SwitchEntity):
 
     async def _post_to_worker(self, data: dict):
         """Post data to debug worker."""
-        timeout = aiohttp.ClientTimeout(total=10)
-        
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            headers = {
-                "User-Agent": f"HomeAssistant-RainPoint/{VERSION}",
-                "Content-Type": "application/json",
-            }
-            
-            _LOGGER.debug(debug_with_version(f"Submitting to worker: {DEBUG_WORKER_URL}"))
-            
-            async with session.post(DEBUG_WORKER_URL, json=data, headers=headers) as response:
+        if not DEBUG_WORKER_URL:
+            raise ValueError("Debug worker URL is not configured")
+
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        session = async_get_clientsession(self.hass)
+        headers = {
+            "User-Agent": f"HomeAssistant-RainPoint/{VERSION}",
+            "Content-Type": "application/json",
+        }
+
+        _LOGGER.debug(debug_with_version(f"Submitting to worker: {DEBUG_WORKER_URL}"))
+
+        async with session.post(DEBUG_WORKER_URL, json=data, headers=headers) as response:
                 if response.status != 200:
                     error_text = await response.text()
                     raise Exception(f"Worker returned status {response.status}: {error_text}")

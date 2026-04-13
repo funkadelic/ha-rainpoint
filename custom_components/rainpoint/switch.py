@@ -6,8 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .debug import RainPointDebugSwitchEntity
+from .const import DEBUG_WORKER_URL, DOMAIN
 from .coordinator import RainPointCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,9 +23,11 @@ async def async_setup_entry(
 
     entities = []
 
-    # Add debug switch
-    debug_switch = RainPointDebugSwitchEntity(hass, coordinator, entry)
-    entities.append(debug_switch)
+    # Only register the debug switch when the worker URL is configured
+    if DEBUG_WORKER_URL:
+        from .debug import RainPointDebugSwitchEntity
+        debug_switch = RainPointDebugSwitchEntity(hass, coordinator, entry)
+        entities.append(debug_switch)
 
-    _LOGGER.info(f"Added {len(entities)} switch entities")
+    _LOGGER.info("Added %d switch entities", len(entities))
     async_add_entities(entities)
