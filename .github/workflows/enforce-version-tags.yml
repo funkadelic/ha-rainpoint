@@ -26,7 +26,7 @@ jobs:
     - name: Get manifest version
       id: manifest-version
       run: |
-        MANIFEST_VERSION=$(jq -r '.version' custom_components/homgar/manifest.json)
+        MANIFEST_VERSION=$(jq -r '.version' custom_components/rainpoint/manifest.json)
         echo "manifest_version=$MANIFEST_VERSION" >> $GITHUB_OUTPUT
         echo "Manifest version: $MANIFEST_VERSION"
         
@@ -43,7 +43,7 @@ jobs:
           echo "Manifest version: $MANIFEST_VERSION"
           echo ""
           echo "To fix this:"
-          echo "1. Update custom_components/homgar/manifest.json to version $TAG_VERSION"
+          echo "1. Update custom_components/rainpoint/manifest.json to version $TAG_VERSION"
           echo "2. Commit and push the version bump"
           echo "3. Recreate the tag"
           echo ""
