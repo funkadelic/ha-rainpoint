@@ -1,15 +1,16 @@
 """Diagnostic sensors for RainPoint devices."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
-    SensorEntity,
     SensorDeviceClass,
+    SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import EntityCategory, SIGNAL_STRENGTH_DECIBELS_MILLIWATT, PERCENTAGE
+from homeassistant.const import PERCENTAGE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT, EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import RainPointCoordinator
@@ -49,6 +50,7 @@ class RainPointDiagnosticSensorBase(CoordinatorEntity, SensorEntity):
     def device_info(self) -> dict[str, Any]:
         """Represent each subDevice as its own HA device."""
         from .const import DOMAIN
+
         hid = self._sensor_info["hid"]
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
@@ -81,17 +83,29 @@ class RainPointDeviceIDSensor(RainPointDiagnosticSensorBase):
         if info:
             # Log available fields for debugging
             import logging
+
             _LOGGER = logging.getLogger(__name__)
             _LOGGER.debug("Available fields for %s: %s", self._sensor_key, list(info.keys()))
-            
+
             # Check for various possible device ID fields
             device_id_fields = [
-                "device_id", "deviceId", "id", "deviceID",
-                "sub_device_id", "subDeviceId", "subDeviceID",
-                "device_sn", "deviceSN", "serial_number", "serialNumber",
-                "addr", "address", "mac", "mac_address"
+                "device_id",
+                "deviceId",
+                "id",
+                "deviceID",
+                "sub_device_id",
+                "subDeviceId",
+                "subDeviceID",
+                "device_sn",
+                "deviceSN",
+                "serial_number",
+                "serialNumber",
+                "addr",
+                "address",
+                "mac",
+                "mac_address",
             ]
-            
+
             for field in device_id_fields:
                 device_id = info.get(field)
                 if device_id:
@@ -99,7 +113,7 @@ class RainPointDeviceIDSensor(RainPointDiagnosticSensorBase):
                     # Check if this looks like the RainPoint device ID (10 digits starting with 1)
                     if isinstance(device_id, (int, str)) and str(device_id).isdigit() and len(str(device_id)) >= 9:
                         return device_id
-            
+
             # Check if device ID is in the decoded data
             decoded_data = info.get("data", {})
             if decoded_data:
@@ -111,20 +125,21 @@ class RainPointDeviceIDSensor(RainPointDiagnosticSensorBase):
                         _LOGGER.debug("Found device ID in decoded data %s: %s", field, device_id)
                         if isinstance(device_id, (int, str)) and str(device_id).isdigit() and len(str(device_id)) >= 9:
                             return device_id
-                
+
                 # Check raw payload for device ID pattern
                 raw_payload = decoded_data.get("raw_value")
                 if raw_payload and isinstance(raw_payload, str):
                     # Look for 10-digit patterns in raw payload
                     import re
-                    matches = re.findall(r'\b\d{9,}\b', raw_payload)
+
+                    matches = re.findall(r"\b\d{9,}\b", raw_payload)
                     if matches:
                         _LOGGER.debug("Found potential device IDs in raw payload: %s", matches)
                         # Return the first match that looks like a device ID
                         for match in matches:
-                            if match.startswith('1'):  # RainPoint IDs seem to start with 1
+                            if match.startswith("1"):  # RainPoint IDs seem to start with 1
                                 return int(match)
-            
+
             # If no proper device ID found, log what we have
             _LOGGER.debug("No device ID found for %s, available info: %s", self._sensor_key, info)
             return None
@@ -213,7 +228,7 @@ class RainPointLastUpdatedSensor(RainPointDiagnosticSensorBase):
         if data and "device_timestamp" in data:
             try:
                 # Parse ISO format timestamp
-                return datetime.fromisoformat(data["device_timestamp"].replace('Z', '+00:00'))
+                return datetime.fromisoformat(data["device_timestamp"].replace("Z", "+00:00"))
             except (ValueError, AttributeError):
                 pass
         return None

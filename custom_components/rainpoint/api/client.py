@@ -7,7 +7,7 @@ with the RainPoint cloud API.
 
 import hashlib
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import aiohttp
 
@@ -16,7 +16,6 @@ _LOGGER = logging.getLogger(__name__)
 
 class RainPointApiError(Exception):
     pass
-
 
 
 class RainPointClient:
@@ -43,29 +42,29 @@ class RainPointClient:
         if not self._token:
             raise RainPointApiError("Token not available")
         return {
-            "auth": self._token, 
-            "lang": "en", 
+            "auth": self._token,
+            "lang": "en",
             "appCode": self._app_code,  # Hardcoded to RainPoint appCode "2"
             "version": "1.16.1065",
-            "sceneType": "1"
+            "sceneType": "1",
         }
 
     def restore_tokens(self, data: dict) -> None:
         """Restore tokens from config entry data."""
-        from ..const import CONF_TOKEN, CONF_REFRESH_TOKEN, CONF_TOKEN_EXPIRES_AT
+        from ..const import CONF_REFRESH_TOKEN, CONF_TOKEN, CONF_TOKEN_EXPIRES_AT
 
         self._token = data.get(CONF_TOKEN)
         self._refresh_token = data.get(CONF_REFRESH_TOKEN)
         ts = data.get(CONF_TOKEN_EXPIRES_AT)
         if ts is not None:
             try:
-                self._token_expires_at = datetime.fromtimestamp(ts, tz=timezone.utc)
+                self._token_expires_at = datetime.fromtimestamp(ts, tz=UTC)
             except (TypeError, ValueError, OSError):
                 self._token_expires_at = None
 
     def export_tokens(self) -> dict:
         """Export current token state as a dict for config entry updates."""
-        from ..const import CONF_TOKEN, CONF_REFRESH_TOKEN, CONF_TOKEN_EXPIRES_AT
+        from ..const import CONF_REFRESH_TOKEN, CONF_TOKEN, CONF_TOKEN_EXPIRES_AT
 
         return {
             CONF_TOKEN: self._token,
@@ -77,7 +76,7 @@ class RainPointClient:
         if not self._token or not self._token_expires_at:
             return False
         # refresh a little before expiry
-        return datetime.now(timezone.utc) < (self._token_expires_at - timedelta(minutes=5))
+        return datetime.now(UTC) < (self._token_expires_at - timedelta(minutes=5))
 
     # --- login / auth ---
 
@@ -94,7 +93,7 @@ class RainPointClient:
         md5 = hashlib.md5(self._password.encode("utf-8")).hexdigest()
 
         # Device ID is required; generate deterministic 16 bytes hex
-        device_id = hashlib.md5(f"{self._email}{self._area_code}".encode("utf-8")).hexdigest()
+        device_id = hashlib.md5(f"{self._email}{self._area_code}".encode()).hexdigest()
 
         payload = {
             "areaCode": self._area_code,
@@ -105,7 +104,8 @@ class RainPointClient:
 
         _LOGGER.debug("RainPoint login request for %s with appCode=%s", self._email, self._app_code)
 
-        async with self._session.post(url, json=payload, headers={"Content-Type": "application/json", "lang": "en", "appCode": self._app_code}) as resp:
+        login_headers = {"Content-Type": "application/json", "lang": "en", "appCode": self._app_code}
+        async with self._session.post(url, json=payload, headers=login_headers) as resp:
             if resp.status != 200:
                 raise RainPointApiError(f"Login HTTP {resp.status}")
             data = await resp.json()
@@ -119,10 +119,7 @@ class RainPointClient:
         self._refresh_token = d.get("refreshToken")
         token_expired_secs = d.get("tokenExpired", 0)
         ts_server = data.get("ts")  # ms since epoch
-        if ts_server:
-            base = datetime.fromtimestamp(ts_server / 1000, tz=timezone.utc)
-        else:
-            base = datetime.now(timezone.utc)
+        base = datetime.fromtimestamp(ts_server / 1000, tz=UTC) if ts_server else datetime.now(UTC)
         self._token_expires_at = base + timedelta(seconds=token_expired_secs)
 
         _LOGGER.info("RainPoint login successful; token expires in %s seconds", token_expired_secs)
@@ -166,11 +163,9 @@ class RainPointClient:
         # Format devices array as expected by API
         device_list = []
         for device in devices:
-            device_list.append({
-                "deviceName": device.get("deviceName", ""),
-                "mid": device["mid"],
-                "productKey": device.get("productKey", "")
-            })
+            device_list.append(
+                {"deviceName": device.get("deviceName", ""), "mid": device["mid"], "productKey": device.get("productKey", "")}
+            )
 
         payload = {"devices": device_list}
         _LOGGER.debug("API call: get_multiple_device_status URL=%s payload=%s", url, payload)
@@ -188,10 +183,7 @@ class RainPointClient:
         # We need: [{"mid": Y, "subDeviceStatus": [...]}]
         converted_data = []
         for device_data in data.get("data", []):
-            converted_data.append({
-                "mid": device_data["mid"],
-                "subDeviceStatus": device_data.get("status", [])
-            })
+            converted_data.append({"mid": device_data["mid"], "subDeviceStatus": device_data.get("status", [])})
 
         return converted_data
 
@@ -283,9 +275,7 @@ class RainPointClient:
         code = data.get("code")
         if code == 4:
             # Code 4 = device already in requested state or transitioning — not fatal
-            _LOGGER.info(
-                "controlWorkMode: device already in requested state (code 4, idempotent): %s", data
-            )
+            _LOGGER.info("controlWorkMode: device already in requested state (code 4, idempotent): %s", data)
         elif code != 0:
             _LOGGER.debug("controlWorkMode failed response: %s", data)
             raise RainPointApiError(f"controlWorkMode failed: code {code}")
@@ -293,16 +283,15 @@ class RainPointClient:
         if isinstance(resp_data, dict):
             state = resp_data.get("state")
             if state is None:
-                _LOGGER.warning(
-                    "controlWorkMode: 'data' dict has no 'state' key; full data: %s", resp_data
-                )
+                _LOGGER.warning("controlWorkMode: 'data' dict has no 'state' key; full data: %s", resp_data)
             return state
         if isinstance(resp_data, str):
             return resp_data
         if resp_data is not None:
             _LOGGER.warning(
                 "controlWorkMode: unexpected 'data' type %s; value: %s",
-                type(resp_data).__name__, resp_data,
+                type(resp_data).__name__,
+                resp_data,
             )
         else:
             _LOGGER.debug("controlWorkMode: API returned code=0 but no 'data' key; optimistic update skipped")

@@ -1,10 +1,10 @@
 """Device representation for RainPoint hubs and sub-devices."""
-from __future__ import annotations
 
-from typing import Any
+from __future__ import annotations
 
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
+
 from .const import DOMAIN
 
 

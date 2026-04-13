@@ -1,15 +1,12 @@
 import logging
-from datetime import timedelta
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DOMAIN, DEFAULT_SCAN_INTERVAL
 from .api import RainPointClient
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,13 +72,13 @@ async def async_supports_reconfigure(hass: HomeAssistant, entry: ConfigEntry) ->
 
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up the RainPoint services."""
-    
+
     async def reload_service(call) -> None:
         """Service to reload the RainPoint integration."""
         from homeassistant.components import persistent_notification
-        
+
         entry_id = call.data.get("entry_id")
-        
+
         # If no entry_id provided, reload all RainPoint entries
         if not entry_id:
             entries = hass.config_entries.async_entries(DOMAIN)
@@ -91,10 +88,10 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                     hass,
                     "No RainPoint integrations found to reload",
                     title="RainPoint Reload Failed",
-                    notification_id="rainpoint_reload_error"
+                    notification_id="rainpoint_reload_error",
                 )
                 raise ValueError("No RainPoint integrations found to reload")
-            
+
             # Reload all entries
             success_count = 0
             for entry in entries:
@@ -104,26 +101,20 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                     success_count += 1
                 else:
                     _LOGGER.error("Failed to reload RainPoint integration '%s'", entry.title)
-            
+
             message = f"Successfully reloaded {success_count} RainPoint integration(s)"
             if success_count == len(entries):
                 persistent_notification.async_create(
-                    hass,
-                    message,
-                    title="RainPoint Reload Complete",
-                    notification_id="rainpoint_reload_success"
+                    hass, message, title="RainPoint Reload Complete", notification_id="rainpoint_reload_success"
                 )
                 return {"message": message}
             else:
                 error_msg = f"Only {success_count} of {len(entries)} integrations reloaded successfully"
                 persistent_notification.async_create(
-                    hass,
-                    error_msg,
-                    title="RainPoint Reload Partial",
-                    notification_id="rainpoint_reload_partial"
+                    hass, error_msg, title="RainPoint Reload Partial", notification_id="rainpoint_reload_partial"
                 )
                 raise ValueError(error_msg)
-        
+
         # Reload specific entry
         success = await async_reload_integration(hass, entry_id)
         if success:
@@ -132,7 +123,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 hass,
                 "RainPoint integration reloaded successfully",
                 title="RainPoint Reload Complete",
-                notification_id="rainpoint_reload_success"
+                notification_id="rainpoint_reload_success",
             )
             return {"message": "RainPoint integration reloaded successfully"}
         else:
@@ -141,18 +132,20 @@ async def async_setup_services(hass: HomeAssistant) -> None:
                 hass,
                 "Failed to reload RainPoint integration",
                 title="RainPoint Reload Failed",
-                notification_id="rainpoint_reload_error"
+                notification_id="rainpoint_reload_error",
             )
             raise ValueError("Failed to reload RainPoint integration")
-    
+
     # Register the service with optional entry_id
     hass.services.async_register(
-        DOMAIN, 
-        "reload", 
-        reload_service, 
-        schema=vol.Schema({
-            vol.Optional("entry_id"): str,
-        }),
+        DOMAIN,
+        "reload",
+        reload_service,
+        schema=vol.Schema(
+            {
+                vol.Optional("entry_id"): str,
+            }
+        ),
         supports_response=True,
     )
 
@@ -170,14 +163,14 @@ async def async_get_diagnostic_info(hass: HomeAssistant, entry: ConfigEntry) -> 
 async def async_reload_integration(hass: HomeAssistant, entry_id: str) -> bool:
     """Reload the RainPoint integration."""
     _LOGGER.info("Reloading RainPoint integration: %s", entry_id)
-    
+
     try:
         # Get the config entry
         entry = hass.config_entries.async_get_entry(entry_id)
         if not entry or entry.domain != DOMAIN:
             _LOGGER.error("Invalid entry for reload: %s", entry_id)
             return False
-        
+
         # Reload the entry
         await hass.config_entries.async_reload(entry_id)
         _LOGGER.info("Successfully reloaded RainPoint integration")

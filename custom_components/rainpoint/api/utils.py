@@ -39,13 +39,13 @@ def _parse_tlv_payload(raw: str) -> dict:
     """
     # Type byte → value width in bytes
     _TYPE_WIDTHS = {
-        0xD8: 1,   # zone state
-        0xDC: 1,   # hub state
-        0xAD: 2,   # zone duration (seconds, little-endian)
-        0x20: 2,   # timer/schedule config
+        0xD8: 1,  # zone state
+        0xDC: 1,  # hub state
+        0xAD: 2,  # zone duration (seconds, little-endian)
+        0x20: 2,  # timer/schedule config
         0xE1: 2,
-        0xB7: 4,   # schedule/timer extended
-        0x9F: 4,   # schedule/timer extended
+        0xB7: 4,  # schedule/timer extended
+        0x9F: 4,  # schedule/timer extended
         0xC4: 1,
         0xC5: 1,
         0xC6: 1,

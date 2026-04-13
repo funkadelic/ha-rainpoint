@@ -1,73 +1,89 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from homeassistant.core import HomeAssistant
 from homeassistant.components.persistent_notification import async_create
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
 
+from .api import (
+    RainPointApiError,
+    RainPointClient,
+    decode_co2,
+    decode_flowmeter,
+    decode_hcs003frf,
+    # New HCS decoder functions
+    decode_hcs005frf,
+    decode_hcs015arf,
+    decode_hcs016arf,
+    decode_hcs024frf_v1,
+    decode_hcs027arf,
+    decode_hcs044frf,
+    decode_hcs048b,
+    decode_hcs0528arf,
+    decode_hcs0600arf,
+    decode_hcs596wb,
+    decode_hcs596wb_v4,
+    decode_hcs666frf,
+    decode_hcs666frf_x,
+    decode_hcs666rfr_p,
+    decode_hcs701b,
+    decode_hcs706arf,
+    decode_hcs802arf,
+    decode_hcs888arf_v1,
+    decode_hcs999frf,
+    decode_hcs999frf_p,
+    decode_htv213frf_valve,
+    decode_hws019wrf_v2,
+    decode_moisture_full,
+    decode_moisture_simple,
+    decode_pool,
+    decode_pool_plus,
+    decode_rain,
+    decode_temphum,
+    decode_valve_hub,
+)
 from .const import (
-    CONF_AREA_CODE,
-    CONF_EMAIL,
     CONF_HIDS,
-    CONF_PASSWORD,
-    CONF_TOKEN,
-    CONF_TOKEN_EXPIRES_AT,
     DEFAULT_SCAN_INTERVAL,
-    DOMAIN,
     ISSUE_URL,
-    MODEL_MOISTURE_SIMPLE,
-    MODEL_MOISTURE_FULL,
-    MODEL_RAIN,
-    MODEL_TEMPHUM,
-    MODEL_FLOWMETER,
     MODEL_CO2,
-    MODEL_POOL,
-    MODEL_POOL_PLUS,
     MODEL_DISPLAY_HUB,
-    MODEL_VALVE_HUB,
-    MODEL_VALVE_213,  # HTV213FRF support
-    MODEL_VALVE_245,  # HTV245FRF support
+    MODEL_FLOWMETER,
+    MODEL_HCS003FRF,
     # New HCS sensor models
     MODEL_HCS005FRF,
-    MODEL_HCS003FRF,
-    MODEL_HCS024FRF_V1,
     MODEL_HCS015ARF,
-    MODEL_HCS0528ARF,
-    MODEL_HCS027ARF,
     MODEL_HCS016ARF,
+    MODEL_HCS024FRF_V1,
+    MODEL_HCS027ARF,
     MODEL_HCS044FRF,
-    MODEL_HCS666FRF,
-    MODEL_HCS666RFR_P,
-    MODEL_HCS999FRF,
-    MODEL_HCS999FRF_P,
-    MODEL_HCS666FRF_X,
-    MODEL_HCS701B,
+    MODEL_HCS048B,
+    MODEL_HCS0528ARF,
+    MODEL_HCS0600ARF,
     MODEL_HCS596WB,
     MODEL_HCS596WB_V4,
+    MODEL_HCS666FRF,
+    MODEL_HCS666FRF_X,
+    MODEL_HCS666RFR_P,
+    MODEL_HCS701B,
     MODEL_HCS706ARF,
     MODEL_HCS802ARF,
-    MODEL_HCS048B,
     MODEL_HCS888ARF_V1,
-    MODEL_HCS0600ARF,
-    VERSION,
+    MODEL_HCS999FRF,
+    MODEL_HCS999FRF_P,
+    MODEL_MOISTURE_FULL,
+    MODEL_MOISTURE_SIMPLE,
+    MODEL_POOL,
+    MODEL_POOL_PLUS,
+    MODEL_RAIN,
+    MODEL_TEMPHUM,
+    MODEL_VALVE_213,  # HTV213FRF support
+    MODEL_VALVE_245,  # HTV245FRF support
+    MODEL_VALVE_HUB,
     debug_with_version,
-)
-from .api import (
-    RainPointClient, RainPointApiError,
-    decode_moisture_simple, decode_moisture_full, decode_rain,
-    decode_temphum, decode_flowmeter, decode_co2, decode_pool, decode_pool_plus,
-    decode_valve_hub, decode_htv213frf_valve,
-    decode_hws019wrf_v2,
-    # New HCS decoder functions
-    decode_hcs005frf, decode_hcs003frf, decode_hcs024frf_v1,
-    decode_hcs015arf, decode_hcs0528arf, decode_hcs027arf, decode_hcs016arf,
-    decode_hcs044frf, decode_hcs666frf, decode_hcs666rfr_p, decode_hcs999frf,
-    decode_hcs999frf_p, decode_hcs666frf_x, decode_hcs701b, decode_hcs596wb,
-    decode_hcs596wb_v4, decode_hcs706arf, decode_hcs802arf, decode_hcs048b,
-    decode_hcs888arf_v1, decode_hcs0600arf,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -133,7 +149,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             _LOGGER.info("Updating data for HIDs: %s", homes)
             for hid in homes:
                 devices = await self._client.get_devices_by_hid(hid)
-                _LOGGER.info("Found %d devices for HID %s: %s", len(devices), hid, [d.get('model', 'unknown') for d in devices])
+                _LOGGER.info("Found %d devices for HID %s: %s", len(devices), hid, [d.get("model", "unknown") for d in devices])
                 for hub in devices:
                     hub_copy = dict(hub)
                     hub_copy["hid"] = hid
@@ -144,27 +160,28 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # Use efficient multipleDeviceStatus API if available, fall back to individual calls
             status_by_mid: dict[int, dict] = {}
             decoded_sensors: dict[str, dict] = {}
-            
+
             if hubs:
                 # Prepare device list for multipleDeviceStatus API
                 device_list = []
                 for hub in hubs:
-                    device_list.append({
-                        "mid": hub["mid"],
-                        "deviceName": hub.get("deviceName", ""),
-                        "productKey": hub.get("productKey", "")
-                    })
-                
+                    device_list.append(
+                        {"mid": hub["mid"], "deviceName": hub.get("deviceName", ""), "productKey": hub.get("productKey", "")}
+                    )
+
                 # Try multipleDeviceStatus first (more efficient)
                 try:
                     multiple_status = await self._client.get_multiple_device_status(device_list)
-                    _LOGGER.debug(debug_with_version("multipleDeviceStatus successful, got data for %d devices"), len(multiple_status))
-                    
+                    _LOGGER.debug(
+                        debug_with_version("multipleDeviceStatus successful, got data for %d devices"),
+                        len(multiple_status),
+                    )
+
                     # If multipleDeviceStatus returns empty data, fall back to individual calls
                     if not multiple_status:
                         _LOGGER.warning("multipleDeviceStatus returned empty data, falling back to individual calls")
                         raise Exception("Empty response from multipleDeviceStatus")
-                    
+
                     # Convert response to status_by_mid format
                     # Note: get_multiple_device_status already converts "status" to "subDeviceStatus"
                     for device_data in multiple_status:
@@ -172,10 +189,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
                         status_array = device_data.get("subDeviceStatus", [])
                         status_by_mid[mid] = {"subDeviceStatus": status_array}
                         _LOGGER.debug(debug_with_version("Fetched status for mid=%s using multipleDeviceStatus"), mid)
-                        
+
                 except Exception as e:
                     _LOGGER.warning("multipleDeviceStatus failed, falling back to individual calls: %s", e)
-                    
+
                     # Fall back to individual device status calls
                     for hub in hubs:
                         mid = hub["mid"]
@@ -220,8 +237,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
                     else:
                         model = sub.get("model")
                         try:
-                            _LOGGER.debug(debug_with_version("Decoding payload for model=%s mid=%s addr=%s: %s"), model, mid, addr, raw_value)
-                            
+                            _LOGGER.debug(
+                                debug_with_version("Decoding payload for model=%s mid=%s addr=%s: %s"),
+                                model,
+                                mid,
+                                addr,
+                                raw_value,
+                            )
+
                             # Special case: Display Hub uses different decoder
                             if model == MODEL_DISPLAY_HUB:
                                 decoded = decode_hws019wrf_v2(raw_value)
@@ -238,16 +261,19 @@ class RainPointCoordinator(DataUpdateCoordinator):
                                         "raw_value": raw_value,
                                     }
                                     _LOGGER.warning(
-                                        "="*60 + "\n"
+                                        "=" * 60 + "\n"
                                         "UNSUPPORTED SENSOR MODEL DETECTED\n"
                                         "Please report this to: %s\n"
                                         "Include the following information:\n"
                                         "  Model: %s\n"
                                         "  Device ID (mid): %s\n"
                                         "  Address: %s\n"
-                                        "  Raw Payload: %s\n"
-                                        + "="*60,
-                                        ISSUE_URL, model, mid, addr, raw_value
+                                        "  Raw Payload: %s\n" + "=" * 60,
+                                        ISSUE_URL,
+                                        model,
+                                        mid,
+                                        addr,
+                                        raw_value,
                                     )
                                     # Send persistent notification (once per model)
                                     if model and model not in self._notified_unknown_models:
@@ -264,7 +290,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                                             notification_id=f"rainpoint_unsupported_{model}",
                                         )
                             _LOGGER.debug(debug_with_version("Decoded data for mid=%s addr=%s: %s"), mid, addr, decoded)
-                        except Exception as ex:  # noqa: BLE001
+                        except Exception as ex:
                             _LOGGER.warning(
                                 "Failed to decode payload for %s addr=%s: %s",
                                 model,
@@ -274,18 +300,18 @@ class RainPointCoordinator(DataUpdateCoordinator):
                             decoded = None
 
                     sensor_key = f"{hub['hid']}_{mid}_{addr}"
-                    
+
                     # Extract device timestamp from API response
                     device_time = s.get("time")
                     if device_time:
                         try:
-                            dt = datetime.fromtimestamp(device_time / 1000, tz=timezone.utc)
+                            dt = datetime.fromtimestamp(device_time / 1000, tz=UTC)
                             if decoded:
                                 decoded["device_timestamp"] = dt.isoformat()
                                 decoded["timestamp_source"] = "device"
                         except (ValueError, TypeError, OSError, OverflowError):
                             pass
-                    
+
                     decoded_sensors[sensor_key] = {
                         "hid": hub["hid"],
                         "mid": mid,
@@ -305,7 +331,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
             _LOGGER.info("Coordinator update complete: %d hubs, %d sensors", len(hubs), len(decoded_sensors))
             _LOGGER.debug(debug_with_version("Final data: hubs=%s, sensors=%s"), hubs, list(decoded_sensors.keys()))
-            
+
             return {
                 "hubs": hubs,
                 "status": status_by_mid,
@@ -313,6 +339,6 @@ class RainPointCoordinator(DataUpdateCoordinator):
             }
         except RainPointApiError as err:
             raise UpdateFailed(f"RainPoint API error: {err}") from err
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             _LOGGER.exception("Unexpected RainPoint error while refreshing")
             raise UpdateFailed(f"Unexpected RainPoint error: {err}") from err

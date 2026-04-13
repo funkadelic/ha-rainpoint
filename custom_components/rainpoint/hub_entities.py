@@ -1,16 +1,14 @@
 """Hub entities for RainPoint devices."""
+
 from __future__ import annotations
 
-from typing import Any
-
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
-from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.select import SelectEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
 from .coordinator import RainPointCoordinator
 from .device import RainPointHubDevice
 
@@ -122,9 +120,7 @@ class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDev
 
     async def async_select_option(self, option: str) -> None:
         """Change the RF channel."""
-        raise HomeAssistantError(
-            "RF channel selection is not yet supported by the RainPoint API"
-        )
+        raise HomeAssistantError("RF channel selection is not yet supported by the RainPoint API")
 
 
 class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubDevice):
@@ -150,12 +146,8 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
 
     async def async_turn_on(self) -> None:
         """Turn on automatic broadcast."""
-        raise HomeAssistantError(
-            "Automatic broadcast control is not yet supported by the RainPoint API"
-        )
+        raise HomeAssistantError("Automatic broadcast control is not yet supported by the RainPoint API")
 
     async def async_turn_off(self) -> None:
         """Turn off automatic broadcast."""
-        raise HomeAssistantError(
-            "Automatic broadcast control is not yet supported by the RainPoint API"
-        )
+        raise HomeAssistantError("Automatic broadcast control is not yet supported by the RainPoint API")

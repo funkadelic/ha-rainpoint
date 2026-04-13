@@ -1,21 +1,16 @@
 """Debug switch for submitting debug data to Cloudflare worker."""
 
-import asyncio
-import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 import aiohttp
-
-from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.persistent_notification import async_create
-from homeassistant.const import __version__ as HA_VERSION
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 
 from .const import (
     CONF_DEBUG_LAST_SUBMISSION,
-    DEBUG_SUBMISSION_INTERVAL,
     DEBUG_WORKER_URL,
     DOMAIN,
     VERSION,
@@ -58,11 +53,11 @@ class RainPointDebugSwitchEntity(SwitchEntity):
     async def async_turn_on(self, **kwargs):
         """Submit debug data when switch is turned on."""
         _LOGGER.info(debug_with_version("Debug data submission initiated by user"))
-        
+
         try:
             # Collect and submit debug data
             await self._submit_debug_data()
-            
+
             # Show success notification
             self.hass.async_create_task(
                 self._show_notification(
@@ -70,25 +65,25 @@ class RainPointDebugSwitchEntity(SwitchEntity):
                     "Thank you for helping improve the RainPoint integration. "
                     "Your anonymous device data will help us discover new patterns "
                     "and improve decoder accuracy for everyone.",
-                    "success"
+                    "success",
                 )
             )
-            
+
             _LOGGER.info(debug_with_version("Debug data submission completed successfully"))
-            
+
         except Exception as ex:
             _LOGGER.error(debug_with_version(f"Debug data submission failed: {ex}"))
-            
+
             # Show error notification
             self.hass.async_create_task(
                 self._show_notification(
                     "❌ Failed to submit debug data\n\n"
                     "Please try again later. If the problem persists, "
                     "check the integration logs for more details.",
-                    "error"
+                    "error",
                 )
             )
-        
+
         # Always turn off after submission (one-time action)
         self._attr_is_on = False
         self.async_write_ha_state()
@@ -102,11 +97,11 @@ class RainPointDebugSwitchEntity(SwitchEntity):
         """Collect and submit debug data to Cloudflare worker."""
         # Collect data from all devices
         devices_data = await self._collect_device_data()
-        
+
         # Submit each device separately
         successful_submissions = 0
         failed_submissions = 0
-        
+
         for device_data in devices_data:
             try:
                 # Submit to worker
@@ -115,9 +110,13 @@ class RainPointDebugSwitchEntity(SwitchEntity):
             except Exception as ex:
                 _LOGGER.error(debug_with_version(f"Failed to submit device {device_data.get('device_model')}: {ex}"))
                 failed_submissions += 1
-        
-        _LOGGER.info(debug_with_version(f"Debug submission complete: {successful_submissions} successful, {failed_submissions} failed"))
-        
+
+        _LOGGER.info(
+            debug_with_version("Debug submission complete: %d successful, %d failed"),
+            successful_submissions,
+            failed_submissions,
+        )
+
         if successful_submissions > 0:
             # Update last submission time
             await self._update_last_submission_time()
@@ -125,22 +124,22 @@ class RainPointDebugSwitchEntity(SwitchEntity):
     async def _collect_device_data(self) -> list:
         """Collect data from all RainPoint devices."""
         devices = []
-        
+
         # Debug coordinator state
         _LOGGER.debug(debug_with_version(f"Coordinator available: {self.coordinator is not None}"))
         _LOGGER.debug(debug_with_version(f"Coordinator data type: {type(self.coordinator.data)}"))
-        
+
         # Get device data from coordinator
-        if hasattr(self.coordinator, 'data') and self.coordinator.data:
+        if hasattr(self.coordinator, "data") and self.coordinator.data:
             _LOGGER.debug(debug_with_version(f"Coordinator data keys: {list(self.coordinator.data.keys())}"))
-            
+
             # Device data is in the "sensors" dict
             sensors_data = self.coordinator.data.get("sensors", {})
             _LOGGER.debug(debug_with_version(f"Found {len(sensors_data)} sensors"))
-            
+
             for device_key, device_info in sensors_data.items():
                 _LOGGER.debug(debug_with_version(f"Processing device key: {device_key}, type: {type(device_info)}"))
-                
+
                 if isinstance(device_info, dict):
                     device_data = self._extract_device_data(device_info)
                     if device_data:
@@ -148,7 +147,7 @@ class RainPointDebugSwitchEntity(SwitchEntity):
                         _LOGGER.debug(debug_with_version(f"Added device: {device_data.get('device_model')}"))
         else:
             _LOGGER.warning(debug_with_version("No coordinator data available"))
-        
+
         _LOGGER.debug(debug_with_version(f"Collected data for {len(devices)} devices"))
         return devices
 
@@ -158,36 +157,36 @@ class RainPointDebugSwitchEntity(SwitchEntity):
             # Sensor info structure: {hid, mid, addr, home_name, hub_name, sub_name, model, firmware_version, raw_status, data}
             if not sensor_info:
                 return None
-            
+
             # Extract sensor values from the data field
             device_data = sensor_info.get("data", {})
             if not device_data:
                 _LOGGER.debug(debug_with_version(f"No data field for sensor {sensor_info.get('sub_name', 'unknown')}"))
                 return None
-            
+
             # Extract sensor values
             sensor_values = {}
             sensor_mappings = {
                 "co2": "co2",
                 "temperature": "temperature",
-                "humidity": "humidity", 
+                "humidity": "humidity",
                 "moisture": "moisture_percent",
                 "illuminance": "illuminance_lux",
                 "flow": "flowcurrentused",
                 "pressure": "pressure",
                 "rain": "rain_last_24h_mm",
             }
-            
+
             for key, value in device_data.items():
                 if key in sensor_mappings and value is not None:
                     sensor_values[sensor_mappings[key]] = value
-            
+
             # Get raw payload from raw_status
             raw_payload = None
             raw_status = sensor_info.get("raw_status", {})
             if isinstance(raw_status, dict):
                 raw_payload = raw_status.get("value", "")
-            
+
             return {
                 "device_model": sensor_info.get("model"),
                 "device_type": device_data.get("type"),
@@ -203,7 +202,7 @@ class RainPointDebugSwitchEntity(SwitchEntity):
                 },
                 "integration_version": VERSION,
             }
-            
+
         except Exception as ex:
             _LOGGER.warning(debug_with_version(f"Failed to extract device data: {ex}"))
             return None
@@ -214,6 +213,7 @@ class RainPointDebugSwitchEntity(SwitchEntity):
             raise ValueError("Debug worker URL is not configured")
 
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
         session = async_get_clientsession(self.hass)
         headers = {
             "User-Agent": f"HomeAssistant-RainPoint/{VERSION}",
@@ -238,13 +238,10 @@ class RainPointDebugSwitchEntity(SwitchEntity):
         """Update the last submission time in config entry."""
         try:
             new_data = self.integration_entry.data.copy()
-            new_data[CONF_DEBUG_LAST_SUBMISSION] = datetime.now(timezone.utc).isoformat()
-            
-            self.hass.config_entries.async_update_entry(
-                self.integration_entry,
-                data=new_data
-            )
-            
+            new_data[CONF_DEBUG_LAST_SUBMISSION] = datetime.now(UTC).isoformat()
+
+            self.hass.config_entries.async_update_entry(self.integration_entry, data=new_data)
+
         except Exception as ex:
             _LOGGER.warning(debug_with_version(f"Failed to update last submission time: {ex}"))
 

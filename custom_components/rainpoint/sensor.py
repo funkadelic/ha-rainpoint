@@ -2,63 +2,61 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Any
 
-from datetime import datetime, timezone
-
 from homeassistant.components.sensor import (
-    SensorEntity,
     SensorDeviceClass,
+    SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import EntityCategory
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DOMAIN,
-    MODEL_MOISTURE_SIMPLE,
-    MODEL_MOISTURE_FULL,
-    MODEL_RAIN,
-    MODEL_TEMPHUM,
-    MODEL_FLOWMETER,
     MODEL_CO2,
-    MODEL_POOL,
-    MODEL_POOL_PLUS,
     MODEL_DISPLAY_HUB,
+    MODEL_FLOWMETER,
+    MODEL_HCS003FRF,
     # New HCS sensor models
     MODEL_HCS005FRF,
-    MODEL_HCS003FRF,
-    MODEL_HCS024FRF_V1,
     MODEL_HCS015ARF,
-    MODEL_HCS0528ARF,
-    MODEL_HCS027ARF,
     MODEL_HCS016ARF,
+    MODEL_HCS024FRF_V1,
+    MODEL_HCS027ARF,
     MODEL_HCS044FRF,
-    MODEL_HCS666FRF,
-    MODEL_HCS666RFR_P,
-    MODEL_HCS999FRF,
-    MODEL_HCS999FRF_P,
-    MODEL_HCS666FRF_X,
-    MODEL_HCS701B,
+    MODEL_HCS048B,
+    MODEL_HCS0528ARF,
+    MODEL_HCS0600ARF,
     MODEL_HCS596WB,
     MODEL_HCS596WB_V4,
+    MODEL_HCS666FRF,
+    MODEL_HCS666FRF_X,
+    MODEL_HCS666RFR_P,
+    MODEL_HCS701B,
     MODEL_HCS706ARF,
     MODEL_HCS802ARF,
-    MODEL_HCS048B,
     MODEL_HCS888ARF_V1,
-    MODEL_HCS0600ARF,
+    MODEL_HCS999FRF,
+    MODEL_HCS999FRF_P,
+    MODEL_MOISTURE_FULL,
+    MODEL_MOISTURE_SIMPLE,
+    MODEL_POOL,
+    MODEL_POOL_PLUS,
+    MODEL_RAIN,
+    MODEL_TEMPHUM,
 )
 from .coordinator import RainPointCoordinator
 from .diagnostic_sensors import (
-    RainPointRSSISensor,
     RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
     RainPointLastUpdatedSensor,
+    RainPointRSSISensor,
 )
-from .device import RainPointSubDevice
 from .hub_entities import (
     RainPointHubDeviceIDSensor,
     RainPointHubFirmwareSensor,
@@ -89,12 +87,8 @@ async def async_setup_entry(
     entities: list[RainPointSensorBase] = []
 
     # Create hub entities first
-    if isinstance(hubs_cfg, list):
-        # Convert list to dict for easier processing
-        hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)}
-    else:
-        hubs_dict = hubs_cfg
-    
+    hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
+
     for _hub_key, hub_info in hubs_dict.items():
         # Add hub sensors
         entities.append(RainPointHubDeviceIDSensor(coordinator, hub_info))
@@ -175,12 +169,9 @@ async def async_setup_entry(
             entities.append(RainPointPoolPlusHumidityCurrentSensor(coordinator, key, info, base_slug))
             entities.append(RainPointPoolPlusHumidityHighSensor(coordinator, key, info, base_slug))
             entities.append(RainPointPoolPlusHumidityLowSensor(coordinator, key, info, base_slug))
-        
+
         # New HCS sensor models
-        elif model == MODEL_HCS005FRF:
-            # Moisture-only sensor - same as MODEL_MOISTURE_SIMPLE
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True))
-        elif model == MODEL_HCS003FRF:
+        elif model in (MODEL_HCS005FRF, MODEL_HCS003FRF):
             # Moisture-only sensor - same as MODEL_MOISTURE_SIMPLE
             entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True))
         elif model == MODEL_HCS024FRF_V1:
@@ -188,27 +179,13 @@ async def async_setup_entry(
             entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False))
             entities.append(RainPointTemperatureSensor(coordinator, key, info, base_slug))
             entities.append(RainPointIlluminanceSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS015ARF:
+        elif model in (MODEL_HCS015ARF, MODEL_HCS0528ARF):
             # Pool temperature sensor - same as MODEL_POOL
             entities.append(RainPointPoolCurrentTempSensor(coordinator, key, info, base_slug))
             entities.append(RainPointPoolHighTempSensor(coordinator, key, info, base_slug))
             entities.append(RainPointPoolLowTempSensor(coordinator, key, info, base_slug))
             entities.append(RainPointPoolBatterySensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS0528ARF:
-            # Pool temperature sensor - same as MODEL_POOL
-            entities.append(RainPointPoolCurrentTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolHighTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolLowTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolBatterySensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS027ARF:
-            # Temperature/humidity sensor - same as MODEL_TEMPHUM
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS016ARF:
+        elif model in (MODEL_HCS027ARF, MODEL_HCS016ARF):
             # Temperature/humidity sensor - same as MODEL_TEMPHUM
             entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
             entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
@@ -270,15 +247,7 @@ async def async_setup_entry(
             entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
             entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
             entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS706ARF:
-            # Environmental sensor - same as MODEL_TEMPHUM
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS802ARF:
+        elif model in (MODEL_HCS706ARF, MODEL_HCS802ARF):
             # Environmental sensor - same as MODEL_TEMPHUM
             entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
             entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
@@ -315,7 +284,7 @@ async def async_setup_entry(
             data = info.get("data", {})
             if data and data.get("type") == "unknown":
                 entities.append(RainPointUnknownSensor(coordinator, key, info, base_slug))
-        
+
         # Add raw payload sensor for all devices (disabled by default)
         entities.append(RainPointRawPayloadSensor(coordinator, key, info, base_slug))
 
@@ -356,6 +325,7 @@ class RainPointSensorBase(CoordinatorEntity, SensorEntity):
     def device_info(self) -> dict[str, Any]:
         """Represent each subDevice as its own HA device, child of hub."""
         from .const import DOMAIN
+
         hid = self._sensor_info["hid"]
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
@@ -399,15 +369,15 @@ class RainPointSensorBase(CoordinatorEntity, SensorEntity):
             attrs["timestamp_source"] = data.get("timestamp_source", "server")
         else:
             _LOGGER.debug("No timestamp found in sensor data: %s", data)
-        
+
         # Legacy timestamp from raw_status (fallback)
         raw_status = info.get("raw_status") or {}
         ts = raw_status.get("time")
         if ts:
             try:
-                dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+                dt = datetime.fromtimestamp(ts / 1000, tz=UTC)
                 attrs["last_updated"] = dt.isoformat()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # If anything goes wrong, we simply omit last_updated
                 pass
 
@@ -433,7 +403,6 @@ class RainPointMoisturePercentSensor(RainPointSensorBase):
     ) -> None:
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._simple = simple
-        model = sensor_info.get("model", "")
         sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_moisture_percent"
         self._attr_name = f"{sub_name} Moisture Percent"
@@ -1084,7 +1053,7 @@ class RainPointPoolPlusHumidityLowSensor(RainPointSensorBase):
 
 class RainPointUnknownSensor(RainPointSensorBase):
     """Diagnostic sensor for unknown/unsupported models.
-    
+
     This sensor surfaces raw payload data in Home Assistant so users can
     easily copy it when reporting issues for new sensor support.
     """
@@ -1112,25 +1081,24 @@ class RainPointUnknownSensor(RainPointSensorBase):
         """Include raw payload and instructions for reporting."""
         attrs = super().extra_state_attributes
         data = self._sensor_data or {}
-        
+
         attrs["model"] = data.get("model")
         attrs["raw_payload"] = data.get("raw_value")
         attrs["report_url"] = "https://github.com/funkadelic/ha-rainpoint/issues"
         attrs["instructions"] = (
-            "This sensor model is not yet supported. "
-            "Please open a GitHub issue with the model and raw_payload values above."
+            "This sensor model is not yet supported. Please open a GitHub issue with the model and raw_payload values above."
         )
-        
+
         return attrs
 
 
 class RainPointRawPayloadSensor(RainPointSensorBase):
     """Raw hex payload sensor (diagnostic, disabled by default)."""
-    
+
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:code-braces"
     _attr_entity_registry_enabled_default = False  # Disabled by default
-    
+
     def __init__(
         self,
         coordinator: RainPointCoordinator,
@@ -1142,7 +1110,7 @@ class RainPointRawPayloadSensor(RainPointSensorBase):
         sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_raw_payload"
         self._attr_name = f"{sub_name} Raw Payload"
-    
+
     @property
     def native_value(self) -> str | None:
         """Return the raw hex payload string."""
