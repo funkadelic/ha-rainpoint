@@ -16,6 +16,7 @@ from .const import (
     CONF_DEBUG_LAST_SUBMISSION,
     DEBUG_SUBMISSION_INTERVAL,
     DEBUG_WORKER_URL,
+    DOMAIN,
     VERSION,
     debug_with_version,
 )
@@ -23,8 +24,8 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class HomGarDebugSwitchEntity(SwitchEntity):
-    """Switch for submitting HomGar debug data."""
+class RainPointDebugSwitchEntity(SwitchEntity):
+    """Switch for submitting RainPoint debug data."""
 
     def __init__(self, hass: HomeAssistant, coordinator, integration_entry):
         """Initialize the debug switch."""
@@ -32,7 +33,7 @@ class HomGarDebugSwitchEntity(SwitchEntity):
         self.coordinator = coordinator
         self.integration_entry = integration_entry
         self._attr_is_on = False
-        self._attr_unique_id = f"homgar_debug_{integration_entry.entry_id}"
+        self._attr_unique_id = f"rainpoint_debug_{integration_entry.entry_id}"
         self._attr_name = "Submit Debug Data"
         self._attr_icon = "mdi:bug"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -41,9 +42,9 @@ class HomGarDebugSwitchEntity(SwitchEntity):
     def device_info(self) -> DeviceInfo:
         """Return device info for this entity."""
         return DeviceInfo(
-            identifiers={("homgar", self.integration_entry.entry_id)},
-            name="HomGar Integration",
-            manufacturer="HomGar/RainPoint",
+            identifiers={(DOMAIN, self.integration_entry.entry_id)},
+            name="RainPoint Integration",
+            manufacturer="RainPoint",
             model="Cloud Integration",
             sw_version=VERSION,
         )
@@ -65,7 +66,7 @@ class HomGarDebugSwitchEntity(SwitchEntity):
             self.hass.async_create_task(
                 self._show_notification(
                     "✅ Debug data submitted successfully!\n\n"
-                    "Thank you for helping improve the HomGar integration. "
+                    "Thank you for helping improve the RainPoint integration. "
                     "Your anonymous device data will help us discover new patterns "
                     "and improve decoder accuracy for everyone.",
                     "success"
@@ -121,7 +122,7 @@ class HomGarDebugSwitchEntity(SwitchEntity):
             await self._update_last_submission_time()
 
     async def _collect_device_data(self) -> list:
-        """Collect data from all HomGar devices."""
+        """Collect data from all RainPoint devices."""
         devices = []
         
         # Debug coordinator state
@@ -212,7 +213,7 @@ class HomGarDebugSwitchEntity(SwitchEntity):
         
         async with aiohttp.ClientSession(timeout=timeout) as session:
             headers = {
-                "User-Agent": f"HomeAssistant-HomGar/{VERSION}",
+                "User-Agent": f"HomeAssistant-RainPoint/{VERSION}",
                 "Content-Type": "application/json",
             }
             
@@ -248,6 +249,6 @@ class HomGarDebugSwitchEntity(SwitchEntity):
         await async_create(
             self.hass,
             message,
-            title="HomGar Debug Data",
-            notification_id=f"homgar_debug_{notification_type}",
+            title="RainPoint Debug Data",
+            notification_id=f"rainpoint_debug_{notification_type}",
         )

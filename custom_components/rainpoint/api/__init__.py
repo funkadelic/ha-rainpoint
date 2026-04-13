@@ -54,7 +54,7 @@ from .validators import (
     _battery_status_to_percent,
 )
 from .utils import (
-    _parse_homgar_payload,
+    _parse_rainpoint_payload,
     _parse_tlv_payload,
     _le16,
     _f10_to_c,
@@ -113,7 +113,7 @@ __all__ = [
     "_extract_status_code",
     "_battery_status_to_percent",
     # Utils
-    "_parse_homgar_payload",
+    "_parse_rainpoint_payload",
     "_parse_tlv_payload",
     "_le16",
     "_f10_to_c",

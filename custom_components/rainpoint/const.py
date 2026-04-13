@@ -26,7 +26,7 @@ CONF_DEBUG_ENABLED = "debug_enabled"
 CONF_DEBUG_AUTO_SUBMIT = "debug_auto_submit"
 CONF_DEBUG_LAST_SUBMISSION = "debug_last_submission"
 
-DEBUG_WORKER_URL = "https://homgar-debug-worker.funkypeople.workers.dev/submit"
+DEBUG_WORKER_URL = ""
 DEBUG_SUBMISSION_INTERVAL = 86400  # 24 hours in seconds
 
 # Known models (original devices)
