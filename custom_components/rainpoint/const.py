@@ -4,6 +4,9 @@ DOMAIN = "rainpoint"
 # Integration version
 VERSION = "1.0.0"
 
+# Issue tracker URL
+ISSUE_URL = "https://github.com/funkadelic/ha-rainpoint/issues"
+
 # Helper function for debug messages with version
 def debug_with_version(message: str) -> str:
     """Format debug message with integration version."""

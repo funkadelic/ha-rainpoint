@@ -17,6 +17,7 @@ from .const import (
     CONF_TOKEN_EXPIRES_AT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    ISSUE_URL,
     MODEL_MOISTURE_SIMPLE,
     MODEL_MOISTURE_FULL,
     MODEL_RAIN,
@@ -239,14 +240,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
                                     _LOGGER.warning(
                                         "="*60 + "\n"
                                         "UNSUPPORTED SENSOR MODEL DETECTED\n"
-                                        "Please report this to: https://github.com/funkadelic/ha-rainpoint/issues\n"
+                                        "Please report this to: %s\n"
                                         "Include the following information:\n"
                                         "  Model: %s\n"
                                         "  Device ID (mid): %s\n"
                                         "  Address: %s\n"
                                         "  Raw Payload: %s\n"
                                         + "="*60,
-                                        model, mid, addr, raw_value
+                                        ISSUE_URL, model, mid, addr, raw_value
                                     )
                                     # Send persistent notification (once per model)
                                     if model and model not in self._notified_unknown_models:
@@ -255,7 +256,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                                             self.hass,
                                             f"RainPoint detected an unsupported sensor model: **{model}**\n\n"
                                             f"To help add support for this sensor, please open an issue at:\n"
-                                            f"https://github.com/funkadelic/ha-rainpoint/issues\n\n"
+                                            f"{ISSUE_URL}\n\n"
                                             f"Include the following raw payload data:\n"
                                             f"```\n{raw_value}\n```\n\n"
                                             f"You can also find this data in the sensor's attributes in Home Assistant.",
@@ -282,7 +283,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                             if decoded:
                                 decoded["device_timestamp"] = dt.isoformat()
                                 decoded["timestamp_source"] = "device"
-                        except (ValueError, TypeError, OSError):
+                        except (ValueError, TypeError, OSError, OverflowError):
                             pass
                     
                     decoded_sensors[sensor_key] = {

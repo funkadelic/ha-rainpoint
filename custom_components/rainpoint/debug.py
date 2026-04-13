@@ -5,6 +5,8 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
+import aiohttp
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.const import __version__ as HA_VERSION
@@ -220,7 +222,8 @@ class RainPointDebugSwitchEntity(SwitchEntity):
 
         _LOGGER.debug(debug_with_version(f"Submitting to worker: {DEBUG_WORKER_URL}"))
 
-        async with session.post(DEBUG_WORKER_URL, json=data, headers=headers) as response:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with session.post(DEBUG_WORKER_URL, json=data, headers=headers, timeout=timeout) as response:
             if response.status != 200:
                 error_text = await response.text()
                 raise Exception(f"Worker returned status {response.status}: {error_text}")
