@@ -66,11 +66,24 @@ for _stub_name in _HA_STUBS:
 #
 # MagicMock-backed stubs work fine for *attribute access* on instances, but
 # multi-inheritance from several MagicMock objects fails at class-definition
-# time with "metaclass conflict".  The entity platform modules
-# (valve.py, number.py, hub_entities.py, etc.) inherit from combinations of
-# CoordinatorEntity, ValveEntity, SensorEntity, NumberEntity, SelectEntity,
-# SwitchEntity, and RestoreEntity.  We replace those specific attributes with
-# minimal real Python classes so Python's class machinery is happy.
+# time with "metaclass conflict" or MRO errors.
+#
+# The entity platform modules inherit from combinations of:
+#   CoordinatorEntity, ValveEntity, SensorEntity, NumberEntity,
+#   SelectEntity, SwitchEntity, RestoreEntity, and device.py classes
+#   (RainPointHubDevice) which themselves inherit from Entity.
+#
+# Key MRO constraint: hub_entities.py has
+#   class RainPointHubSensorBase(CoordinatorEntity, SensorEntity, RainPointHubDevice)
+# where RainPointHubDevice inherits Entity.  For C3 to succeed,
+# SensorEntity must NOT share a common ancestor with Entity/RainPointHubDevice
+# (otherwise the ordering constraint is circular).
+#
+# Solution: Entity, CoordinatorEntity, and RestoreEntity all share
+# _HABaseEntity as root.  Platform entity types (ValveEntity, SensorEntity,
+# NumberEntity, SelectEntity, SwitchEntity) are FLAT classes that inherit
+# directly from object — no shared root with Entity/CoordinatorEntity.
+# This lets Python resolve any multi-inheritance combo without deadlock.
 # ---------------------------------------------------------------------------
 
 
@@ -99,8 +112,7 @@ class _RestoreEntity:
     """Minimal RestoreEntity stand-in.
 
     Inherits from object (not _HABaseEntity) to avoid MRO conflicts when
-    combined with CoordinatorEntity and NumberEntity/SensorEntity which also
-    both trace back to _HABaseEntity.
+    combined with CoordinatorEntity and platform entity types.
     """
 
     async def async_added_to_hass(self):
@@ -110,27 +122,52 @@ class _RestoreEntity:
         return None
 
 
+# Platform entity base types — FLAT classes (object root only).
+# They must NOT share _HABaseEntity as a root because device.py's
+# RainPointHubDevice inherits Entity (= _HABaseEntity), and combining
+# (CoordinatorEntity→_HABaseEntity, PlatformType→_HABaseEntity,
+# RainPointHubDevice→_HABaseEntity) creates an unresolvable C3 cycle.
+class _ValveEntity:
+    pass
+
+
+class _SensorEntity:
+    pass
+
+
+class _NumberEntity:
+    pass
+
+
+class _SelectEntity:
+    pass
+
+
+class _SwitchEntity:
+    pass
+
+
 # Patch the stub modules with real classes so multi-inheritance works.
 sys.modules["homeassistant.helpers.update_coordinator"].CoordinatorEntity = _CoordinatorEntity
 sys.modules["homeassistant.helpers.entity"].Entity = _HABaseEntity
 sys.modules["homeassistant.helpers.restore_state"].RestoreEntity = _RestoreEntity
 
-# Entity platform base classes — all get the same lightweight base so that
-# multi-inheritance combos like (CoordinatorEntity, ValveEntity) are clean.
-sys.modules["homeassistant.components.valve"].ValveEntity = _HABaseEntity
+# Platform entity classes
+sys.modules["homeassistant.components.valve"].ValveEntity = _ValveEntity
 sys.modules["homeassistant.components.valve"].ValveEntityFeature = MagicMock()
-sys.modules["homeassistant.components.sensor"].SensorEntity = _HABaseEntity
+sys.modules["homeassistant.components.sensor"].SensorEntity = _SensorEntity
 sys.modules["homeassistant.components.sensor"].SensorDeviceClass = MagicMock()
 sys.modules["homeassistant.components.sensor"].SensorStateClass = MagicMock()
-sys.modules["homeassistant.components.number"].NumberEntity = _HABaseEntity
+sys.modules["homeassistant.components.number"].NumberEntity = _NumberEntity
 sys.modules["homeassistant.components.number"].NumberMode = MagicMock()
-sys.modules["homeassistant.components.select"].SelectEntity = _HABaseEntity
-sys.modules["homeassistant.components.switch"].SwitchEntity = _HABaseEntity
+sys.modules["homeassistant.components.select"].SelectEntity = _SelectEntity
+sys.modules["homeassistant.components.switch"].SwitchEntity = _SwitchEntity
 
-# DeviceInfo is used as a callable that returns its kwargs dict — use identity.
+# DeviceInfo: callable that stores kwargs as a dict subclass.
 class _DeviceInfo(dict):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
 
 sys.modules["homeassistant.helpers.device_registry"].DeviceInfo = _DeviceInfo
 
@@ -138,12 +175,14 @@ sys.modules["homeassistant.helpers.device_registry"].DeviceInfo = _DeviceInfo
 class _HomeAssistantError(Exception):
     pass
 
+
 sys.modules["homeassistant.exceptions"].HomeAssistantError = _HomeAssistantError
 
 # EntityCategory is accessed as EntityCategory.DIAGNOSTIC / .CONFIG — use a simple namespace.
 class _EntityCategory:
     DIAGNOSTIC = "diagnostic"
     CONFIG = "config"
+
 
 sys.modules["homeassistant.const"].EntityCategory = _EntityCategory
 sys.modules["homeassistant.const"].PERCENTAGE = "%"
