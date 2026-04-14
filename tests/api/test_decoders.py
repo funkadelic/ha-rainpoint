@@ -1,6 +1,6 @@
 """Tests for RainPoint device decoders."""
 
-from tests.conftest import SAMPLE_HTV245_ASCII_PAYLOAD, SAMPLE_HTV245_TLV_PAYLOAD
+from tests.payload_samples import SAMPLE_HTV245_ASCII_PAYLOAD, SAMPLE_HTV245_TLV_PAYLOAD
 
 from custom_components.rainpoint.api import decode_htv213frf_valve
 

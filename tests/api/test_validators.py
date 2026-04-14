@@ -116,7 +116,7 @@ class TestValidateTag:
     def test_mismatched_tag_raises(self):
         """Mismatched tag raises ValueError with device name."""
         b = bytes([0x00, 0xBB, 0x00])
-        with pytest.raises(ValueError, match="TestDevice.*Expected tag 0xAA.*got 0xBB"):
+        with pytest.raises(ValueError, match=r"TestDevice.*Expected tag 0xAA.*got 0xBB"):
             _validate_tag(b, 1, 0xAA, "TestDevice")
 
 
