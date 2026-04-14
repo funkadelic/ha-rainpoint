@@ -30,7 +30,7 @@ jobs:
       - name: Upload release asset
         if: ${{ steps.release.outputs.release_created }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
         run: |
           gh release upload "$TAG_NAME" rainpoint.zip
