@@ -60,3 +60,93 @@ for _stub_name in _HA_STUBS:
     if _stub_name not in sys.modules:
         _make_stub(_stub_name)
 
+
+# ---------------------------------------------------------------------------
+# Provide real Python base classes for HA entity hierarchy.
+#
+# MagicMock-backed stubs work fine for *attribute access* on instances, but
+# multi-inheritance from several MagicMock objects fails at class-definition
+# time with "metaclass conflict".  The entity platform modules
+# (valve.py, number.py, hub_entities.py, etc.) inherit from combinations of
+# CoordinatorEntity, ValveEntity, SensorEntity, NumberEntity, SelectEntity,
+# SwitchEntity, and RestoreEntity.  We replace those specific attributes with
+# minimal real Python classes so Python's class machinery is happy.
+# ---------------------------------------------------------------------------
+
+
+class _HABaseEntity:
+    """Lightweight stand-in for homeassistant.helpers.entity.Entity."""
+
+    _attr_should_poll = False
+    _attr_entity_category = None
+    _attr_unique_id = None
+    _attr_name = None
+
+
+class _CoordinatorEntity(_HABaseEntity):
+    """Minimal CoordinatorEntity stand-in.
+
+    Real signature: CoordinatorEntity.__init__(self, coordinator, context=None).
+    We capture the coordinator and ignore the rest so that sub-classes that
+    call super().__init__(coordinator) work without error.
+    """
+
+    def __init__(self, coordinator=None, context=None):
+        self.coordinator = coordinator
+
+
+class _RestoreEntity:
+    """Minimal RestoreEntity stand-in.
+
+    Inherits from object (not _HABaseEntity) to avoid MRO conflicts when
+    combined with CoordinatorEntity and NumberEntity/SensorEntity which also
+    both trace back to _HABaseEntity.
+    """
+
+    async def async_added_to_hass(self):
+        pass
+
+    async def async_get_last_state(self):
+        return None
+
+
+# Patch the stub modules with real classes so multi-inheritance works.
+sys.modules["homeassistant.helpers.update_coordinator"].CoordinatorEntity = _CoordinatorEntity
+sys.modules["homeassistant.helpers.entity"].Entity = _HABaseEntity
+sys.modules["homeassistant.helpers.restore_state"].RestoreEntity = _RestoreEntity
+
+# Entity platform base classes — all get the same lightweight base so that
+# multi-inheritance combos like (CoordinatorEntity, ValveEntity) are clean.
+sys.modules["homeassistant.components.valve"].ValveEntity = _HABaseEntity
+sys.modules["homeassistant.components.valve"].ValveEntityFeature = MagicMock()
+sys.modules["homeassistant.components.sensor"].SensorEntity = _HABaseEntity
+sys.modules["homeassistant.components.sensor"].SensorDeviceClass = MagicMock()
+sys.modules["homeassistant.components.sensor"].SensorStateClass = MagicMock()
+sys.modules["homeassistant.components.number"].NumberEntity = _HABaseEntity
+sys.modules["homeassistant.components.number"].NumberMode = MagicMock()
+sys.modules["homeassistant.components.select"].SelectEntity = _HABaseEntity
+sys.modules["homeassistant.components.switch"].SwitchEntity = _HABaseEntity
+
+# DeviceInfo is used as a callable that returns its kwargs dict — use identity.
+class _DeviceInfo(dict):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+sys.modules["homeassistant.helpers.device_registry"].DeviceInfo = _DeviceInfo
+
+# HomeAssistantError must be a real exception class so `raise HomeAssistantError(...)` works.
+class _HomeAssistantError(Exception):
+    pass
+
+sys.modules["homeassistant.exceptions"].HomeAssistantError = _HomeAssistantError
+
+# EntityCategory is accessed as EntityCategory.DIAGNOSTIC / .CONFIG — use a simple namespace.
+class _EntityCategory:
+    DIAGNOSTIC = "diagnostic"
+    CONFIG = "config"
+
+sys.modules["homeassistant.const"].EntityCategory = _EntityCategory
+sys.modules["homeassistant.const"].PERCENTAGE = "%"
+sys.modules["homeassistant.const"].SIGNAL_STRENGTH_DECIBELS_MILLIWATT = "dBm"
+sys.modules["homeassistant.const"].UnitOfTime = MagicMock()
+
