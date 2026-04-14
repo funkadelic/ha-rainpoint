@@ -79,7 +79,7 @@ async def _run(coord):
     return await _async_update_data_fn(coord)
 
 
-def _make_hub(hid=100, mid=200, model="HCS026FRF"):
+def _make_hub(hid=100, mid=200, model=MODEL_MOISTURE_SIMPLE):
     """Make hub helper."""
     return {
         "mid": mid,
