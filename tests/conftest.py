@@ -85,6 +85,16 @@ for _stub_name in _HA_STUBS:
             _make_stub(_parent)
     if _stub_name not in sys.modules:
         _make_stub(_stub_name)
+    # Bind the submodule as an attribute on its parent so that
+    # ``from homeassistant import config_entries`` returns the stub in
+    # sys.modules rather than a fresh auto-attribute on the parent MagicMock.
+    # Normally Python's import machinery sets this attribute as a side-effect
+    # of ``import pkg.sub``, but our parents are MagicMocks (not packages),
+    # and when the submodule is already cached in sys.modules the side-effect
+    # does not fire. Setting it explicitly makes the binding deterministic.
+    if len(_parts) > 1:
+        _parent_mod = sys.modules[".".join(_parts[:-1])]
+        setattr(_parent_mod, _parts[-1], sys.modules[_stub_name])
 
 # Register the real update_coordinator stub (must come after the loop so that
 # the parent "homeassistant.helpers" stub is already in sys.modules).
@@ -218,5 +228,30 @@ sys.modules["homeassistant.const"].EntityCategory = _EntityCategory
 sys.modules["homeassistant.const"].PERCENTAGE = "%"
 sys.modules["homeassistant.const"].SIGNAL_STRENGTH_DECIBELS_MILLIWATT = "dBm"
 sys.modules["homeassistant.const"].UnitOfTime = MagicMock()
+
+
+# ---------------------------------------------------------------------------
+# Real ConfigFlow base + aiohttp.ClientError so that config_flow.py can be
+# imported as a proper Python class (not a MagicMock subclass) in any test
+# collection order. Applied here (before any test module is collected) rather
+# than at the top of test_config_flow.py so that pytest ordering via -k,
+# --last-failed, or pytest-xdist cannot change whether these mutations are
+# visible to sibling test modules.
+# ---------------------------------------------------------------------------
+class _FakeConfigFlow:
+    """Minimal stand-in for homeassistant.config_entries.ConfigFlow."""
+
+    def __init_subclass__(cls, domain=None, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+
+sys.modules["homeassistant.config_entries"].ConfigFlow = _FakeConfigFlow
+
+
+class _FakeClientError(OSError):
+    """Stand-in for aiohttp.ClientError."""
+
+
+sys.modules["aiohttp"].ClientError = _FakeClientError
 
 import tests.helpers  # noqa: E402, F401 — ensures helpers are importable in tests

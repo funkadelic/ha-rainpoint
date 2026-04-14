@@ -1,51 +1,18 @@
 """Tests for custom_components.rainpoint.config_flow.
 
-Because config_entries.ConfigFlow is a MagicMock stub, the class definition
-``class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN)`` would
-normally turn RainPointConfigFlow itself into a MagicMock. To work around this,
-we replace config_entries.ConfigFlow with a real base class *before* importing
-the config_flow module so that the subclass is a proper Python class.
+The real `homeassistant.config_entries.ConfigFlow` stand-in and
+`aiohttp.ClientError` stand-in are installed by `tests/conftest.py` before
+any test collection happens, so that subclassing and `except` clauses work
+regardless of test collection order.
 """
 
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Set up a real ConfigFlow base class in the stub so that subclassing works.
-# This must happen before config_flow is imported for the first time.
-# ---------------------------------------------------------------------------
-
-class _FakeConfigFlow:
-    """Minimal stand-in for homeassistant.config_entries.ConfigFlow."""
-
-    def __init_subclass__(cls, domain=None, **kwargs):
-        super().__init_subclass__(**kwargs)
-
-
-import homeassistant.config_entries as _ce  # noqa: E402
-
-_ce.ConfigFlow = _FakeConfigFlow
-
-# aiohttp.ClientError must be a real exception class so that
-# ``except (TimeoutError, aiohttp.ClientError)`` in config_flow works.
-import aiohttp as _aiohttp  # noqa: E402
-
-
-class _FakeClientError(OSError):
-    """Stand-in for aiohttp.ClientError."""
-
-
-_aiohttp.ClientError = _FakeClientError
-
-# Now import (or reload) the config_flow module so it sees the real base class.
-if "custom_components.rainpoint.config_flow" in sys.modules:
-    del sys.modules["custom_components.rainpoint.config_flow"]
-
-from custom_components.rainpoint.api import RainPointApiError  # noqa: E402
-from custom_components.rainpoint.config_flow import RainPointConfigFlow  # noqa: E402
-from custom_components.rainpoint.const import CONF_AREA_CODE, CONF_EMAIL, CONF_HIDS, CONF_PASSWORD  # noqa: E402
+from custom_components.rainpoint.api import RainPointApiError
+from custom_components.rainpoint.config_flow import RainPointConfigFlow
+from custom_components.rainpoint.const import CONF_AREA_CODE, CONF_EMAIL, CONF_HIDS, CONF_PASSWORD
 
 # ---------------------------------------------------------------------------
 # Helpers
