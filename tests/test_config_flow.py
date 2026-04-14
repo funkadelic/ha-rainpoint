@@ -262,11 +262,15 @@ class TestConfigFlowReconfigure:
         ):
             flow.async_step_select_homes_reconfigure = AsyncMock(return_value={"type": "form"})
             await flow.async_step_reconfigure(
-                {CONF_AREA_CODE: "1", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "newpass"}
+                {CONF_AREA_CODE: "1", CONF_EMAIL: "New@Example.com", CONF_PASSWORD: "newpass"}
             )
 
         # Homes should be populated after successful login
         assert flow._homes == [{"hid": 1, "homeName": "My Home"}]
+        # Email must be normalised (lowercased + stripped)
+        assert flow._email == "new@example.com"
+        # Unique ID must be set (and awaited) using the normalised email
+        flow.async_set_unique_id.assert_awaited_once_with("rainpoint_new@example.com")
 
     @pytest.mark.asyncio
     async def test_reconfigure_auth_error(self):
@@ -286,7 +290,7 @@ class TestConfigFlowReconfigure:
                 {CONF_AREA_CODE: "1", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "wrong"}
             )
 
-        flow.async_show_form.assert_called()
+        flow.async_show_form.assert_called_once()
         last_call = flow.async_show_form.call_args.kwargs
         assert last_call.get("errors", {}).get("base") == "auth_failed"
 
@@ -308,6 +312,6 @@ class TestConfigFlowReconfigure:
                 {CONF_AREA_CODE: "1", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "pass"}
             )
 
-        flow.async_show_form.assert_called()
+        flow.async_show_form.assert_called_once()
         last_call = flow.async_show_form.call_args.kwargs
         assert last_call.get("errors", {}).get("base") == "cannot_connect"

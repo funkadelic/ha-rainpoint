@@ -90,10 +90,11 @@ class RainPointClient:
         url = f"{self._base_url}/auth/basic/app/login"
 
         # Client-side MD5 hashing as per app/Postman flow
-        md5 = hashlib.md5(self._password.encode("utf-8")).hexdigest()
+        # MD5 is mandated by the RainPoint cloud API wire protocol (not at-rest password storage).
+        md5 = hashlib.md5(self._password.encode("utf-8"), usedforsecurity=False).hexdigest()  # noqa: S324
 
         # Device ID is required; generate deterministic 16 bytes hex
-        device_id = hashlib.md5(f"{self._email}{self._area_code}".encode()).hexdigest()
+        device_id = hashlib.md5(f"{self._email}{self._area_code}".encode(), usedforsecurity=False).hexdigest()  # noqa: S324
 
         payload = {
             "areaCode": self._area_code,

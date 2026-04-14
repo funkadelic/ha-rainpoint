@@ -226,15 +226,22 @@ class TestCoordinatorUpdate:
 
         await _run(coord)
 
-        assert client.get_device_status.call_count == 2
+        # Each hub must be queried individually by its mid
+        called_mids = [
+            call.kwargs.get("mid", call.args[0] if call.args else None)
+            for call in client.get_device_status.await_args_list
+        ]
+        assert sorted(called_mids) == [201, 202]
 
     @pytest.mark.asyncio
     async def test_update_api_error_raises_exception(self):
-        """RainPointApiError propagates as an exception (wrapped in UpdateFailed)."""
+        """RainPointApiError is translated to UpdateFailed."""
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
         coord, client = _make_coord()
         client.get_devices_by_hid.side_effect = RainPointApiError("fail")
 
-        with pytest.raises(Exception):  # noqa: B017 - UpdateFailed is a MagicMock stub in tests
+        with pytest.raises(UpdateFailed):
             await _run(coord)
 
     @pytest.mark.asyncio
@@ -307,14 +314,18 @@ class TestCoordinatorUpdate:
 
     @pytest.mark.asyncio
     async def test_update_multiple_hids_each_call_get_devices(self):
-        """Each HID triggers a separate get_devices_by_hid call."""
+        """Each HID triggers a separate get_devices_by_hid call with the right hid."""
         coord, client = _make_coord(hids=[100, 101])
         client.get_devices_by_hid.return_value = []
         client.get_multiple_device_status.return_value = []
 
         await _run(coord)
 
-        assert client.get_devices_by_hid.call_count == 2
+        called_hids = [
+            call.kwargs.get("hid", call.args[0] if call.args else None)
+            for call in client.get_devices_by_hid.await_args_list
+        ]
+        assert sorted(called_hids) == [100, 101]
 
     @pytest.mark.asyncio
     async def test_update_empty_multiple_status_triggers_fallback(self):

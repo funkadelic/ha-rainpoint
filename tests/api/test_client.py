@@ -110,18 +110,20 @@ class TestLogin:
 
     @pytest.mark.asyncio
     async def test_login_success(self):
-        """Successful login stores token, refresh token, and expiry."""
+        """Successful login stores token, refresh token, and exact expiry."""
         client = _make_client()
         client._token = None  # Reset so we're actually testing login
 
+        ts_ms = 1700000000000
+        token_expired = 3600
         json_body = {
             "code": 0,
             "data": {
                 "token": "tok123",
                 "refreshToken": "ref456",
-                "tokenExpired": 3600,
+                "tokenExpired": token_expired,
             },
-            "ts": 1700000000000,
+            "ts": ts_ms,
         }
         client._session.post = MagicMock(return_value=_mock_response(json_body))
 
@@ -129,7 +131,11 @@ class TestLogin:
 
         assert client._token == "tok123"
         assert client._refresh_token == "ref456"
-        assert client._token_expires_at is not None
+        # Expiry is deterministic: server ts + tokenExpired seconds
+        expected_expires_at = datetime.fromtimestamp(ts_ms / 1000, tz=UTC) + timedelta(
+            seconds=token_expired
+        )
+        assert client._token_expires_at == expected_expires_at
 
     @pytest.mark.asyncio
     async def test_login_http_error(self):
@@ -296,7 +302,7 @@ class TestTokenManagement:
 
         await client.ensure_logged_in()
 
-        client._login.assert_called_once()
+        client._login.assert_awaited_once()
 
 
 class TestAuthHeaders:
