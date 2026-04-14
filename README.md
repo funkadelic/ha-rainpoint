@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/github/license/funkadelic/ha-rainpoint.svg)](LICENSE)
 [![HACS](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/hacs/integration)
 
-A Home Assistant custom integration for RainPoint Smart+ irrigation devices via the RainPoint cloud API (`region3.homgarus.com`).
+A Home Assistant custom integration for RainPoint Smart+ irrigation devices via the RainPoint cloud API.
 
 ---
 
@@ -13,7 +13,7 @@ A Home Assistant custom integration for RainPoint Smart+ irrigation devices via 
 This integration supports RainPoint Smart+ device families, including:
 
 | Family | Examples | Entities Created |
-|--------|----------|-----------------|
+| ------ | -------- | ---------------- |
 | Valve hubs | HTV245FRF (primary tested device), HTV213FRF, HTV0540FRF | Valve per zone, duration number per zone |
 | Soil sensors | HCS021FRF, HCS026FRF, HCS003FRF, HCS005FRF | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
@@ -95,6 +95,6 @@ The original MIT license is preserved — see [LICENSE](LICENSE).
 
 ## Contributing / Issues
 
-Report bugs and request features at: https://github.com/funkadelic/ha-rainpoint/issues
+Report bugs and request features at: <https://github.com/funkadelic/ha-rainpoint/issues>
 
 Contributions are welcome. The primary testing target is the HTV245FRF valve — if you have other RainPoint hardware and can provide raw payloads, open an issue to help expand decoder coverage.
