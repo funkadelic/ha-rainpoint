@@ -19,6 +19,33 @@ def _make_stub(name: str) -> ModuleType:
     return mod
 
 
+# ---------------------------------------------------------------------------
+# Real stubs for update_coordinator — must be real classes so that
+# RainPointCoordinator can inherit from DataUpdateCoordinator and be
+# instantiated as a normal Python object.
+# ---------------------------------------------------------------------------
+
+class DataUpdateCoordinator:
+    """Minimal real DataUpdateCoordinator stub for tests."""
+
+    def __init__(self, hass, logger, name, update_interval):
+        self.hass = hass
+        self.logger = logger
+
+
+class UpdateFailed(Exception):
+    """Real UpdateFailed exception stub for tests."""
+
+
+def _make_update_coordinator_stub() -> ModuleType:
+    mod = ModuleType("homeassistant.helpers.update_coordinator")
+    mod.__name__ = "homeassistant.helpers.update_coordinator"
+    mod.__spec__ = None
+    mod.DataUpdateCoordinator = DataUpdateCoordinator
+    mod.UpdateFailed = UpdateFailed
+    return mod
+
+
 # All HA / third-party modules pulled in transitively when
 # custom_components.rainpoint (the package __init__) loads.
 # Must be registered BEFORE any test module is imported so that the package
@@ -31,7 +58,6 @@ _HA_STUBS = [
     "homeassistant.helpers",
     "homeassistant.helpers.aiohttp_client",
     "homeassistant.helpers.entity_platform",
-    "homeassistant.helpers.update_coordinator",
     "homeassistant.helpers.entity",
     "homeassistant.components",
     "homeassistant.components.persistent_notification",
@@ -60,5 +86,8 @@ for _stub_name in _HA_STUBS:
     if _stub_name not in sys.modules:
         _make_stub(_stub_name)
 
-import tests.helpers  # noqa: E402, F401 — ensures helpers are importable in tests
+# Register the real update_coordinator stub (must come after the loop so that
+# the parent "homeassistant.helpers" stub is already in sys.modules).
+sys.modules["homeassistant.helpers.update_coordinator"] = _make_update_coordinator_stub()
 
+import tests.helpers  # noqa: E402, F401 — ensures helpers are importable in tests
