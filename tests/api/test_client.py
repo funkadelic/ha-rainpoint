@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.rainpoint.api import RainPointClient, RainPointApiError
+from custom_components.rainpoint.api import RainPointApiError, RainPointClient
 
 
 def _make_client() -> RainPointClient:
@@ -169,10 +169,9 @@ class TestLogin:
 
         # Extract the payload passed to session.post
         call_kwargs = client._session.post.call_args
-        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json") or call_kwargs[0][1] if len(call_kwargs[0]) > 1 else None
-        # Try positional then keyword args
+        payload = call_kwargs.kwargs.get("json")
         if payload is None:
-            args, kwargs = call_kwargs
+            _args, kwargs = call_kwargs
             payload = kwargs.get("json")
 
         expected_md5 = hashlib.md5(b"testpass").hexdigest()
@@ -194,7 +193,7 @@ class TestLogin:
 
         await client._login()
 
-        args, kwargs = client._session.post.call_args
+        _args, kwargs = client._session.post.call_args
         payload = kwargs.get("json")
 
         # email="test@example.com", area_code="1" => MD5("test@example.com1")

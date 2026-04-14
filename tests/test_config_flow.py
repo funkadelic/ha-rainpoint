@@ -7,11 +7,10 @@ we replace config_entries.ConfigFlow with a real base class *before* importing
 the config_flow module so that the subclass is a proper Python class.
 """
 
-import importlib
 import sys
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Set up a real ConfigFlow base class in the stub so that subclassing works.
@@ -25,12 +24,13 @@ class _FakeConfigFlow:
         super().__init_subclass__(**kwargs)
 
 
-import homeassistant.config_entries as _ce
+import homeassistant.config_entries as _ce  # noqa: E402
+
 _ce.ConfigFlow = _FakeConfigFlow
 
 # aiohttp.ClientError must be a real exception class so that
 # ``except (TimeoutError, aiohttp.ClientError)`` in config_flow works.
-import aiohttp as _aiohttp
+import aiohttp as _aiohttp  # noqa: E402
 
 
 class _FakeClientError(OSError):
@@ -43,10 +43,9 @@ _aiohttp.ClientError = _FakeClientError
 if "custom_components.rainpoint.config_flow" in sys.modules:
     del sys.modules["custom_components.rainpoint.config_flow"]
 
-from custom_components.rainpoint.config_flow import RainPointConfigFlow  # noqa: E402
 from custom_components.rainpoint.api import RainPointApiError  # noqa: E402
+from custom_components.rainpoint.config_flow import RainPointConfigFlow  # noqa: E402
 from custom_components.rainpoint.const import CONF_AREA_CODE, CONF_EMAIL, CONF_HIDS, CONF_PASSWORD  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Helpers

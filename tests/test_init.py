@@ -1,11 +1,11 @@
 """Tests for custom_components.rainpoint.__init__ (integration lifecycle)."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from custom_components.rainpoint import (
     DOMAIN,
-    PLATFORMS,
     async_reload_integration,
     async_setup,
     async_setup_entry,

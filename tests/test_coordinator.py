@@ -1,9 +1,9 @@
 """Tests for RainPointCoordinator: data fetching, decoder dispatch, fallback, and error handling."""
 
-import sys
 import types
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # ---------------------------------------------------------------------------
 # Strategy: call _async_update_data as an unbound function.
@@ -18,8 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # self._notified_unknown_models, self.hass, and self.logger — all attributes we
 # can set on a SimpleNamespace.
 # ---------------------------------------------------------------------------
-
-import custom_components.rainpoint.coordinator as _coord_module  # noqa: E402
+import custom_components.rainpoint.coordinator as _coord_module
 
 # Grab the raw function (bypasses MagicMock descriptor protocol)
 _async_update_data_fn = _coord_module.RainPointCoordinator.__dict__["_async_update_data"]
@@ -28,7 +27,6 @@ DECODER_REGISTRY = _coord_module.DECODER_REGISTRY
 
 from custom_components.rainpoint.api import RainPointApiError  # noqa: E402
 from custom_components.rainpoint.const import (  # noqa: E402
-    CONF_HIDS,
     MODEL_CO2,
     MODEL_DISPLAY_HUB,
     MODEL_FLOWMETER,
@@ -40,7 +38,6 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_VALVE_245,
     MODEL_VALVE_HUB,
 )
-
 
 # ---------------------------------------------------------------------------
 # Sample raw payloads
@@ -232,7 +229,7 @@ class TestCoordinatorUpdate:
         coord, client = _make_coord()
         client.get_devices_by_hid.side_effect = RainPointApiError("fail")
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 - UpdateFailed is a MagicMock stub in tests
             await _run(coord)
 
     @pytest.mark.asyncio
@@ -283,7 +280,7 @@ class TestCoordinatorUpdate:
     @pytest.mark.asyncio
     async def test_update_empty_hids(self):
         """No HIDs configured returns empty hubs and sensors."""
-        coord, client = _make_coord(hids=[])
+        coord, _client = _make_coord(hids=[])
 
         result = await _run(coord)
 

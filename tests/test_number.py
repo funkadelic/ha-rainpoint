@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
 
-from custom_components.rainpoint.number import (
-    RainPointZoneDurationNumber,
-    DURATION_DEFAULT_MINUTES,
-    DURATION_MIN_MINUTES,
-    DURATION_MAX_MINUTES,
-    DURATION_STEP_MINUTES,
-)
+import pytest
+
 from custom_components.rainpoint.const import DOMAIN
+from custom_components.rainpoint.number import (
+    DURATION_DEFAULT_MINUTES,
+    DURATION_MAX_MINUTES,
+    DURATION_MIN_MINUTES,
+    DURATION_STEP_MINUTES,
+    RainPointZoneDurationNumber,
+)
 
 
 def _make_number(current_value=10.0, firmware_version="1.0"):

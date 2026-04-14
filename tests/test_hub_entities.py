@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
+
 from custom_components.rainpoint.hub_entities import (
-    RainPointHubRSSISensor,
+    RainPointHubBroadcastSwitch,
+    RainPointHubChannelSelect,
     RainPointHubDeviceIDSensor,
     RainPointHubFirmwareSensor,
     RainPointHubMACSensor,
-    RainPointHubChannelSelect,
-    RainPointHubBroadcastSwitch,
+    RainPointHubRSSISensor,
 )
-from custom_components.rainpoint.const import DOMAIN
 
 
 def _make_coordinator():

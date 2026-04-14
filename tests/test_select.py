@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
-from custom_components.rainpoint.select import async_setup_entry
+import pytest
+
 from custom_components.rainpoint.const import DOMAIN
+from custom_components.rainpoint.select import async_setup_entry
 
 
 def _make_hass(hubs=None):
@@ -27,7 +28,7 @@ class TestSelectSetupEntry:
     async def test_setup_entry_creates_entities_for_each_hub(self):
         """One channel select entity should be created per hub."""
         hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
-        hass, entry, coord = _make_hass(hubs=[hub_info])
+        hass, entry, _coord = _make_hass(hubs=[hub_info])
 
         mock_add_entities = MagicMock()
         await async_setup_entry(hass, entry, mock_add_entities)
@@ -39,7 +40,7 @@ class TestSelectSetupEntry:
     @pytest.mark.asyncio
     async def test_setup_entry_no_hubs_adds_empty_list(self):
         """No hubs should result in async_add_entities called with empty list."""
-        hass, entry, coord = _make_hass(hubs=[])
+        hass, entry, _coord = _make_hass(hubs=[])
 
         mock_add_entities = MagicMock()
         await async_setup_entry(hass, entry, mock_add_entities)
@@ -55,7 +56,7 @@ class TestSelectSetupEntry:
             {"hid": 100, "name": "Hub 1", "softVer": "1.0"},
             {"hid": 200, "name": "Hub 2", "softVer": "2.0"},
         ]
-        hass, entry, coord = _make_hass(hubs=hubs)
+        hass, entry, _coord = _make_hass(hubs=hubs)
 
         mock_add_entities = MagicMock()
         await async_setup_entry(hass, entry, mock_add_entities)

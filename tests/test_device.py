@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-from custom_components.rainpoint.device import RainPointHubDevice, RainPointSubDevice
 from custom_components.rainpoint.const import DOMAIN
+from custom_components.rainpoint.device import RainPointHubDevice, RainPointSubDevice
 
 
 class TestRainPointHubDevice:

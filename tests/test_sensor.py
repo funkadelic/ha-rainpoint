@@ -2,30 +2,27 @@
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
-from custom_components.rainpoint.sensor import (
-    _slugify,
-    async_setup_entry,
-    RainPointMoisturePercentSensor,
-    RainPointTemperatureSensor,
-    RainPointIlluminanceSensor,
-    RainPointRainSensor,
-    DisplayHubReadingSensor,
-    RainPointSensorBase,
-)
+import pytest
+
 from custom_components.rainpoint.const import (
     DOMAIN,
-    MODEL_MOISTURE_SIMPLE,
-    MODEL_MOISTURE_FULL,
-    MODEL_RAIN,
     MODEL_DISPLAY_HUB,
-    MODEL_TEMPHUM,
-    MODEL_VALVE_245,
+    MODEL_MOISTURE_FULL,
+    MODEL_MOISTURE_SIMPLE,
+    MODEL_RAIN,
 )
-from tests.helpers import make_sensor_entry, make_coordinator_data, make_hub_info
-
+from custom_components.rainpoint.sensor import (
+    DisplayHubReadingSensor,
+    RainPointIlluminanceSensor,
+    RainPointMoisturePercentSensor,
+    RainPointRainSensor,
+    RainPointTemperatureSensor,
+    _slugify,
+    async_setup_entry,
+)
+from tests.helpers import make_coordinator_data, make_hub_info, make_sensor_entry
 
 # ---------------------------------------------------------------------------
 # _slugify helper
@@ -313,7 +310,7 @@ class TestMoisturePercentSensor:
             {"type": "moisture_simple", "moisture_percent": moisture_percent, "rssi_dbm": -80, "battery_percent": 75},
         )
         sensor._simple = simple
-        sensor._attr_unique_id = f"rainpoint_100_200_1_moisture_percent"
+        sensor._attr_unique_id = "rainpoint_100_200_1_moisture_percent"
         sensor._attr_name = "Test Sensor Moisture Percent"
         return sensor
 
@@ -362,7 +359,7 @@ class TestRainSensor:
         )
         sensor._data_key = data_key
         sensor._attr_unique_id = f"rainpoint_100_200_1_{data_key}"
-        sensor._attr_name = f"Rain Sensor Rain (Last 24 Hours)"
+        sensor._attr_name = "Rain Sensor Rain (Last 24 Hours)"
         return sensor
 
     def test_rain_sensor_native_value(self):

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from custom_components.rainpoint.valve import (
-    RainPointValveEntity,
-    DEFAULT_DURATION_SECONDS,
-)
+import pytest
+
 from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_245
+from custom_components.rainpoint.valve import (
+    DEFAULT_DURATION_SECONDS,
+    RainPointValveEntity,
+)
 
 
 def _make_valve(zone_data=None, hub_online=True, model="HTV245FRF"):

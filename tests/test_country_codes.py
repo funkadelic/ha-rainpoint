@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from custom_components.rainpoint.country_codes import (
     COUNTRY_TO_PHONE_CODE,
     get_default_country_code,

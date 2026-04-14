@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import pytest
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import MagicMock
 
+from custom_components.rainpoint.const import DOMAIN
 from custom_components.rainpoint.diagnostic_sensors import (
-    RainPointRSSISensor,
     RainPointBatterySensor,
+    RainPointDeviceIDSensor,
     RainPointFirmwareVersionSensor,
     RainPointLastUpdatedSensor,
-    RainPointDeviceIDSensor,
+    RainPointRSSISensor,
 )
-from custom_components.rainpoint.const import DOMAIN
-
 
 _SENTINEL = object()
 
@@ -52,10 +50,7 @@ class TestRainPointRSSISensor:
     """Tests for RainPointRSSISensor."""
 
     def _make(self, rssi=-84, data_is_none=False):
-        if data_is_none:
-            coord = _make_coordinator(sensor_data=None)
-        else:
-            coord = _make_coordinator(sensor_data={"rssi_dbm": rssi})
+        coord = _make_coordinator(sensor_data=None) if data_is_none else _make_coordinator(sensor_data={"rssi_dbm": rssi})
         sensor_info = _make_sensor_info()
         sensor = RainPointRSSISensor.__new__(RainPointRSSISensor)
         RainPointRSSISensor.__init__(sensor, coord, "100_200_1", sensor_info, "100_200_1")
