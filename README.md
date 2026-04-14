@@ -100,3 +100,5 @@ The original MIT license is preserved — see [LICENSE](LICENSE).
 Report bugs and request features at: <https://github.com/funkadelic/ha-rainpoint/issues>
 
 Contributions are welcome. The primary testing target is the HTV245FRF valve — if you have other RainPoint hardware and can provide raw payloads, open an issue to help expand decoder coverage.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup (venv, Pylance, running tests).
