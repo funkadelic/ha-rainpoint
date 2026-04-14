@@ -9,7 +9,7 @@ The version is tracked in two files:
 - `custom_components/rainpoint/manifest.json` — the canonical source (read by HACS)
 - `custom_components/rainpoint/const.py` (`VERSION`) — used in runtime logging
 
-Both are updated automatically by release-please when a release PR is merged.
+Both are updated by release-please in its auto-generated release PR. When that PR is merged, the version bumps land on `main` and trigger tag/release creation.
 
 ## How Releases Work
 
@@ -31,8 +31,10 @@ Release-please determines the version bump from commit prefixes:
 
 ## Configuration
 
-- `release-please-config.json` — changelog sections, extra files, release type
-- `.release-please-manifest.json` — current version tracker
+- `release-please-config.json` — release type (`simple`, no language-specific publish step), `extra-files` (tells release-please to update `manifest.json` via jsonpath and `const.py` via the `x-release-please-version` annotation), and `changelog-sections` (maps conventional commit types to changelog headings)
+- `.release-please-manifest.json` — current version tracker (updated automatically by release-please)
+
+The `const.py` version update relies on the `# x-release-please-version` annotation comment on the `VERSION` line. Do not remove this annotation.
 
 ## Changelog Visibility
 
@@ -44,7 +46,8 @@ Release-please determines the version bump from commit prefixes:
 | `refactor:` | Changed | Yes |
 | `docs:` | Documentation | No |
 | `test:` | Testing | No |
-| `ci:`, `build:` | CI / Build | No |
+| `ci:` | CI | No |
+| `build:` | Build | No |
 | `chore:` | Miscellaneous | No |
 
 Hidden commits are excluded from user-facing release notes. Edit the release PR body to override visibility for a specific release.
