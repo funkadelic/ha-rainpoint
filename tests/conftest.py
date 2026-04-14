@@ -59,3 +59,4 @@ for _stub_name in _HA_STUBS:
             _make_stub(_parent)
     if _stub_name not in sys.modules:
         _make_stub(_stub_name)
+
