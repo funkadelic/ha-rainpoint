@@ -8,5 +8,6 @@ __pycache__/
 # Internal documentation
 PUBLISHING_GUIDE.md
 backup_guide.sh
+docs/superpowers/
 post_with_curl.py
 POST_RESPONSES_README.md
