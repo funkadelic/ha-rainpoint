@@ -62,8 +62,10 @@ _VALID_USER_INPUT = {
 # ---------------------------------------------------------------------------
 
 class TestConfigFlowUserStep:
+    """Tests for ConfigFlowUserStep."""
     @pytest.mark.asyncio
     async def test_user_step_no_input_shows_form(self):
+        """User step no input shows form."""
         flow = _make_flow()
         await flow.async_step_user(None)
         flow.async_show_form.assert_called_once()
@@ -72,6 +74,7 @@ class TestConfigFlowUserStep:
 
     @pytest.mark.asyncio
     async def test_user_step_success_proceeds_to_home_selection(self):
+        """User step success proceeds to home selection."""
         flow = _make_flow()
         mock_client = _make_mock_client()
 
@@ -92,6 +95,7 @@ class TestConfigFlowUserStep:
 
     @pytest.mark.asyncio
     async def test_user_step_auth_error(self):
+        """User step auth error."""
         flow = _make_flow()
         mock_client = _make_mock_client()
         mock_client.ensure_logged_in = AsyncMock(side_effect=RainPointApiError("bad creds"))
@@ -111,6 +115,7 @@ class TestConfigFlowUserStep:
 
     @pytest.mark.asyncio
     async def test_user_step_network_error(self):
+        """User step network error."""
         flow = _make_flow()
         mock_client = _make_mock_client()
         mock_client.ensure_logged_in = AsyncMock(side_effect=TimeoutError())
@@ -130,6 +135,7 @@ class TestConfigFlowUserStep:
 
     @pytest.mark.asyncio
     async def test_user_step_no_homes(self):
+        """User step no homes."""
         flow = _make_flow()
         mock_client = _make_mock_client(homes=[])
 
@@ -152,8 +158,10 @@ class TestConfigFlowUserStep:
 # ---------------------------------------------------------------------------
 
 class TestConfigFlowSelectHomes:
+    """Tests for ConfigFlowSelectHomes."""
     @pytest.mark.asyncio
     async def test_select_homes_no_input_shows_form(self):
+        """Select homes no input shows form."""
         flow = _make_flow()
         flow._homes = [{"hid": 1, "homeName": "Home1"}]
         flow._reconfigure = False
@@ -166,6 +174,7 @@ class TestConfigFlowSelectHomes:
 
     @pytest.mark.asyncio
     async def test_select_homes_creates_entry(self):
+        """Select homes creates entry."""
         flow = _make_flow()
         flow._homes = [{"hid": 1, "homeName": "Home1"}]
         flow._area_code = "1"
@@ -182,6 +191,7 @@ class TestConfigFlowSelectHomes:
 
     @pytest.mark.asyncio
     async def test_select_homes_no_selection_shows_error(self):
+        """Select homes no selection shows error."""
         flow = _make_flow()
         flow._homes = [{"hid": 1, "homeName": "Home1"}]
         flow._reconfigure = False
@@ -194,6 +204,7 @@ class TestConfigFlowSelectHomes:
 
     @pytest.mark.asyncio
     async def test_select_homes_none_selection_shows_error(self):
+        """Select homes none selection shows error."""
         flow = _make_flow()
         flow._homes = [{"hid": 1, "homeName": "Home1"}]
         flow._reconfigure = False
@@ -210,6 +221,7 @@ class TestConfigFlowSelectHomes:
 # ---------------------------------------------------------------------------
 
 class TestConfigFlowReconfigure:
+    """Tests for ConfigFlowReconfigure."""
     def _make_reconfigure_flow(self):
         """Create flow with reconfigure entry pre-wired."""
         flow = _make_flow()
@@ -226,6 +238,7 @@ class TestConfigFlowReconfigure:
 
     @pytest.mark.asyncio
     async def test_reconfigure_no_input_shows_form(self):
+        """Reconfigure no input shows form."""
         flow = self._make_reconfigure_flow()
 
         await flow.async_step_reconfigure(None)
@@ -236,6 +249,7 @@ class TestConfigFlowReconfigure:
 
     @pytest.mark.asyncio
     async def test_reconfigure_success_proceeds_to_home_selection(self):
+        """Reconfigure success proceeds to home selection."""
         flow = self._make_reconfigure_flow()
         mock_client = _make_mock_client()
 
@@ -256,6 +270,7 @@ class TestConfigFlowReconfigure:
 
     @pytest.mark.asyncio
     async def test_reconfigure_auth_error(self):
+        """Reconfigure auth error."""
         flow = self._make_reconfigure_flow()
         mock_client = _make_mock_client()
         mock_client.ensure_logged_in = AsyncMock(side_effect=RainPointApiError("bad"))
@@ -277,6 +292,7 @@ class TestConfigFlowReconfigure:
 
     @pytest.mark.asyncio
     async def test_reconfigure_network_error(self):
+        """Reconfigure network error."""
         flow = self._make_reconfigure_flow()
         mock_client = _make_mock_client()
         mock_client.ensure_logged_in = AsyncMock(side_effect=TimeoutError())

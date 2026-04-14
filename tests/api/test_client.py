@@ -47,9 +47,11 @@ class TestControlWorkModeCode4:
     """
 
     def _make_client(self) -> RainPointClient:
+        """Make client helper."""
         return _make_client()
 
     def _mock_response(self, json_data: dict, status: int = 200) -> AsyncMock:
+        """Mock response helper."""
         return _mock_response(json_data, status)
 
     @pytest.mark.asyncio

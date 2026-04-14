@@ -14,6 +14,7 @@ from custom_components.rainpoint import (
 
 
 def _make_entry(entry_id="test_entry_id"):
+    """Make entry helper."""
     entry = MagicMock()
     entry.entry_id = entry_id
     entry.data = {
@@ -29,6 +30,7 @@ def _make_entry(entry_id="test_entry_id"):
 
 
 def _make_hass(entry_id=None):
+    """Make hass helper."""
     hass = MagicMock()
     hass.data = {}
     hass.config_entries = MagicMock()
@@ -37,16 +39,20 @@ def _make_hass(entry_id=None):
 
 
 class TestAsyncSetup:
+    """Tests for AsyncSetup."""
     @pytest.mark.asyncio
     async def test_async_setup_returns_true(self):
+        """Async setup returns true."""
         hass = _make_hass()
         result = await async_setup(hass, {})
         assert result is True
 
 
 class TestAsyncSetupEntry:
+    """Tests for AsyncSetupEntry."""
     @pytest.mark.asyncio
     async def test_async_setup_entry_creates_coordinator(self):
+        """Async setup entry creates coordinator."""
         hass = _make_hass()
         entry = _make_entry()
 
@@ -75,8 +81,10 @@ class TestAsyncSetupEntry:
 
 
 class TestAsyncUnloadEntry:
+    """Tests for AsyncUnloadEntry."""
     @pytest.mark.asyncio
     async def test_async_unload_entry_success(self):
+        """Async unload entry success."""
         entry = _make_entry()
         hass = _make_hass()
         hass.data[DOMAIN] = {entry.entry_id: {"client": MagicMock(), "coordinator": MagicMock()}}
@@ -89,6 +97,7 @@ class TestAsyncUnloadEntry:
 
     @pytest.mark.asyncio
     async def test_async_unload_entry_failure(self):
+        """Async unload entry failure."""
         entry = _make_entry()
         hass = _make_hass()
         hass.data[DOMAIN] = {entry.entry_id: {"client": MagicMock(), "coordinator": MagicMock()}}
@@ -101,8 +110,10 @@ class TestAsyncUnloadEntry:
 
 
 class TestAsyncReloadIntegration:
+    """Tests for AsyncReloadIntegration."""
     @pytest.mark.asyncio
     async def test_async_reload_integration_success(self):
+        """Async reload integration success."""
         hass = _make_hass()
         mock_entry = MagicMock()
         mock_entry.domain = DOMAIN
@@ -116,6 +127,7 @@ class TestAsyncReloadIntegration:
 
     @pytest.mark.asyncio
     async def test_async_reload_integration_invalid_entry_none(self):
+        """Async reload integration invalid entry none."""
         hass = _make_hass()
         hass.config_entries.async_get_entry = MagicMock(return_value=None)
 
@@ -125,6 +137,7 @@ class TestAsyncReloadIntegration:
 
     @pytest.mark.asyncio
     async def test_async_reload_integration_wrong_domain(self):
+        """Async reload integration wrong domain."""
         hass = _make_hass()
         mock_entry = MagicMock()
         mock_entry.domain = "other_domain"
@@ -136,6 +149,7 @@ class TestAsyncReloadIntegration:
 
     @pytest.mark.asyncio
     async def test_async_reload_integration_exception_returns_false(self):
+        """Async reload integration exception returns false."""
         hass = _make_hass()
         mock_entry = MagicMock()
         mock_entry.domain = DOMAIN

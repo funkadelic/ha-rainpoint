@@ -24,6 +24,7 @@ def _make_coordinator():
 
 
 def _make_hub_info(hid=100, name="Test Hub", soft_ver="2.0", mac="AA:BB:CC"):
+    """Make hub info helper."""
     return {
         "hid": hid,
         "name": name,
@@ -38,6 +39,7 @@ class TestRainPointHubRSSISensor:
     """Tests for hub RSSI sensor."""
 
     def _make(self):
+        """Make helper."""
         coord = _make_coordinator()
         hub_info = _make_hub_info()
         sensor = RainPointHubRSSISensor.__new__(RainPointHubRSSISensor)
@@ -69,6 +71,7 @@ class TestRainPointHubDeviceIDSensor:
     """Tests for hub device ID sensor."""
 
     def _make(self, hid=100):
+        """Make helper."""
         coord = _make_coordinator()
         hub_info = _make_hub_info(hid=hid)
         sensor = RainPointHubDeviceIDSensor.__new__(RainPointHubDeviceIDSensor)
@@ -90,6 +93,7 @@ class TestRainPointHubFirmwareSensor:
     """Tests for hub firmware version sensor."""
 
     def _make(self, soft_ver="2.0"):
+        """Make helper."""
         coord = _make_coordinator()
         hub_info = _make_hub_info(soft_ver=soft_ver)
         sensor = RainPointHubFirmwareSensor.__new__(RainPointHubFirmwareSensor)
@@ -119,6 +123,7 @@ class TestRainPointHubMACSensor:
     """Tests for hub MAC address sensor."""
 
     def _make(self, mac="AA:BB:CC:DD:EE:FF"):
+        """Make helper."""
         coord = _make_coordinator()
         hub_info = _make_hub_info(mac=mac)
         sensor = RainPointHubMACSensor.__new__(RainPointHubMACSensor)
@@ -140,6 +145,7 @@ class TestRainPointHubChannelSelect:
     """Tests for hub RF channel select entity."""
 
     def _make(self):
+        """Make helper."""
         coord = _make_coordinator()
         hub_info = _make_hub_info()
         select = RainPointHubChannelSelect.__new__(RainPointHubChannelSelect)
@@ -181,6 +187,7 @@ class TestRainPointHubBroadcastSwitch:
     """Tests for hub broadcast switch entity."""
 
     def _make(self):
+        """Make helper."""
         coord = _make_coordinator()
         hub_info = _make_hub_info()
         switch = RainPointHubBroadcastSwitch.__new__(RainPointHubBroadcastSwitch)

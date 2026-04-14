@@ -20,6 +20,9 @@ import pytest
 # ---------------------------------------------------------------------------
 import custom_components.rainpoint.coordinator as _coord_module
 
+assert "_async_update_data" in _coord_module.RainPointCoordinator.__dict__, (
+    "RainPointCoordinator._async_update_data missing or renamed; update tests accordingly"
+)
 # Grab the raw function (bypasses MagicMock descriptor protocol)
 _async_update_data_fn = _coord_module.RainPointCoordinator.__dict__["_async_update_data"]
 
@@ -77,6 +80,7 @@ async def _run(coord):
 
 
 def _make_hub(hid=100, mid=200, model="HCS026FRF"):
+    """Make hub helper."""
     return {
         "mid": mid,
         "name": "Hub1",
@@ -90,6 +94,7 @@ def _make_hub(hid=100, mid=200, model="HCS026FRF"):
 
 
 def _make_status(mid=200, sid="D1", value=_MOISTURE_SIMPLE_PAYLOAD, time_ms=1700000000000):
+    """Make status helper."""
     entry = {"id": sid, "value": value}
     if time_ms is not None:
         entry["time"] = time_ms
@@ -280,7 +285,7 @@ class TestCoordinatorUpdate:
     @pytest.mark.asyncio
     async def test_update_empty_hids(self):
         """No HIDs configured returns empty hubs and sensors."""
-        coord, _client = _make_coord(hids=[])
+        coord, _ = _make_coord(hids=[])
 
         result = await _run(coord)
 
@@ -371,37 +376,59 @@ class TestDecoderRegistry:
     """Tests for the DECODER_REGISTRY constant."""
 
     def test_registry_is_dict(self):
+        """Registry is dict."""
         assert isinstance(DECODER_REGISTRY, dict)
 
-    def test_registry_has_minimum_entries(self):
-        """Registry has at least 20 model entries."""
-        assert len(DECODER_REGISTRY) >= 20
+    def test_registry_contains_required_models(self):
+        """Registry must cover every model we claim to support."""
+        required = {
+            MODEL_CO2,
+            MODEL_FLOWMETER,
+            MODEL_MOISTURE_FULL,
+            MODEL_MOISTURE_SIMPLE,
+            MODEL_RAIN,
+            MODEL_TEMPHUM,
+            MODEL_VALVE_213,
+            MODEL_VALVE_245,
+            MODEL_VALVE_HUB,
+        }
+        missing = required - DECODER_REGISTRY.keys()
+        assert not missing, f"DECODER_REGISTRY missing required models: {missing}"
 
     def test_registry_contains_moisture_simple(self):
+        """Registry contains moisture simple."""
         assert MODEL_MOISTURE_SIMPLE in DECODER_REGISTRY
 
     def test_registry_contains_moisture_full(self):
+        """Registry contains moisture full."""
         assert MODEL_MOISTURE_FULL in DECODER_REGISTRY
 
     def test_registry_contains_rain(self):
+        """Registry contains rain."""
         assert MODEL_RAIN in DECODER_REGISTRY
 
     def test_registry_contains_temphum(self):
+        """Registry contains temphum."""
         assert MODEL_TEMPHUM in DECODER_REGISTRY
 
     def test_registry_contains_flowmeter(self):
+        """Registry contains flowmeter."""
         assert MODEL_FLOWMETER in DECODER_REGISTRY
 
     def test_registry_contains_co2(self):
+        """Registry contains co2."""
         assert MODEL_CO2 in DECODER_REGISTRY
 
     def test_registry_contains_valve_245(self):
+        """Registry contains valve 245."""
         assert MODEL_VALVE_245 in DECODER_REGISTRY
 
     def test_registry_contains_valve_213(self):
+        """Registry contains valve 213."""
         assert MODEL_VALVE_213 in DECODER_REGISTRY
 
     def test_registry_contains_valve_hub(self):
+        """Registry contains valve hub."""
         assert MODEL_VALVE_HUB in DECODER_REGISTRY
 
     def test_registry_display_hub_not_in_registry(self):

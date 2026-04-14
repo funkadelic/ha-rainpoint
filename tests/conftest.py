@@ -29,6 +29,7 @@ class DataUpdateCoordinator:
     """Minimal real DataUpdateCoordinator stub for tests."""
 
     def __init__(self, hass, logger, name, update_interval):
+        """Init helper."""
         self.hass = hass
         self.logger = logger
 
@@ -38,6 +39,7 @@ class UpdateFailed(Exception):
 
 
 def _make_update_coordinator_stub() -> ModuleType:
+    """Make update coordinator stub helper."""
     mod = ModuleType("homeassistant.helpers.update_coordinator")
     mod.__name__ = "homeassistant.helpers.update_coordinator"
     mod.__spec__ = None
@@ -97,8 +99,12 @@ for _stub_name in _HA_STUBS:
         setattr(_parent_mod, _parts[-1], sys.modules[_stub_name])
 
 # Register the real update_coordinator stub (must come after the loop so that
-# the parent "homeassistant.helpers" stub is already in sys.modules).
-sys.modules["homeassistant.helpers.update_coordinator"] = _make_update_coordinator_stub()
+# the parent "homeassistant.helpers" stub is already in sys.modules). Bind it
+# as an attribute on the parent so ``from homeassistant.helpers import
+# update_coordinator`` resolves to the same stub object.
+_update_coordinator_stub = _make_update_coordinator_stub()
+sys.modules["homeassistant.helpers.update_coordinator"] = _update_coordinator_stub
+sys.modules["homeassistant.helpers"].update_coordinator = _update_coordinator_stub
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +151,7 @@ class _CoordinatorEntity(_HABaseEntity):
     """
 
     def __init__(self, coordinator=None, context=None):
+        """Init helper."""
         self.coordinator = coordinator
 
 
@@ -156,9 +163,11 @@ class _RestoreEntity:
     """
 
     async def async_added_to_hass(self):
+        """Async added to hass."""
         pass
 
     async def async_get_last_state(self):
+        """Async get last state."""
         return None
 
 
@@ -168,22 +177,27 @@ class _RestoreEntity:
 # (CoordinatorEntity→_HABaseEntity, PlatformType→_HABaseEntity,
 # RainPointHubDevice→_HABaseEntity) creates an unresolvable C3 cycle.
 class _ValveEntity:
+    """_ValveEntity."""
     pass
 
 
 class _SensorEntity:
+    """_SensorEntity."""
     pass
 
 
 class _NumberEntity:
+    """_NumberEntity."""
     pass
 
 
 class _SelectEntity:
+    """_SelectEntity."""
     pass
 
 
 class _SwitchEntity:
+    """_SwitchEntity."""
     pass
 
 
@@ -205,7 +219,9 @@ sys.modules["homeassistant.components.switch"].SwitchEntity = _SwitchEntity
 
 # DeviceInfo: callable that stores kwargs as a dict subclass.
 class _DeviceInfo(dict):
+    """_DeviceInfo."""
     def __init__(self, **kwargs):
+        """Init helper."""
         super().__init__(**kwargs)
 
 
@@ -213,6 +229,7 @@ sys.modules["homeassistant.helpers.device_registry"].DeviceInfo = _DeviceInfo
 
 # HomeAssistantError must be a real exception class so `raise HomeAssistantError(...)` works.
 class _HomeAssistantError(Exception):
+    """_HomeAssistantError."""
     pass
 
 
@@ -220,6 +237,7 @@ sys.modules["homeassistant.exceptions"].HomeAssistantError = _HomeAssistantError
 
 # EntityCategory is accessed as EntityCategory.DIAGNOSTIC / .CONFIG — use a simple namespace.
 class _EntityCategory:
+    """_EntityCategory."""
     DIAGNOSTIC = "diagnostic"
     CONFIG = "config"
 
@@ -242,6 +260,7 @@ class _FakeConfigFlow:
     """Minimal stand-in for homeassistant.config_entries.ConfigFlow."""
 
     def __init_subclass__(cls, domain=None, **kwargs):
+        """Init subclass helper."""
         super().__init_subclass__(**kwargs)
 
 

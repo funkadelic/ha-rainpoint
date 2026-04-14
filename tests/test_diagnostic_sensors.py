@@ -37,6 +37,7 @@ def _make_coordinator(sensor_data=_SENTINEL, firmware_version="1.0"):
 
 
 def _make_sensor_info(hid=100, mid=200, addr=1, sub_name="Test Sensor", model="HCS026FRF"):
+    """Make sensor info helper."""
     return {
         "hid": hid,
         "mid": mid,
@@ -50,6 +51,7 @@ class TestRainPointRSSISensor:
     """Tests for RainPointRSSISensor."""
 
     def _make(self, rssi=-84, data_is_none=False):
+        """Make helper."""
         coord = _make_coordinator(sensor_data=None) if data_is_none else _make_coordinator(sensor_data={"rssi_dbm": rssi})
         sensor_info = _make_sensor_info()
         sensor = RainPointRSSISensor.__new__(RainPointRSSISensor)
@@ -96,6 +98,7 @@ class TestRainPointBatterySensor:
     """Tests for RainPointBatterySensor."""
 
     def _make(self, battery=75, data_is_none=False):
+        """Make helper."""
         if data_is_none:
             coord = _make_coordinator(sensor_data=None)
         else:
@@ -135,6 +138,7 @@ class TestRainPointFirmwareVersionSensor:
     """Tests for RainPointFirmwareVersionSensor."""
 
     def _make(self, firmware="3.0"):
+        """Make helper."""
         coord = _make_coordinator(firmware_version=firmware)
         sensor_info = _make_sensor_info()
         sensor = RainPointFirmwareVersionSensor.__new__(RainPointFirmwareVersionSensor)
@@ -165,6 +169,7 @@ class TestRainPointLastUpdatedSensor:
     """Tests for RainPointLastUpdatedSensor."""
 
     def _make(self, device_timestamp=None):
+        """Make helper."""
         data = {}
         if device_timestamp is not None:
             data["device_timestamp"] = device_timestamp
@@ -207,6 +212,7 @@ class TestRainPointDeviceIDSensor:
     """Tests for RainPointDeviceIDSensor."""
 
     def _make(self, sensor_entry=None):
+        """Make helper."""
         coord = MagicMock()
         if sensor_entry is None:
             sensor_entry = {

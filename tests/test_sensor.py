@@ -32,18 +32,23 @@ class TestSlugify:
     """Tests for the _slugify helper."""
 
     def test_slugify_basic(self):
+        """Slugify basic."""
         assert _slugify("Hello World") == "hello_world"
 
     def test_slugify_special_chars(self):
+        """Slugify special chars."""
         assert _slugify("Sensor #1 (test)") == "sensor_1_test"
 
     def test_slugify_multiple_underscores(self):
+        """Slugify multiple underscores."""
         assert _slugify("a---b___c") == "a_b_c"
 
     def test_slugify_leading_trailing(self):
+        """Slugify leading trailing."""
         assert _slugify("__hello__") == "hello"
 
     def test_slugify_already_clean(self):
+        """Slugify already clean."""
         assert _slugify("hello_world") == "hello_world"
 
 
@@ -52,12 +57,14 @@ class TestSlugify:
 # ---------------------------------------------------------------------------
 
 def _make_mock_coordinator(data):
+    """Make mock coordinator helper."""
     mock = MagicMock()
     mock.data = data
     return mock
 
 
 def _make_hass(coordinator):
+    """Make hass helper."""
     hass = MagicMock()
     entry = MagicMock()
     entry.entry_id = "test_entry"
@@ -304,6 +311,7 @@ class TestMoisturePercentSensor:
     """Tests for RainPointMoisturePercentSensor."""
 
     def _make(self, moisture_percent=42, simple=True):
+        """Make helper."""
         sensor = _make_sensor_base(
             RainPointMoisturePercentSensor,
             "100_200_1",
@@ -315,14 +323,17 @@ class TestMoisturePercentSensor:
         return sensor
 
     def test_moisture_sensor_native_value(self):
+        """Moisture sensor native value."""
         sensor = self._make(moisture_percent=42)
         assert sensor.native_value == 42
 
     def test_moisture_sensor_unique_id(self):
+        """Moisture sensor unique id."""
         sensor = self._make()
         assert "moisture" in sensor._attr_unique_id
 
     def test_moisture_sensor_native_value_none_when_no_data(self):
+        """Moisture sensor native value none when no data."""
         sensor = _make_sensor_base(
             RainPointMoisturePercentSensor,
             "100_200_1",
@@ -334,10 +345,12 @@ class TestMoisturePercentSensor:
         assert sensor.native_value is None
 
     def test_moisture_sensor_available_with_data(self):
+        """Moisture sensor available with data."""
         sensor = self._make()
         assert sensor.available is True
 
     def test_moisture_sensor_device_info_manufacturer(self):
+        """Moisture sensor device info manufacturer."""
         sensor = self._make()
         assert sensor.device_info["manufacturer"] == "RainPoint"
 
@@ -346,6 +359,7 @@ class TestRainSensor:
     """Tests for RainPointRainSensor."""
 
     def _make(self, data_key="rain_last_24h_mm", rain_value=18.7):
+        """Make helper."""
         sensor = _make_sensor_base(
             RainPointRainSensor,
             "100_200_1",
@@ -363,18 +377,22 @@ class TestRainSensor:
         return sensor
 
     def test_rain_sensor_native_value(self):
+        """Rain sensor native value."""
         sensor = self._make(data_key="rain_last_24h_mm", rain_value=18.7)
         assert sensor.native_value == 18.7
 
     def test_rain_sensor_native_value_rounded(self):
+        """Rain sensor native value rounded."""
         sensor = self._make(data_key="rain_last_24h_mm", rain_value=18.723)
         assert sensor.native_value == 18.7
 
     def test_rain_sensor_device_info(self):
+        """Rain sensor device info."""
         sensor = self._make()
         assert sensor.device_info["manufacturer"] == "RainPoint"
 
     def test_rain_sensor_returns_none_when_no_data(self):
+        """Rain sensor returns none when no data."""
         sensor = _make_sensor_base(RainPointRainSensor, "100_200_1", None)
         sensor._data_key = "rain_last_24h_mm"
         sensor._attr_unique_id = "rainpoint_100_200_1_rain_last_24h_mm"
@@ -382,6 +400,7 @@ class TestRainSensor:
         assert sensor.native_value is None
 
     def test_rain_sensor_last_hour(self):
+        """Rain sensor last hour."""
         sensor = self._make(data_key="rain_last_hour_mm", rain_value=0.5)
         assert sensor.native_value == 0.5
 
@@ -390,6 +409,7 @@ class TestTemperatureSensor:
     """Tests for RainPointTemperatureSensor."""
 
     def _make(self, temperature_c=22.5):
+        """Make helper."""
         sensor = _make_sensor_base(
             RainPointTemperatureSensor,
             "100_200_1",
@@ -400,14 +420,17 @@ class TestTemperatureSensor:
         return sensor
 
     def test_temperature_sensor_native_value(self):
+        """Temperature sensor native value."""
         sensor = self._make(temperature_c=22.5)
         assert sensor.native_value == 22.5
 
     def test_temperature_sensor_native_value_rounded(self):
+        """Temperature sensor native value rounded."""
         sensor = self._make(temperature_c=22.567)
         assert sensor.native_value == 22.6
 
     def test_temperature_sensor_none_when_missing(self):
+        """Temperature sensor none when missing."""
         sensor = _make_sensor_base(
             RainPointTemperatureSensor,
             "100_200_1",
@@ -418,6 +441,7 @@ class TestTemperatureSensor:
         assert sensor.native_value is None
 
     def test_temperature_sensor_device_info(self):
+        """Temperature sensor device info."""
         sensor = self._make()
         assert sensor.device_info["manufacturer"] == "RainPoint"
 
@@ -426,6 +450,7 @@ class TestDisplayHubReadingSensor:
     """Tests for DisplayHubReadingSensor."""
 
     def _make(self, reading_key="temp", readings=None):
+        """Make helper."""
         if readings is None:
             readings = {"temp": "707", "humidity": "42", "P": "9709"}
         sensor = _make_sensor_base(
@@ -439,14 +464,17 @@ class TestDisplayHubReadingSensor:
         return sensor
 
     def test_display_hub_reading_sensor_returns_float_for_numeric(self):
+        """Display hub reading sensor returns float for numeric."""
         sensor = self._make(reading_key="temp", readings={"temp": "707"})
         assert sensor.native_value == 707.0
 
     def test_display_hub_reading_sensor_returns_string_for_non_numeric(self):
+        """Display hub reading sensor returns string for non numeric."""
         sensor = self._make(reading_key="status", readings={"status": "ok"})
         assert sensor.native_value == "ok"
 
     def test_display_hub_reading_sensor_none_when_no_data(self):
+        """Display hub reading sensor none when no data."""
         sensor = _make_sensor_base(DisplayHubReadingSensor, "100_200_1", None)
         sensor._reading_key = "temp"
         sensor._attr_unique_id = "rainpoint_100_200_1_displayhub_temp"
@@ -454,6 +482,7 @@ class TestDisplayHubReadingSensor:
         assert sensor.native_value is None
 
     def test_display_hub_reading_sensor_unique_id(self):
+        """Display hub reading sensor unique id."""
         sensor = self._make(reading_key="temp")
         assert "displayhub" in sensor._attr_unique_id
         assert "temp" in sensor._attr_unique_id
@@ -463,6 +492,7 @@ class TestIlluminanceSensor:
     """Tests for RainPointIlluminanceSensor."""
 
     def _make(self, illuminance_lux=1000):
+        """Make helper."""
         sensor = _make_sensor_base(
             RainPointIlluminanceSensor,
             "100_200_1",
@@ -473,10 +503,12 @@ class TestIlluminanceSensor:
         return sensor
 
     def test_illuminance_sensor_native_value(self):
+        """Illuminance sensor native value."""
         sensor = self._make(illuminance_lux=1500)
         assert sensor.native_value == 1500
 
     def test_illuminance_sensor_none_when_missing(self):
+        """Illuminance sensor none when missing."""
         sensor = _make_sensor_base(
             RainPointIlluminanceSensor,
             "100_200_1",
@@ -495,6 +527,7 @@ class TestSensorBaseProperties:
     """Tests for RainPointSensorBase common properties."""
 
     def _make_base(self, data=_SENSOR_BASE_SENTINEL):
+        """Make base helper."""
         if data is _SENSOR_BASE_SENTINEL:
             data = _SENSOR_BASE_DATA
         sensor = _make_sensor_base(
@@ -508,6 +541,7 @@ class TestSensorBaseProperties:
         return sensor
 
     def test_available_true_with_data(self):
+        """Available true with data."""
         sensor = self._make_base()
         assert sensor.available is True
 
@@ -519,21 +553,25 @@ class TestSensorBaseProperties:
         assert sensor.available is False
 
     def test_device_info_identifiers(self):
+        """Device info identifiers."""
         sensor = self._make_base()
         identifiers = sensor.device_info["identifiers"]
         assert (DOMAIN, "100_200_1") in identifiers
 
     def test_device_info_via_device(self):
+        """Device info via device."""
         sensor = self._make_base()
         via = sensor.device_info["via_device"]
         assert via == (DOMAIN, "hub_100")
 
     def test_extra_state_attributes_rssi(self):
+        """Extra state attributes rssi."""
         sensor = self._make_base(data={"type": "moisture_simple", "moisture_percent": 50, "rssi_dbm": -80})
         attrs = sensor.extra_state_attributes
         assert attrs.get("rssi_dbm") == -80
 
     def test_extra_state_attributes_battery(self):
+        """Extra state attributes battery."""
         sensor = self._make_base(data={"type": "moisture_simple", "moisture_percent": 50, "battery_percent": 75})
         attrs = sensor.extra_state_attributes
         assert attrs.get("battery_percent") == 75

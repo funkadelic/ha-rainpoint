@@ -224,6 +224,7 @@ class TestDecodeMoistureFull:
     """Tests for decode_moisture_full (HCS021FRF) — hex and ASCII paths."""
 
     def test_hex_payload_fields(self):
+        """Hex payload fields."""
         result = decode_moisture_full(MOISTURE_FULL_HEX_PAYLOAD)
         assert result["type"] == "moisture_full"
         assert result["rssi_dbm"] == -94
@@ -234,6 +235,7 @@ class TestDecodeMoistureFull:
         assert result["decoder"] == "hcs021frf_hex"
 
     def test_ascii_payload_fields(self):
+        """Ascii payload fields."""
         result = decode_moisture_full(MOISTURE_FULL_ASCII_PAYLOAD)
         assert result["type"] == "moisture_full"
         assert result["rssi_dbm"] == -73
@@ -247,6 +249,7 @@ class TestDecodeHws019wrfV2:
     """Tests for decode_hws019wrf_v2 — CSV/semicolon payload."""
 
     def test_readings_parsed(self):
+        """Readings parsed."""
         result = decode_hws019wrf_v2(HWS019WRF_V2_PAYLOAD)
         assert result["type"] == "hws019wrf_v2"
         assert result["readings"]["temp"] == "707"
@@ -258,6 +261,7 @@ class TestDecodeValveHub:
     """Tests for decode_valve_hub (HTV0540FRF TLV payload)."""
 
     def test_hub_online_and_zone_state(self):
+        """Hub online and zone state."""
         result = decode_valve_hub(VALVE_HUB_TLV_PAYLOAD)
         assert result["type"] == "valve_hub"
         assert result["hub_online"] is True
@@ -272,6 +276,7 @@ class TestDecodeRain:
     """Tests for decode_rain (HCS012ARF rain gauge)."""
 
     def test_rain_values(self):
+        """Rain values."""
         result = decode_rain(RAIN_HEX_PAYLOAD)
         assert result["type"] == "rain"
         assert result["rain_last_hour_mm"] == 0.0
@@ -284,6 +289,7 @@ class TestDecodeMoistureSimple:
     """Tests for decode_moisture_simple (HCS026FRF)."""
 
     def test_moisture_and_rssi(self):
+        """Moisture and rssi."""
         result = decode_moisture_simple(MOISTURE_SIMPLE_HEX_PAYLOAD)
         assert result["type"] == "moisture_simple"
         assert result["rssi_dbm"] == -58
@@ -294,52 +300,62 @@ class TestBasicDecoders:
     """Tests for basic decoders that extract only type and RSSI."""
 
     def test_decode_flow_meter(self):
+        """Decode flow meter."""
         result = decode_flow_meter(BASIC_HEX_PAYLOAD)
         assert result["type"] == "flowmeter"
         assert result["rssi"] is not None
 
     def test_decode_flowmeter_alias(self):
+        """Decode flowmeter alias."""
         result = decode_flowmeter(BASIC_HEX_PAYLOAD)
         assert result["type"] == "flowmeter"
         assert result["rssi"] is not None
 
     def test_decode_pool_plus(self):
+        """Decode pool plus."""
         # decode_pool_plus returns type="co2" (HCS0530THO pool/spa monitor)
         result = decode_pool_plus(BASIC_HEX_PAYLOAD)
         assert result["type"] == "co2"
         assert result["rssi"] is not None
 
     def test_decode_soil(self):
+        """Decode soil."""
         result = decode_soil(BASIC_HEX_PAYLOAD)
         assert result["type"] == "soil"
         assert result["rssi"] is not None
 
     def test_decode_temp_hum(self):
+        """Decode temp hum."""
         result = decode_temp_hum(BASIC_HEX_PAYLOAD)
         assert result["type"] == "temphum"
         assert result["rssi"] is not None
 
     def test_decode_temp_hum_full(self):
+        """Decode temp hum full."""
         result = decode_temp_hum_full(BASIC_HEX_PAYLOAD)
         assert result["type"] == "temphum_full"
         assert result["rssi"] is not None
 
     def test_decode_co2(self):
+        """Decode co2."""
         result = decode_co2(BASIC_HEX_PAYLOAD)
         assert result["type"] == "co2"
         assert result["rssi"] is not None
 
     def test_decode_display(self):
+        """Decode display."""
         result = decode_display(BASIC_HEX_PAYLOAD)
         assert result["type"] == "display"
         assert result["rssi"] is not None
 
     def test_decode_temphum(self):
+        """Decode temphum."""
         result = decode_temphum(BASIC_HEX_PAYLOAD)
         assert result["type"] == "temphum"
         assert result["rssi"] is not None
 
     def test_decode_pool(self):
+        """Decode pool."""
         result = decode_pool(BASIC_HEX_PAYLOAD)
         assert result["type"] == "pool"
         assert result["rssi"] is not None
@@ -349,11 +365,13 @@ class TestDecodeUnknown:
     """Tests for decode_unknown — the catch-all fallback."""
 
     def test_valid_payload(self):
+        """Valid payload."""
         result = decode_unknown(BASIC_HEX_PAYLOAD)
         assert result["type"] == "unknown"
         assert result["rssi"] == -80
 
     def test_non_parseable_payload(self):
+        """Non parseable payload."""
         # A payload missing the '#' separator triggers the except branch.
         # decode_unknown handles it gracefully rather than raising.
         result = decode_unknown("garbage-no-separator")
