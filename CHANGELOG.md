@@ -2,6 +2,8 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [Unreleased]
+
 ## [1.0.0] - 2026-04-12
 
 ### Added
