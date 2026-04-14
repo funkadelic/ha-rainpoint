@@ -197,8 +197,10 @@ class TestValveControl:
 
         valve.coordinator.async_set_updated_data.assert_not_called()
 
-    def test_get_configured_duration_falls_back_to_default(self):
+    def test_get_configured_duration_falls_back_to_default(self, monkeypatch):
         """If entity registry lookup finds entity_id but state is None, fall back to default."""
+        import sys
+
         valve = _make_valve()
 
         # Mock the entity registry import chain: entity_id found but state is None
@@ -210,15 +212,10 @@ class TestValveControl:
         # hass.states.get returns None — state not available yet
         valve.hass.states.get.return_value = None
 
-        import sys
-        original = sys.modules.get("homeassistant.helpers.entity_registry")
-        sys.modules["homeassistant.helpers.entity_registry"] = mock_er_module
-        try:
-            result = valve._get_configured_duration_seconds()
-        finally:
-            if original is not None:
-                sys.modules["homeassistant.helpers.entity_registry"] = original
-            else:
-                del sys.modules["homeassistant.helpers.entity_registry"]
+        # Use monkeypatch.setitem so that if conftest later adds
+        # homeassistant.helpers.entity_registry to _HA_STUBS, pytest's
+        # teardown restores the original stub rather than deleting it
+        # (which would break tests running after this one in the same session).
+        monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", mock_er_module)
 
-        assert result == DEFAULT_DURATION_SECONDS
+        assert valve._get_configured_duration_seconds() == DEFAULT_DURATION_SECONDS
