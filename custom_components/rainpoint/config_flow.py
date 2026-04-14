@@ -1,26 +1,23 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
 import aiohttp
 import voluptuous as vol
-
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .api import RainPointApiError, RainPointClient
 from .const import (
-    DOMAIN,
     CONF_AREA_CODE,
     CONF_EMAIL,
-    CONF_PASSWORD,
     CONF_HIDS,
+    CONF_PASSWORD,
+    DOMAIN,
 )
 from .country_codes import get_default_country_code
-from .api import RainPointClient, RainPointApiError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,7 +60,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except RainPointApiError:
                 _LOGGER.exception("Error logging in to RainPoint")
                 errors["base"] = "auth_failed"
-            except (aiohttp.ClientError, asyncio.TimeoutError):
+            except (TimeoutError, aiohttp.ClientError):
                 _LOGGER.exception("Network error talking to RainPoint")
                 errors["base"] = "cannot_connect"
             else:
@@ -130,12 +127,8 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         data=data,
                     )
 
-        # single-select dropdown – keys are HIDs, labels come from options dict
-        data_schema = vol.Schema(
-            {
-                vol.Required(CONF_HIDS): vol.In(home_options)
-            }
-        )
+        # single-select dropdown - keys are HIDs, labels come from options dict
+        data_schema = vol.Schema({vol.Required(CONF_HIDS): vol.In(home_options)})
 
         return self.async_show_form(
             step_id="select_homes",
@@ -146,11 +139,11 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle reconfiguration of the integration."""
         self._reconfigure = True
-        
+
         # Get current entry data
         entry = self._get_reconfigure_entry()
         current_data = entry.data
-        
+
         default_country_code = get_default_country_code(self.hass)
 
         # Pre-fill form with current values
@@ -182,7 +175,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data_schema=data_schema,
                     errors={"base": "auth_failed"},
                 )
-            except (aiohttp.ClientError, asyncio.TimeoutError):
+            except (TimeoutError, aiohttp.ClientError):
                 _LOGGER.exception("Network error during reconfigure")
                 return self.async_show_form(
                     step_id="reconfigure",
@@ -218,11 +211,11 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_select_homes_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle home selection during reconfiguration."""
         errors: dict[str, str] = {}
-        
+
         home_options = {str(h["hid"]): h["homeName"] for h in self._homes}
         current_entry = self._get_reconfigure_entry()
         current_hids = current_entry.data.get(CONF_HIDS, [])
-        
+
         if user_input is not None:
             selected = user_input.get(CONF_HIDS)
             if not selected:
@@ -249,12 +242,8 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Pre-select current home
         current_hid = str(current_hids[0]) if current_hids else None
-        
-        data_schema = vol.Schema(
-            {
-                vol.Required(CONF_HIDS, default=current_hid): vol.In(home_options)
-            }
-        )
+
+        data_schema = vol.Schema({vol.Required(CONF_HIDS, default=current_hid): vol.In(home_options)})
 
         return self.async_show_form(
             step_id="select_homes_reconfigure",

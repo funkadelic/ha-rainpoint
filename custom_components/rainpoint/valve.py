@@ -12,9 +12,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MODEL_VALVE_HUB, MODEL_VALVE_213, MODEL_VALVE_245
+from .api import decode_htv213frf_valve, decode_valve_hub
+from .const import DOMAIN, MODEL_VALVE_213, MODEL_VALVE_245, MODEL_VALVE_HUB
 from .coordinator import RainPointCoordinator
-from .api import decode_valve_hub, decode_htv213frf_valve
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,12 +46,12 @@ async def async_setup_entry(
         # Zones absent from the payload are not created - avoids phantom entities
         # if the device reports fewer zones than the model name implies.
         for zone_num in sorted(zones.keys()):
-            entities.append(
-                RainPointValveEntity(coordinator, key, info, zone_num)
-            )
+            entities.append(RainPointValveEntity(coordinator, key, info, zone_num))
             _LOGGER.debug(
                 "Creating valve entity: key=%s zone=%s model=%s",
-                key, zone_num, info.get("model"),
+                key,
+                zone_num,
+                info.get("model"),
             )
 
     if entities:
@@ -131,14 +131,14 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
             if dur is not None:
                 attrs["duration_seconds"] = dur
             attrs["state_raw"] = zone.get("state_raw")
-        
+
         # Add firmware version from sensor info
         sensors = self.coordinator.data.get("sensors", {})
         info = sensors.get(self._sensor_key) or {}
         firmware_version = info.get("firmware_version")
         if firmware_version:
             attrs["firmware_version"] = firmware_version
-        
+
         # Add device timestamp from decoded data
         data = self.coordinator.data.get("sensors", {}).get(self._sensor_key, {}).get("data", {})
         if "device_timestamp" in data:
@@ -148,7 +148,7 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
         elif "server_timestamp" in data:
             attrs["device_timestamp"] = data["server_timestamp"]
             attrs["timestamp_source"] = data.get("timestamp_source", "server")
-        
+
         return attrs
 
     @property
@@ -177,6 +177,7 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
         Uses the entity registry to resolve unique_id -> entity_id so the lookup
         is not sensitive to HA auto-generated entity_id naming."""
         from homeassistant.helpers import entity_registry as er
+
         hid = self._sensor_info["hid"]
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
@@ -193,7 +194,8 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
                     pass
         _LOGGER.debug(
             "Duration entity for unique_id=%s not found, falling back to default %ss",
-            unique_id, DEFAULT_DURATION_SECONDS,
+            unique_id,
+            DEFAULT_DURATION_SECONDS,
         )
         return DEFAULT_DURATION_SECONDS
 
@@ -223,10 +225,7 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
 
     # ------------------------------------------------------------------
     async def async_open_valve(self, **kwargs: Any) -> None:
-        if "duration" in kwargs:
-            duration = int(kwargs["duration"])
-        else:
-            duration = self._get_configured_duration_seconds()
+        duration = int(kwargs["duration"]) if "duration" in kwargs else self._get_configured_duration_seconds()
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
         device_name = self._sensor_info.get("device_name") or ""
@@ -234,7 +233,10 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
 
         _LOGGER.debug(
             "Opening valve mid=%s addr=%s zone=%s duration=%ss",
-            mid, addr, self._zone_num, duration,
+            mid,
+            addr,
+            self._zone_num,
+            duration,
         )
 
         client = self.coordinator._client
@@ -257,7 +259,9 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
 
         _LOGGER.debug(
             "Closing valve mid=%s addr=%s zone=%s",
-            mid, addr, self._zone_num,
+            mid,
+            addr,
+            self._zone_num,
         )
 
         client = self.coordinator._client

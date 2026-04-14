@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MODEL_VALVE_HUB, MODEL_VALVE_213, MODEL_VALVE_245
+from .const import DOMAIN, MODEL_VALVE_213, MODEL_VALVE_245, MODEL_VALVE_HUB
 from .coordinator import RainPointCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,12 +42,11 @@ async def async_setup_entry(
         zones: dict = decoded.get("zones", {})
 
         for zone_num in sorted(zones.keys()):
-            entities.append(
-                RainPointZoneDurationNumber(coordinator, key, info, zone_num)
-            )
+            entities.append(RainPointZoneDurationNumber(coordinator, key, info, zone_num))
             _LOGGER.debug(
                 "Creating duration number entity: key=%s zone=%s",
-                key, zone_num,
+                key,
+                zone_num,
             )
 
     if entities:
@@ -100,7 +99,8 @@ class RainPointZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity
                     self._current_value = restored
                     _LOGGER.debug(
                         "Restored duration for %s: %s min",
-                        self._attr_unique_id, restored,
+                        self._attr_unique_id,
+                        restored,
                     )
             except (ValueError, TypeError):
                 pass
@@ -116,14 +116,14 @@ class RainPointZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         attrs: dict[str, Any] = {}
-        
+
         # Add firmware version from sensor info
         sensors = self.coordinator.data.get("sensors", {})
         info = sensors.get(self._sensor_key) or {}
         firmware_version = info.get("firmware_version")
         if firmware_version:
             attrs["firmware_version"] = firmware_version
-        
+
         # Add device timestamp from decoded data
         data = self.coordinator.data.get("sensors", {}).get(self._sensor_key, {}).get("data", {})
         if "device_timestamp" in data:
@@ -133,7 +133,7 @@ class RainPointZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity
         elif "server_timestamp" in data:
             attrs["device_timestamp"] = data["server_timestamp"]
             attrs["timestamp_source"] = data.get("timestamp_source", "server")
-        
+
         return attrs
 
     @property

@@ -26,10 +26,7 @@ async def async_setup_entry(
 
     # Hub broadcast switches
     hubs_cfg = coordinator.data.get("hubs", [])
-    if isinstance(hubs_cfg, list):
-        hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)}
-    else:
-        hubs_dict = hubs_cfg
+    hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
 
     for _hub_key, hub_info in hubs_dict.items():
         entities.append(RainPointHubBroadcastSwitch(coordinator, hub_info))
@@ -37,6 +34,7 @@ async def async_setup_entry(
     # Only register the debug switch when the worker URL is configured
     if DEBUG_WORKER_URL:
         from .debug import RainPointDebugSwitchEntity
+
         debug_switch = RainPointDebugSwitchEntity(hass, coordinator, entry)
         entities.append(debug_switch)
 

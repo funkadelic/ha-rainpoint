@@ -25,10 +25,10 @@ async def async_setup_entry(
     entities = []
 
     hubs_cfg = coordinator.data.get("hubs", [])
-    if isinstance(hubs_cfg, list):
-        hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)}
-    else:
-        hubs_dict = hubs_cfg
+    if not isinstance(hubs_cfg, list):
+        _LOGGER.error("Expected hubs to be a list, got %s; skipping select entity setup", type(hubs_cfg).__name__)
+        return
+    hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)}
 
     for _hub_key, hub_info in hubs_dict.items():
         entities.append(RainPointHubChannelSelect(coordinator, hub_info))
