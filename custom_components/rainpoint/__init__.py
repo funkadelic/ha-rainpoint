@@ -176,5 +176,5 @@ async def async_reload_integration(hass: HomeAssistant, entry_id: str) -> bool:
         _LOGGER.info("Successfully reloaded RainPoint integration")
         return True
     except Exception as ex:
-        _LOGGER.error("Failed to reload RainPoint integration: %s", ex)
+        _LOGGER.exception("Failed to reload RainPoint integration")
         return False

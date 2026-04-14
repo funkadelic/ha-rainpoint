@@ -87,16 +87,26 @@ jobs:
           [ -n "$DOCS" ]    && ENTRY="${ENTRY}\n### Documentation\n\n${DOCS}"
           [ -n "$TESTING" ] && ENTRY="${ENTRY}\n### Testing\n\n${TESTING}"
 
-          # Rewrite CHANGELOG: keep Unreleased header (empty), insert new version + content,
-          # then skip the old Unreleased body and append from the next version onward
-          {
-            sed -n '1,/^## \[Unreleased\]/p' CHANGELOG.md
-            echo ""
-            echo "## [$VERSION] - $DATE"
-            printf "%b" "$ENTRY"
-            # Print from the next version heading (after Unreleased) to end of file
-            sed -n '/^## \[Unreleased\]/,$ p' CHANGELOG.md | sed -n '/^## \[/{/\[Unreleased\]/!{p; :a; n; p; ba}}'
-          } > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+          # Rewrite CHANGELOG: insert new version entry
+          if grep -q '^## \[Unreleased\]' CHANGELOG.md; then
+            # Unreleased heading exists: keep everything up to it, insert new version,
+            # then append from the next version heading onward
+            {
+              sed -n '1,/^## \[Unreleased\]/p' CHANGELOG.md
+              echo ""
+              echo "## [$VERSION] - $DATE"
+              printf "%b" "$ENTRY"
+              sed -n '/^## \[Unreleased\]/,$ p' CHANGELOG.md | sed -n '/^## \[/{/\[Unreleased\]/!{p; :a; n; p; ba}}'
+            } > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+          else
+            # No Unreleased heading: insert new version after the file header
+            {
+              sed -n '1,/^## \[/{ /^## \[/!p }' CHANGELOG.md
+              echo "## [$VERSION] - $DATE"
+              printf "%b" "$ENTRY"
+              sed -n '/^## \[/,$ p' CHANGELOG.md
+            } > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+          fi
 
           # Update comparison links at bottom
           REPO="https://github.com/${GITHUB_REPOSITORY}"
