@@ -121,8 +121,12 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          git tag -f "v$VERSION"
-          git push --force origin "v$VERSION"
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag v$VERSION already exists. Delete it first or choose a different version."
+            exit 1
+          fi
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
 
       - name: Create GitHub Release
         env:
