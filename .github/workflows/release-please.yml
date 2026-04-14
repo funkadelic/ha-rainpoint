@@ -14,5 +14,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.release_created }}
+
+      - name: Package integration
+        if: ${{ steps.release.outputs.release_created }}
+        run: |
+          cd custom_components
+          zip -r ../rainpoint.zip rainpoint/
+
+      - name: Upload release asset
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          gh release upload "$TAG_NAME" rainpoint.zip
