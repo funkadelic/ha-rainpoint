@@ -3,6 +3,7 @@
 import pytest
 
 from custom_components.rainpoint.api import (
+    _base_decoder_dict,
     _f10_to_c,
     _le16,
     _parse_rainpoint_payload,
@@ -155,3 +156,22 @@ class TestF10ToC:
     def test_room_temp(self):
         # 72F ~ 22.22C; 72*10 = 720
         assert abs(_f10_to_c(720) - 22.22) < 0.1
+
+
+class TestBaseDecoderDict:
+    """Tests for _base_decoder_dict."""
+
+    def test_returns_expected_keys(self):
+        result = _base_decoder_dict("valve_hub", -84, b"\xaa\xbb")
+        assert result == {
+            "type": "valve_hub",
+            "rssi_dbm": -84,
+            "raw_bytes": b"\xaa\xbb",
+        }
+
+    def test_returns_independent_dicts(self):
+        """Each call returns a fresh dict so callers can mutate safely."""
+        a = _base_decoder_dict("soil", -70, b"\x01")
+        b = _base_decoder_dict("soil", -70, b"\x01")
+        a["extra"] = True
+        assert "extra" not in b

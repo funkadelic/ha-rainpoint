@@ -74,11 +74,8 @@ def _parse_tlv_payload(raw: str) -> dict:
 
         raw_bytes = bytes(b[i + 2 : i + 2 + width])
         # Duration DPs (0xAD type) are little-endian; all others big-endian
-        if width > 0:
-            endian = "little" if type_byte == 0xAD else "big"
-            value_int = int.from_bytes(raw_bytes, endian)
-        else:
-            value_int = None
+        endian = "little" if type_byte == 0xAD else "big"
+        value_int = int.from_bytes(raw_bytes, endian)
         tlv[dp_id] = (type_byte, value_int, raw_bytes)
         i += 2 + width
 

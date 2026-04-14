@@ -5,7 +5,9 @@ import pytest
 from custom_components.rainpoint.api import (
     _battery_status_to_percent,
     _extract_rssi,
+    _extract_status_code,
     _validate_payload,
+    _validate_tag,
 )
 
 
@@ -101,3 +103,37 @@ class TestBatteryStatusToPercent:
         }
         for code, pct in expected.items():
             assert _battery_status_to_percent(code) == pct, f"Code 0x{code:04X} should be {pct}%"
+
+
+class TestValidateTag:
+    """Tests for _validate_tag (COVR-05)."""
+
+    def test_matching_tag_passes(self):
+        """No exception when tag matches expected value."""
+        b = bytes([0x00, 0xAA, 0x00])
+        _validate_tag(b, 1, 0xAA, "TestDevice")  # should not raise
+
+    def test_mismatched_tag_raises(self):
+        """Mismatched tag raises ValueError with device name."""
+        b = bytes([0x00, 0xBB, 0x00])
+        with pytest.raises(ValueError, match="TestDevice.*Expected tag 0xAA.*got 0xBB"):
+            _validate_tag(b, 1, 0xAA, "TestDevice")
+
+
+class TestExtractStatusCode:
+    """Tests for _extract_status_code (COVR-05)."""
+
+    def test_simple_value(self):
+        """Low byte only."""
+        b = bytes([0x00, 0x00, 0x0A, 0x00])
+        assert _extract_status_code(b, 2, 3) == 0x0A
+
+    def test_high_byte_shifted(self):
+        """High byte is shifted left 8 bits and ORed with low byte."""
+        b = bytes([0x00, 0x00, 0xFF, 0x0F])
+        assert _extract_status_code(b, 2, 3) == 0x0FFF
+
+    def test_both_bytes_contribute(self):
+        """Both bytes assemble into a 16-bit value: 0x12 << 8 | 0x34 = 0x1234."""
+        b = bytes([0x00, 0x00, 0x34, 0x12])
+        assert _extract_status_code(b, 2, 3) == 0x1234
