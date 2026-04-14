@@ -2,6 +2,30 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.0.1] - 2026-04-14
+
+### Added
+
+- add test directory structure and seed decoder tests
+
+### Fixed
+
+- fix CI failures and address code review finding #2
+- address PR review findings across 5 files
+- use %s format for rssi_dbm log statements that may be None
+- WR-05 return structured dict instead of raising ValueError in reload_service error paths
+- WR-04 read tlv directly in zone dict to eliminate stale variable references
+- WR-03 warn and return None for non-negative ASCII RSSI values
+- WR-02 add missing HA module stubs to conftest
+- WR-01 add pytest-asyncio to requirements-test.txt
+
+### Changed
+
+- Merge pull request #2 from funkadelic/feat/phase-2-test-harness
+- clean up upstream leftovers and fix review findings
+- add hassfest, HACS, tests, and release workflows from ha-acwd
+- run ruff --fix and ruff format to establish clean baseline
+- add pyproject.toml, requirements-test.txt, .python-version
 ## [1.0.0] - 2026-04-12
 
 ### Added
