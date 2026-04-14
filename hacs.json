@@ -1,5 +1,6 @@
 {
     "name": "RainPoint Cloud",
+    "filename": "rainpoint.zip",
     "render_readme": true,
     "homeassistant": "2024.5.0"
 }

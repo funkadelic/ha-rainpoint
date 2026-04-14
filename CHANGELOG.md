@@ -2,6 +2,8 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [Unreleased]
+
 ## [1.0.1] - 2026-04-14
 
 ### Added
@@ -26,6 +28,7 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 - add hassfest, HACS, tests, and release workflows from ha-acwd
 - run ruff --fix and ruff format to establish clean baseline
 - add pyproject.toml, requirements-test.txt, .python-version
+
 ## [1.0.0] - 2026-04-12
 
 ### Added

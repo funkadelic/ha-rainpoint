@@ -1,130 +1,53 @@
 # Version Enforcement
 
-This repository has automated checks to ensure release tags match the manifest version.
+This repository uses [release-please](https://github.com/googleapis/release-please) to automate version bumps, changelog generation, and GitHub Releases.
 
 ## Version Locations
 
-The version must be consistent across:
+The version is tracked in two files:
 
-- `custom_components/rainpoint/manifest.json` — the canonical source
+- `custom_components/rainpoint/manifest.json` — the canonical source (read by HACS)
 - `custom_components/rainpoint/const.py` (`VERSION`) — used in runtime logging
 
-## GitHub Actions Checks
+Both are updated by release-please in its auto-generated release PR. When that PR is merged, the version bumps land on `main` and trigger tag/release creation.
 
-### Release Tag Check
+## How Releases Work
 
-**File:** `.github/workflows/enforce-version-tags.yml`
+1. Push commits to `main` using [conventional commit](https://www.conventionalcommits.org/) prefixes (`feat:`, `fix:`, etc.)
+2. Release-please automatically opens (or updates) a release PR titled "chore(main): release X.Y.Z"
+3. The PR contains:
+   - Version bumps to `manifest.json` and `const.py`
+   - An auto-generated changelog entry derived from commit messages
+4. Review the PR, edit the changelog if needed, and merge
+5. On merge, release-please creates a `vX.Y.Z` tag and a GitHub Release
 
-**Triggers:**
+## Version Bumping Rules
 
-- Push of any tag starting with `v*`
+Release-please determines the version bump from commit prefixes:
 
-**Behavior:**
+- `fix:` commits trigger a **patch** bump (1.0.0 -> 1.0.1)
+- `feat:` commits trigger a **minor** bump (1.0.0 -> 1.1.0)
+- `BREAKING CHANGE:` footer or `!` after type triggers a **major** bump (1.0.0 -> 2.0.0)
 
-- Extracts version from tag (removes `v` prefix)
-- Compares tag version with manifest version
-- Blocks tag creation if versions don't match
-- Checks for changelog entry
-- Provides detailed fix instructions
+## Configuration
 
-**Example Error:**
+- `release-please-config.json` — release type (`simple`, no language-specific publish step), `extra-files` (tells release-please to update `manifest.json` via jsonpath and `const.py` via the `x-release-please-version` annotation), and `changelog-sections` (maps conventional commit types to changelog headings)
+- `.release-please-manifest.json` — current version tracker (updated automatically by release-please)
 
-```text
-ERROR: Tag version does not match manifest version!
-Tag version: 1.3.6
-Manifest version: 1.3.5
+The `const.py` version update relies on the `# x-release-please-version` annotation comment on the `VERSION` line. Do not remove this annotation.
 
-To fix this:
-1. Update custom_components/rainpoint/manifest.json to version 1.3.6
-2. Commit and push the version bump
-3. Recreate the tag
-```
+## Changelog Visibility
 
-### Release Workflow
+| Commit prefix | Changelog section | Visible? |
+| --- | --- | --- |
+| `feat:` | Added | Yes |
+| `fix:` | Fixed | Yes |
+| `perf:` | Performance | Yes |
+| `refactor:` | Changed | Yes |
+| `docs:` | Documentation | No |
+| `test:` | Testing | No |
+| `ci:` | CI | No |
+| `build:` | Build | No |
+| `chore:` | Miscellaneous | No |
 
-**File:** `.github/workflows/release.yml`
-
-**Triggers:**
-
-- Manual dispatch (`workflow_dispatch`) with a version input
-
-**Behavior:**
-
-- Updates both `manifest.json` and `const.py` to the input version
-- Auto-generates a changelog entry from commit messages since the last tag
-- Commits the version bump, creates a tag, and publishes a GitHub release
-
-## Safe Tag Creation Script
-
-**File:** `scripts/create-release-tag.sh`
-
-**Usage:**
-
-```bash
-# Use manifest version (recommended)
-./scripts/create-release-tag.sh
-
-# Use specific version (must match manifest)
-./scripts/create-release-tag.sh 1.0.1
-```
-
-**Features:**
-
-- Ensures tag version matches manifest version
-- Checks working directory is clean
-- Prevents duplicate tags
-- Verifies changelog entry exists
-- Creates and pushes tag safely
-- Provides next steps for GitHub release
-
-## Version Bumping Guidelines
-
-### When to Bump Version
-
-- **Patch (1.0.0 → 1.0.1):** Bug fixes, small improvements, decoder fixes
-- **Minor (1.0.0 → 1.1.0):** New features, new device support, breaking changes to config
-- **Major (1.0.0 → 2.0.0):** Major architectural changes, breaking API changes
-
-### How to Bump Version
-
-1. Edit `custom_components/rainpoint/manifest.json`
-2. Update `VERSION` in `custom_components/rainpoint/const.py` to match
-3. Update `CHANGELOG.md` with changes
-4. Commit and push
-5. Create release tag using safe script
-
-### Version Format
-
-- Semantic versioning: `MAJOR.MINOR.PATCH`
-- Always increment by 1 for the appropriate level
-- No leading zeros (use `1.0.1`, not `1.0.01`)
-
-### Safe Release Process
-
-1. **Make changes** and commit with version bump
-2. **Test thoroughly** in development environment
-3. **Create release tag** using safe script:
-
-   ```bash
-   ./scripts/create-release-tag.sh
-   ```
-
-4. **Create GitHub release** at the provided URL
-5. **Tag enforcement** will verify version match automatically
-
-### Troubleshooting Tag Issues
-
-If tag enforcement fails:
-
-```bash
-# Delete wrong tag
-git tag -d v1.0.1
-git push origin :refs/tags/v1.0.1
-
-# Fix manifest version and const.py VERSION
-# Edit custom_components/rainpoint/manifest.json
-# Edit custom_components/rainpoint/const.py
-
-# Create correct tag
-./scripts/create-release-tag.sh
-```
+Hidden commits are excluded from user-facing release notes. Edit the release PR body to override visibility for a specific release.
