@@ -67,24 +67,6 @@ All entities are grouped under their parent hub device in the Home Assistant dev
 
 ---
 
-## Version
-
-Current version: **1.0.0**
-
-The `manifest.json` for this integration:
-
-```json
-{
-    "domain": "rainpoint",
-    "name": "RainPoint Cloud",
-    "version": "1.0.0"
-}
-```
-
-The version string in `manifest.json`, `const.py`, and this README must always match. A CI workflow blocks PRs that touch `custom_components/` without bumping `manifest.json`.
-
----
-
 ## Migrating from homeassistant-homgar
 
 **This fork is NOT a drop-in replacement for the upstream `homeassistant-homgar` integration.**
