@@ -133,12 +133,15 @@ class TestLe16:
     """Tests for _le16 helper."""
 
     def test_basic(self):
+        """Basic."""
         assert _le16(b"\x05\x00", 0) == 5
 
     def test_with_offset(self):
+        """With offset."""
         assert _le16(b"\x00\x00\xe8\x03", 2) == 1000
 
     def test_max_value(self):
+        """Max value."""
         assert _le16(b"\xff\xff", 0) == 65535
 
 
@@ -146,14 +149,17 @@ class TestF10ToC:
     """Tests for _f10_to_c (Fahrenheit*10 to Celsius)."""
 
     def test_freezing(self):
+        """Freezing."""
         # 32F = 0C; 32*10 = 320
         assert abs(_f10_to_c(320) - 0.0) < 0.01
 
     def test_boiling(self):
+        """Boiling."""
         # 212F = 100C; 212*10 = 2120
         assert abs(_f10_to_c(2120) - 100.0) < 0.01
 
     def test_room_temp(self):
+        """Room temp."""
         # 72F ~ 22.22C; 72*10 = 720
         assert abs(_f10_to_c(720) - 22.22) < 0.1
 
@@ -162,6 +168,7 @@ class TestBaseDecoderDict:
     """Tests for _base_decoder_dict."""
 
     def test_returns_expected_keys(self):
+        """Returns expected keys."""
         result = _base_decoder_dict("valve_hub", -84, b"\xaa\xbb")
         assert result == {
             "type": "valve_hub",

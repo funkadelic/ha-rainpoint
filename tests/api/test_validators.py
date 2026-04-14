@@ -82,12 +82,15 @@ class TestBatteryStatusToPercent:
     """Tests for _battery_status_to_percent (COVR-05)."""
 
     def test_full_battery(self):
+        """Full battery."""
         assert _battery_status_to_percent(0x0FFF) == 100
 
     def test_ninety_percent(self):
+        """Ninety percent."""
         assert _battery_status_to_percent(0x0FFE) == 90
 
     def test_ten_percent(self):
+        """Ten percent."""
         assert _battery_status_to_percent(0x0FF6) == 10
 
     def test_unknown_code_returns_zero(self):

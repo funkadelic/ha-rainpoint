@@ -1,8 +1,37 @@
 """Tests for RainPoint device decoders."""
 
-from tests.payload_samples import SAMPLE_HTV245_ASCII_PAYLOAD, SAMPLE_HTV245_TLV_PAYLOAD
-
-from custom_components.rainpoint.api import decode_htv213frf_valve
+from custom_components.rainpoint.api import (
+    decode_co2,
+    decode_display,
+    decode_flow_meter,
+    decode_flowmeter,
+    decode_hcs005frf,
+    decode_hcs027arf,
+    decode_htv213frf_valve,
+    decode_hws019wrf_v2,
+    decode_moisture_full,
+    decode_moisture_simple,
+    decode_pool,
+    decode_pool_plus,
+    decode_rain,
+    decode_soil,
+    decode_temp_hum,
+    decode_temp_hum_full,
+    decode_temphum,
+    decode_unknown,
+    decode_valve_hub,
+)
+from tests.payload_samples import (
+    BASIC_HEX_PAYLOAD,
+    HWS019WRF_V2_PAYLOAD,
+    MOISTURE_FULL_ASCII_PAYLOAD,
+    MOISTURE_FULL_HEX_PAYLOAD,
+    MOISTURE_SIMPLE_HEX_PAYLOAD,
+    RAIN_HEX_PAYLOAD,
+    SAMPLE_HTV245_ASCII_PAYLOAD,
+    SAMPLE_HTV245_TLV_PAYLOAD,
+    VALVE_HUB_TLV_PAYLOAD,
+)
 
 # Expected top-level keys the decoder must return for an ASCII payload.
 EXPECTED_KEYS = {"type", "zones", "rssi_dbm", "raw_bytes"}
@@ -189,3 +218,179 @@ class TestLittleEndianTripwire:
             f"Zone 1 duration is {zone1['duration_seconds']}; expected 1000 (LE). "
             f"59395 means the 0xAD little-endian branch was removed."
         )
+
+
+class TestDecodeMoistureFull:
+    """Tests for decode_moisture_full (HCS021FRF) — hex and ASCII paths."""
+
+    def test_hex_payload_fields(self):
+        """Hex payload fields."""
+        result = decode_moisture_full(MOISTURE_FULL_HEX_PAYLOAD)
+        assert result["type"] == "moisture_full"
+        assert result["rssi_dbm"] == -94
+        assert result["moisture_percent"] == 31
+        assert result["illuminance_lux"] == 163.2
+        # 683/10=68.3F -> (68.3-32)*5/9 ≈ 20.17C
+        assert abs(result["temperature_c"] - 20.17) < 0.05
+        assert result["decoder"] == "hcs021frf_hex"
+
+    def test_ascii_payload_fields(self):
+        """Ascii payload fields."""
+        result = decode_moisture_full(MOISTURE_FULL_ASCII_PAYLOAD)
+        assert result["type"] == "moisture_full"
+        assert result["rssi_dbm"] == -73
+        assert result["moisture_percent"] == 70
+        # 694/10=69.4F -> (69.4-32)*5/9 ≈ 20.78C
+        assert abs(result["temperature_c"] - 20.78) < 0.05
+        assert result["decoder"] == "hcs021frf_ascii"
+
+
+class TestDecodeHws019wrfV2:
+    """Tests for decode_hws019wrf_v2 — CSV/semicolon payload."""
+
+    def test_readings_parsed(self):
+        """Readings parsed."""
+        result = decode_hws019wrf_v2(HWS019WRF_V2_PAYLOAD)
+        assert result["type"] == "hws019wrf_v2"
+        assert result["readings"]["temp"] == "707"
+        assert result["readings"]["humidity"] == "42"
+        assert result["readings"]["P"] == "9709"
+
+
+class TestDecodeValveHub:
+    """Tests for decode_valve_hub (HTV0540FRF TLV payload)."""
+
+    def test_hub_online_and_zone_state(self):
+        """Hub online and zone state."""
+        result = decode_valve_hub(VALVE_HUB_TLV_PAYLOAD)
+        assert result["type"] == "valve_hub"
+        assert result["hub_online"] is True
+        assert 1 in result["zones"]
+        zone1 = result["zones"][1]
+        assert zone1["open"] is True
+        # 0x012C little-endian = 300
+        assert zone1["duration_seconds"] == 300
+
+
+class TestDecodeRain:
+    """Tests for decode_rain (HCS012ARF rain gauge)."""
+
+    def test_rain_values(self):
+        """Rain values."""
+        result = decode_rain(RAIN_HEX_PAYLOAD)
+        assert result["type"] == "rain"
+        assert result["rain_last_hour_mm"] == 0.0
+        assert result["rain_last_24h_mm"] == 187.0
+        assert result["rain_last_7d_mm"] == 187.0
+        assert result["rain_total_mm"] == 187.0
+
+
+class TestDecodeMoistureSimple:
+    """Tests for decode_moisture_simple (HCS026FRF)."""
+
+    def test_moisture_and_rssi(self):
+        """Moisture and rssi."""
+        result = decode_moisture_simple(MOISTURE_SIMPLE_HEX_PAYLOAD)
+        assert result["type"] == "moisture_simple"
+        assert result["rssi_dbm"] == -58
+        assert result["moisture_percent"] == 26
+
+
+class TestBasicDecoders:
+    """Tests for basic decoders that extract only type and RSSI."""
+
+    def test_decode_flow_meter(self):
+        """Decode flow meter."""
+        result = decode_flow_meter(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "flowmeter"
+        assert result["rssi"] is not None
+
+    def test_decode_flowmeter_alias(self):
+        """Decode flowmeter alias."""
+        result = decode_flowmeter(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "flowmeter"
+        assert result["rssi"] is not None
+
+    def test_decode_pool_plus(self):
+        """Decode pool plus."""
+        # decode_pool_plus returns type="co2" (HCS0530THO pool/spa monitor)
+        result = decode_pool_plus(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "co2"
+        assert result["rssi"] is not None
+
+    def test_decode_soil(self):
+        """Decode soil."""
+        result = decode_soil(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "soil"
+        assert result["rssi"] is not None
+
+    def test_decode_temp_hum(self):
+        """Decode temp hum."""
+        result = decode_temp_hum(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "temphum"
+        assert result["rssi"] is not None
+
+    def test_decode_temp_hum_full(self):
+        """Decode temp hum full."""
+        result = decode_temp_hum_full(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "temphum_full"
+        assert result["rssi"] is not None
+
+    def test_decode_co2(self):
+        """Decode co2."""
+        result = decode_co2(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "co2"
+        assert result["rssi"] is not None
+
+    def test_decode_display(self):
+        """Decode display."""
+        result = decode_display(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "display"
+        assert result["rssi"] is not None
+
+    def test_decode_temphum(self):
+        """Decode temphum."""
+        result = decode_temphum(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "temphum"
+        assert result["rssi"] is not None
+
+    def test_decode_pool(self):
+        """Decode pool."""
+        result = decode_pool(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "pool"
+        assert result["rssi"] is not None
+
+
+class TestDecodeUnknown:
+    """Tests for decode_unknown — the catch-all fallback."""
+
+    def test_valid_payload(self):
+        """Valid payload."""
+        result = decode_unknown(BASIC_HEX_PAYLOAD)
+        assert result["type"] == "unknown"
+        assert result["rssi"] == -80
+
+    def test_non_parseable_payload(self):
+        """Non parseable payload."""
+        # A payload missing the '#' separator triggers the except branch.
+        # decode_unknown handles it gracefully rather than raising.
+        result = decode_unknown("garbage-no-separator")
+        assert result["type"] == "unknown"
+        # rssi is None when the payload could not be parsed
+        assert result["rssi"] is None
+
+
+class TestHcsDelegation:
+    """Verify HCS stub decoders delegate to their real implementations (D-09)."""
+
+    def test_hcs005frf_matches_moisture_simple(self):
+        """decode_hcs005frf should produce the same output as decode_moisture_simple."""
+        delegated = decode_hcs005frf(MOISTURE_SIMPLE_HEX_PAYLOAD)
+        real = decode_moisture_simple(MOISTURE_SIMPLE_HEX_PAYLOAD)
+        assert delegated == real
+
+    def test_hcs027arf_matches_unknown(self):
+        """decode_hcs027arf should produce the same output as decode_unknown."""
+        delegated = decode_hcs027arf(BASIC_HEX_PAYLOAD)
+        real = decode_unknown(BASIC_HEX_PAYLOAD)
+        assert delegated == real

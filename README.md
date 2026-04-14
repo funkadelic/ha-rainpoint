@@ -1,5 +1,7 @@
 # RainPoint Cloud
 
+[![Build](https://github.com/funkadelic/ha-rainpoint/actions/workflows/tests.yml/badge.svg)](https://github.com/funkadelic/ha-rainpoint/actions/workflows/tests.yml)
+[![Codecov](https://img.shields.io/codecov/c/github/funkadelic/ha-rainpoint?logo=codecov)](https://codecov.io/gh/funkadelic/ha-rainpoint)
 [![Release](https://img.shields.io/github/release/funkadelic/ha-rainpoint.svg)](https://github.com/funkadelic/ha-rainpoint/releases)
 [![License](https://img.shields.io/github/license/funkadelic/ha-rainpoint.svg)](LICENSE)
 [![HACS](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/hacs/integration)
@@ -44,7 +46,7 @@ All devices communicate via the RainPoint cloud backend. There is no local LAN p
 
 The config flow asks for three fields:
 
-1. **Country / area code** — the two-letter country code associated with your RainPoint account (e.g. `US`).
+1. **Country / area code** — the phone country (calling) code for the phone number on your RainPoint account (e.g. `1` for US/Canada, `44` for UK).
 2. **Email** — your RainPoint app account email.
 3. **Password** — your RainPoint app account password.
 
@@ -98,3 +100,5 @@ The original MIT license is preserved — see [LICENSE](LICENSE).
 Report bugs and request features at: <https://github.com/funkadelic/ha-rainpoint/issues>
 
 Contributions are welcome. The primary testing target is the HTV245FRF valve — if you have other RainPoint hardware and can provide raw payloads, open an issue to help expand decoder coverage.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup (venv, Pylance, running tests).

@@ -1,3 +1,6 @@
+[tool.coverage.run]
+omit = ["custom_components/rainpoint/debug.py"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
