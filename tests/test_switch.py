@@ -67,13 +67,19 @@ class TestSwitchSetupEntry:
         assert len(entities) == 2
 
     @pytest.mark.asyncio
-    async def test_setup_entry_no_debug_switch_when_url_empty(self):
+    async def test_setup_entry_no_debug_switch_when_url_empty(self, monkeypatch):
         """DEBUG_WORKER_URL is empty by default; no debug switch should be added."""
+        # Force the precondition explicitly rather than relying on const.py
+        # to stay empty, so this test does not give a misleading hub-count
+        # failure if anyone sets a real debug worker URL.
+        monkeypatch.setattr(
+            "custom_components.rainpoint.switch.DEBUG_WORKER_URL", ""
+        )
+
         hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0"}
         hass, entry, _coord = _make_hass(hubs=[hub_info])
 
         mock_add_entities = MagicMock()
-        # DEBUG_WORKER_URL is "" in const.py — no debug switch
         await async_setup_entry(hass, entry, mock_add_entities)
 
         entities = mock_add_entities.call_args[0][0]
