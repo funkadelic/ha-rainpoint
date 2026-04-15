@@ -16,10 +16,11 @@
       ],
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true
+      "bump-patch-for-minor-pre-major": true,
+      "pull-request-header": "",
+      "pull-request-footer": ""
     }
   },
-  "footer": "",
   "changelog-sections": [
     { "type": "feat", "section": "Added", "hidden": false },
     { "type": "fix", "section": "Fixed", "hidden": false },
