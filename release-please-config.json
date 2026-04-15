@@ -17,8 +17,8 @@
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
-      "pull-request-header": "",
-      "pull-request-footer": ""
+      "pull-request-header": " ",
+      "pull-request-footer": " "
     }
   },
   "changelog-sections": [
