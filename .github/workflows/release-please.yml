@@ -30,8 +30,8 @@ jobs:
       - name: Package integration
         if: ${{ steps.release.outputs.release_created }}
         run: |
-          cd custom_components
-          zip -r ../rainpoint.zip rainpoint/
+          cd custom_components/rainpoint
+          zip -r ../../rainpoint.zip .
 
       - name: Upload release asset
         if: ${{ steps.release.outputs.release_created }}
