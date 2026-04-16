@@ -32,6 +32,8 @@ jobs:
           pytest --cov-report=xml --junitxml=junit.xml --tb=short
 
       - name: Upload coverage to Codecov
+        if: >-
+          !contains(github.event.pull_request.labels.*.name, 'autorelease: pending')
         uses: codecov/codecov-action@v6
         with:
           files: ./coverage.xml
@@ -41,7 +43,9 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload test results to Codecov
-        if: ${{ !cancelled() }}
+        if: >-
+          !cancelled()
+          && !contains(github.event.pull_request.labels.*.name, 'autorelease: pending')
         uses: codecov/codecov-action@v6
         with:
           files: ./junit.xml
