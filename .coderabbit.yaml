@@ -1,0 +1,5 @@
+reviews:
+  auto_review:
+    drafts: false
+    ignore_title_keywords:
+      - "chore(main): release"
