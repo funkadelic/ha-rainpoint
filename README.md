@@ -46,13 +46,32 @@ All devices communicate via the RainPoint cloud backend. There is no local LAN p
 
 The config flow asks for three fields:
 
-1. **Country / area code** — the phone country (calling) code for the phone number on your RainPoint account (e.g. `1` for US/Canada, `44` for UK).
-2. **Email** — your RainPoint app account email.
-3. **Password** — your RainPoint app account password.
+1. **Country / area code**: the phone country (calling) code for the phone number on your RainPoint account (e.g. `1` for US/Canada, `44` for UK).
+2. **Email**: your RainPoint app account email.
+3. **Password**: your RainPoint app account password.
 
-After authenticating, select the **home** to monitor. There is no app-type selection — this integration uses the RainPoint app API only.
+After authenticating, select the **home** to monitor. There is no app-type selection; this integration uses the RainPoint app API only.
 
-**Note on API sessions:** The RainPoint cloud API allows only one active session per account. Logging in via this integration will log you out of the RainPoint mobile app. Consider creating a dedicated API account and inviting it to your home as a member.
+> **Heads up on API sessions.** The RainPoint cloud allows only one active session per account. Logging in here will sign you out of the RainPoint mobile app on your phone, and vice versa. To avoid that ping-pong, [create a dedicated account for Home Assistant](#use-a-dedicated-home-assistant-account-recommended) and share your home with it.
+
+---
+
+## Use a dedicated Home Assistant account (recommended)
+
+Rather than giving Home Assistant your primary RainPoint credentials, create a second account and invite it to your home. Your phone keeps the original account logged in, and the integration runs on the member account, so both stay signed in at the same time.
+
+1. In the RainPoint mobile app, sign out and create a new account with a different email address (any mailbox you control is fine).
+
+   > **Tip:** Gmail and many other providers route `you+anything@example.com` to the same inbox as `you@example.com`. So if your main login is `user@example.com`, you can sign up the second account as `user+homeassistant@example.com` and receive both mailboxes at one address. RainPoint treats them as separate accounts.
+2. Sign back in with your **original** account.
+3. In the app, go to **Me → Home management → your home → Members → Invite** and invite the new account's email.
+4. Accept the invitation from the new account (you can sign in briefly in a separate session, or on another device, to accept).
+5. Sign back into your original account on your phone and leave it there.
+6. In Home Assistant, set up this integration using the **new** account's email and password.
+
+From then on, the new account owns the integration's session and your phone's session is never disturbed.
+
+You can still reach every device and zone the original account can. Invited members share the same home.
 
 ---
 
@@ -60,38 +79,22 @@ After authenticating, select the **home** to monitor. There is no app-type selec
 
 For each device the coordinator discovers, the integration creates:
 
-- **Sensor entities** — one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API.
-- **Valve entities** — one per irrigation zone for valve hub models (HTV*).
-- **Number entities** — one per zone for configuring zone run duration (1–60 minutes).
-- **Hub diagnostic sensors** — RSSI, battery, firmware version, last-updated timestamp.
+- **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API.
+- **Valve entities**: one per irrigation zone for valve hub models (HTV*).
+- **Number entities**: one per zone for configuring zone run duration (1–60 minutes).
+- **Hub diagnostic sensors**: RSSI, battery, firmware version, last-updated timestamp.
 
 All entities are grouped under their parent hub device in the Home Assistant device registry.
 
 ---
 
-## Migrating from homeassistant-homgar
-
-**This fork is NOT a drop-in replacement for the upstream `homeassistant-homgar` integration.**
-
-To migrate:
-
-1. In Home Assistant, go to **Settings → Devices & Services**.
-2. Find the existing **HomGar** (or HomGar/RainPoint) integration entry and remove it completely — delete the config entry.
-3. Remove the `custom_components/homgar/` folder from your Home Assistant `config/` directory (or let HACS uninstall it).
-4. Install **RainPoint Cloud** fresh via HACS (see Installation above).
-5. Re-add the integration through **Settings → Devices & Services → Add Integration → RainPoint Cloud**.
-
-**Entity IDs will change.** All entity IDs move from `sensor.homgar_*` / `valve.homgar_*` etc. to `sensor.rainpoint_*` / `valve.rainpoint_*`. Any automations, dashboards, or scripts referencing the old entity IDs must be updated to use the new ones.
-
----
-
 ## Attribution
 
-This project is a fork of [homeassistant-homgar](https://github.com/brettmeyerowitz/homeassistant-homgar) by Brett Meyerowitz. The original project supports both HomGar and RainPoint apps; this fork narrows to the RainPoint app only.
+This project is based off of [homeassistant-homgar](https://github.com/brettmeyerowitz/homeassistant-homgar) by Brett Meyerowitz.
 
-Special thanks to [shaundekok/rainpoint](https://github.com/shaundekok/rainpoint) for payload decoding inspiration referenced in the upstream project.
+Special thanks to [shaundekok/rainpoint](https://github.com/shaundekok/rainpoint) for payload decoding inspiration referenced in homeassistant-homgar.
 
-The original MIT license is preserved — see [LICENSE](LICENSE).
+The original MIT license is preserved. See [LICENSE](LICENSE).
 
 ---
 
@@ -99,6 +102,4 @@ The original MIT license is preserved — see [LICENSE](LICENSE).
 
 Report bugs and request features at: <https://github.com/funkadelic/ha-rainpoint/issues>
 
-Contributions are welcome. The primary testing target is the HTV245FRF valve — if you have other RainPoint hardware and can provide raw payloads, open an issue to help expand decoder coverage.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup (venv, Pylance, running tests).
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup (venv, Pylance, running tests).
