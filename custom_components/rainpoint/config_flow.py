@@ -8,18 +8,39 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .api import RainPointApiError, RainPointClient
 from .const import (
     CONF_AREA_CODE,
+    CONF_COUNTRY,
     CONF_EMAIL,
     CONF_HIDS,
     CONF_PASSWORD,
     DOMAIN,
 )
-from .country_codes import get_default_country_code
+from .country_codes import (
+    COUNTRY_TO_PHONE_CODE,
+    get_country_code_options,
+    get_default_country,
+    resolve_country_from_phone_code,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _country_selector() -> SelectSelector:
+    """Build the country dropdown selector (ISO value, 'Name (+code)' label)."""
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=get_country_code_options(),
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
 
 
 class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -35,7 +56,8 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            area_code = user_input[CONF_AREA_CODE]
+            country = user_input[CONF_COUNTRY]
+            area_code = COUNTRY_TO_PHONE_CODE[country]
             email = user_input[CONF_EMAIL]
             password = user_input[CONF_PASSWORD]
 
@@ -68,6 +90,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"] = "no_homes"
                 else:
                     # Store temp values for the next step
+                    self._country = country
                     self._area_code = area_code
                     self._email = email
                     self._password = password
@@ -75,11 +98,11 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._client = client
                     return await self.async_step_select_homes()
 
-        default_country_code = get_default_country_code(self.hass)
+        default_country = get_default_country(self.hass)
 
         data_schema = vol.Schema(
             {
-                vol.Required(CONF_AREA_CODE, default=default_country_code): str,
+                vol.Required(CONF_COUNTRY, default=default_country): _country_selector(),
                 vol.Required(CONF_EMAIL): str,
                 vol.Required(CONF_PASSWORD): str,
             }
@@ -108,6 +131,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 token_data = self._client.export_tokens()
 
                 data = {
+                    CONF_COUNTRY: self._country,
                     CONF_AREA_CODE: self._area_code,
                     CONF_EMAIL: self._email,
                     CONF_PASSWORD: self._password,
@@ -144,20 +168,28 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         entry = self._get_reconfigure_entry()
         current_data = entry.data
 
-        default_country_code = get_default_country_code(self.hass)
+        # Prefer an explicitly stored ISO; otherwise derive one from the
+        # legacy phone code, preferring HA's configured country when its
+        # dial code matches. Keeps pre-upgrade entries from silently
+        # switching dial codes on a no-op reconfigure submit.
+        default_country = current_data.get(CONF_COUNTRY) or resolve_country_from_phone_code(
+            current_data.get(CONF_AREA_CODE),
+            preferred_iso=get_default_country(self.hass),
+        )
 
         # Pre-fill form with current values
         data_schema = vol.Schema(
             {
-                vol.Required(CONF_AREA_CODE, default=current_data.get(CONF_AREA_CODE, default_country_code)): str,
+                vol.Required(CONF_COUNTRY, default=default_country): _country_selector(),
                 vol.Required(CONF_EMAIL, default=current_data.get(CONF_EMAIL, "")): str,
                 vol.Required(CONF_PASSWORD, default=current_data.get(CONF_PASSWORD, "")): str,
             }
         )
 
         if user_input is not None:
-            area_code = user_input[CONF_AREA_CODE]
-            email = user_input[CONF_EMAIL]
+            country = user_input[CONF_COUNTRY]
+            area_code = COUNTRY_TO_PHONE_CODE[country]
+            email = user_input[CONF_EMAIL].strip().lower()
             password = user_input[CONF_PASSWORD]
 
             # Test new credentials
@@ -190,12 +222,12 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         errors={"base": "no_homes"},
                     )
                 else:
-                    # Normalize email and update unique_id for account deduplication
-                    email = email.strip().lower()
+                    # Email is already normalized above; update unique_id for account deduplication.
                     await self.async_set_unique_id(f"{DOMAIN}_{email}")
                     self._abort_if_unique_id_mismatch()
 
                     # Store temp values for the next step
+                    self._country = country
                     self._area_code = area_code
                     self._email = email
                     self._password = password
@@ -227,6 +259,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 token_data = self._client.export_tokens()
 
                 data = {
+                    CONF_COUNTRY: self._country,
                     CONF_AREA_CODE: self._area_code,
                     CONF_EMAIL: self._email,
                     CONF_PASSWORD: self._password,

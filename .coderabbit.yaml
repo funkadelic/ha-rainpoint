@@ -1,5 +1,8 @@
 reviews:
+  poem: false
+  in_progress_fortune: false
   auto_review:
     drafts: false
+    auto_incremental_review: false
     ignore_title_keywords:
       - "chore(main): release"
