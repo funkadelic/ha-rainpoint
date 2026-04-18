@@ -7,6 +7,7 @@ from custom_components.rainpoint.country_codes import (
     COUNTRY_TO_PHONE_CODE,
     get_country_code_options,
     get_default_country_code,
+    resolve_country_from_phone_code,
 )
 
 
@@ -38,22 +39,22 @@ class TestGetDefaultCountryCode:
     def test_unknown_country_falls_back(self):
         """Unknown country falls back."""
         hass = _make_hass("XX")
-        assert get_default_country_code(hass) == "27"
+        assert get_default_country_code(hass) == "1"
 
     def test_no_country_attribute(self):
         """No country attribute."""
         hass = MagicMock(spec=[])  # no attributes at all
-        assert get_default_country_code(hass) == "27"
+        assert get_default_country_code(hass) == "1"
 
     def test_none_country(self):
         """None country."""
         hass = _make_hass(None)
-        assert get_default_country_code(hass) == "27"
+        assert get_default_country_code(hass) == "1"
 
     def test_empty_string_country(self):
         """Empty string country."""
         hass = _make_hass("")
-        assert get_default_country_code(hass) == "27"
+        assert get_default_country_code(hass) == "1"
 
 
 class TestCountryToPhoneCodeMap:
@@ -138,7 +139,39 @@ class TestGetCountryCodeOptions:
         assert labels == sorted(labels)
 
     def test_fallback_country_is_in_options(self):
-        """ZA fallback used by get_default_country must be selectable."""
+        """US fallback used by get_default_country must be selectable."""
         options = {o["value"]: o["label"] for o in get_country_code_options()}
-        assert "ZA" in options
-        assert "South Africa" in options["ZA"]
+        assert "US" in options
+        assert "United States" in options["US"]
+
+
+class TestResolveCountryFromPhoneCode:
+    """Tests for resolve_country_from_phone_code, used for pre-CONF_COUNTRY upgrades."""
+
+    def test_preferred_iso_matches_phone_code(self):
+        """When HA's configured country matches the stored dial code, prefer it."""
+        assert resolve_country_from_phone_code("1", preferred_iso="US") == "US"
+
+    def test_preferred_iso_mismatch_finds_matching_iso(self):
+        """If preferred_iso's dial code doesn't match, fall through to any matching ISO."""
+        assert resolve_country_from_phone_code("44", preferred_iso="US") == "GB"
+
+    def test_unknown_phone_code_returns_fallback_not_preferred(self):
+        """Bogus stored dial codes should not silently pre-select the preferred ISO."""
+        # preferred_iso="GB" (dial code "44") does not match "999"; returning
+        # GB would imply a match that doesn't exist. Use the explicit fallback
+        # (US) instead. Using GB here keeps the test discriminative vs. the
+        # fallback, which is itself US.
+        assert resolve_country_from_phone_code("999", preferred_iso="GB") == "US"
+
+    def test_no_phone_code_returns_preferred(self):
+        """Fresh entries with no legacy phone_code should use the preferred ISO."""
+        assert resolve_country_from_phone_code(None, preferred_iso="GB") == "GB"
+
+    def test_no_phone_code_no_preferred_returns_fallback(self):
+        """With nothing to go on, use the fallback country."""
+        assert resolve_country_from_phone_code(None, preferred_iso=None) == "US"
+
+    def test_empty_phone_code_treated_as_no_phone_code(self):
+        """Empty-string phone_code behaves like None (pre-upgrade with no stored code)."""
+        assert resolve_country_from_phone_code("", preferred_iso="GB") == "GB"

@@ -208,6 +208,9 @@ class TestConfigFlowSelectHomes:
         flow.async_create_entry.assert_called_once()
         call_kwargs = flow.async_create_entry.call_args.kwargs
         assert "RainPoint" in call_kwargs.get("title", "")
+        entry_data = call_kwargs.get("data", {})
+        assert entry_data.get(CONF_COUNTRY) == "US"
+        assert entry_data.get(CONF_AREA_CODE) == "1"
 
     @pytest.mark.asyncio
     async def test_select_homes_no_selection_shows_error(self):

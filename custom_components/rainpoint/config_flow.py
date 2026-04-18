@@ -189,7 +189,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             country = user_input[CONF_COUNTRY]
             area_code = COUNTRY_TO_PHONE_CODE[country]
-            email = user_input[CONF_EMAIL]
+            email = user_input[CONF_EMAIL].strip().lower()
             password = user_input[CONF_PASSWORD]
 
             # Test new credentials
@@ -222,8 +222,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         errors={"base": "no_homes"},
                     )
                 else:
-                    # Normalize email and update unique_id for account deduplication
-                    email = email.strip().lower()
+                    # Email is already normalized above; update unique_id for account deduplication.
                     await self.async_set_unique_id(f"{DOMAIN}_{email}")
                     self._abort_if_unique_id_mismatch()
 

@@ -105,11 +105,11 @@ COUNTRY_NAMES = {
 }
 
 
-_FALLBACK_COUNTRY = "ZA"
+_FALLBACK_COUNTRY = "US"
 
 
 def get_default_country(hass) -> str:
-    """Get ISO country code from HA's configured country, falling back to ZA."""
+    """Get ISO country code from HA's configured country, falling back to US."""
     try:
         country = hass.config.country
         if country and country in COUNTRY_TO_PHONE_CODE:
@@ -120,7 +120,7 @@ def get_default_country(hass) -> str:
 
 
 def get_default_country_code(hass) -> str:
-    """Get phone country code from HA's configured country, falling back to '27' (ZA)."""
+    """Get phone country code from HA's configured country, falling back to '1' (US)."""
     return COUNTRY_TO_PHONE_CODE[get_default_country(hass)]
 
 
@@ -139,6 +139,10 @@ def resolve_country_from_phone_code(phone_code: str | None, preferred_iso: str |
         for iso, pc in COUNTRY_TO_PHONE_CODE.items():
             if pc == phone_code:
                 return iso
+        # phone_code was provided but doesn't map to any known ISO (e.g. user
+        # typed a bogus dial code in the legacy freeform input). Don't silently
+        # return preferred_iso since its dial code wouldn't match.
+        return _FALLBACK_COUNTRY
     return preferred_iso or _FALLBACK_COUNTRY
 
 

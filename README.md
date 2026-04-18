@@ -46,7 +46,7 @@ All devices communicate via the RainPoint cloud backend. There is no local LAN p
 
 The config flow asks for three fields:
 
-1. **Country / area code**: the phone country (calling) code for the phone number on your RainPoint account (e.g. `1` for US/Canada, `44` for UK).
+1. **Country**: select the country for the phone number on your RainPoint account from the dropdown. The integration derives the dial code automatically (e.g. selecting **United States (+1)** stores `+1`).
 2. **Email**: your RainPoint app account email.
 3. **Password**: your RainPoint app account password.
 
@@ -90,7 +90,7 @@ All entities are grouped under their parent hub device in the Home Assistant dev
 
 ## Attribution
 
-This project is based off of [homeassistant-homgar](https://github.com/brettmeyerowitz/homeassistant-homgar) by Brett Meyerowitz.
+This project is based on [homeassistant-homgar](https://github.com/brettmeyerowitz/homeassistant-homgar) by Brett Meyerowitz.
 
 Special thanks to [shaundekok/rainpoint](https://github.com/shaundekok/rainpoint) for payload decoding inspiration referenced in homeassistant-homgar.
 
