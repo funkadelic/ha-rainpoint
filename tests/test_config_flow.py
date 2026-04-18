@@ -12,11 +12,18 @@ import pytest
 
 from custom_components.rainpoint.api import RainPointApiError
 from custom_components.rainpoint.config_flow import RainPointConfigFlow
-from custom_components.rainpoint.const import CONF_AREA_CODE, CONF_EMAIL, CONF_HIDS, CONF_PASSWORD
+from custom_components.rainpoint.const import (
+    CONF_AREA_CODE,
+    CONF_COUNTRY,
+    CONF_EMAIL,
+    CONF_HIDS,
+    CONF_PASSWORD,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_flow():
     """Create a RainPointConfigFlow with HA stub methods wired up."""
@@ -41,17 +48,13 @@ def _make_mock_client(homes=None):
     """Return a mock RainPointClient that succeeds by default."""
     client = MagicMock()
     client.ensure_logged_in = AsyncMock()
-    client.list_homes = AsyncMock(
-        return_value=homes if homes is not None else [{"hid": 1, "homeName": "My Home"}]
-    )
-    client.export_tokens = MagicMock(
-        return_value={"token": "tok", "refresh_token": "ref", "token_expires_at": 9999999999}
-    )
+    client.list_homes = AsyncMock(return_value=homes if homes is not None else [{"hid": 1, "homeName": "My Home"}])
+    client.export_tokens = MagicMock(return_value={"token": "tok", "refresh_token": "ref", "token_expires_at": 9999999999})
     return client
 
 
 _VALID_USER_INPUT = {
-    CONF_AREA_CODE: "1",
+    CONF_COUNTRY: "US",
     CONF_EMAIL: "Test@Example.com",
     CONF_PASSWORD: "secret",
 }
@@ -61,8 +64,10 @@ _VALID_USER_INPUT = {
 # User step tests
 # ---------------------------------------------------------------------------
 
+
 class TestConfigFlowUserStep:
     """Tests for ConfigFlowUserStep."""
+
     @pytest.mark.asyncio
     async def test_user_step_no_input_shows_form(self):
         """User step no input shows form."""
@@ -78,12 +83,15 @@ class TestConfigFlowUserStep:
         flow = _make_flow()
         mock_client = _make_mock_client()
 
-        with patch(
-            "custom_components.rainpoint.config_flow.async_get_clientsession",
-            return_value=MagicMock(),
-        ), patch(
-            "custom_components.rainpoint.config_flow.RainPointClient",
-            return_value=mock_client,
+        with (
+            patch(
+                "custom_components.rainpoint.config_flow.async_get_clientsession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.rainpoint.config_flow.RainPointClient",
+                return_value=mock_client,
+            ),
         ):
             # async_step_select_homes is called internally; stub it
             flow.async_step_select_homes = AsyncMock(return_value={"type": "form"})
@@ -100,12 +108,15 @@ class TestConfigFlowUserStep:
         mock_client = _make_mock_client()
         mock_client.ensure_logged_in = AsyncMock(side_effect=RainPointApiError("bad creds"))
 
-        with patch(
-            "custom_components.rainpoint.config_flow.async_get_clientsession",
-            return_value=MagicMock(),
-        ), patch(
-            "custom_components.rainpoint.config_flow.RainPointClient",
-            return_value=mock_client,
+        with (
+            patch(
+                "custom_components.rainpoint.config_flow.async_get_clientsession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.rainpoint.config_flow.RainPointClient",
+                return_value=mock_client,
+            ),
         ):
             await flow.async_step_user(_VALID_USER_INPUT)
 
@@ -120,12 +131,15 @@ class TestConfigFlowUserStep:
         mock_client = _make_mock_client()
         mock_client.ensure_logged_in = AsyncMock(side_effect=TimeoutError())
 
-        with patch(
-            "custom_components.rainpoint.config_flow.async_get_clientsession",
-            return_value=MagicMock(),
-        ), patch(
-            "custom_components.rainpoint.config_flow.RainPointClient",
-            return_value=mock_client,
+        with (
+            patch(
+                "custom_components.rainpoint.config_flow.async_get_clientsession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.rainpoint.config_flow.RainPointClient",
+                return_value=mock_client,
+            ),
         ):
             await flow.async_step_user(_VALID_USER_INPUT)
 
@@ -139,12 +153,15 @@ class TestConfigFlowUserStep:
         flow = _make_flow()
         mock_client = _make_mock_client(homes=[])
 
-        with patch(
-            "custom_components.rainpoint.config_flow.async_get_clientsession",
-            return_value=MagicMock(),
-        ), patch(
-            "custom_components.rainpoint.config_flow.RainPointClient",
-            return_value=mock_client,
+        with (
+            patch(
+                "custom_components.rainpoint.config_flow.async_get_clientsession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.rainpoint.config_flow.RainPointClient",
+                return_value=mock_client,
+            ),
         ):
             await flow.async_step_user(_VALID_USER_INPUT)
 
@@ -157,8 +174,10 @@ class TestConfigFlowUserStep:
 # Select homes step tests
 # ---------------------------------------------------------------------------
 
+
 class TestConfigFlowSelectHomes:
     """Tests for ConfigFlowSelectHomes."""
+
     @pytest.mark.asyncio
     async def test_select_homes_no_input_shows_form(self):
         """Select homes no input shows form."""
@@ -177,6 +196,7 @@ class TestConfigFlowSelectHomes:
         """Select homes creates entry."""
         flow = _make_flow()
         flow._homes = [{"hid": 1, "homeName": "Home1"}]
+        flow._country = "US"
         flow._area_code = "1"
         flow._email = "test@example.com"
         flow._password = "secret"
@@ -220,8 +240,10 @@ class TestConfigFlowSelectHomes:
 # Reconfigure step tests
 # ---------------------------------------------------------------------------
 
+
 class TestConfigFlowReconfigure:
     """Tests for ConfigFlowReconfigure."""
+
     def _make_reconfigure_flow(self):
         """Create flow with reconfigure entry pre-wired."""
         flow = _make_flow()
@@ -229,6 +251,7 @@ class TestConfigFlowReconfigure:
 
         mock_entry = MagicMock()
         mock_entry.data = {
+            CONF_COUNTRY: "US",
             CONF_AREA_CODE: "1",
             CONF_EMAIL: "existing@example.com",
             CONF_PASSWORD: "oldpass",
@@ -253,17 +276,18 @@ class TestConfigFlowReconfigure:
         flow = self._make_reconfigure_flow()
         mock_client = _make_mock_client()
 
-        with patch(
-            "custom_components.rainpoint.config_flow.async_get_clientsession",
-            return_value=MagicMock(),
-        ), patch(
-            "custom_components.rainpoint.config_flow.RainPointClient",
-            return_value=mock_client,
+        with (
+            patch(
+                "custom_components.rainpoint.config_flow.async_get_clientsession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.rainpoint.config_flow.RainPointClient",
+                return_value=mock_client,
+            ),
         ):
             flow.async_step_select_homes_reconfigure = AsyncMock(return_value={"type": "form"})
-            await flow.async_step_reconfigure(
-                {CONF_AREA_CODE: "1", CONF_EMAIL: "New@Example.com", CONF_PASSWORD: "newpass"}
-            )
+            await flow.async_step_reconfigure({CONF_COUNTRY: "US", CONF_EMAIL: "New@Example.com", CONF_PASSWORD: "newpass"})
 
         # Homes should be populated after successful login
         assert flow._homes == [{"hid": 1, "homeName": "My Home"}]
@@ -279,16 +303,17 @@ class TestConfigFlowReconfigure:
         mock_client = _make_mock_client()
         mock_client.ensure_logged_in = AsyncMock(side_effect=RainPointApiError("bad"))
 
-        with patch(
-            "custom_components.rainpoint.config_flow.async_get_clientsession",
-            return_value=MagicMock(),
-        ), patch(
-            "custom_components.rainpoint.config_flow.RainPointClient",
-            return_value=mock_client,
+        with (
+            patch(
+                "custom_components.rainpoint.config_flow.async_get_clientsession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.rainpoint.config_flow.RainPointClient",
+                return_value=mock_client,
+            ),
         ):
-            await flow.async_step_reconfigure(
-                {CONF_AREA_CODE: "1", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "wrong"}
-            )
+            await flow.async_step_reconfigure({CONF_COUNTRY: "US", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "wrong"})
 
         flow.async_show_form.assert_called_once()
         last_call = flow.async_show_form.call_args.kwargs
@@ -301,17 +326,48 @@ class TestConfigFlowReconfigure:
         mock_client = _make_mock_client()
         mock_client.ensure_logged_in = AsyncMock(side_effect=TimeoutError())
 
-        with patch(
-            "custom_components.rainpoint.config_flow.async_get_clientsession",
-            return_value=MagicMock(),
-        ), patch(
-            "custom_components.rainpoint.config_flow.RainPointClient",
-            return_value=mock_client,
+        with (
+            patch(
+                "custom_components.rainpoint.config_flow.async_get_clientsession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.rainpoint.config_flow.RainPointClient",
+                return_value=mock_client,
+            ),
         ):
-            await flow.async_step_reconfigure(
-                {CONF_AREA_CODE: "1", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "pass"}
-            )
+            await flow.async_step_reconfigure({CONF_COUNTRY: "US", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "pass"})
 
         flow.async_show_form.assert_called_once()
         last_call = flow.async_show_form.call_args.kwargs
         assert last_call.get("errors", {}).get("base") == "cannot_connect"
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_legacy_entry_defaults_to_ha_country_on_matching_dial_code(self):
+        """Legacy entry (CONF_AREA_CODE only, no CONF_COUNTRY) resolves the
+        dropdown default to HA's configured ISO when its dial code matches,
+        so e.g. a US user doesn't silently flip to CA on the first reconfigure.
+        """
+        flow = _make_flow()
+        flow.hass.config.country = "US"
+        flow._reconfigure = True
+
+        mock_entry = MagicMock()
+        mock_entry.data = {
+            CONF_AREA_CODE: "1",
+            CONF_EMAIL: "existing@example.com",
+            CONF_PASSWORD: "oldpass",
+        }
+        flow._get_reconfigure_entry = MagicMock(return_value=mock_entry)
+
+        await flow.async_step_reconfigure(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        country_default = None
+        for key in schema.schema:
+            if getattr(key, "schema", None) == CONF_COUNTRY:
+                raw = key.default
+                country_default = raw() if callable(raw) else raw
+                break
+
+        assert country_default == "US"

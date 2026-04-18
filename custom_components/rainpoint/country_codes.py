@@ -52,13 +52,109 @@ COUNTRY_TO_PHONE_CODE = {
     "TW": "886",
 }
 
+# ISO 3166-1 alpha-2 → English country name (display label)
+COUNTRY_NAMES = {
+    "US": "United States",
+    "CA": "Canada",
+    "GB": "United Kingdom",
+    "AU": "Australia",
+    "NZ": "New Zealand",
+    "ZA": "South Africa",
+    "DE": "Germany",
+    "FR": "France",
+    "IT": "Italy",
+    "ES": "Spain",
+    "NL": "Netherlands",
+    "BE": "Belgium",
+    "CH": "Switzerland",
+    "AT": "Austria",
+    "SE": "Sweden",
+    "NO": "Norway",
+    "DK": "Denmark",
+    "FI": "Finland",
+    "PL": "Poland",
+    "CZ": "Czech Republic",
+    "IE": "Ireland",
+    "PT": "Portugal",
+    "GR": "Greece",
+    "RU": "Russia",
+    "CN": "China",
+    "JP": "Japan",
+    "KR": "South Korea",
+    "IN": "India",
+    "BR": "Brazil",
+    "MX": "Mexico",
+    "AR": "Argentina",
+    "CL": "Chile",
+    "CO": "Colombia",
+    "SG": "Singapore",
+    "MY": "Malaysia",
+    "TH": "Thailand",
+    "ID": "Indonesia",
+    "PH": "Philippines",
+    "VN": "Vietnam",
+    "IL": "Israel",
+    "AE": "United Arab Emirates",
+    "SA": "Saudi Arabia",
+    "TR": "Turkey",
+    "EG": "Egypt",
+    "NG": "Nigeria",
+    "KE": "Kenya",
+    "HK": "Hong Kong",
+    "TW": "Taiwan",
+}
 
-def get_default_country_code(hass) -> str:
-    """Get phone country code from HA's configured country, falling back to '27' (ZA)."""
+
+_FALLBACK_COUNTRY = "ZA"
+
+
+def get_default_country(hass) -> str:
+    """Get ISO country code from HA's configured country, falling back to ZA."""
     try:
         country = hass.config.country
         if country and country in COUNTRY_TO_PHONE_CODE:
-            return COUNTRY_TO_PHONE_CODE[country]
+            return country
     except AttributeError:
         pass
-    return "27"
+    return _FALLBACK_COUNTRY
+
+
+def get_default_country_code(hass) -> str:
+    """Get phone country code from HA's configured country, falling back to '27' (ZA)."""
+    return COUNTRY_TO_PHONE_CODE[get_default_country(hass)]
+
+
+def resolve_country_from_phone_code(phone_code: str | None, preferred_iso: str | None = None) -> str:
+    """Pick the ISO country that matches a stored phone code.
+
+    Used when upgrading a pre-CONF_COUNTRY config entry: we know the phone
+    code, need an ISO to pre-select in the dropdown. If `preferred_iso` maps
+    to the same phone code (e.g. HA is configured for `US` and the entry has
+    `"1"`), return it. Otherwise fall back to the first ISO with a matching
+    phone code, or the default country when nothing matches.
+    """
+    if preferred_iso and COUNTRY_TO_PHONE_CODE.get(preferred_iso) == phone_code:
+        return preferred_iso
+    if phone_code:
+        for iso, pc in COUNTRY_TO_PHONE_CODE.items():
+            if pc == phone_code:
+                return iso
+    return preferred_iso or _FALLBACK_COUNTRY
+
+
+def get_country_code_options() -> list[dict[str, str]]:
+    """Return a list of dropdown options for the config-flow country picker.
+
+    Each option is a ``{"value": iso, "label": "<Country Name> (+<phone>)"}``
+    dict suitable for Home Assistant's ``SelectSelector``. Values are ISO
+    codes so countries that share a dial code (US/CA on +1) stay distinct
+    and render as separate rows. Sorted alphabetically by label.
+    """
+    options = [
+        {
+            "value": iso,
+            "label": f"{COUNTRY_NAMES.get(iso, iso)} (+{phone_code})",
+        }
+        for iso, phone_code in COUNTRY_TO_PHONE_CODE.items()
+    ]
+    return sorted(options, key=lambda item: item["label"])

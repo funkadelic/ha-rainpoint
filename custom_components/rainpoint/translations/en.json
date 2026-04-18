@@ -5,7 +5,7 @@
                 "title": "RainPoint Cloud",
                 "description": "Log in with your RainPoint account.",
                 "data": {
-                    "area_code": "Country code",
+                    "area_code": "Country",
                     "email": "Email",
                     "password": "Password"
                 }
@@ -21,7 +21,7 @@
                 "title": "Reconfigure RainPoint",
                 "description": "Update your RainPoint credentials.",
                 "data": {
-                    "area_code": "Country code",
+                    "area_code": "Country",
                     "email": "Email",
                     "password": "Password"
                 }

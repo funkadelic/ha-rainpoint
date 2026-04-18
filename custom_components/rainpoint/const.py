@@ -15,6 +15,7 @@ def debug_with_version(message: str) -> str:
 
 
 CONF_AREA_CODE = "area_code"
+CONF_COUNTRY = "country"  # ISO 3166-1 alpha-2, source of truth for the UI dropdown
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
 CONF_HIDS = "hids"  # list of selected home IDs
