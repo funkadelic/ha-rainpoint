@@ -653,8 +653,7 @@ class TestSensorBaseProperties:
         """raw_status.time (ms since epoch) is exposed as last_updated ISO string."""
         sensor = self._make_base()
         attrs = sensor.extra_state_attributes
-        assert "last_updated" in attrs
-        assert "2023" in attrs["last_updated"] or "1700" in str(attrs["last_updated"])
+        assert attrs["last_updated"] == "2023-11-14T22:13:20+00:00"
 
     def test_extra_state_attributes_legacy_last_updated_bad_time_swallowed(self):
         """A non-numeric raw_status.time does not raise; last_updated is omitted."""
