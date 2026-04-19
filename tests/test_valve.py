@@ -172,10 +172,12 @@ class TestValveControl:
         valve = _make_valve(model=MODEL_VALVE_245)
         valve.coordinator.async_set_updated_data = MagicMock()
 
-        # Use a realistic ASCII-format payload for HTV245FRF
-        valve._apply_response_state("1,-84,1;1,0,0,300;0,0,0,0")
+        # Canonical two-zone ASCII payload from maintainer's HTV245FRF
+        valve._apply_response_state("1,-84,1;0,149,0,0,0,0|0,6,0,0,0,0")
 
         valve.coordinator.async_set_updated_data.assert_called_once()
+        updated = valve.coordinator.async_set_updated_data.call_args.args[0]
+        assert updated["sensors"]["100_200_1"]["data"]["zones"]  # non-empty
 
     def test_apply_response_state_none_skips(self):
         """_apply_response_state with None should not call async_set_updated_data."""
