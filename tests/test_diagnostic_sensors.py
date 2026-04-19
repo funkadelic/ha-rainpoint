@@ -228,20 +228,24 @@ class TestRainPointDeviceIDSensor:
 
     def test_native_value_returns_addr_when_long_int(self):
         """native_value should return addr when it is a 9+ digit number."""
-        sensor = self._make(sensor_entry={
-            "firmware_version": "1.0",
-            "data": {},
-            "addr": 12345678901,
-        })
+        sensor = self._make(
+            sensor_entry={
+                "firmware_version": "1.0",
+                "data": {},
+                "addr": 12345678901,
+            }
+        )
         assert sensor.native_value == 12345678901
 
     def test_native_value_returns_none_when_short_addr(self):
         """native_value should be None when addr is too short to be a device ID."""
-        sensor = self._make(sensor_entry={
-            "firmware_version": "1.0",
-            "data": {},
-            "addr": 1,  # short addr, not a device ID
-        })
+        sensor = self._make(
+            sensor_entry={
+                "firmware_version": "1.0",
+                "data": {},
+                "addr": 1,  # short addr, not a device ID
+            }
+        )
         assert sensor.native_value is None
 
     def test_native_value_returns_none_when_no_sensor_entry(self):
@@ -257,3 +261,115 @@ class TestRainPointDeviceIDSensor:
         """unique_id should end with '_device_id'."""
         sensor = self._make()
         assert sensor._attr_unique_id.endswith("_device_id")
+
+    def test_native_value_from_decoded_data_device_id(self):
+        """Long device_id inside decoded `data` dict is returned (covers decoded-data loop)."""
+        sensor = self._make(
+            sensor_entry={
+                "firmware_version": "1.0",
+                "data": {"deviceId": "1234567890"},
+                # No top-level addr / device_id fields - force fall-through to decoded data
+            }
+        )
+        assert sensor.native_value == "1234567890"
+
+    def test_native_value_from_raw_payload_regex(self):
+        """Device ID is extracted from the raw_value string via the regex fallback."""
+        sensor = self._make(
+            sensor_entry={
+                "firmware_version": "1.0",
+                "data": {"raw_value": "prefix 1234567890 suffix"},
+            }
+        )
+        # 10-digit match starting with 1 -> returned as int
+        assert sensor.native_value == 1234567890
+
+    def test_native_value_raw_payload_no_match_returns_none(self):
+        """Raw payload without a 9+ digit match yields None."""
+        sensor = self._make(
+            sensor_entry={
+                "firmware_version": "1.0",
+                "data": {"raw_value": "no digits here"},
+            }
+        )
+        assert sensor.native_value is None
+
+    def test_native_value_raw_payload_match_not_starting_with_one(self):
+        """Regex match exists but does not start with '1' - no device ID returned."""
+        sensor = self._make(
+            sensor_entry={
+                "firmware_version": "1.0",
+                "data": {"raw_value": "xx 2234567890 yy"},
+            }
+        )
+        assert sensor.native_value is None
+
+    def test_native_value_decoded_data_short_id_rejected(self):
+        """device_id field in decoded data exists but is too short - loop continues."""
+        sensor = self._make(
+            sensor_entry={
+                "firmware_version": "1.0",
+                "data": {"deviceId": "123"},  # too short, fails len>=9 check
+            }
+        )
+        assert sensor.native_value is None
+
+    def test_native_value_decoded_data_no_raw_value(self):
+        """Decoded data has no raw_value key - raw-payload regex branch skipped."""
+        sensor = self._make(
+            sensor_entry={
+                "firmware_version": "1.0",
+                "data": {"some_other_key": "whatever"},
+            }
+        )
+        assert sensor.native_value is None
+
+
+class TestDiagnosticBaseNoInfo:
+    """Cover RainPointDiagnosticSensorBase._sensor_data when info is missing (line 42)."""
+
+    def test_sensor_data_none_when_key_missing(self):
+        """_sensor_data returns None when sensor_key is absent from sensors dict."""
+        coord = MagicMock()
+        coord.data = {"sensors": {}}
+        sensor_info = _make_sensor_info()
+        sensor = RainPointBatterySensor.__new__(RainPointBatterySensor)
+        RainPointBatterySensor.__init__(sensor, coord, "missing_key", sensor_info, "100_200_1")
+        assert sensor._sensor_data is None
+        assert sensor.available is False
+
+
+class TestLastUpdatedSensorBadTimestamp:
+    """Cover lines 232-233 (ValueError/AttributeError swallowed)."""
+
+    def test_invalid_timestamp_returns_none(self):
+        """device_timestamp that isn't an ISO string raises and is swallowed."""
+        coord = MagicMock()
+        coord.data = {
+            "sensors": {
+                "100_200_1": {
+                    "firmware_version": "1.0",
+                    "data": {"device_timestamp": "not-a-timestamp"},
+                }
+            }
+        }
+        sensor_info = _make_sensor_info()
+        sensor = RainPointLastUpdatedSensor.__new__(RainPointLastUpdatedSensor)
+        RainPointLastUpdatedSensor.__init__(sensor, coord, "100_200_1", sensor_info, "100_200_1")
+        assert sensor.native_value is None
+
+    def test_non_string_timestamp_returns_none(self):
+        """Non-string device_timestamp triggers AttributeError on .replace() and returns None."""
+        coord = MagicMock()
+        coord.data = {
+            "sensors": {
+                "100_200_1": {
+                    "firmware_version": "1.0",
+                    "data": {"device_timestamp": 12345},  # int, not str
+                }
+            }
+        }
+        sensor_info = _make_sensor_info()
+        sensor = RainPointLastUpdatedSensor.__new__(RainPointLastUpdatedSensor)
+        RainPointLastUpdatedSensor.__init__(sensor, coord, "100_200_1", sensor_info, "100_200_1")
+        assert sensor.native_value is None
