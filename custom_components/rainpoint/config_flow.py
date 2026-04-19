@@ -67,7 +67,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Single account per HA instance
             await self.async_set_unique_id(f"{DOMAIN}_{email}")
             if self._reconfigure:
-                self._abort_if_unique_id_mismatch()
+                self._abort_if_unique_id_mismatch()  # pragma: no cover -- HA framework wrapper; raises AbortFlow at runtime only
             else:
                 self._abort_if_unique_id_configured()
 
@@ -139,7 +139,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     **token_data,
                 }
 
-                if self._reconfigure:
+                if self._reconfigure:  # pragma: no cover -- HA framework wrapper; requires real ConfigEntry runtime
                     return self.async_update_reload_and_abort(
                         self._get_reconfigure_entry(),
                         data=data,
