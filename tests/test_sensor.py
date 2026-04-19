@@ -806,11 +806,8 @@ class TestUnknownSensor:
         return sensor
 
     def test_native_value_reports_model_when_data_present(self):
-        sensor = self._make(model="WIDGET")
-        # data dict still has model=MYSTERY from helper default unless passed
-        # explicitly; we pass model="WIDGET" but default data has model="MYSTERY".
-        # The native_value reads data["model"], not sensor_info["model"].
-        # Reset data explicitly:
+        # native_value reads data["model"], not sensor_info["model"], so pass
+        # the model in the data dict explicitly.
         sensor = self._make(model="WIDGET", data={"type": "unknown", "model": "WIDGET", "raw_value": "10#"})
         assert sensor.native_value == "Unsupported: WIDGET"
 
