@@ -493,23 +493,8 @@ class TestCoordinatorConstructor:
         hass = MagicMock()
         client = MagicMock()
 
-        # Build a bare object and invoke __init__ on it.
-        # Use object.__new__ to skip the MagicMock descriptor side of the class.
         instance = object.__new__(coord_mod.RainPointCoordinator)
-        # The super().__init__() call inside will route into the stubbed
-        # DataUpdateCoordinator mock; we just need it not to crash.
-        try:
-            real_init(instance, hass, client, entry)
-        except TypeError:
-            # If the stubbed super().__init__ rejects kwargs, seed minimal
-            # attributes manually so the rest of init can run. This still
-            # exercises the CONF_HIDS read and set-initialization lines.
-            instance._client = client
-            instance._entry = entry
-            from custom_components.rainpoint.const import CONF_HIDS
-
-            instance._hids = entry.data.get(CONF_HIDS, [])
-            instance._notified_unknown_models = set()
+        real_init(instance, hass, client, entry)
 
         assert instance._client is client
         assert instance._entry is entry
@@ -529,15 +514,7 @@ class TestCoordinatorConstructor:
         client = MagicMock()
         instance = object.__new__(coord_mod.RainPointCoordinator)
 
-        try:
-            real_init(instance, hass, client, entry)
-        except TypeError:
-            instance._client = client
-            instance._entry = entry
-            from custom_components.rainpoint.const import CONF_HIDS
-
-            instance._hids = entry.data.get(CONF_HIDS, [])
-            instance._notified_unknown_models = set()
+        real_init(instance, hass, client, entry)
 
         assert instance._hids == []
 

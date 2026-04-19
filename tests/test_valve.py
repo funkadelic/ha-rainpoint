@@ -486,19 +486,21 @@ class TestValveExtraAttributes:
 class TestApplyResponseStateBranches:
     """Cover _apply_response_state edge branches (lines 213, 215, 219)."""
 
-    def test_apply_response_state_uses_valve_hub_decoder_for_non_213_245(self):
-        """Model not in (213, 245) uses decode_valve_hub branch."""
+    def test_apply_response_state_uses_valve_hub_decoder_for_non_213_245(self, monkeypatch):
+        """Model not in (213, 245) routes through decode_valve_hub and short-circuits on falsy decode."""
+        from custom_components.rainpoint import valve as valve_mod
+
         valve = _make_valve(model=MODEL_VALVE_245)
         valve._sensor_info["model"] = "HWV100FRF"  # unknown valve-hub variant
         valve.coordinator.async_set_updated_data = MagicMock()
 
-        # Use an empty payload that causes decode_valve_hub to return falsy,
-        # exercising the "if not decoded: return" branch.
-        valve._apply_response_state("garbage-that-decodes-to-empty")
+        spy = MagicMock(return_value=None)
+        monkeypatch.setattr(valve_mod, "decode_valve_hub", spy)
 
-        # Either the decoder returned {} and we returned early, OR it returned
-        # something and we called async_set_updated_data. Either way no crash.
-        assert isinstance(valve.coordinator.async_set_updated_data.called, bool)
+        valve._apply_response_state("whatever-payload")
+
+        spy.assert_called_once_with("whatever-payload")
+        valve.coordinator.async_set_updated_data.assert_not_called()
 
     def test_apply_response_state_key_missing_in_sensors(self):
         """If the sensor_key is not in coordinator.data['sensors'], return without update."""

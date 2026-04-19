@@ -29,7 +29,7 @@ def _make_entry(entry_id="test_entry_id"):
     return entry
 
 
-def _make_hass(entry_id=None):
+def _make_hass():
     """Make hass helper."""
     hass = MagicMock()
     hass.data = {}
@@ -300,6 +300,9 @@ class TestReloadService:
         ):
             result = await captured["handler"](call)
 
+        # All-succeed path returns {"message": ...} without an explicit "success" key;
+        # the absence of `success: False` is the success signal.
+        assert result.get("success", True) is True
         assert "Successfully reloaded 2" in result["message"]
 
     @pytest.mark.asyncio

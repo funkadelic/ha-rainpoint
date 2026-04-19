@@ -175,19 +175,7 @@ class TestNumberConstructor:
         inst = object.__new__(num_mod.RainPointZoneDurationNumber)
         coord = MagicMock()
 
-        # Our subclass __init__ calls super().__init__(coordinator); the
-        # CoordinatorEntity stub in conftest accepts it, so this should work.
-        try:
-            real_init(inst, coord, "100_200_1", sensor_info, 2)
-        except TypeError:
-            # Defensive fallback: if super().__init__ rejected kwargs,
-            # seed the attributes we care about.
-            inst._sensor_key = "100_200_1"
-            inst._sensor_info = sensor_info
-            inst._zone_num = 2
-            inst._current_value = num_mod.DURATION_DEFAULT_MINUTES
-            inst._attr_unique_id = "rainpoint_100_200_1_zone2_duration"
-            inst._attr_name = "Front Yard Zone 2 Duration"
+        real_init(inst, coord, "100_200_1", sensor_info, 2)
 
         assert inst._sensor_key == "100_200_1"
         assert inst._zone_num == 2
@@ -204,11 +192,7 @@ class TestNumberConstructor:
         sensor_info = {"hid": 9, "mid": 8, "addr": 7, "model": "M"}  # no sub_name
         inst = object.__new__(num_mod.RainPointZoneDurationNumber)
         coord = MagicMock()
-        try:
-            real_init(inst, coord, "9_8_7", sensor_info, 1)
-        except TypeError:
-            inst._attr_name = "Valve Hub 7 Zone 1 Duration"
-            inst._attr_unique_id = "rainpoint_9_8_7_zone1_duration"
+        real_init(inst, coord, "9_8_7", sensor_info, 1)
 
         assert "Valve Hub 7" in inst._attr_name
 
@@ -226,20 +210,10 @@ class TestNumberAsyncAddedToHass:
         last_state.state = "25.0"
         num.async_get_last_state = AsyncMock(return_value=last_state)
 
-        # super().async_added_to_hass is a no-op on our stub; call the real method.
         import custom_components.rainpoint.number as num_mod
 
         real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
-        # Patch super() call by providing a no-op base
-        with MagicMock():
-            try:
-                await real_fn(num)
-            except AttributeError:
-                # If super().async_added_to_hass blows up, fall through to
-                # exercising the restore branch directly.
-                restored = float(last_state.state)
-                if num_mod.DURATION_MIN_MINUTES <= restored <= num_mod.DURATION_MAX_MINUTES:
-                    num._current_value = restored
+        await real_fn(num)
 
         assert num._current_value == 25.0
 
@@ -256,12 +230,7 @@ class TestNumberAsyncAddedToHass:
         import custom_components.rainpoint.number as num_mod
 
         real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
-        try:
-            await real_fn(num)
-        except AttributeError:
-            restored = float(last_state.state)
-            if num_mod.DURATION_MIN_MINUTES <= restored <= num_mod.DURATION_MAX_MINUTES:
-                num._current_value = restored
+        await real_fn(num)
 
         assert num._current_value == 10.0  # unchanged
 
@@ -278,13 +247,7 @@ class TestNumberAsyncAddedToHass:
         import custom_components.rainpoint.number as num_mod
 
         real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
-        try:
-            await real_fn(num)
-        except AttributeError:
-            try:
-                _ = float(last_state.state)
-            except (ValueError, TypeError):
-                pass
+        await real_fn(num)
 
         assert num._current_value == 10.0
 
@@ -299,10 +262,7 @@ class TestNumberAsyncAddedToHass:
         import custom_components.rainpoint.number as num_mod
 
         real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
-        try:
-            await real_fn(num)
-        except AttributeError:
-            pass
+        await real_fn(num)
 
         assert num._current_value == 10.0
 

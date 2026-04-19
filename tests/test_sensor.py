@@ -737,7 +737,7 @@ _NATIVE_VALUE_CASES = [
     (RainPointFlowLastUsedDurationSensor, "flowlastusedduration", "flow_last_used_duration", 600),
     (RainPointFlowTotalTodaySensor, "flowtotaltoday", "flow_total_today", 42.0),
     (RainPointFlowTotalSensor, "flowtotal", "flow_total", 999.0),
-    (RainPointFlowBatterySensor, "battery_percent", "flow_battery", 75),  # note: class reads "flowbatt" actually
+    (RainPointFlowBatterySensor, "flowbatt", "flow_battery", 75),
     # CO2
     (RainPointCO2Sensor, "co2", "co2", 450),
     (RainPointCO2LowSensor, "co2low", "co2_low", 400),
@@ -766,22 +766,10 @@ _NATIVE_VALUE_CASES = [
 @pytest.mark.parametrize(("cls", "data_key", "uid_suffix", "value"), _NATIVE_VALUE_CASES)
 def test_native_value_returns_data_key(cls, data_key, uid_suffix, value):
     """Each simple sensor reads its dedicated data key and returns that value."""
-    # Note: RainPointFlowBatterySensor reads "co2batt" style internally? Actually
-    # it reads "flow_battery" via data.get("flowbatt")? Let's read the file:
-    # The implementation uses `data.get("battery_percent") if data else None`? Actually
-    # RainPointFlowBatterySensor.native_value reads what key? We'll trust source.
-    #
-    # We do NOT try to re-derive key names; we just feed the sensor a data dict
-    # containing the declared key and assert it surfaces. For classes that read
-    # a different internal key, this parametric will pass if the key IS present
-    # in the data we provide (because we provide only that key).
     sensor = _make_sensor_base(cls, "100_200_1", {"type": "x", data_key: value})
     sensor._attr_unique_id = f"rainpoint_100_200_1_{uid_suffix}"
     sensor._attr_name = f"Test Sensor {uid_suffix}"
-    # Special-case: FlowBattery reads a different key internally; be lenient.
-    result = sensor.native_value
-    # For classes that read a different internal key, result is None; accept that.
-    assert result == value or result is None
+    assert sensor.native_value == value
 
 
 @pytest.mark.parametrize(("cls", "data_key", "uid_suffix", "_value"), _NATIVE_VALUE_CASES)
