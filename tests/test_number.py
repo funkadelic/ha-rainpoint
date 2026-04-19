@@ -14,11 +14,11 @@ from custom_components.rainpoint.number import (
     DURATION_STEP_MINUTES,
     RainPointZoneDurationNumber,
 )
+from tests.helpers import make_sensor_coordinator
 
 
 def _make_number(current_value=10.0, firmware_version="1.0"):
     """Create a RainPointZoneDurationNumber with mock coordinator, bypassing __init__."""
-    mock_coordinator = MagicMock()
     sensor_key = "100_200_1"
     sensor_info = {
         "hid": 100,
@@ -27,14 +27,12 @@ def _make_number(current_value=10.0, firmware_version="1.0"):
         "sub_name": "Valve Hub 1",
         "model": "HTV245FRF",
     }
-    mock_coordinator.data = {
-        "sensors": {
-            sensor_key: {
-                "firmware_version": firmware_version,
-                "data": {},
-            }
-        }
-    }
+    mock_coordinator = make_sensor_coordinator(
+        model="HTV245FRF",
+        data={},
+        sub_name="Valve Hub 1",
+        firmware_version=firmware_version,
+    )
 
     num = RainPointZoneDurationNumber.__new__(RainPointZoneDurationNumber)
     num.coordinator = mock_coordinator

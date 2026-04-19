@@ -11,11 +11,12 @@ from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
     RainPointValveEntity,
 )
+from tests.helpers import make_sensor_coordinator
+from tests.payload_samples import SAMPLE_HTV245_ASCII_PAYLOAD
 
 
 def _make_valve(zone_data=None, hub_online=True, model="HTV245FRF"):
     """Create a RainPointValveEntity with mock coordinator, bypassing __init__."""
-    mock_coordinator = MagicMock()
     sensor_key = "100_200_1"
     sensor_info = {
         "hid": 100,
@@ -27,20 +28,17 @@ def _make_valve(zone_data=None, hub_online=True, model="HTV245FRF"):
         "product_key": "pk1",
         "firmware_version": "1.0",
     }
-    mock_coordinator.data = {
-        "sensors": {
-            sensor_key: {
-                "hid": 100,
-                "mid": 200,
-                "addr": 1,
-                "data": {
-                    "hub_online": hub_online,
-                    "zones": {1: zone_data if zone_data is not None else {"open": True, "duration_seconds": 300, "state_raw": 1}},
-                },
-                "firmware_version": "1.0",
-            }
-        }
+    decoded = {
+        "hub_online": hub_online,
+        "zones": {1: zone_data if zone_data is not None else {"open": True, "duration_seconds": 300, "state_raw": 1}},
     }
+    mock_coordinator = make_sensor_coordinator(
+        model=model,
+        data=decoded,
+        sub_name="Valve Hub 1",
+        firmware_version="1.0",
+        extra_sensor_info={"device_name": "dev1", "product_key": "pk1"},
+    )
 
     valve = RainPointValveEntity.__new__(RainPointValveEntity)
     valve.coordinator = mock_coordinator
@@ -135,6 +133,27 @@ class TestValveControl:
         )
 
     @pytest.mark.asyncio
+    async def test_async_open_valve_applies_response_state_end_to_end(self):
+        """control_work_mode response is decoded and pushed to coordinator, bypassing the next poll.
+
+        This closes plan D-10: a single test where control_work_mode returns
+        a real ASCII payload and async_set_updated_data is asserted directly,
+        rather than exercising the decode + coordinator-push halves separately.
+        """
+        valve = _make_valve(model=MODEL_VALVE_245)
+        valve.coordinator.async_set_updated_data = MagicMock()
+        valve._get_configured_duration_seconds = MagicMock(return_value=600)
+        mock_control = AsyncMock(return_value=SAMPLE_HTV245_ASCII_PAYLOAD)
+        valve.coordinator._client.control_work_mode = mock_control
+
+        await valve.async_open_valve()
+
+        mock_control.assert_called_once()
+        valve.coordinator.async_set_updated_data.assert_called_once()
+        updated = valve.coordinator.async_set_updated_data.call_args.args[0]
+        assert updated["sensors"]["100_200_1"]["data"]["zones"]
+
+    @pytest.mark.asyncio
     async def test_async_open_valve_with_kwargs_duration(self):
         """async_open_valve with duration kwarg should use that value, not configured."""
         valve = _make_valve()
@@ -173,7 +192,7 @@ class TestValveControl:
         valve.coordinator.async_set_updated_data = MagicMock()
 
         # Canonical two-zone ASCII payload from maintainer's HTV245FRF
-        valve._apply_response_state("1,-84,1;0,149,0,0,0,0|0,6,0,0,0,0")
+        valve._apply_response_state(SAMPLE_HTV245_ASCII_PAYLOAD)
 
         valve.coordinator.async_set_updated_data.assert_called_once()
         updated = valve.coordinator.async_set_updated_data.call_args.args[0]
@@ -196,6 +215,36 @@ class TestValveControl:
         valve._apply_response_state("")
 
         valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_get_configured_duration_when_entity_id_not_registered(self, monkeypatch):
+        """Registry returns None (duration entity not yet registered) -> fall back to default.
+
+        Covers the ``if entity_id:`` falsy branch at valve.py:187->195, which fires
+        on the first open_valve call before the companion number entity has been
+        added to the registry.
+        """
+        import sys
+
+        valve = _make_valve()
+
+        mock_registry = MagicMock()
+        mock_registry.async_get_entity_id.return_value = None
+        mock_er_module = MagicMock()
+        mock_er_module.async_get.return_value = mock_registry
+
+        # Binding via sys.modules alone isn't enough when the parent stub
+        # already cached an auto-MagicMock attribute for entity_registry on
+        # first access; rebind the parent attr so ``from homeassistant.helpers
+        # import entity_registry as er`` resolves to our mock.
+        monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", mock_er_module)
+        monkeypatch.setattr(
+            sys.modules["homeassistant.helpers"],
+            "entity_registry",
+            mock_er_module,
+            raising=False,
+        )
+
+        assert valve._get_configured_duration_seconds() == DEFAULT_DURATION_SECONDS
 
     def test_get_configured_duration_falls_back_to_default(self, monkeypatch):
         """If entity registry lookup finds entity_id but state is None, fall back to default."""

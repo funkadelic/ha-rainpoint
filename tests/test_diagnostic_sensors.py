@@ -13,6 +13,7 @@ from custom_components.rainpoint.diagnostic_sensors import (
     RainPointLastUpdatedSensor,
     RainPointRSSISensor,
 )
+from tests.helpers import make_sensor_coordinator
 
 _SENTINEL = object()
 
@@ -23,17 +24,11 @@ def _make_coordinator(sensor_data=_SENTINEL, firmware_version="1.0"):
     Pass sensor_data=None explicitly to test the "no data" (unavailable) path.
     Omit sensor_data to get a default dict with rssi and battery fields.
     """
-    coord = MagicMock()
     data_value = {"rssi_dbm": -84, "battery_percent": 75} if sensor_data is _SENTINEL else sensor_data
-    coord.data = {
-        "sensors": {
-            "100_200_1": {
-                "firmware_version": firmware_version,
-                "data": data_value,
-            }
-        }
-    }
-    return coord
+    return make_sensor_coordinator(
+        data=data_value,
+        firmware_version=firmware_version,
+    )
 
 
 def _make_sensor_info(hid=100, mid=200, addr=1, sub_name="Test Sensor", model="HCS026FRF"):
