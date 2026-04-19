@@ -222,10 +222,12 @@ class TestAsyncGetDiagnosticInfo:
 
         info = await async_get_diagnostic_info(hass, entry)
 
-        assert info["entry_id"] == "e42"
-        assert info["title"] == "RainPoint (test)"
-        assert info["domain"] == DOMAIN
-        assert info["supports_reload"] is True
+        assert info == {
+            "entry_id": "e42",
+            "title": "RainPoint (test)",
+            "domain": DOMAIN,
+            "supports_reload": True,
+        }
 
 
 class TestReloadService:
