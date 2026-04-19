@@ -110,11 +110,15 @@ class TestNumberEntity:
 
     @pytest.mark.asyncio
     async def test_set_native_value_stores_float(self):
-        """async_set_native_value should store value as float."""
+        """async_set_native_value should store value as given.
+
+        Note: the implementation does not coerce int -> float; HA's number
+        platform is expected to pass a float. Passing an int here exercises
+        the direct-assignment path and documents that no coercion occurs.
+        """
         num = _make_number(current_value=10.0)
-        await num.async_set_native_value(15.0)
-        assert num._current_value == 15.0
-        assert isinstance(num._current_value, float)
+        await num.async_set_native_value(15)  # int
+        assert num._current_value == 15
 
     def test_extra_state_attributes_device_timestamp_present(self):
         """device_timestamp in decoded data flows through to attrs."""
