@@ -177,14 +177,18 @@ class TestAsyncReloadEntry:
         hass = _make_hass()
         entry = _make_entry()
 
+        tracker = MagicMock()
         with (
             patch("custom_components.rainpoint.async_unload_entry", new=AsyncMock(return_value=True)) as mu,
             patch("custom_components.rainpoint.async_setup_entry", new=AsyncMock(return_value=True)) as ms,
         ):
+            tracker.attach_mock(mu, "unload")
+            tracker.attach_mock(ms, "setup")
             await async_reload_entry(hass, entry)
 
         mu.assert_awaited_once_with(hass, entry)
         ms.assert_awaited_once_with(hass, entry)
+        assert [c[0] for c in tracker.mock_calls] == ["unload", "setup"]
 
 
 class TestAsyncSupportsReconfigure:
