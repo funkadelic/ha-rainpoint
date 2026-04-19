@@ -72,9 +72,7 @@ class TestSwitchSetupEntry:
         # Force the precondition explicitly rather than relying on const.py
         # to stay empty, so this test does not give a misleading hub-count
         # failure if anyone sets a real debug worker URL.
-        monkeypatch.setattr(
-            "custom_components.rainpoint.switch.DEBUG_WORKER_URL", ""
-        )
+        monkeypatch.setattr("custom_components.rainpoint.switch.DEBUG_WORKER_URL", "")
 
         hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0"}
         hass, entry, _coord = _make_hass(hubs=[hub_info])
@@ -85,3 +83,27 @@ class TestSwitchSetupEntry:
         entities = mock_add_entities.call_args[0][0]
         # Verify none of the entities is a debug entity by checking count == hub count
         assert len(entities) == 1
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_debug_switch_when_url_configured(self, monkeypatch):
+        """A truthy DEBUG_WORKER_URL appends a RainPointDebugSwitchEntity alongside hubs."""
+        # Patch the module-level name seen by switch.py, not the const module.
+        monkeypatch.setattr(
+            "custom_components.rainpoint.switch.DEBUG_WORKER_URL",
+            "https://example.com",
+        )
+        # Stub the debug entity constructor so we do not exercise its real body.
+        monkeypatch.setattr(
+            "custom_components.rainpoint.debug.RainPointDebugSwitchEntity",
+            MagicMock(),
+        )
+
+        hub_info = {"hid": 100, "name": "Hub A", "softVer": "1.0"}
+        hass, entry, _coord = _make_hass(hubs=[hub_info])
+
+        captured: list = []
+        mock_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        # One hub broadcast switch + one debug switch = 2 entities
+        assert len(captured) == 2

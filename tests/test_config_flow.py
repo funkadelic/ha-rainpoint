@@ -374,3 +374,89 @@ class TestConfigFlowReconfigure:
                 break
 
         assert country_default == "US"
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_no_homes_shows_error(self):
+        """Reconfigure with empty homes list surfaces a no_homes error on the form."""
+        flow = self._make_reconfigure_flow()
+        mock_client = _make_mock_client(homes=[])
+
+        with (
+            patch(
+                "custom_components.rainpoint.config_flow.async_get_clientsession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.rainpoint.config_flow.RainPointClient",
+                return_value=mock_client,
+            ),
+        ):
+            await flow.async_step_reconfigure({CONF_COUNTRY: "US", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "pass"})
+
+        flow.async_show_form.assert_called_once()
+        last_call = flow.async_show_form.call_args.kwargs
+        assert last_call.get("step_id") == "reconfigure"
+        assert last_call.get("errors", {}).get("base") == "no_homes"
+
+
+# ---------------------------------------------------------------------------
+# Select homes reconfigure step tests
+# ---------------------------------------------------------------------------
+
+
+class TestConfigFlowSelectHomesReconfigure:
+    """Tests for the reconfigure variant of the home-selection step."""
+
+    def _make_flow_with_reconfigure_context(self):
+        """Return a flow wired for async_step_select_homes_reconfigure."""
+        flow = _make_flow()
+        flow._reconfigure = True
+        flow._homes = [{"hid": 1, "homeName": "Home A"}]
+
+        mock_entry = MagicMock()
+        mock_entry.data = {CONF_HIDS: [1]}
+        flow._get_reconfigure_entry = MagicMock(return_value=mock_entry)
+        return flow
+
+    @pytest.mark.asyncio
+    async def test_select_homes_reconfigure_no_input_shows_form(self):
+        """No user_input should render the select_homes_reconfigure form."""
+        flow = self._make_flow_with_reconfigure_context()
+
+        await flow.async_step_select_homes_reconfigure(user_input=None)
+
+        flow.async_show_form.assert_called_once()
+        call_kwargs = flow.async_show_form.call_args.kwargs
+        assert call_kwargs["step_id"] == "select_homes_reconfigure"
+
+    @pytest.mark.asyncio
+    async def test_select_homes_reconfigure_updates_entry(self):
+        """Submitting a selection drives async_update_reload_and_abort with the new data."""
+        flow = self._make_flow_with_reconfigure_context()
+        flow._country = "US"
+        flow._area_code = "1"
+        flow._email = "test@example.com"
+        flow._password = "pw"
+        flow._client = MagicMock()
+        flow._client.export_tokens = MagicMock(return_value={"token": "T"})
+        flow.async_update_reload_and_abort = MagicMock(return_value={"type": "abort", "reason": "reconfigure_successful"})
+
+        await flow.async_step_select_homes_reconfigure(user_input={CONF_HIDS: "1"})
+
+        flow.async_update_reload_and_abort.assert_called_once()
+        call_kwargs = flow.async_update_reload_and_abort.call_args.kwargs
+        assert call_kwargs["title"] == "RainPoint (test@example.com)"
+        assert call_kwargs["data"][CONF_HIDS] == [1]
+        assert call_kwargs["data"][CONF_EMAIL] == "test@example.com"
+        assert call_kwargs["data"]["token"] == "T"
+
+    @pytest.mark.asyncio
+    async def test_select_homes_reconfigure_no_selection_shows_error(self):
+        """Empty CONF_HIDS selection surfaces select_at_least_one on the form."""
+        flow = self._make_flow_with_reconfigure_context()
+
+        await flow.async_step_select_homes_reconfigure(user_input={CONF_HIDS: None})
+
+        flow.async_show_form.assert_called_once()
+        errors = flow.async_show_form.call_args.kwargs.get("errors", {})
+        assert errors.get("base") == "select_at_least_one"

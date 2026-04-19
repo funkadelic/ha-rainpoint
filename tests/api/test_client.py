@@ -69,8 +69,13 @@ class TestControlWorkModeCode4:
 
         # Must NOT raise
         result = await client.control_work_mode(
-            mid=123, addr=1, device_name="AABBCCDD",
-            product_key="pk123", port=1, mode=1, duration=300,
+            mid=123,
+            addr=1,
+            device_name="AABBCCDD",
+            product_key="pk123",
+            port=1,
+            mode=1,
+            duration=300,
         )
         assert result == "11#somestate"
 
@@ -84,8 +89,13 @@ class TestControlWorkModeCode4:
         client._session.post = MagicMock(return_value=self._mock_response(json_body))
 
         result = await client.control_work_mode(
-            mid=123, addr=1, device_name="AABBCCDD",
-            product_key="pk123", port=1, mode=1, duration=300,
+            mid=123,
+            addr=1,
+            device_name="AABBCCDD",
+            product_key="pk123",
+            port=1,
+            mode=1,
+            duration=300,
         )
         assert result is None
 
@@ -100,9 +110,94 @@ class TestControlWorkModeCode4:
 
         with pytest.raises(RainPointApiError, match="controlWorkMode failed"):
             await client.control_work_mode(
-                mid=123, addr=1, device_name="AABBCCDD",
-                product_key="pk123", port=1, mode=1, duration=300,
+                mid=123,
+                addr=1,
+                device_name="AABBCCDD",
+                product_key="pk123",
+                port=1,
+                mode=1,
+                duration=300,
             )
+
+    @pytest.mark.asyncio
+    async def test_control_work_mode_unexpected_data_type_returns_none(self):
+        """An int 'data' field hits the unexpected-type warning branch and returns None."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 0, "data": 12345}
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        result = await client.control_work_mode(
+            mid=123,
+            addr=1,
+            device_name="AABBCCDD",
+            product_key="pk123",
+            port=1,
+            mode=1,
+            duration=300,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_control_work_mode_http_error_raises(self):
+        """An HTTP 500 status raises controlWorkMode HTTP 500."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.post = MagicMock(return_value=self._mock_response({}, status=500))
+
+        with pytest.raises(RainPointApiError, match="controlWorkMode HTTP 500"):
+            await client.control_work_mode(
+                mid=1,
+                addr=1,
+                device_name="X",
+                product_key="pk",
+                port=1,
+                mode=1,
+                duration=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_control_work_mode_dict_without_state_returns_none(self):
+        """A 'data' dict missing the 'state' key logs a warning and returns None."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        # dict without "state" key should return None (not raise)
+        json_body = {"code": 0, "data": {"other": "x"}}
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        result = await client.control_work_mode(
+            mid=1,
+            addr=1,
+            device_name="X",
+            product_key="pk",
+            port=1,
+            mode=0,
+            duration=0,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_control_work_mode_string_data_returned_directly(self):
+        """A plain string 'data' is returned as-is."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 0, "data": "11#AABBCC"}
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        result = await client.control_work_mode(
+            mid=1,
+            addr=1,
+            device_name="X",
+            product_key="pk",
+            port=1,
+            mode=1,
+            duration=60,
+        )
+        assert result == "11#AABBCC"
 
 
 class TestLogin:
@@ -132,9 +227,7 @@ class TestLogin:
         assert client._token == "tok123"
         assert client._refresh_token == "ref456"
         # Expiry is deterministic: server ts + tokenExpired seconds
-        expected_expires_at = datetime.fromtimestamp(ts_ms / 1000, tz=UTC) + timedelta(
-            seconds=token_expired
-        )
+        expected_expires_at = datetime.fromtimestamp(ts_ms / 1000, tz=UTC) + timedelta(seconds=token_expired)
         assert client._token_expires_at == expected_expires_at
 
     @pytest.mark.asyncio
@@ -158,6 +251,19 @@ class TestLogin:
         client._session.post = MagicMock(return_value=_mock_response(json_body))
 
         with pytest.raises(RainPointApiError, match="Login failed: code 1"):
+            await client._login()
+
+    @pytest.mark.asyncio
+    async def test_login_no_data_key_raises(self):
+        """A 200 response with code 0 but no 'data' key still raises Login failed."""
+        client = _make_client()
+        client._token = None
+
+        # Code 0 alone is not enough: login expects the 'data' envelope too.
+        json_body = {"code": 0}
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        with pytest.raises(RainPointApiError, match="Login failed"):
             await client._login()
 
     @pytest.mark.asyncio
@@ -246,11 +352,13 @@ class TestTokenManagement:
         client = _make_client()
         client._token = None
 
-        client.restore_tokens({
-            "token": "t1",
-            "refresh_token": "r1",
-            "token_expires_at": 1700000000,
-        })
+        client.restore_tokens(
+            {
+                "token": "t1",
+                "refresh_token": "r1",
+                "token_expires_at": 1700000000,
+            }
+        )
 
         assert client._token == "t1"
         assert client._refresh_token == "r1"
@@ -265,6 +373,30 @@ class TestTokenManagement:
         client.restore_tokens({})
 
         assert client._token is None
+        assert client._token_expires_at is None
+
+    def test_restore_tokens_bad_timestamp_falls_back_to_none(self):
+        """A non-numeric token_expires_at is caught and _token_expires_at stays None."""
+        from custom_components.rainpoint.const import (
+            CONF_REFRESH_TOKEN,
+            CONF_TOKEN,
+            CONF_TOKEN_EXPIRES_AT,
+        )
+
+        client = _make_client()
+        client._token = None
+        client._token_expires_at = None
+
+        client.restore_tokens(
+            {
+                CONF_TOKEN: "t",
+                CONF_REFRESH_TOKEN: "r",
+                CONF_TOKEN_EXPIRES_AT: "not-a-number",
+            }
+        )
+
+        assert client._token == "t"
+        assert client._refresh_token == "r"
         assert client._token_expires_at is None
 
     def test_export_tokens(self):
@@ -399,6 +531,18 @@ class TestGetDevicesByHid:
         with pytest.raises(RainPointApiError):
             await client.get_devices_by_hid(hid=42)
 
+    @pytest.mark.asyncio
+    async def test_get_devices_api_error_code(self):
+        """200 with non-zero API code raises getDeviceByHid failed: code N."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 1, "msg": "bad"}
+        client._session.get = MagicMock(return_value=_mock_response(json_body))
+
+        with pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 1"):
+            await client.get_devices_by_hid(hid=42)
+
 
 class TestGetMultipleDeviceStatus:
     """Tests for get_multiple_device_status API method."""
@@ -422,9 +566,7 @@ class TestGetMultipleDeviceStatus:
         }
         client._session.post = MagicMock(return_value=_mock_response(json_body))
 
-        result = await client.get_multiple_device_status(
-            devices=[{"mid": 100, "deviceName": "DEV", "productKey": "pk"}]
-        )
+        result = await client.get_multiple_device_status(devices=[{"mid": 100, "deviceName": "DEV", "productKey": "pk"}])
 
         assert len(result) == 1
         assert result[0]["mid"] == 100
@@ -441,6 +583,30 @@ class TestGetMultipleDeviceStatus:
         client._session.post = MagicMock(return_value=_mock_response(json_body))
 
         with pytest.raises(RainPointApiError):
+            await client.get_multiple_device_status(devices=[{"mid": 100}])
+
+    @pytest.mark.asyncio
+    async def test_get_multiple_status_missing_data_key(self):
+        """code=0 with no 'data' key returns an empty list, not an error."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 0}
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        result = await client.get_multiple_device_status(devices=[{"mid": 100}])
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_get_multiple_status_http_error_raises(self):
+        """A non-200 status raises multipleDeviceStatus HTTP N."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.post = MagicMock(return_value=_mock_response({}, status=500))
+
+        with pytest.raises(RainPointApiError, match="multipleDeviceStatus HTTP 500"):
             await client.get_multiple_device_status(devices=[{"mid": 100}])
 
 
@@ -474,6 +640,18 @@ class TestGetDeviceStatus:
         with pytest.raises(RainPointApiError):
             await client.get_device_status(mid=100)
 
+    @pytest.mark.asyncio
+    async def test_get_device_status_api_error_code(self):
+        """200 with non-zero API code raises getDeviceStatus failed: code N."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 1, "msg": "err"}
+        client._session.get = MagicMock(return_value=_mock_response(json_body))
+
+        with pytest.raises(RainPointApiError, match="getDeviceStatus failed: code 1"):
+            await client.get_device_status(mid=100)
+
 
 class TestSetDeviceState:
     """Tests for set_device_state API method."""
@@ -487,9 +665,7 @@ class TestSetDeviceState:
         json_body = {"code": 0}
         client._session.post = MagicMock(return_value=_mock_response(json_body))
 
-        result = await client.set_device_state(
-            home_id=1, device_name="dev", mid=100, product_key="pk", state={"mode": 1}
-        )
+        result = await client.set_device_state(home_id=1, device_name="dev", mid=100, product_key="pk", state={"mode": 1})
 
         assert result is True
 
@@ -503,9 +679,7 @@ class TestSetDeviceState:
         client._session.post = MagicMock(return_value=_mock_response(json_body))
 
         with pytest.raises(RainPointApiError):
-            await client.set_device_state(
-                home_id=1, device_name="dev", mid=100, product_key="pk", state={}
-            )
+            await client.set_device_state(home_id=1, device_name="dev", mid=100, product_key="pk", state={})
 
     @pytest.mark.asyncio
     async def test_set_device_state_http_error(self):
@@ -516,6 +690,4 @@ class TestSetDeviceState:
         client._session.post = MagicMock(return_value=_mock_response({}, status=500))
 
         with pytest.raises(RainPointApiError):
-            await client.set_device_state(
-                home_id=1, device_name="dev", mid=100, product_key="pk", state={}
-            )
+            await client.set_device_state(home_id=1, device_name="dev", mid=100, product_key="pk", state={})

@@ -29,7 +29,7 @@ def _make_entry(entry_id="test_entry_id"):
     return entry
 
 
-def _make_hass(entry_id=None):
+def _make_hass():
     """Make hass helper."""
     hass = MagicMock()
     hass.data = {}
@@ -40,6 +40,7 @@ def _make_hass(entry_id=None):
 
 class TestAsyncSetup:
     """Tests for AsyncSetup."""
+
     @pytest.mark.asyncio
     async def test_async_setup_returns_true(self):
         """Async setup returns true."""
@@ -50,6 +51,7 @@ class TestAsyncSetup:
 
 class TestAsyncSetupEntry:
     """Tests for AsyncSetupEntry."""
+
     @pytest.mark.asyncio
     async def test_async_setup_entry_creates_coordinator(self):
         """Async setup entry creates coordinator."""
@@ -64,11 +66,12 @@ class TestAsyncSetupEntry:
 
         hass.config_entries.async_forward_entry_setups = AsyncMock()
 
-        with patch(
-            "custom_components.rainpoint.RainPointClient", return_value=mock_client
-        ), patch(
-            "custom_components.rainpoint.coordinator.RainPointCoordinator",
-            return_value=mock_coordinator,
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
         ):
             result = await async_setup_entry(hass, entry)
 
@@ -82,6 +85,7 @@ class TestAsyncSetupEntry:
 
 class TestAsyncUnloadEntry:
     """Tests for AsyncUnloadEntry."""
+
     @pytest.mark.asyncio
     async def test_async_unload_entry_success(self):
         """Async unload entry success."""
@@ -111,6 +115,7 @@ class TestAsyncUnloadEntry:
 
 class TestAsyncReloadIntegration:
     """Tests for AsyncReloadIntegration."""
+
     @pytest.mark.asyncio
     async def test_async_reload_integration_success(self):
         """Async reload integration success."""
@@ -159,3 +164,238 @@ class TestAsyncReloadIntegration:
         result = await async_reload_integration(hass, "test_id")
 
         assert result is False
+
+
+class TestAsyncReloadEntry:
+    """Cover async_reload_entry helper (lines 67-68)."""
+
+    @pytest.mark.asyncio
+    async def test_async_reload_entry_calls_unload_then_setup(self):
+        """async_reload_entry unloads then re-sets up the entry."""
+        from custom_components.rainpoint import async_reload_entry
+
+        hass = _make_hass()
+        entry = _make_entry()
+
+        tracker = MagicMock()
+        with (
+            patch("custom_components.rainpoint.async_unload_entry", new=AsyncMock(return_value=True)) as mu,
+            patch("custom_components.rainpoint.async_setup_entry", new=AsyncMock(return_value=True)) as ms,
+        ):
+            tracker.attach_mock(mu, "unload")
+            tracker.attach_mock(ms, "setup")
+            await async_reload_entry(hass, entry)
+
+        mu.assert_awaited_once_with(hass, entry)
+        ms.assert_awaited_once_with(hass, entry)
+        assert [c[0] for c in tracker.mock_calls] == ["unload", "setup"]
+
+
+class TestAsyncSupportsReconfigure:
+    """Cover async_supports_reconfigure (line 73)."""
+
+    @pytest.mark.asyncio
+    async def test_supports_reconfigure_returns_true(self):
+        """async_supports_reconfigure always returns True for this integration."""
+        from custom_components.rainpoint import async_supports_reconfigure
+
+        hass = _make_hass()
+        entry = _make_entry()
+
+        result = await async_supports_reconfigure(hass, entry)
+
+        assert result is True
+
+
+class TestAsyncGetDiagnosticInfo:
+    """Cover async_get_diagnostic_info (line 158)."""
+
+    @pytest.mark.asyncio
+    async def test_diagnostic_info_payload(self):
+        """Diagnostic info includes entry_id, title, domain, supports_reload."""
+        from custom_components.rainpoint import async_get_diagnostic_info
+
+        hass = _make_hass()
+        entry = MagicMock()
+        entry.entry_id = "e42"
+        entry.title = "RainPoint (test)"
+
+        info = await async_get_diagnostic_info(hass, entry)
+
+        assert info == {
+            "entry_id": "e42",
+            "title": "RainPoint (test)",
+            "domain": DOMAIN,
+            "supports_reload": True,
+        }
+
+
+class TestReloadService:
+    """Cover async_setup_services + the nested reload_service closure (lines 79-153)."""
+
+    @pytest.mark.asyncio
+    async def test_setup_services_registers_reload(self):
+        """async_setup_services registers the 'reload' service."""
+        from custom_components.rainpoint import async_setup_services
+
+        hass = _make_hass()
+        hass.services.async_register = MagicMock()
+
+        await async_setup_services(hass)
+
+        # Service registration is the sole side effect; verify it was called
+        # with domain + "reload".
+        assert hass.services.async_register.called
+        args, _kwargs = hass.services.async_register.call_args
+        assert args[0] == DOMAIN
+        assert args[1] == "reload"
+
+    @pytest.mark.asyncio
+    async def test_reload_service_no_entry_id_no_entries_errors(self):
+        """Reload called without entry_id and no registered entries emits error."""
+        from custom_components.rainpoint import async_setup_services
+
+        hass = _make_hass()
+        captured = {}
+
+        def _register(domain, name, handler, **kw):
+            captured["handler"] = handler
+
+        hass.services.async_register = MagicMock(side_effect=_register)
+        hass.config_entries.async_entries = MagicMock(return_value=[])
+
+        await async_setup_services(hass)
+
+        call = MagicMock()
+        call.data = {}  # no entry_id
+
+        with patch("homeassistant.components.persistent_notification.async_create") as pn:
+            result = await captured["handler"](call)
+
+        assert result == {"success": False, "message": "No RainPoint integrations found to reload"}
+        pn.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reload_service_no_entry_id_all_succeed(self):
+        """Reload with no entry_id + all entries succeed emits success notification."""
+        from custom_components.rainpoint import async_setup_services
+
+        hass = _make_hass()
+        captured = {}
+        hass.services.async_register = MagicMock(side_effect=lambda d, n, h, **kw: captured.update(handler=h))
+
+        e1 = MagicMock()
+        e1.entry_id = "a"
+        e1.title = "Home"
+        e2 = MagicMock()
+        e2.entry_id = "b"
+        e2.title = "Cabin"
+        hass.config_entries.async_entries = MagicMock(return_value=[e1, e2])
+
+        await async_setup_services(hass)
+
+        call = MagicMock()
+        call.data = {}
+
+        with (
+            patch(
+                "custom_components.rainpoint.async_reload_integration",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("homeassistant.components.persistent_notification.async_create"),
+        ):
+            result = await captured["handler"](call)
+
+        # All-succeed path returns {"message": ...} without an explicit "success" key;
+        # the absence of `success: False` is the success signal.
+        assert result.get("success", True) is True
+        assert "Successfully reloaded 2" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_reload_service_no_entry_id_partial_success(self):
+        """Reload with no entry_id where only some entries reload emits partial notification."""
+        from custom_components.rainpoint import async_setup_services
+
+        hass = _make_hass()
+        captured = {}
+        hass.services.async_register = MagicMock(side_effect=lambda d, n, h, **kw: captured.update(handler=h))
+
+        e1 = MagicMock()
+        e1.entry_id = "a"
+        e1.title = "Home"
+        e2 = MagicMock()
+        e2.entry_id = "b"
+        e2.title = "Cabin"
+        hass.config_entries.async_entries = MagicMock(return_value=[e1, e2])
+
+        await async_setup_services(hass)
+
+        call = MagicMock()
+        call.data = {}
+
+        # First reload succeeds, second fails
+        async def mixed_reload(hass_, entry_id):
+            return entry_id == "a"
+
+        with (
+            patch(
+                "custom_components.rainpoint.async_reload_integration",
+                new=AsyncMock(side_effect=mixed_reload),
+            ),
+            patch("homeassistant.components.persistent_notification.async_create"),
+        ):
+            result = await captured["handler"](call)
+
+        assert result["success"] is False
+        assert "1 of 2" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_reload_service_specific_entry_success(self):
+        """Reload with an explicit entry_id that reloads OK emits the success message."""
+        from custom_components.rainpoint import async_setup_services
+
+        hass = _make_hass()
+        captured = {}
+        hass.services.async_register = MagicMock(side_effect=lambda d, n, h, **kw: captured.update(handler=h))
+
+        await async_setup_services(hass)
+
+        call = MagicMock()
+        call.data = {"entry_id": "X"}
+
+        with (
+            patch(
+                "custom_components.rainpoint.async_reload_integration",
+                new=AsyncMock(return_value=True),
+            ),
+            patch("homeassistant.components.persistent_notification.async_create"),
+        ):
+            result = await captured["handler"](call)
+
+        assert result == {"message": "RainPoint integration reloaded successfully"}
+
+    @pytest.mark.asyncio
+    async def test_reload_service_specific_entry_failure(self):
+        """Reload with an explicit entry_id that fails emits the failure notification."""
+        from custom_components.rainpoint import async_setup_services
+
+        hass = _make_hass()
+        captured = {}
+        hass.services.async_register = MagicMock(side_effect=lambda d, n, h, **kw: captured.update(handler=h))
+
+        await async_setup_services(hass)
+
+        call = MagicMock()
+        call.data = {"entry_id": "X"}
+
+        with (
+            patch(
+                "custom_components.rainpoint.async_reload_integration",
+                new=AsyncMock(return_value=False),
+            ),
+            patch("homeassistant.components.persistent_notification.async_create"),
+        ):
+            result = await captured["handler"](call)
+
+        assert result["success"] is False
+        assert "Failed" in result["message"]
