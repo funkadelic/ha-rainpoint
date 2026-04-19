@@ -129,7 +129,10 @@ class RainPointDeviceIDSensor(RainPointDiagnosticSensorBase):
                 # Check raw payload for device ID pattern
                 raw_payload = decoded_data.get("raw_value")
                 if raw_payload and isinstance(raw_payload, str):
-                    # Look for 10-digit patterns in raw payload
+                    # Look for 10-digit patterns in raw payload.
+                    # RainPoint device IDs for this family are 10-11 digits and
+                    # always start with "1"; the startswith("1") filter below
+                    # relies on that convention.
                     import re
 
                     matches = re.findall(r"\b\d{9,}\b", raw_payload)
