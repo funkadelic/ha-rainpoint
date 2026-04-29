@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -90,6 +91,192 @@ def _slugify(text: str) -> str:
     return text.strip("_")
 
 
+def _make_display_hub_entities(coordinator, key, info, base_slug):
+    data = info.get("data", {})
+    readings = data.get("readings", {}) if data else {}
+    return [DisplayHubReadingSensor(coordinator, key, info, base_slug, reading_key) for reading_key in readings]
+
+
+def _make_diagnostic_entities(coordinator, key, info, base_slug):
+    """Generic RSSI / battery / firmware / last-updated diagnostic set."""
+    return [
+        RainPointRSSISensor(coordinator, key, info, base_slug),
+        RainPointBatterySensor(coordinator, key, info, base_slug),
+        RainPointFirmwareVersionSensor(coordinator, key, info, base_slug),
+        RainPointLastUpdatedSensor(coordinator, key, info, base_slug),
+    ]
+
+
+def _make_moisture_simple_entities(coordinator, key, info, base_slug):
+    return [
+        RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True),
+        *_make_diagnostic_entities(coordinator, key, info, base_slug),
+    ]
+
+
+def _make_moisture_full_entities(coordinator, key, info, base_slug):
+    return [
+        RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False),
+        RainPointTemperatureSensor(coordinator, key, info, base_slug),
+        RainPointIlluminanceSensor(coordinator, key, info, base_slug),
+        *_make_diagnostic_entities(coordinator, key, info, base_slug),
+    ]
+
+
+def _make_rain_entities(coordinator, key, info, base_slug):
+    rain_specs = (
+        ("rain_last_hour_mm", "rain last hour"),
+        ("rain_last_24h_mm", "rain last 24h"),
+        ("rain_last_7d_mm", "rain last 7d"),
+        ("rain_total_mm", "rain total"),
+    )
+    return [RainPointRainSensor(coordinator, key, info, base_slug, data_key, label) for data_key, label in rain_specs]
+
+
+def _make_temphum_entities(coordinator, key, info, base_slug):
+    return [
+        RainPointTempHumCurrentSensor(coordinator, key, info, base_slug),
+        RainPointTempHumHighSensor(coordinator, key, info, base_slug),
+        RainPointTempHumLowSensor(coordinator, key, info, base_slug),
+        RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug),
+        RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug),
+        RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug),
+    ]
+
+
+def _make_flowmeter_entities(coordinator, key, info, base_slug):
+    return [
+        RainPointFlowCurrentUsedSensor(coordinator, key, info, base_slug),
+        RainPointFlowCurrentDurationSensor(coordinator, key, info, base_slug),
+        RainPointFlowLastUsedSensor(coordinator, key, info, base_slug),
+        RainPointFlowLastUsedDurationSensor(coordinator, key, info, base_slug),
+        RainPointFlowTotalTodaySensor(coordinator, key, info, base_slug),
+        RainPointFlowTotalSensor(coordinator, key, info, base_slug),
+        RainPointFlowBatterySensor(coordinator, key, info, base_slug),
+    ]
+
+
+def _make_co2_entities(coordinator, key, info, base_slug):
+    return [
+        RainPointCO2Sensor(coordinator, key, info, base_slug),
+        RainPointCO2LowSensor(coordinator, key, info, base_slug),
+        RainPointCO2HighSensor(coordinator, key, info, base_slug),
+        RainPointCO2TempSensor(coordinator, key, info, base_slug),
+        RainPointCO2HumiditySensor(coordinator, key, info, base_slug),
+        RainPointCO2BatterySensor(coordinator, key, info, base_slug),
+    ]
+
+
+def _make_pool_entities(coordinator, key, info, base_slug):
+    return [
+        RainPointPoolCurrentTempSensor(coordinator, key, info, base_slug),
+        RainPointPoolHighTempSensor(coordinator, key, info, base_slug),
+        RainPointPoolLowTempSensor(coordinator, key, info, base_slug),
+        RainPointPoolBatterySensor(coordinator, key, info, base_slug),
+    ]
+
+
+def _make_pool_plus_entities(coordinator, key, info, base_slug):
+    return [
+        RainPointPoolPlusPoolCurrentTempSensor(coordinator, key, info, base_slug),
+        RainPointPoolPlusPoolHighTempSensor(coordinator, key, info, base_slug),
+        RainPointPoolPlusPoolLowTempSensor(coordinator, key, info, base_slug),
+        RainPointPoolPlusAmbientCurrentTempSensor(coordinator, key, info, base_slug),
+        RainPointPoolPlusAmbientHighTempSensor(coordinator, key, info, base_slug),
+        RainPointPoolPlusAmbientLowTempSensor(coordinator, key, info, base_slug),
+        RainPointPoolPlusHumidityCurrentSensor(coordinator, key, info, base_slug),
+        RainPointPoolPlusHumidityHighSensor(coordinator, key, info, base_slug),
+        RainPointPoolPlusHumidityLowSensor(coordinator, key, info, base_slug),
+    ]
+
+
+def _make_hcs_moisture_only_entities(coordinator, key, info, base_slug):
+    return [RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True)]
+
+
+def _make_hcs_multisensor_entities(coordinator, key, info, base_slug):
+    """Multi-sensor (moisture + temperature + illuminance).
+
+    Distinct from MODEL_MOISTURE_FULL: this group does not emit the generic
+    RSSI, battery, firmware, and last-updated diagnostic entities.
+    """
+    return [
+        RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False),
+        RainPointTemperatureSensor(coordinator, key, info, base_slug),
+        RainPointIlluminanceSensor(coordinator, key, info, base_slug),
+    ]
+
+
+def _make_unknown_entities(coordinator, key, info, base_slug):
+    """Fallback: only emit a diagnostic entity when the decoder flagged the model unknown."""
+    data = info.get("data", {})
+    if data and data.get("type") == "unknown":
+        return [RainPointUnknownSensor(coordinator, key, info, base_slug)]
+    return []
+
+
+# Maps canonical sensor model to a factory that yields its entity list.
+# Aliased models (see _SENSOR_MODEL_ALIASES) are resolved to their canonical
+# model before lookup, so they share factories with their base model.
+_MODEL_FACTORIES: dict[str, Callable[..., list]] = {
+    MODEL_DISPLAY_HUB: _make_display_hub_entities,
+    MODEL_MOISTURE_SIMPLE: _make_moisture_simple_entities,
+    MODEL_MOISTURE_FULL: _make_moisture_full_entities,
+    MODEL_RAIN: _make_rain_entities,
+    MODEL_TEMPHUM: _make_temphum_entities,
+    MODEL_FLOWMETER: _make_flowmeter_entities,
+    MODEL_CO2: _make_co2_entities,
+    MODEL_POOL: _make_pool_entities,
+    MODEL_POOL_PLUS: _make_pool_plus_entities,
+    MODEL_HCS005FRF: _make_hcs_moisture_only_entities,
+    MODEL_HCS003FRF: _make_hcs_moisture_only_entities,
+    MODEL_HCS024FRF_V1: _make_hcs_multisensor_entities,
+    MODEL_HCS044FRF: _make_hcs_multisensor_entities,
+    MODEL_HCS666FRF: _make_hcs_multisensor_entities,
+    MODEL_HCS666RFR_P: _make_hcs_multisensor_entities,
+    MODEL_HCS999FRF: _make_hcs_multisensor_entities,
+    MODEL_HCS999FRF_P: _make_hcs_multisensor_entities,
+    MODEL_HCS666FRF_X: _make_hcs_multisensor_entities,
+}
+
+
+def _create_hub_entities(coordinator, hubs_cfg):
+    """Create the per-hub diagnostic entities for every hub returned by the API."""
+    hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
+    entities: list = []
+    for hub_info in hubs_dict.values():
+        entities.append(RainPointHubDeviceIDSensor(coordinator, hub_info))
+        entities.append(RainPointHubFirmwareSensor(coordinator, hub_info))
+        entities.append(RainPointHubMACSensor(coordinator, hub_info))
+    return entities
+
+
+def _create_sensor_entities(coordinator, key, info):
+    """Resolve a sub-device's canonical model and produce its entity list.
+
+    Always appends a per-device raw-payload diagnostic entity at the end.
+    """
+    raw_model = info.get("model")
+    model = _SENSOR_MODEL_ALIASES.get(raw_model, raw_model)
+    sub_name = info.get("sub_name") or f"Sensor {info['addr']}"
+    hid = info.get("hid", "")
+    mid = info.get("mid", "")
+    addr = info.get("addr", "")
+    base_slug = f"{hid}_{mid}_{addr}"
+    _LOGGER.debug(
+        "Creating sensor entity: key=%s, model=%s, sub_name=%s, base_slug=%s",
+        key,
+        model,
+        sub_name,
+        base_slug,
+    )
+
+    factory = _MODEL_FACTORIES.get(model, _make_unknown_entities)
+    entities = list(factory(coordinator, key, info, base_slug))
+    entities.append(RainPointRawPayloadSensor(coordinator, key, info, base_slug))
+    return entities
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -102,121 +289,9 @@ async def async_setup_entry(
     hubs_cfg = coordinator.data.get("hubs", [])
 
     entities: list[RainPointSensorBase] = []
-
-    # Create hub entities first
-    hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
-
-    for _hub_key, hub_info in hubs_dict.items():
-        # Add hub sensors
-        entities.append(RainPointHubDeviceIDSensor(coordinator, hub_info))
-        entities.append(RainPointHubFirmwareSensor(coordinator, hub_info))
-        entities.append(RainPointHubMACSensor(coordinator, hub_info))
-
-    # Create sensor entities for sub-devices
+    entities.extend(_create_hub_entities(coordinator, hubs_cfg))
     for key, info in sensors_cfg.items():
-        model = info.get("model")
-        model = _SENSOR_MODEL_ALIASES.get(model, model)
-        sub_name = info.get("sub_name") or f"Sensor {info['addr']}"
-        # Use stable hardware identifiers for unique IDs to survive renames
-        hid = info.get("hid", "")
-        mid = info.get("mid", "")
-        addr = info.get("addr", "")
-        base_slug = f"{hid}_{mid}_{addr}"
-        _LOGGER.debug("Creating sensor entity: key=%s, model=%s, sub_name=%s, base_slug=%s", key, model, sub_name, base_slug)
-
-        if model == MODEL_DISPLAY_HUB:
-            data = info.get("data", {})
-            readings = data.get("readings", {}) if data else {}
-            for reading_key, _reading_val in readings.items():
-                entities.append(DisplayHubReadingSensor(coordinator, key, info, base_slug, reading_key))
-        elif model == MODEL_MOISTURE_SIMPLE:
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True))
-            # Add diagnostic sensors
-            entities.append(RainPointRSSISensor(coordinator, key, info, base_slug))
-            entities.append(RainPointBatterySensor(coordinator, key, info, base_slug))
-            entities.append(RainPointFirmwareVersionSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointLastUpdatedSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_MOISTURE_FULL:
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False))
-            entities.append(RainPointTemperatureSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointIlluminanceSensor(coordinator, key, info, base_slug))
-            # Add diagnostic sensors
-            entities.append(RainPointRSSISensor(coordinator, key, info, base_slug))
-            entities.append(RainPointBatterySensor(coordinator, key, info, base_slug))
-            entities.append(RainPointFirmwareVersionSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointLastUpdatedSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_RAIN:
-            entities.append(RainPointRainSensor(coordinator, key, info, base_slug, "rain_last_hour_mm", "rain last hour"))
-            entities.append(RainPointRainSensor(coordinator, key, info, base_slug, "rain_last_24h_mm", "rain last 24h"))
-            entities.append(RainPointRainSensor(coordinator, key, info, base_slug, "rain_last_7d_mm", "rain last 7d"))
-            entities.append(RainPointRainSensor(coordinator, key, info, base_slug, "rain_total_mm", "rain total"))
-        elif model == MODEL_TEMPHUM:
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_FLOWMETER:
-            entities.append(RainPointFlowCurrentUsedSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointFlowCurrentDurationSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointFlowLastUsedSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointFlowLastUsedDurationSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointFlowTotalTodaySensor(coordinator, key, info, base_slug))
-            entities.append(RainPointFlowTotalSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointFlowBatterySensor(coordinator, key, info, base_slug))
-        elif model == MODEL_CO2:
-            entities.append(RainPointCO2Sensor(coordinator, key, info, base_slug))
-            entities.append(RainPointCO2LowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointCO2HighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointCO2TempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointCO2HumiditySensor(coordinator, key, info, base_slug))
-            entities.append(RainPointCO2BatterySensor(coordinator, key, info, base_slug))
-        elif model == MODEL_POOL:
-            entities.append(RainPointPoolCurrentTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolHighTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolLowTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolBatterySensor(coordinator, key, info, base_slug))
-        elif model == MODEL_POOL_PLUS:
-            entities.append(RainPointPoolPlusPoolCurrentTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolPlusPoolHighTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolPlusPoolLowTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolPlusAmbientCurrentTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolPlusAmbientHighTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolPlusAmbientLowTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolPlusHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolPlusHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolPlusHumidityLowSensor(coordinator, key, info, base_slug))
-
-        # New HCS sensor models. Variants whose entity layout matches a canonical
-        # model (MODEL_POOL, MODEL_TEMPHUM) are aliased through _SENSOR_MODEL_ALIASES
-        # at the top of this module and dispatched via the canonical branches above.
-        elif model in (MODEL_HCS005FRF, MODEL_HCS003FRF):
-            # Moisture-only sensor.
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True))
-        elif model in (
-            MODEL_HCS024FRF_V1,
-            MODEL_HCS044FRF,
-            MODEL_HCS666FRF,
-            MODEL_HCS666RFR_P,
-            MODEL_HCS999FRF,
-            MODEL_HCS999FRF_P,
-            MODEL_HCS666FRF_X,
-        ):
-            # Multi-sensor (moisture + temperature + illuminance). Distinct from
-            # MODEL_MOISTURE_FULL: this group does not emit the generic RSSI,
-            # battery, firmware, and last-updated diagnostic entities.
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False))
-            entities.append(RainPointTemperatureSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointIlluminanceSensor(coordinator, key, info, base_slug))
-        else:
-            # Unknown/unsupported model - create diagnostic entity
-            data = info.get("data", {})
-            if data and data.get("type") == "unknown":
-                entities.append(RainPointUnknownSensor(coordinator, key, info, base_slug))
-
-        # Add raw payload sensor for all devices (disabled by default)
-        entities.append(RainPointRawPayloadSensor(coordinator, key, info, base_slug))
+        entities.extend(_create_sensor_entities(coordinator, key, info))
 
     if entities:
         async_add_entities(entities)
