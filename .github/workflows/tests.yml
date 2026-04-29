@@ -51,3 +51,10 @@ jobs:
           files: ./junit.xml
           report_type: test_results
           token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: SonarQube Scan
+        if: >-
+          !contains(github.event.pull_request.labels.*.name, 'autorelease: pending')
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

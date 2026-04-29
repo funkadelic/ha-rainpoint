@@ -6,6 +6,9 @@ __pycache__/
 venv/
 .env
 .DS_Store
+.coverage
+coverage.xml
+htmlcov/
 
 # Internal documentation
 PUBLISHING_GUIDE.md
@@ -15,6 +18,7 @@ backup_guide.sh
 CLAUDE.md
 .planning/
 .envrc
+.claude/
 
 # Documentation moved to external repo
 docs/

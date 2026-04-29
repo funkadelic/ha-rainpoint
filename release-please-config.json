@@ -12,6 +12,10 @@
         {
           "type": "generic",
           "path": "custom_components/rainpoint/const.py"
+        },
+        {
+          "type": "generic",
+          "path": "sonar-project.properties"
         }
       ],
       "changelog-path": "CHANGELOG.md",
