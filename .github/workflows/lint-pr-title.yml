@@ -26,7 +26,7 @@ jobs:
             build
             chore
           requireScope: false
-          subjectPattern: ^[a-z].+[^.]$
+          subjectPattern: ^[a-z](?:.*[^.])?$
           subjectPatternError: |
             PR title subject must start with a lowercase letter and not end with a period.
             Release-please parses squash-merge subjects; non-conventional titles silently skip releases.
