@@ -273,6 +273,12 @@ class TestDecodeHws019wrfV2:
         assert "abc" in result["error"]
         assert "1,abc,0" in result["error"]
 
+    def test_empty_flag_tokens_are_skipped(self):
+        """Empty flag tokens (e.g. from a stray comma) are tolerated, not treated as malformed."""
+        result = decode_hws019wrf_v2("1,,0;707(707/694/1)")
+        assert result["type"] == "hws019wrf_v2"
+        assert result["flags"] == [1, 0]
+
 
 class TestDecodeValveHub:
     """Tests for decode_valve_hub (HTV0540FRF TLV payload)."""
