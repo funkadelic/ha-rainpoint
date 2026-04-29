@@ -510,19 +510,92 @@ def decode_hws019wrf_v2(raw: str) -> dict:
         return {"type": "hws019wrf_v2", "raw": raw, "error": str(ex)}
 
 
+# DP IDs for valve hub zone state and duration (confirmed via payload capture).
+# Zone N state DP   = _VALVE_HUB_DP_HUB_STATE + N (0x19 = zone 1, 0x1A = zone 2, ...)
+# Zone N duration DP = _VALVE_HUB_DP_BASE_DURATION + N (0x25 = zone 1, 0x26 = zone 2, ...)
+_VALVE_HUB_DP_HUB_STATE = 0x18
+_VALVE_HUB_DP_BASE_DURATION = 0x24
+
+
+def _format_valve_hub_tlv_log(tlv: dict) -> dict:
+    """Format the valve hub TLV map for diagnostic logging."""
+    return {
+        f"0x{dp:02X}": (
+            f"0x{type_byte:02X}",
+            f"0x{value_int:02X}" if value_int < 256 else value_int,
+            raw_bytes.hex(),
+        )
+        for dp, (type_byte, value_int, raw_bytes) in tlv.items()
+    }
+
+
+def _extract_valve_hub_state(tlv: dict) -> bool:
+    """Return hub online flag derived from DP 0x18; logs at INFO when present."""
+    from ..const import debug_with_version
+
+    if _VALVE_HUB_DP_HUB_STATE not in tlv:
+        return False
+    _, hub_state_raw, _ = tlv[_VALVE_HUB_DP_HUB_STATE]
+    hub_online = hub_state_raw == 0x01
+    _LOGGER.info(debug_with_version("Valve hub state: %s (raw: 0x%02X)"), hub_online, hub_state_raw)
+    return hub_online
+
+
+def _extract_valve_hub_zone(zone_num: int, tlv: dict) -> dict | None:
+    """Build a single zone dict from TLV, or None when no state DP is present."""
+    state_dp = _VALVE_HUB_DP_HUB_STATE + zone_num
+    if state_dp not in tlv:
+        return None
+
+    _, state_raw, _ = tlv[state_dp]
+    zone_state = state_raw == 0x01
+
+    duration_dp = _VALVE_HUB_DP_BASE_DURATION + zone_num
+    duration_entry = tlv.get(duration_dp)
+    # Duration appears to be in seconds (little-endian).
+    zone_duration = duration_entry[1] if duration_entry is not None else 0
+    duration_raw = duration_entry[1] if duration_entry is not None else None
+
+    return {
+        "open": zone_state,
+        "duration_seconds": zone_duration,
+        "state_raw": state_raw,
+        "duration_raw": duration_raw,
+    }
+
+
+def _extract_valve_hub_zones(tlv: dict) -> dict:
+    """Walk zones 1-8 and return the populated zone map."""
+    zones: dict = {}
+    for zone_num in range(1, 9):
+        zone = _extract_valve_hub_zone(zone_num, tlv)
+        if zone is not None:
+            zones[zone_num] = zone
+    return zones
+
+
+def _valve_hub_error_result(error: str) -> dict:
+    """Shape the error fallback dict returned when decoding fails."""
+    return {
+        "type": "valve_hub",
+        "rssi_dbm": 0,
+        "raw_bytes": [],
+        "zones": {},
+        "tlv_raw": {},
+        "decoder": "valve_hub_error",
+        "error": error,
+    }
+
+
 def decode_valve_hub(raw: str) -> dict:
     """
     Decode an irrigation valve hub TLV payload (e.g. HTV0540FRF).
 
     Confirmed DP map (derived from live payload capture):
-    - Zone N state DP   = _DP_HUB_STATE + N  (0x19 = zone 1, 0x1A = zone 2, ...)
-    - Zone N duration DP = _DP_BASE_DURATION + N (0x25 = zone 1, 0x26 = zone 2, ...)
+    - Zone N state DP   = _VALVE_HUB_DP_HUB_STATE + N  (0x19 = zone 1, 0x1A = zone 2, ...)
+    - Zone N duration DP = _VALVE_HUB_DP_BASE_DURATION + N (0x25 = zone 1, 0x26 = zone 2, ...)
     """
     from ..const import debug_with_version
-
-    # DP IDs for valve hub zone state and duration (confirmed via payload capture)
-    _DP_HUB_STATE = 0x18
-    _DP_BASE_DURATION = 0x24  # zone N duration DP = 0x24 + N
 
     try:
         b = _parse_rainpoint_payload(raw)
@@ -531,45 +604,11 @@ def decode_valve_hub(raw: str) -> dict:
         tlv = _parse_tlv_payload(raw)
         _LOGGER.debug(
             debug_with_version("Valve hub TLV entries: %s"),
-            {
-                f"0x{dp:02X}": (f"0x{type_byte:02X}", f"0x{value_int:02X}" if value_int < 256 else value_int, raw_bytes.hex())
-                for dp, (type_byte, value_int, raw_bytes) in tlv.items()
-            },
+            _format_valve_hub_tlv_log(tlv),
         )
 
-        zones = {}
-        hub_online = False
-
-        # Extract hub online state from DP 0x18
-        if _DP_HUB_STATE in tlv:
-            _, hub_state_raw, _ = tlv[_DP_HUB_STATE]
-            hub_online = hub_state_raw == 0x01
-            _LOGGER.info(debug_with_version("Valve hub state: %s (raw: 0x%02X)"), hub_online, hub_state_raw)
-
-        # Extract zone states and durations
-        for zone_num in range(1, 9):  # Support up to 8 zones
-            state_dp = _DP_HUB_STATE + zone_num
-            duration_dp = _DP_BASE_DURATION + zone_num
-
-            zone_state = None
-            zone_duration = 0
-
-            if state_dp in tlv:
-                _, state_raw, _ = tlv[state_dp]
-                zone_state = state_raw == 0x01
-
-            if duration_dp in tlv:
-                _, duration_raw, _ = tlv[duration_dp]
-                # Duration appears to be in seconds (little-endian)
-                zone_duration = duration_raw
-
-            if zone_state is not None:
-                zones[zone_num] = {
-                    "open": zone_state,
-                    "duration_seconds": zone_duration,
-                    "state_raw": tlv[state_dp][1] if state_dp in tlv else None,
-                    "duration_raw": tlv[duration_dp][1] if duration_dp in tlv else None,
-                }
+        hub_online = _extract_valve_hub_state(tlv)
+        zones = _extract_valve_hub_zones(tlv)
 
         result = {
             "type": "valve_hub",
@@ -578,7 +617,7 @@ def decode_valve_hub(raw: str) -> dict:
             "zones": zones,
             "tlv_raw": tlv,
             "hub_online": hub_online,
-            "hub_state_raw": tlv.get(_DP_HUB_STATE, (None, None, None))[1],
+            "hub_state_raw": tlv.get(_VALVE_HUB_DP_HUB_STATE, (None, None, None))[1],
             "decoder": "valve_hub_tlv",
         }
 
@@ -587,15 +626,7 @@ def decode_valve_hub(raw: str) -> dict:
 
     except Exception as e:
         _LOGGER.error("Valve hub decoder error: %s", e)
-        return {
-            "type": "valve_hub",
-            "rssi_dbm": 0,
-            "raw_bytes": [],
-            "zones": {},
-            "tlv_raw": {},
-            "decoder": "valve_hub_error",
-            "error": str(e),
-        }
+        return _valve_hub_error_result(str(e))
 
 
 def decode_rain(raw: str) -> dict:
