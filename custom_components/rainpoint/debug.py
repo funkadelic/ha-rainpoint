@@ -9,6 +9,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 
+from .api import RainPointApiError
 from .const import (
     CONF_DEBUG_LAST_SUBMISSION,
     DEBUG_WORKER_URL,
@@ -226,11 +227,11 @@ class RainPointDebugSwitchEntity(SwitchEntity):
         async with session.post(DEBUG_WORKER_URL, json=data, headers=headers, timeout=timeout) as response:
             if response.status != 200:
                 error_text = await response.text()
-                raise Exception(f"Worker returned status {response.status}: {error_text}")
+                raise RainPointApiError(f"Worker returned status {response.status}: {error_text}")
 
             result = await response.json()
             if result.get("status") != "success":
-                raise Exception(result.get("message", "Unknown error from worker"))
+                raise RainPointApiError(result.get("message", "Unknown error from worker"))
 
             _LOGGER.debug(debug_with_version(f"Worker response: {result}"))
 

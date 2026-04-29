@@ -11,6 +11,8 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+_RELOAD_FAILED_MSG = "Failed to reload RainPoint integration"
+
 PLATFORMS: list[str] = ["sensor", "select", "valve", "number", "switch"]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -133,11 +135,11 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             _LOGGER.error("Failed to reload RainPoint integration via service")
             persistent_notification.async_create(
                 hass,
-                "Failed to reload RainPoint integration",
+                _RELOAD_FAILED_MSG,
                 title="RainPoint Reload Failed",
                 notification_id="rainpoint_reload_error",
             )
-            return {"message": "Failed to reload RainPoint integration", "success": False}
+            return {"message": _RELOAD_FAILED_MSG, "success": False}
 
     # Register the service with optional entry_id
     hass.services.async_register(
@@ -178,6 +180,6 @@ async def async_reload_integration(hass: HomeAssistant, entry_id: str) -> bool:
         await hass.config_entries.async_reload(entry_id)
         _LOGGER.info("Successfully reloaded RainPoint integration")
         return True
-    except Exception as ex:
-        _LOGGER.exception("Failed to reload RainPoint integration")
+    except Exception:
+        _LOGGER.exception(_RELOAD_FAILED_MSG)
         return False
