@@ -462,8 +462,20 @@ def _decode_moisture_full_hex(raw: str) -> dict:
 
 
 def _parse_hws019_flags(flags_part: str) -> list[int]:
-    """Parse the leading status-flags segment (e.g. '1,0,1') into a list of ints."""
-    return [int(x) for x in flags_part.split(",") if x.strip().isdigit()]
+    """Parse the leading status-flags segment (e.g. '1,0,1') into a list of ints.
+
+    Raises ValueError if any non-empty token is not a digit string, so malformed
+    payloads surface to the caller's error path instead of producing a partial list.
+    """
+    flags: list[int] = []
+    for raw_token in flags_part.split(","):
+        token = raw_token.strip()
+        if not token:
+            continue
+        if not token.isdigit():
+            raise ValueError(f"invalid flag token {token!r} in flags segment {flags_part!r}")
+        flags.append(int(token))
+    return flags
 
 
 def _apply_hws019_keyed_item(item: str, readings: dict) -> None:

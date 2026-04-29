@@ -200,11 +200,20 @@ class TestLittleEndianTripwire:
         - DP 0x19 type 0xD8 value 0x01 (zone 1 open)
         - DP 0x25 type 0xAD value E8 03 (zone 1 duration = 1000s LE)
         """
-        payload_bytes = bytes([
-            0x18, 0xDC, 0x01,        # hub online
-            0x19, 0xD8, 0x01,        # zone 1 open
-            0x25, 0xAD, 0xE8, 0x03,  # zone 1 duration = 1000s (LE)
-        ])
+        payload_bytes = bytes(
+            [
+                0x18,
+                0xDC,
+                0x01,  # hub online
+                0x19,
+                0xD8,
+                0x01,  # zone 1 open
+                0x25,
+                0xAD,
+                0xE8,
+                0x03,  # zone 1 duration = 1000s (LE)
+            ]
+        )
         raw = "11#" + payload_bytes.hex()
         result = decode_htv213frf_valve(raw)
 
@@ -255,6 +264,14 @@ class TestDecodeHws019wrfV2:
         assert result["readings"]["temp"] == "707"
         assert result["readings"]["humidity"] == "42"
         assert result["readings"]["P"] == "9709"
+
+    def test_malformed_flag_token_routes_to_error_path(self):
+        """A non-digit flag token surfaces via the decoder's error path, not a partial list."""
+        result = decode_hws019wrf_v2("1,abc,0;707(707/694/1)")
+        assert result["type"] == "hws019wrf_v2"
+        assert "flags" not in result
+        assert "abc" in result["error"]
+        assert "1,abc,0" in result["error"]
 
 
 class TestDecodeValveHub:
