@@ -348,6 +348,42 @@ class TestReloadService:
         assert "1 of 2" in result["message"]
 
     @pytest.mark.asyncio
+    async def test_reload_service_no_entry_id_all_fail(self):
+        """Reload with no entry_id where every entry fails emits the failed notification."""
+        from custom_components.rainpoint import async_setup_services
+
+        hass = _make_hass()
+        captured = {}
+        hass.services.async_register = MagicMock(side_effect=lambda d, n, h, **kw: captured.update(handler=h))
+
+        e1 = MagicMock()
+        e1.entry_id = "a"
+        e1.title = "Home"
+        e2 = MagicMock()
+        e2.entry_id = "b"
+        e2.title = "Cabin"
+        hass.config_entries.async_entries = MagicMock(return_value=[e1, e2])
+
+        await async_setup_services(hass)
+
+        call = MagicMock()
+        call.data = {}
+
+        with (
+            patch(
+                "custom_components.rainpoint.async_reload_integration",
+                new=AsyncMock(return_value=False),
+            ),
+            patch("homeassistant.components.persistent_notification.async_create") as pn,
+        ):
+            result = await captured["handler"](call)
+
+        assert result["success"] is False
+        assert "Failed to reload all 2" in result["message"]
+        # Total failure should surface as the "Failed" notification, not "Partial".
+        assert pn.call_args.kwargs["notification_id"] == "rainpoint_reload_error"
+
+    @pytest.mark.asyncio
     async def test_reload_service_specific_entry_success(self):
         """Reload with an explicit entry_id that reloads OK emits the success message."""
         from custom_components.rainpoint import async_setup_services
