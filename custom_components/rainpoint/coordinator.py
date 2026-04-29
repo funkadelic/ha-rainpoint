@@ -180,7 +180,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                     # If multipleDeviceStatus returns empty data, fall back to individual calls
                     if not multiple_status:
                         _LOGGER.warning("multipleDeviceStatus returned empty data, falling back to individual calls")
-                        raise Exception("Empty response from multipleDeviceStatus")
+                        raise RainPointApiError("Empty response from multipleDeviceStatus")
 
                     # Convert response to status_by_mid format
                     # Note: get_multiple_device_status already converts "status" to "subDeviceStatus"
