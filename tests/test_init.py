@@ -306,9 +306,7 @@ class TestReloadService:
         ):
             result = await captured["handler"](call)
 
-        # All-succeed path returns {"message": ...} without an explicit "success" key;
-        # the absence of `success: False` is the success signal.
-        assert result.get("success", True) is True
+        assert result["success"] is True
         assert "Successfully reloaded 2" in result["message"]
 
     @pytest.mark.asyncio
