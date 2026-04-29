@@ -372,7 +372,7 @@ class TestReloadService:
         ):
             result = await captured["handler"](call)
 
-        assert result == {"message": "RainPoint integration reloaded successfully"}
+        assert result == {"success": True, "message": "RainPoint integration reloaded successfully"}
 
     @pytest.mark.asyncio
     async def test_reload_service_specific_entry_failure(self):
