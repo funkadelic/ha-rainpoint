@@ -30,7 +30,6 @@ from .const import (
     MODEL_HCS027ARF,
     MODEL_HCS044FRF,
     MODEL_HCS048B,
-    MODEL_HCS0528ARF,
     MODEL_HCS0600ARF,
     MODEL_HCS596WB,
     MODEL_HCS596WB_V4,
@@ -65,6 +64,24 @@ from .hub_entities import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# HCS device variants that share an entity layout with one of the canonical
+# RainPoint sensor models. Resolving through this map lets the dispatch chain
+# below stay flat: each variant is rebound to its base model before the if/elif
+# runs, so we don't repeat identical entity-creation blocks per variant.
+_SENSOR_MODEL_ALIASES: dict[str, str] = {
+    MODEL_HCS015ARF: MODEL_POOL,
+    MODEL_HCS016ARF: MODEL_TEMPHUM,
+    MODEL_HCS027ARF: MODEL_TEMPHUM,
+    MODEL_HCS048B: MODEL_TEMPHUM,
+    MODEL_HCS0600ARF: MODEL_TEMPHUM,
+    MODEL_HCS596WB: MODEL_TEMPHUM,
+    MODEL_HCS596WB_V4: MODEL_TEMPHUM,
+    MODEL_HCS701B: MODEL_TEMPHUM,
+    MODEL_HCS706ARF: MODEL_TEMPHUM,
+    MODEL_HCS802ARF: MODEL_TEMPHUM,
+    MODEL_HCS888ARF_V1: MODEL_TEMPHUM,
+}
+
 
 def _slugify(text: str) -> str:
     text = text.lower()
@@ -98,6 +115,7 @@ async def async_setup_entry(
     # Create sensor entities for sub-devices
     for key, info in sensors_cfg.items():
         model = info.get("model")
+        model = _SENSOR_MODEL_ALIASES.get(model, model)
         sub_name = info.get("sub_name") or f"Sensor {info['addr']}"
         # Use stable hardware identifiers for unique IDs to survive renames
         hid = info.get("hid", "")
@@ -170,115 +188,27 @@ async def async_setup_entry(
             entities.append(RainPointPoolPlusHumidityHighSensor(coordinator, key, info, base_slug))
             entities.append(RainPointPoolPlusHumidityLowSensor(coordinator, key, info, base_slug))
 
-        # New HCS sensor models
+        # New HCS sensor models. Variants whose entity layout matches a canonical
+        # model (MODEL_POOL, MODEL_TEMPHUM) are aliased through _SENSOR_MODEL_ALIASES
+        # at the top of this module and dispatched via the canonical branches above.
         elif model in (MODEL_HCS005FRF, MODEL_HCS003FRF):
-            # Moisture-only sensor - same as MODEL_MOISTURE_SIMPLE
+            # Moisture-only sensor.
             entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True))
-        elif model == MODEL_HCS024FRF_V1:
-            # Multi-sensor (temp+moisture+lux) - same as MODEL_MOISTURE_FULL
+        elif model in (
+            MODEL_HCS024FRF_V1,
+            MODEL_HCS044FRF,
+            MODEL_HCS666FRF,
+            MODEL_HCS666RFR_P,
+            MODEL_HCS999FRF,
+            MODEL_HCS999FRF_P,
+            MODEL_HCS666FRF_X,
+        ):
+            # Multi-sensor (moisture + temperature + illuminance). Distinct from
+            # MODEL_MOISTURE_FULL: this group does not emit the generic RSSI,
+            # battery, firmware, and last-updated diagnostic entities.
             entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False))
             entities.append(RainPointTemperatureSensor(coordinator, key, info, base_slug))
             entities.append(RainPointIlluminanceSensor(coordinator, key, info, base_slug))
-        elif model in (MODEL_HCS015ARF, MODEL_HCS0528ARF):
-            # Pool temperature sensor - same as MODEL_POOL
-            entities.append(RainPointPoolCurrentTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolHighTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolLowTempSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointPoolBatterySensor(coordinator, key, info, base_slug))
-        elif model in (MODEL_HCS027ARF, MODEL_HCS016ARF):
-            # Temperature/humidity sensor - same as MODEL_TEMPHUM
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS044FRF:
-            # Multi-sensor device - same as MODEL_MOISTURE_FULL
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False))
-            entities.append(RainPointTemperatureSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointIlluminanceSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS666FRF:
-            # Sensor variant (similar to HCS021FRF) - same as MODEL_MOISTURE_FULL
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False))
-            entities.append(RainPointTemperatureSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointIlluminanceSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS666RFR_P:
-            # Sensor variant with plus features - same as MODEL_MOISTURE_FULL
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False))
-            entities.append(RainPointTemperatureSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointIlluminanceSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS999FRF:
-            # Advanced sensor variant - same as MODEL_MOISTURE_FULL
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False))
-            entities.append(RainPointTemperatureSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointIlluminanceSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS999FRF_P:
-            # Advanced sensor variant with plus features - same as MODEL_MOISTURE_FULL
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False))
-            entities.append(RainPointTemperatureSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointIlluminanceSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS666FRF_X:
-            # Extended sensor variant - same as MODEL_MOISTURE_FULL
-            entities.append(RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False))
-            entities.append(RainPointTemperatureSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointIlluminanceSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS701B:
-            # Wall-mounted sensor - same as MODEL_TEMPHUM
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS596WB:
-            # Weather station base - same as MODEL_TEMPHUM
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS596WB_V4:
-            # Weather station base v4 - same as MODEL_TEMPHUM
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model in (MODEL_HCS706ARF, MODEL_HCS802ARF):
-            # Environmental sensor - same as MODEL_TEMPHUM
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS048B:
-            # Compact sensor device - same as MODEL_TEMPHUM
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS888ARF_V1:
-            # Multi-function sensor v1 - same as MODEL_TEMPHUM
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
-        elif model == MODEL_HCS0600ARF:
-            # Advanced environmental sensor - same as MODEL_TEMPHUM
-            entities.append(RainPointTempHumCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumLowSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityCurrentSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityHighSensor(coordinator, key, info, base_slug))
-            entities.append(RainPointTempHumHumidityLowSensor(coordinator, key, info, base_slug))
         else:
             # Unknown/unsupported model - create diagnostic entity
             data = info.get("data", {})
