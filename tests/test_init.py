@@ -433,3 +433,22 @@ class TestReloadService:
 
         assert result["success"] is False
         assert "Failed" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_reload_service_schema_rejects_empty_entry_id(self):
+        """Schema rejects empty entry_id so a blank input cannot silently reload all entries."""
+        import voluptuous as vol
+
+        from custom_components.rainpoint import async_setup_services
+
+        hass = _make_hass()
+        captured = {}
+        hass.services.async_register = MagicMock(side_effect=lambda d, n, h, **kw: captured.update(schema=kw.get("schema")))
+
+        await async_setup_services(hass)
+
+        schema = captured["schema"]
+        assert schema({}) == {}
+        assert schema({"entry_id": "abc"}) == {"entry_id": "abc"}
+        with pytest.raises(vol.Invalid):
+            schema({"entry_id": ""})

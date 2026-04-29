@@ -133,7 +133,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         """Service to reload the RainPoint integration."""
         entry_id = call.data.get("entry_id")
 
-        if entry_id:
+        if entry_id is not None:
             success, message = await _reload_one_entry(hass, entry_id)
             _notify(hass, _NOTIF_SUCCESS if success else _NOTIF_FAILED, message)
             return {"success": success, "message": message}
@@ -153,7 +153,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         DOMAIN,
         "reload",
         reload_service,
-        schema=vol.Schema({vol.Optional("entry_id"): str}),
+        schema=vol.Schema({vol.Optional("entry_id"): vol.All(cv.string, vol.Length(min=1))}),
         supports_response=True,
     )
 
