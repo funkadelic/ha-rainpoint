@@ -443,8 +443,7 @@ def _decode_moisture_full_hex(raw: str) -> dict:
     lux_raw10 = _le16(b, 11)
     lux = lux_raw10 / 10.0
 
-    # Status code is at different positions depending on payload length
-    status_code = _extract_status_code(b, 14, 15) if len(b) >= 16 else 0
+    status_code = _extract_status_code(b, 14, 15)
 
     result = _base_decoder_dict("moisture_full", rssi, b)
     result.update(
