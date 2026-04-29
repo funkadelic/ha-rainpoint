@@ -78,7 +78,7 @@ async def async_supports_reconfigure(hass: HomeAssistant, entry: ConfigEntry) ->
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up the RainPoint services."""
 
-    async def reload_service(call) -> None:
+    async def reload_service(call) -> dict:
         """Service to reload the RainPoint integration."""
         from homeassistant.components import persistent_notification
 
