@@ -152,7 +152,7 @@ class RainPointDebugSwitchEntity(SwitchEntity):
         _LOGGER.debug(debug_with_version(f"Collected data for {len(devices)} devices"))
         return devices
 
-    def _extract_device_data(self, sensor_info: dict) -> dict:
+    def _extract_device_data(self, sensor_info: dict) -> dict | None:
         """Extract relevant data from a single device sensor."""
         try:
             # Sensor info structure: {hid, mid, addr, home_name, hub_name, sub_name, model, firmware_version, raw_status, data}
