@@ -2,6 +2,29 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.4.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.4.1...v1.4.2) (2026-04-30)
+
+
+### Fixed
+
+* **decoders:** route HWS019 payloads missing ';' to error path ([#42](https://github.com/funkadelic/ha-rainpoint/issues/42)) ([5a25231](https://github.com/funkadelic/ha-rainpoint/commit/5a25231b655ab2eb6fd27022c3a912ca1a8f2893))
+
+
+### Changed
+
+* extract device-id lookup helpers from native_value ([#39](https://github.com/funkadelic/ha-rainpoint/issues/39)) ([426b713](https://github.com/funkadelic/ha-rainpoint/commit/426b7133d01ffa4b695ef0cbd693aa2ec59615b9))
+* extract reload-service helpers and normalize response shape ([#34](https://github.com/funkadelic/ha-rainpoint/issues/34)) ([9dbdb49](https://github.com/funkadelic/ha-rainpoint/commit/9dbdb498f17a221e61373b599b84eb4976ef2a82))
+* replace sensor setup elif chain with model factory map ([#36](https://github.com/funkadelic/ha-rainpoint/issues/36)) ([0b117fb](https://github.com/funkadelic/ha-rainpoint/commit/0b117fb3150bc2c39bf6a4cbc060f72ecb58d9ec))
+* split decode_hws019wrf_v2 into flag/reading helpers ([#40](https://github.com/funkadelic/ha-rainpoint/issues/40)) ([8a15203](https://github.com/funkadelic/ha-rainpoint/commit/8a1520354b0858591920e474b5640f2b818ef0ab))
+* split decode_valve_hub into helpers to drop CC under 15 ([#38](https://github.com/funkadelic/ha-rainpoint/issues/38)) ([e02d9db](https://github.com/funkadelic/ha-rainpoint/commit/e02d9db131281bf6fd7ff50f468b8c46b1de67d3))
+* split HTV213FRF hex decoder into scan/hub/zone helpers ([#35](https://github.com/funkadelic/ha-rainpoint/issues/35)) ([9b753c5](https://github.com/funkadelic/ha-rainpoint/commit/9b753c5e09b728c40f555cad5a8acac810abb1d4))
+
+
+### Other Changes
+
+* surface docs, test, ci, build, and chore commits in changelog ([#41](https://github.com/funkadelic/ha-rainpoint/issues/41)) ([833bc11](https://github.com/funkadelic/ha-rainpoint/commit/833bc11fab7e3d944df72303cb047332e0ee1ed0))
+* update pytest-cov requirement from &gt;=4.0.0 to &gt;=7.1.0 ([#22](https://github.com/funkadelic/ha-rainpoint/issues/22)) ([a163f01](https://github.com/funkadelic/ha-rainpoint/commit/a163f01e8cf3263fb70aa424064d6bedb43817e9))
+
 ## [1.4.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.4.0...v1.4.1) (2026-04-29)
 
 
