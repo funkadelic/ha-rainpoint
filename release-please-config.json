@@ -30,10 +30,10 @@
     { "type": "fix", "section": "Fixed", "hidden": false },
     { "type": "perf", "section": "Performance", "hidden": false },
     { "type": "refactor", "section": "Changed", "hidden": false },
-    { "type": "docs", "section": "Documentation", "hidden": true },
-    { "type": "test", "section": "Testing", "hidden": true },
-    { "type": "ci", "section": "CI", "hidden": true },
-    { "type": "build", "section": "Build", "hidden": true },
-    { "type": "chore", "section": "Miscellaneous", "hidden": true }
+    { "type": "docs", "section": "Other Changes", "hidden": false },
+    { "type": "test", "section": "Other Changes", "hidden": false },
+    { "type": "ci", "section": "Other Changes", "hidden": false },
+    { "type": "build", "section": "Other Changes", "hidden": false },
+    { "type": "chore", "section": "Other Changes", "hidden": false }
   ]
 }
