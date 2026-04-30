@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +16,69 @@ from homeassistant.const import PERCENTAGE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT, 
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import RainPointCoordinator
+
+_LOGGER = logging.getLogger(__name__)
+
+# Candidate field names that may carry the RainPoint device ID, in priority order.
+_DEVICE_ID_FIELDS: tuple[str, ...] = (
+    "device_id",
+    "deviceId",
+    "id",
+    "deviceID",
+    "sub_device_id",
+    "subDeviceId",
+    "subDeviceID",
+    "device_sn",
+    "deviceSN",
+    "serial_number",
+    "serialNumber",
+    "addr",
+    "address",
+    "mac",
+    "mac_address",
+)
+
+# RainPoint device IDs in this family are 9+ digit numeric values.
+_DEVICE_ID_RE = re.compile(r"\b\d{9,}\b")
+
+
+def _looks_like_device_id(value: Any) -> bool:
+    """Return True when value is an int or string of 9+ digits."""
+    if not isinstance(value, (int, str)):
+        return False
+    text = str(value)
+    return text.isdigit() and len(text) >= 9
+
+
+def _find_device_id_in_dict(source: dict, sensor_key: str, source_label: str) -> str | int | None:
+    """Scan source for any candidate device-id field that looks valid."""
+    for field in _DEVICE_ID_FIELDS:
+        device_id = source.get(field)
+        if not device_id:
+            continue
+        _LOGGER.debug("Found device ID %s in %s: %s", field, source_label, device_id)
+        if _looks_like_device_id(device_id):
+            return device_id
+    _LOGGER.debug("No matching device ID field in %s for %s", source_label, sensor_key)
+    return None
+
+
+def _find_device_id_in_raw_payload(raw_payload: Any) -> int | None:
+    """Find the first 9+ digit run starting with '1' in a raw payload string.
+
+    RainPoint device IDs for this family are 10-11 digits and always start
+    with "1"; the startswith("1") filter relies on that convention.
+    """
+    if not isinstance(raw_payload, str):
+        return None
+    matches = _DEVICE_ID_RE.findall(raw_payload)
+    if not matches:
+        return None
+    _LOGGER.debug("Found potential device IDs in raw payload: %s", matches)
+    for match in matches:
+        if match.startswith("1"):
+            return int(match)
+    return None
 
 
 class RainPointDiagnosticSensorBase(CoordinatorEntity, SensorEntity):
@@ -77,75 +142,29 @@ class RainPointDeviceIDSensor(RainPointDiagnosticSensorBase):
 
     @property
     def native_value(self) -> str | int | None:
-        # Try to get device ID from sensor info first
         sensors = self.coordinator.data.get("sensors", {})
         info = sensors.get(self._sensor_key)
-        if info:
-            # Log available fields for debugging
-            import logging
-
-            _LOGGER = logging.getLogger(__name__)
-            _LOGGER.debug("Available fields for %s: %s", self._sensor_key, list(info.keys()))
-
-            # Check for various possible device ID fields
-            device_id_fields = [
-                "device_id",
-                "deviceId",
-                "id",
-                "deviceID",
-                "sub_device_id",
-                "subDeviceId",
-                "subDeviceID",
-                "device_sn",
-                "deviceSN",
-                "serial_number",
-                "serialNumber",
-                "addr",
-                "address",
-                "mac",
-                "mac_address",
-            ]
-
-            for field in device_id_fields:
-                device_id = info.get(field)
-                if device_id:
-                    _LOGGER.debug("Found device ID field %s: %s", field, device_id)
-                    # Check if this looks like the RainPoint device ID (10 digits starting with 1)
-                    if isinstance(device_id, (int, str)) and str(device_id).isdigit() and len(str(device_id)) >= 9:
-                        return device_id
-
-            # Check if device ID is in the decoded data
-            decoded_data = info.get("data", {})
-            if decoded_data:
-                _LOGGER.debug("Checking decoded data: %s", list(decoded_data.keys()))
-                # Look for device ID in decoded data
-                for field in device_id_fields:
-                    device_id = decoded_data.get(field)
-                    if device_id:
-                        _LOGGER.debug("Found device ID in decoded data %s: %s", field, device_id)
-                        if isinstance(device_id, (int, str)) and str(device_id).isdigit() and len(str(device_id)) >= 9:
-                            return device_id
-
-                # Check raw payload for device ID pattern
-                raw_payload = decoded_data.get("raw_value")
-                if raw_payload and isinstance(raw_payload, str):
-                    # Look for 10-digit patterns in raw payload.
-                    # RainPoint device IDs for this family are 10-11 digits and
-                    # always start with "1"; the startswith("1") filter below
-                    # relies on that convention.
-                    import re
-
-                    matches = re.findall(r"\b\d{9,}\b", raw_payload)
-                    if matches:
-                        _LOGGER.debug("Found potential device IDs in raw payload: %s", matches)
-                        # Return the first match that looks like a device ID
-                        for match in matches:
-                            if match.startswith("1"):  # RainPoint IDs seem to start with 1
-                                return int(match)
-
-            # If no proper device ID found, log what we have
-            _LOGGER.debug("No device ID found for %s, available info: %s", self._sensor_key, info)
+        if not info:
             return None
+
+        _LOGGER.debug("Available fields for %s: %s", self._sensor_key, list(info.keys()))
+
+        device_id = _find_device_id_in_dict(info, self._sensor_key, "sensor info")
+        if device_id is not None:
+            return device_id
+
+        decoded_data = info.get("data") or {}
+        if decoded_data:
+            _LOGGER.debug("Checking decoded data: %s", list(decoded_data.keys()))
+            device_id = _find_device_id_in_dict(decoded_data, self._sensor_key, "decoded data")
+            if device_id is not None:
+                return device_id
+
+            raw_match = _find_device_id_in_raw_payload(decoded_data.get("raw_value"))
+            if raw_match is not None:
+                return raw_match
+
+        _LOGGER.debug("No device ID found for %s, available info: %s", self._sensor_key, info)
         return None
 
 
