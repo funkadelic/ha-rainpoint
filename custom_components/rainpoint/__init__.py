@@ -1,4 +1,5 @@
 import logging
+from typing import Literal
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -12,6 +13,17 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 _RELOAD_FAILED_MSG = "Failed to reload RainPoint integration"
+
+_NOTIF_SUCCESS = ("RainPoint Reload Complete", "rainpoint_reload_success")
+_NOTIF_PARTIAL = ("RainPoint Reload Partial", "rainpoint_reload_partial")
+_NOTIF_FAILED = ("RainPoint Reload Failed", "rainpoint_reload_error")
+
+_ReloadStatus = Literal["success", "partial", "failed"]
+_RELOAD_STATUS_NOTIFS: dict[_ReloadStatus, tuple[str, str]] = {
+    "success": _NOTIF_SUCCESS,
+    "partial": _NOTIF_PARTIAL,
+    "failed": _NOTIF_FAILED,
+}
 
 PLATFORMS: list[str] = ["sensor", "select", "valve", "number", "switch"]
 
@@ -75,82 +87,73 @@ async def async_supports_reconfigure(hass: HomeAssistant, entry: ConfigEntry) ->
     return True
 
 
+def _notify(hass: HomeAssistant, notif: tuple[str, str], message: str) -> None:
+    """Emit a persistent notification using a (title, notification_id) pair."""
+    from homeassistant.components import persistent_notification
+
+    title, notification_id = notif
+    persistent_notification.async_create(hass, message, title=title, notification_id=notification_id)
+
+
+async def _reload_one_entry(hass: HomeAssistant, entry_id: str) -> tuple[bool, str]:
+    """Reload a single config entry; return (success, user-facing message)."""
+    if await async_reload_integration(hass, entry_id):
+        _LOGGER.info("RainPoint integration reloaded successfully via service")
+        return True, "RainPoint integration reloaded successfully"
+    _LOGGER.error("Failed to reload RainPoint integration via service")
+    return False, _RELOAD_FAILED_MSG
+
+
+async def _reload_all_entries(hass: HomeAssistant, entries) -> tuple[_ReloadStatus, str]:
+    """Reload every config entry; return (status, user-facing message).
+
+    Status is "success" when all reloaded, "partial" when some failed, "failed"
+    when none reloaded.
+    """
+    success_count = 0
+    for entry in entries:
+        if await async_reload_integration(hass, entry.entry_id):
+            _LOGGER.info("RainPoint integration '%s' reloaded successfully", entry.title)
+            success_count += 1
+        else:
+            _LOGGER.error("Failed to reload RainPoint integration '%s'", entry.title)
+
+    total = len(entries)
+    if success_count == total:
+        return "success", f"Successfully reloaded {success_count} RainPoint integration(s)"
+    if success_count == 0:
+        return "failed", f"Failed to reload all {total} RainPoint integration(s)"
+    return "partial", f"Only {success_count} of {total} integrations reloaded successfully"
+
+
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Set up the RainPoint services."""
 
     async def reload_service(call) -> dict:
         """Service to reload the RainPoint integration."""
-        from homeassistant.components import persistent_notification
-
         entry_id = call.data.get("entry_id")
 
-        # If no entry_id provided, reload all RainPoint entries
-        if not entry_id:
-            entries = hass.config_entries.async_entries(DOMAIN)
-            if not entries:
-                _LOGGER.error("No RainPoint entries found to reload")
-                persistent_notification.async_create(
-                    hass,
-                    "No RainPoint integrations found to reload",
-                    title="RainPoint Reload Failed",
-                    notification_id="rainpoint_reload_error",
-                )
-                return {"success": False, "message": "No RainPoint integrations found to reload"}
+        if entry_id is not None:
+            success, message = await _reload_one_entry(hass, entry_id)
+            _notify(hass, _NOTIF_SUCCESS if success else _NOTIF_FAILED, message)
+            return {"success": success, "message": message}
 
-            # Reload all entries
-            success_count = 0
-            for entry in entries:
-                success = await async_reload_integration(hass, entry.entry_id)
-                if success:
-                    _LOGGER.info("RainPoint integration '%s' reloaded successfully", entry.title)
-                    success_count += 1
-                else:
-                    _LOGGER.error("Failed to reload RainPoint integration '%s'", entry.title)
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            message = "No RainPoint integrations found to reload"
+            _LOGGER.error("No RainPoint entries found to reload")
+            _notify(hass, _NOTIF_FAILED, message)
+            return {"success": False, "message": message}
 
-            message = f"Successfully reloaded {success_count} RainPoint integration(s)"
-            if success_count == len(entries):
-                persistent_notification.async_create(
-                    hass, message, title="RainPoint Reload Complete", notification_id="rainpoint_reload_success"
-                )
-                return {"message": message}
-            else:
-                error_msg = f"Only {success_count} of {len(entries)} integrations reloaded successfully"
-                persistent_notification.async_create(
-                    hass, error_msg, title="RainPoint Reload Partial", notification_id="rainpoint_reload_partial"
-                )
-                return {"message": error_msg, "success": False}
+        status, message = await _reload_all_entries(hass, entries)
+        _notify(hass, _RELOAD_STATUS_NOTIFS[status], message)
+        return {"success": status == "success", "message": message}
 
-        # Reload specific entry
-        success = await async_reload_integration(hass, entry_id)
-        if success:
-            _LOGGER.info("RainPoint integration reloaded successfully via service")
-            persistent_notification.async_create(
-                hass,
-                "RainPoint integration reloaded successfully",
-                title="RainPoint Reload Complete",
-                notification_id="rainpoint_reload_success",
-            )
-            return {"message": "RainPoint integration reloaded successfully"}
-        else:
-            _LOGGER.error("Failed to reload RainPoint integration via service")
-            persistent_notification.async_create(
-                hass,
-                _RELOAD_FAILED_MSG,
-                title="RainPoint Reload Failed",
-                notification_id="rainpoint_reload_error",
-            )
-            return {"message": _RELOAD_FAILED_MSG, "success": False}
-
-    # Register the service with optional entry_id
     hass.services.async_register(
         DOMAIN,
         "reload",
         reload_service,
-        schema=vol.Schema(
-            {
-                vol.Optional("entry_id"): str,
-            }
-        ),
+        schema=vol.Schema({vol.Optional("entry_id"): vol.All(cv.string, vol.Length(min=1))}),
         supports_response=True,
     )
 
