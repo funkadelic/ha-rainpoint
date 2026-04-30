@@ -268,18 +268,29 @@ class TestHtv213DpMapEdgeCases:
         )
 
     def test_truncated_known_type_record_is_skipped(self):
-        """A known type byte with insufficient remaining buffer is skipped.
+        """A known type byte with insufficient remaining buffer is skipped, and
+        the i += 1 advance lets the scanner pick up valid records that follow.
 
-        Type 0xAD requires 2 value bytes; supplying only 1 must not produce a
-        dp_map entry. The scanner advances 1 byte for re-alignment.
+        Two cases:
+        1. A bare truncated 0xAD record (needs 2 value bytes, has 1) yields
+           an empty dp_map.
+        2. A truncated 0xB7 record (needs 4 value bytes, has 3) followed by a
+           valid 0xDC record exercises the re-alignment path: the truncated
+           branch fires at offset 0, the unknown branch absorbs one byte of
+           drift at offset 1, and the success branch captures DP 0x11 at
+           offset 2. A 2-byte 0xAD truncation cannot be used here because
+           appending any 3+ trailing bytes would satisfy 0xAD's value length
+           and short-circuit the truncated branch.
         """
         from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
 
-        # DP 0x10, type 0xAD (needs 2 value bytes), only 1 byte supplied
-        truncated = bytes([0x10, 0xAD, 0x01])
-        dp_map = _scan_htv213_dp_map(truncated)
+        bare_truncated = bytes([0x10, 0xAD, 0x01])
+        assert _scan_htv213_dp_map(bare_truncated) == {}, "Bare truncation should yield empty dp_map"
 
-        assert dp_map == {}, f"Truncated record should be skipped; got {dp_map}"
+        with_trailing = bytes([0x10, 0xB7, 0x11, 0xDC, 0x05])
+        dp_map = _scan_htv213_dp_map(with_trailing)
+        assert 0x10 not in dp_map, f"Truncated DP 0x10 should not be captured; got {dp_map}"
+        assert dp_map.get(0x11) == (0xDC, 0x05), f"Expected DP 0x11 = (0xDC, 0x05) after re-alignment; got {dp_map}"
 
     def test_unknown_type_byte_is_skipped(self):
         """An unrecognized type byte advances 1 byte and produces no dp entry."""
