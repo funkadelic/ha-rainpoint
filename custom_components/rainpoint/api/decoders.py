@@ -553,8 +553,10 @@ def decode_hws019wrf_v2(raw: str) -> dict:
     _LOGGER.debug("decode_hws019wrf_v2 called with raw: %r", raw)
     try:
         parts = raw.split(";")
+        if len(parts) < 2:
+            raise ValueError(f"expected ';' separator between flags and readings in HWS019 payload: {raw!r}")
         flags = _parse_hws019_flags(parts[0])
-        readings = _parse_hws019_readings(parts[1]) if len(parts) > 1 else {}
+        readings = _parse_hws019_readings(parts[1])
         result = {
             "type": "hws019wrf_v2",
             "flags": flags,
