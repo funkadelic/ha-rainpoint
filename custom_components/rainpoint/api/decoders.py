@@ -12,6 +12,10 @@ from .validators import _battery_status_to_percent, _extract_rssi, _extract_stat
 
 _LOGGER = logging.getLogger(__name__)
 
+# Type byte → value byte count for HTV213FRF/HTV245FRF.
+# Subset of types relevant to these models; see _TYPE_WIDTHS in utils.py for the full set.
+_HTV213_TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
+
 
 def decode_htv213frf_valve(raw: str) -> dict:
     """
@@ -153,6 +157,106 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
         raise
 
 
+def _scan_htv213_dp_map(b: bytes) -> dict[int, tuple[int, int]]:
+    """Scan a flat dp_id/type/value byte stream into {dp_id: (type_byte, value_int)}.
+
+    Unknown type bytes cause a 1-byte advance so parsing can re-align on the
+    next potential DP record. A misaligned multi-byte-value skip can still
+    bypass trailing records; re-alignment is best-effort only. Duplicate
+    dp_ids are last-write-wins (intentional, not an oversight). Endianness
+    depends on type (0xAD=LE, others=BE).
+    """
+    dp_map: dict[int, tuple[int, int]] = {}
+    i = 0
+    while i < len(b) - 2:  # need at least 3 bytes: dp_id + type_byte + 1 value byte
+        dp_id = b[i]
+        type_byte = b[i + 1]
+        val_len = _HTV213_TYPE_LENGTHS.get(type_byte)
+        if val_len is None:
+            _LOGGER.debug(
+                "HTV213FRF: unknown type byte 0x%02X at offset %d; advancing 1 byte for re-alignment",
+                type_byte,
+                i,
+            )
+            i += 1
+        elif i + 2 + val_len > len(b):
+            _LOGGER.debug(
+                "HTV213FRF: truncated record for type 0x%02X at offset %d: need %d value bytes but have %d; advancing 1 byte",
+                type_byte,
+                i,
+                val_len,
+                len(b) - (i + 2),
+            )
+            i += 1
+        else:
+            val_bytes = b[i + 2 : i + 2 + val_len]
+            endian = "little" if type_byte == 0xAD else "big"
+            dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, endian))
+            i += 2 + val_len
+    return dp_map
+
+
+def _extract_htv213_hub_state(dp_map: dict[int, tuple[int, int]], raw: str) -> tuple[bool, int | None]:
+    """Pull (hub_online, hub_state_raw) from the dp_map.
+
+    Hub online DP is 0x18 with type 0xDC enforced; value 0x01 means online.
+    """
+    if 0x18 not in dp_map:
+        _LOGGER.warning(
+            "HTV213FRF: hub online DP (0x18) absent from payload %r; defaulting hub_online=False",
+            raw,
+        )
+        return False, None
+
+    hub_type, hub_state_raw = dp_map[0x18]
+    if hub_type != 0xDC:
+        _LOGGER.warning(
+            "HTV213FRF: hub DP 0x18 has unexpected type 0x%02X (expected 0xDC); ignoring hub state",
+            hub_type,
+        )
+        return False, hub_state_raw
+    return hub_state_raw == 0x01, hub_state_raw
+
+
+def _extract_htv213_zones(dp_map: dict[int, tuple[int, int]]) -> dict[int, dict]:
+    """Pull per-zone open state and duration from the dp_map.
+
+    Zone states are DP 0x18+N with type 0xD8 only; other types on zone-range
+    IDs are schedule/timer fields, not zone states. Zone durations are DP
+    0x24+N with type 0xAD (2-byte little-endian seconds).
+    """
+    zones: dict[int, dict] = {}
+    for zone_num in range(1, 9):
+        state_dp = 0x18 + zone_num
+        dur_dp = 0x24 + zone_num
+        if state_dp not in dp_map:
+            continue
+        state_type, state_val = dp_map[state_dp]
+        if state_type != 0xD8:
+            continue
+        # Duration only populated for the documented 0xAD DP type; any other type
+        # at this DP (or a missing DP) defaults to 0 rather than misinterpreting a
+        # differently-typed value as seconds.
+        duration_seconds = 0
+        dur_entry = dp_map.get(dur_dp)
+        if dur_entry is not None and dur_entry[0] == 0xAD:
+            duration_seconds = dur_entry[1]
+        is_open = bool(state_val & 0x01)  # LSB: 1=open, 0=closed (device uses 0x21/0x20, not 0x01/0x00)
+        zones[zone_num] = {
+            "open": is_open,
+            "duration_seconds": duration_seconds,
+            "state_raw": state_val,
+        }
+        _LOGGER.info(
+            "HTV213FRF Zone %d: open=%s duration=%ds state_raw=0x%02X",
+            zone_num,
+            is_open,
+            duration_seconds,
+            state_val,
+        )
+    return zones
+
+
 def _decode_htv213frf_hex(raw: str) -> dict:
     """
     Decode HTV213FRF/HTV245FRF hex format payload (11# prefix).
@@ -167,91 +271,16 @@ def _decode_htv213frf_hex(raw: str) -> dict:
       0x18              → hub online state (type 0xDC enforced, value 0x01=online)
       0x18+N (1≤N≤8)   → zone N open state (type 0xD8, value 0x01=open, 0x00=closed)
       0x24+N (1≤N≤8)   → zone N duration in seconds (type 0xAD, 2-byte little-endian)
-
-    Only DPs with type 0xD8 are treated as zone state records; other types on
-    zone-range DP IDs (e.g. 0x1D/0x1E with type 0x20) are schedule fields, not
-    active zone states.
     """
     from ..const import debug_with_version
-
-    # Type byte → value byte count for HTV213FRF/HTV245FRF.
-    # Subset of types relevant to these models; see _TYPE_WIDTHS in utils.py for the full set.
-    _TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
 
     try:
         b = _parse_rainpoint_payload(raw)
         _LOGGER.debug(debug_with_version("HTV213FRF hex raw bytes: %s"), b)
 
-        # Scan the byte stream for DP records.
-        # Unknown type bytes cause a 1-byte advance so parsing can re-align on
-        # the next potential DP record. Note: a misaligned multi-byte-value skip
-        # can still bypass trailing records — re-alignment is best-effort only.
-        # If a dp_id appears more than once (e.g. after misalignment recovery),
-        # the last occurrence wins — this is intentional, not an oversight.
-        dp_map: dict[int, tuple[int, int]] = {}  # dp_id → (type_byte, value_int); endianness depends on type (0xAD=LE, others=BE)
-        i = 0
-        while i < len(b) - 2:  # need at least 3 bytes: dp_id + type_byte + 1 value byte
-            dp_id = b[i]
-            type_byte = b[i + 1]
-            val_len = _TYPE_LENGTHS.get(type_byte)
-            if val_len is not None and i + 2 + val_len <= len(b):
-                val_bytes = b[i + 2 : i + 2 + val_len]
-                # Duration DPs (0xAD type) are little-endian; all others big-endian
-                endian = "little" if type_byte == 0xAD else "big"
-                dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, endian))
-                i += 2 + val_len
-            else:
-                _LOGGER.debug(
-                    "HTV213FRF: unknown type byte 0x%02X at offset %d; advancing 1 byte for re-alignment",
-                    type_byte,
-                    i,
-                )
-                i += 1
-
-        # Hub online: DP 0x18, type 0xDC (enforced), value 0x01 = online
-        hub_online = False
-        hub_state_raw = None
-        if 0x18 in dp_map:
-            hub_type, hub_state_raw = dp_map[0x18]
-            if hub_type == 0xDC:
-                hub_online = hub_state_raw == 0x01
-            else:
-                _LOGGER.warning(
-                    "HTV213FRF: hub DP 0x18 has unexpected type 0x%02X (expected 0xDC); ignoring hub state",
-                    hub_type,
-                )
-        else:
-            _LOGGER.warning(
-                "HTV213FRF: hub online DP (0x18) absent from payload %r; defaulting hub_online=False",
-                raw,
-            )
-
-        # Zone states: DP 0x18+N with type 0xD8 only.
-        # Other types on zone-range IDs are schedule/timer fields, not zone states.
-        # Zone durations: DP 0x24+N with type 0xAD (2-byte little-endian seconds).
-        zones: dict[int, dict] = {}
-        for zone_num in range(1, 9):
-            state_dp = 0x18 + zone_num
-            dur_dp = 0x24 + zone_num
-            if state_dp not in dp_map:
-                continue
-            state_type, state_val = dp_map[state_dp]
-            if state_type != 0xD8:
-                # Not a zone-state DP (schedule/timer field — skip)
-                continue
-            dur_val = dp_map.get(dur_dp, (None, 0))[1]
-            zones[zone_num] = {
-                "open": bool(state_val & 0x01),  # LSB: 1=open, 0=closed (device uses 0x21/0x20, not 0x01/0x00)
-                "duration_seconds": dur_val,
-                "state_raw": state_val,
-            }
-            _LOGGER.info(
-                "HTV213FRF Zone %d: open=%s duration=%ds state_raw=0x%02X",
-                zone_num,
-                bool(state_val & 0x01),
-                dur_val,
-                state_val,
-            )
+        dp_map = _scan_htv213_dp_map(b)
+        hub_online, hub_state_raw = _extract_htv213_hub_state(dp_map, raw)
+        zones = _extract_htv213_zones(dp_map)
 
         _LOGGER.debug(
             debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s"),
