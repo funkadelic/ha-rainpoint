@@ -34,13 +34,13 @@ ruff check .        # lint
 ruff format .       # format
 ```
 
-CI runs the same `pytest` invocation plus `hassfest` and HACS validation on every PR.
+CI runs the same `pytest` invocation plus `hassfest` and HACS validation on every PR. Coverage is uploaded to Codecov and a SonarQube scan runs on PRs (skipped for Dependabot).
 
 ## Adding a new device model
 
 See the "Adding support for a new device model" section in `CLAUDE.md` (if present) or follow the pattern in `custom_components/rainpoint/api/decoders.py`:
 
-1. Capture a raw payload (the disabled-by-default "Raw Payload" diagnostic sensor exposes it).
+1. Capture a raw payload. The disabled-by-default "Raw Payload" diagnostic sensor exposes it; see `DEBUG_VALVE_PAYLOAD.md` for the full capture procedure.
 2. Add `MODEL_XXX` to `const.py`.
 3. Write `decode_xxx(raw: str) -> dict` in `api/decoders.py` and re-export from `api/__init__.py`.
 4. Register `MODEL_XXX: decode_xxx` in `DECODER_REGISTRY` in `coordinator.py`.
@@ -54,5 +54,5 @@ Releases are automated by `release-please`. Do not bump `manifest.json` or `cons
 
 ## Commit and PR style
 
-- Conventional-commit-style messages (`feat:`, `fix:`, `chore:`, etc.) — release-please uses them to generate changelogs.
+- Conventional-commit-style **PR titles** (`feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `ci`, `build`, `chore`): enforced on every PR by the `lint-pr-title` workflow. PRs squash-merge into `main`, so the PR title becomes the commit subject that release-please parses; a non-conventional title silently skips the release.
 - Keep PRs focused; large multi-concern diffs are harder to review.
