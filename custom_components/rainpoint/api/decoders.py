@@ -503,29 +503,30 @@ def decode_hws019wrf_v2(raw: str) -> dict:
     _LOGGER.debug("decode_hws019wrf_v2 called with raw: %r", raw)
     try:
         parts = raw.split(";")
+        if len(parts) < 2:
+            raise ValueError(f"expected ';' separator between flags and readings in HWS019 payload: {raw!r}")
         # First part: status flags (e.g., '1,0,1')
         flags = [int(x) for x in parts[0].split(",") if x.strip().isdigit()]
         readings = {}
-        if len(parts) > 1:
-            for item in parts[1].split(","):
-                item = item.strip()
-                if not item:
-                    continue
-                if "=" in item:
-                    # Pressure format: P=9709(9709/9701/1)
-                    key, rest = item.split("=", 1)
-                    key = key.strip()
-                    if "(" in rest:
-                        readings[key] = rest.split("(")[0].strip()
-                    else:
-                        readings[key] = rest.strip()
-                elif "(" in item:
-                    # Temperature/Humidity: 707(707/694/1) — extract current value
-                    current_value = item.split("(")[0].strip()
-                    if "temp" not in readings:
-                        readings["temp"] = current_value
-                    elif "humidity" not in readings:
-                        readings["humidity"] = current_value
+        for item in parts[1].split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if "=" in item:
+                # Pressure format: P=9709(9709/9701/1)
+                key, rest = item.split("=", 1)
+                key = key.strip()
+                if "(" in rest:
+                    readings[key] = rest.split("(")[0].strip()
+                else:
+                    readings[key] = rest.strip()
+            elif "(" in item:
+                # Temperature/Humidity: 707(707/694/1), extract current value
+                current_value = item.split("(")[0].strip()
+                if "temp" not in readings:
+                    readings["temp"] = current_value
+                elif "humidity" not in readings:
+                    readings["humidity"] = current_value
         result = {
             "type": "hws019wrf_v2",
             "flags": flags,

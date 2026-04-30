@@ -339,6 +339,15 @@ class TestDecodeHws019wrfV2:
         assert result["readings"]["humidity"] == "42"
         assert result["readings"]["P"] == "9709"
 
+    def test_missing_separator_routes_to_error_path(self):
+        """A payload with no ';' separator must surface via the error path, not return empty readings."""
+        result = decode_hws019wrf_v2("1,0,1")
+        assert result["type"] == "hws019wrf_v2"
+        assert "readings" not in result
+        assert "flags" not in result
+        assert "';'" in result["error"]
+        assert "1,0,1" in result["error"]
+
 
 class TestDecodeValveHub:
     """Tests for decode_valve_hub (HTV0540FRF TLV payload)."""
