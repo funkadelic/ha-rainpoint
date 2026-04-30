@@ -200,11 +200,20 @@ class TestLittleEndianTripwire:
         - DP 0x19 type 0xD8 value 0x01 (zone 1 open)
         - DP 0x25 type 0xAD value E8 03 (zone 1 duration = 1000s LE)
         """
-        payload_bytes = bytes([
-            0x18, 0xDC, 0x01,        # hub online
-            0x19, 0xD8, 0x01,        # zone 1 open
-            0x25, 0xAD, 0xE8, 0x03,  # zone 1 duration = 1000s (LE)
-        ])
+        payload_bytes = bytes(
+            [
+                0x18,
+                0xDC,
+                0x01,  # hub online
+                0x19,
+                0xD8,
+                0x01,  # zone 1 open
+                0x25,
+                0xAD,
+                0xE8,
+                0x03,  # zone 1 duration = 1000s (LE)
+            ]
+        )
         raw = "11#" + payload_bytes.hex()
         result = decode_htv213frf_valve(raw)
 
@@ -218,6 +227,69 @@ class TestLittleEndianTripwire:
             f"Zone 1 duration is {zone1['duration_seconds']}; expected 1000 (LE). "
             f"59395 means the 0xAD little-endian branch was removed."
         )
+
+
+class TestHtv213DpMapEdgeCases:
+    """Defensive parsing edge cases for the HTV213FRF/HTV245FRF dp_map scan
+    and zone extraction.
+    """
+
+    def test_duration_dp_with_wrong_type_defaults_to_zero(self):
+        """A non-0xAD type at DP 0x24+N must not be misread as duration seconds.
+
+        The documented duration DP type is 0xAD (2-byte little-endian seconds).
+        If the firmware ever places a different type at the duration DP, the
+        decoder should default duration_seconds to 0 rather than reinterpret a
+        differently-typed value as a count of seconds.
+        """
+        # Hub online, zone 1 open, zone 1 "duration" sent with type 0xD8 (val_len=1, value=0x05)
+        payload_bytes = bytes(
+            [
+                0x18,
+                0xDC,
+                0x01,
+                0x19,
+                0xD8,
+                0x01,
+                0x25,
+                0xD8,
+                0x05,  # wrong type for duration DP
+            ]
+        )
+        raw = "11#" + payload_bytes.hex()
+        result = decode_htv213frf_valve(raw)
+
+        assert result["hub_online"] is True
+        zone1 = result["zones"][1]
+        assert zone1["open"] is True
+        assert zone1["duration_seconds"] == 0, (
+            f"Zone 1 duration is {zone1['duration_seconds']}; expected 0. "
+            f"A non-0xAD value at the duration DP must not populate duration_seconds."
+        )
+
+    def test_truncated_known_type_record_is_skipped(self):
+        """A known type byte with insufficient remaining buffer is skipped.
+
+        Type 0xAD requires 2 value bytes; supplying only 1 must not produce a
+        dp_map entry. The scanner advances 1 byte for re-alignment.
+        """
+        from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
+
+        # DP 0x10, type 0xAD (needs 2 value bytes), only 1 byte supplied
+        truncated = bytes([0x10, 0xAD, 0x01])
+        dp_map = _scan_htv213_dp_map(truncated)
+
+        assert dp_map == {}, f"Truncated record should be skipped; got {dp_map}"
+
+    def test_unknown_type_byte_is_skipped(self):
+        """An unrecognized type byte advances 1 byte and produces no dp entry."""
+        from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
+
+        # DP 0x10, type 0x00 (not in _HTV213_TYPE_LENGTHS), one trailing byte
+        unknown = bytes([0x10, 0x00, 0x01])
+        dp_map = _scan_htv213_dp_map(unknown)
+
+        assert dp_map == {}, f"Unknown-type record should be skipped; got {dp_map}"
 
 
 class TestDecodeMoistureFull:

@@ -172,18 +172,27 @@ def _scan_htv213_dp_map(b: bytes) -> dict[int, tuple[int, int]]:
         dp_id = b[i]
         type_byte = b[i + 1]
         val_len = _HTV213_TYPE_LENGTHS.get(type_byte)
-        if val_len is not None and i + 2 + val_len <= len(b):
-            val_bytes = b[i + 2 : i + 2 + val_len]
-            endian = "little" if type_byte == 0xAD else "big"
-            dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, endian))
-            i += 2 + val_len
-        else:
+        if val_len is None:
             _LOGGER.debug(
                 "HTV213FRF: unknown type byte 0x%02X at offset %d; advancing 1 byte for re-alignment",
                 type_byte,
                 i,
             )
             i += 1
+        elif i + 2 + val_len > len(b):
+            _LOGGER.debug(
+                "HTV213FRF: truncated record for type 0x%02X at offset %d: need %d value bytes but have %d; advancing 1 byte",
+                type_byte,
+                i,
+                val_len,
+                len(b) - (i + 2),
+            )
+            i += 1
+        else:
+            val_bytes = b[i + 2 : i + 2 + val_len]
+            endian = "little" if type_byte == 0xAD else "big"
+            dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, endian))
+            i += 2 + val_len
     return dp_map
 
 
@@ -225,18 +234,24 @@ def _extract_htv213_zones(dp_map: dict[int, tuple[int, int]]) -> dict[int, dict]
         state_type, state_val = dp_map[state_dp]
         if state_type != 0xD8:
             continue
-        dur_val = dp_map.get(dur_dp, (None, 0))[1]
+        # Duration only populated for the documented 0xAD DP type; any other type
+        # at this DP (or a missing DP) defaults to 0 rather than misinterpreting a
+        # differently-typed value as seconds.
+        duration_seconds = 0
+        dur_entry = dp_map.get(dur_dp)
+        if dur_entry is not None and dur_entry[0] == 0xAD:
+            duration_seconds = dur_entry[1]
         is_open = bool(state_val & 0x01)  # LSB: 1=open, 0=closed (device uses 0x21/0x20, not 0x01/0x00)
         zones[zone_num] = {
             "open": is_open,
-            "duration_seconds": dur_val,
+            "duration_seconds": duration_seconds,
             "state_raw": state_val,
         }
         _LOGGER.info(
             "HTV213FRF Zone %d: open=%s duration=%ds state_raw=0x%02X",
             zone_num,
             is_open,
-            dur_val,
+            duration_seconds,
             state_val,
         )
     return zones
