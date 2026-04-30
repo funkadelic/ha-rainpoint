@@ -348,6 +348,20 @@ class TestDecodeHws019wrfV2:
         assert "';'" in result["error"]
         assert "1,0,1" in result["error"]
 
+    def test_malformed_flag_token_routes_to_error_path(self):
+        """A non-digit flag token surfaces via the decoder's error path, not a partial list."""
+        result = decode_hws019wrf_v2("1,abc,0;707(707/694/1)")
+        assert result["type"] == "hws019wrf_v2"
+        assert "flags" not in result
+        assert "abc" in result["error"]
+        assert "1,abc,0" in result["error"]
+
+    def test_empty_flag_tokens_are_skipped(self):
+        """Empty flag tokens (e.g. from a stray comma) are tolerated, not treated as malformed."""
+        result = decode_hws019wrf_v2("1,,0;707(707/694/1)")
+        assert result["type"] == "hws019wrf_v2"
+        assert result["flags"] == [1, 0]
+
 
 class TestDecodeValveHub:
     """Tests for decode_valve_hub (HTV0540FRF TLV payload)."""
