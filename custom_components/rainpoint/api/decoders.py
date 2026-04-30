@@ -490,6 +490,56 @@ def _decode_moisture_full_hex(raw: str) -> dict:
     return result
 
 
+def _parse_hws019_flags(flags_part: str) -> list[int]:
+    """Parse the leading status-flags segment (e.g. '1,0,1') into a list of ints.
+
+    Raises ValueError if any non-empty token is not a digit string, so malformed
+    payloads surface to the caller's error path instead of producing a partial list.
+    """
+    flags: list[int] = []
+    for raw_token in flags_part.split(","):
+        token = raw_token.strip()
+        if not token:
+            continue
+        if not token.isdigit():
+            raise ValueError(f"invalid flag token {token!r} in flags segment {flags_part!r}")
+        flags.append(int(token))
+    return flags
+
+
+def _apply_hws019_keyed_item(item: str, readings: dict) -> None:
+    """Apply a 'KEY=VALUE(...)' style reading (e.g. 'P=9709(9709/9701/1)') to readings."""
+    key, rest = item.split("=", 1)
+    key = key.strip()
+    if "(" in rest:
+        readings[key] = rest.split("(")[0].strip()
+    else:
+        readings[key] = rest.strip()
+
+
+def _apply_hws019_positional_item(item: str, readings: dict) -> None:
+    """Apply a positional 'CURRENT(min/max/count)' reading; first slot is temp, second is humidity."""
+    current_value = item.split("(")[0].strip()
+    if "temp" not in readings:
+        readings["temp"] = current_value
+    elif "humidity" not in readings:
+        readings["humidity"] = current_value
+
+
+def _parse_hws019_readings(readings_part: str) -> dict[str, str]:
+    """Parse the readings segment (e.g. '707(...),42(...),P=9709(...)') into a key/value dict."""
+    readings: dict[str, str] = {}
+    for raw_item in readings_part.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if "=" in item:
+            _apply_hws019_keyed_item(item, readings)
+        elif "(" in item:
+            _apply_hws019_positional_item(item, readings)
+    return readings
+
+
 def decode_hws019wrf_v2(raw: str) -> dict:
     """
     Decode HWS019WRF-V2 (Display Hub) CSV/semicolon payload.
@@ -503,29 +553,8 @@ def decode_hws019wrf_v2(raw: str) -> dict:
     _LOGGER.debug("decode_hws019wrf_v2 called with raw: %r", raw)
     try:
         parts = raw.split(";")
-        # First part: status flags (e.g., '1,0,1')
-        flags = [int(x) for x in parts[0].split(",") if x.strip().isdigit()]
-        readings = {}
-        if len(parts) > 1:
-            for item in parts[1].split(","):
-                item = item.strip()
-                if not item:
-                    continue
-                if "=" in item:
-                    # Pressure format: P=9709(9709/9701/1)
-                    key, rest = item.split("=", 1)
-                    key = key.strip()
-                    if "(" in rest:
-                        readings[key] = rest.split("(")[0].strip()
-                    else:
-                        readings[key] = rest.strip()
-                elif "(" in item:
-                    # Temperature/Humidity: 707(707/694/1) — extract current value
-                    current_value = item.split("(")[0].strip()
-                    if "temp" not in readings:
-                        readings["temp"] = current_value
-                    elif "humidity" not in readings:
-                        readings["humidity"] = current_value
+        flags = _parse_hws019_flags(parts[0])
+        readings = _parse_hws019_readings(parts[1]) if len(parts) > 1 else {}
         result = {
             "type": "hws019wrf_v2",
             "flags": flags,
