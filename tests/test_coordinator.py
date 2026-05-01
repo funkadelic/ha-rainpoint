@@ -3,6 +3,7 @@
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -201,10 +202,10 @@ class TestCoordinatorUpdate:
 
     @pytest.mark.asyncio
     async def test_update_fallback_to_individual_calls(self):
-        """When get_multiple_device_status raises, falls back to get_device_status."""
+        """When get_multiple_device_status raises a transport error, falls back to get_device_status."""
         coord, client = _make_coord()
         client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
-        client.get_multiple_device_status.side_effect = Exception("API error")
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("API error")
         client.get_device_status.return_value = {"subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD}]}
 
         result = await _run(coord)
@@ -219,7 +220,7 @@ class TestCoordinatorUpdate:
         hub1 = _make_hub(mid=201, model=MODEL_MOISTURE_SIMPLE)
         hub2 = _make_hub(mid=202, model=MODEL_MOISTURE_SIMPLE)
         client.get_devices_by_hid.return_value = [hub1, hub2]
-        client.get_multiple_device_status.side_effect = Exception("fail")
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("fail")
         client.get_device_status.return_value = {"subDeviceStatus": []}
 
         await _run(coord)
@@ -448,23 +449,24 @@ class TestCoordinatorEdgeBranches:
 
     @pytest.mark.asyncio
     async def test_update_individual_fallback_hub_error_continues(self):
-        """When multipleDeviceStatus fails AND a per-hub get_device_status also fails,
-        that hub is recorded with an empty subDeviceStatus list and iteration continues."""
+        """When multipleDeviceStatus fails AND a per-hub get_device_status also fails
+        with a transport error, that hub is recorded with an empty subDeviceStatus list
+        and iteration continues."""
         coord, client = _make_coord()
         hub1 = _make_hub(mid=301, model=MODEL_MOISTURE_SIMPLE)
         hub2 = _make_hub(mid=302, model=MODEL_MOISTURE_SIMPLE)
         client.get_devices_by_hid.return_value = [hub1, hub2]
-        client.get_multiple_device_status.side_effect = Exception("first call fails")
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("first call fails")
 
-        # Second fallback call per-hub: first hub raises, second returns empty
+        # Second fallback call per-hub: first hub raises a transport error, second returns empty
         def per_hub(mid):
             if mid == 301:
-                raise RuntimeError("per-hub boom")
+                raise aiohttp.ClientError("per-hub transport boom")
             return {"subDeviceStatus": []}
 
         client.get_device_status.side_effect = per_hub
 
-        # Should NOT raise: individual errors are swallowed and logged.
+        # Should NOT raise: transport errors per-hub are logged and the loop continues.
         result = await _run(coord)
 
         # Both hubs made it into the output; neither has decoded sensor data
@@ -729,10 +731,52 @@ class TestApiErrorSurfacing:
 
         coord, client = _make_coord()
         client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
-        # Force fallback: generic Exception trips the broad ``except Exception:`` on multi-status.
-        client.get_multiple_device_status.side_effect = Exception("transient")
+        # Force fallback: a transport-level error trips the narrow
+        # ``except (aiohttp.ClientError, TimeoutError):`` clause on multi-status.
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("transient")
         # Then per-hub raises RainPointApiError.
         client.get_device_status.side_effect = RainPointApiError("per-hub auth failure")
 
         with pytest.raises(UpdateFailed):
+            await _run(coord)
+
+
+class TestNonTransportErrorsPropagate:
+    """Non-transport exceptions (programming bugs) must surface as UpdateFailed
+    instead of being silently swallowed by the multi-status / per-hub fallbacks."""
+
+    @pytest.mark.asyncio
+    async def test_multi_status_non_transport_error_does_not_fall_back(self):
+        """A KeyError from get_multiple_device_status surfaces as UpdateFailed and
+        does NOT trigger the per-hub fallback, so the bug is visible to operators."""
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        # Programming bug shape: KeyError is NOT aiohttp.ClientError / TimeoutError.
+        client.get_multiple_device_status.side_effect = KeyError("missing-key")
+        # If the fallback were wrongly invoked, this would mask the bug.
+        client.get_device_status.return_value = {"subDeviceStatus": []}
+
+        with pytest.raises(UpdateFailed, match="Unexpected RainPoint error"):
+            await _run(coord)
+
+        # Critical assertion: the per-hub fallback must NOT have been invoked, because
+        # KeyError no longer matches the narrow except clause.
+        assert client.get_device_status.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_per_hub_non_transport_error_does_not_swallow(self):
+        """An AttributeError raised by per-hub get_device_status surfaces as UpdateFailed
+        instead of being recorded as an empty subDeviceStatus list."""
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        # Force fallback through a real transport error.
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("transient")
+        # Per-hub raises a programming bug, NOT a transport error.
+        client.get_device_status.side_effect = AttributeError("bad attr")
+
+        with pytest.raises(UpdateFailed, match="Unexpected RainPoint error"):
             await _run(coord)

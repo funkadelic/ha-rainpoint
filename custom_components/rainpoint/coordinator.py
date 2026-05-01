@@ -1,6 +1,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
+import aiohttp
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import (
@@ -267,7 +268,9 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
     async def _fetch_status_by_mid(self, hubs: list[dict]) -> dict[int, dict]:
         """Try multipleDeviceStatus first, fall back to per-hub get_device_status on empty
-        response or transient (non-API) Exception. RainPointApiError surfaces to UpdateFailed."""
+        response or transport-level errors (aiohttp.ClientError / TimeoutError).
+        RainPointApiError surfaces to UpdateFailed; programming bugs propagate to the outer
+        Exception handler instead of being silently masked by the fallback."""
         # Prepare device list for multipleDeviceStatus API
         device_list = [
             {"mid": hub["mid"], "deviceName": hub.get("deviceName", ""), "productKey": hub.get("productKey", "")} for hub in hubs
@@ -285,8 +288,11 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # Surface API errors to the outer except RainPointApiError -> UpdateFailed wrapper
             # so HA marks entities unavailable instead of silently falling back.
             raise
-        except Exception as e:
-            _LOGGER.warning("multipleDeviceStatus failed, falling back to individual calls: %s", e)
+        except (aiohttp.ClientError, TimeoutError) as e:
+            # Only treat transport-level errors as transient. Programming bugs
+            # (KeyError, AttributeError, etc.) propagate to the outer handler so
+            # they surface as UpdateFailed and are not silently masked by the fallback.
+            _LOGGER.warning("multipleDeviceStatus transport error, falling back to individual calls: %s", e)
 
         # Convert response to status_by_mid format when populated.
         # Note: get_multiple_device_status already converts "status" to "subDeviceStatus".
@@ -309,9 +315,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
         return await RainPointCoordinator._fallback_per_hub_status(self, hubs)
 
     async def _fallback_per_hub_status(self, hubs: list[dict]) -> dict[int, dict]:
-        """Per-hub fallback fetch. RainPointApiError surfaces to UpdateFailed; generic
-        Exceptions record an empty subDeviceStatus list and continue with the next hub
-        so a single transient hub failure does not wipe a multi-hub poll."""
+        """Per-hub fallback fetch. RainPointApiError surfaces to UpdateFailed; transport
+        errors (aiohttp.ClientError / TimeoutError) record an empty subDeviceStatus list
+        and continue with the next hub so a single transient hub failure does not wipe a
+        multi-hub poll. Programming bugs propagate to the outer Exception handler."""
         status_by_mid: dict[int, dict] = {}
         for hub in hubs:
             mid = hub["mid"]
@@ -322,8 +329,8 @@ class RainPointCoordinator(DataUpdateCoordinator):
             except RainPointApiError:
                 # Surface API errors to the outer except RainPointApiError -> UpdateFailed wrapper.
                 raise
-            except Exception as individual_e:
-                _LOGGER.error("Failed to get status for mid=%s: %s", mid, individual_e)
+            except (aiohttp.ClientError, TimeoutError) as individual_e:
+                _LOGGER.error("Transport error getting status for mid=%s: %s", mid, individual_e)
                 status_by_mid[mid] = {"subDeviceStatus": []}
         return status_by_mid
 
