@@ -680,3 +680,52 @@ class TestPureHelpers:
         sub = {"name": "S", "model": "M", "softVer": "1.0"}
         entry = _coord_module._build_sensor_entry(hub, sub, mid=200, addr=1, status_entry={"id": "D1"}, decoded=None)
         assert entry["hub_name"] == "Hub"
+
+
+class TestApiErrorSurfacing:
+    """RainPointApiError from the multi-status or per-hub fallback path must surface as UpdateFailed."""
+
+    @pytest.mark.asyncio
+    async def test_multi_status_api_error_surfaces_as_update_failed(self):
+        """RainPointApiError from get_multiple_device_status propagates to UpdateFailed.
+
+        Previously the inner ``except Exception`` swallowed RainPointApiError and silently
+        fell back to per-hub get_device_status, masking auth/token/5xx failures from HA.
+        With the narrowed ``except RainPointApiError: raise`` clause, the error must reach
+        the outer UpdateFailed wrapper and the per-hub fallback must NOT run.
+        """
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_multiple_device_status.side_effect = RainPointApiError("token expired")
+        # Even if a fallback per-hub call would have succeeded, RainPointApiError must surface.
+        client.get_device_status.return_value = {"subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD}]}
+
+        with pytest.raises(UpdateFailed):
+            await _run(coord)
+
+        # Critical assertion: the per-hub fallback must NOT have been invoked, because the
+        # narrow ``except RainPointApiError: raise`` re-raises before reaching the per-hub loop.
+        assert client.get_device_status.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_per_hub_api_error_surfaces_as_update_failed(self):
+        """RainPointApiError from per-hub get_device_status (during fallback) propagates to UpdateFailed.
+
+        Previously the inner ``except Exception as individual_e`` swallowed RainPointApiError
+        and silently recorded ``{"subDeviceStatus": []}`` for that hub, hiding the failure.
+        With the narrowed ``except RainPointApiError: raise`` clause in the per-hub fallback,
+        the error must reach the outer UpdateFailed wrapper.
+        """
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        # Force fallback: generic Exception trips the broad ``except Exception:`` on multi-status.
+        client.get_multiple_device_status.side_effect = Exception("transient")
+        # Then per-hub raises RainPointApiError.
+        client.get_device_status.side_effect = RainPointApiError("per-hub auth failure")
+
+        with pytest.raises(UpdateFailed):
+            await _run(coord)
