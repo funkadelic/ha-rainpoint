@@ -586,3 +586,97 @@ class TestDecoderRegistry:
         """Every value is a callable decoder function."""
         for model, fn in DECODER_REGISTRY.items():
             assert callable(fn), f"Decoder for {model!r} is not callable"
+
+
+class TestPureHelpers:
+    """Direct-call tests for module-level pure helpers extracted from _async_update_data."""
+
+    # _resolve_addr_from_sid
+    def test_resolve_addr_from_sid_valid(self):
+        """A 'D'-prefixed sid with integer tail returns the integer."""
+        assert _coord_module._resolve_addr_from_sid("D1") == 1
+
+    def test_resolve_addr_from_sid_multi_digit(self):
+        """Multi-digit integer tails are parsed as a single base-10 integer."""
+        assert _coord_module._resolve_addr_from_sid("D42") == 42
+
+    def test_resolve_addr_from_sid_non_d_prefix(self):
+        """sids that do not start with 'D' return None."""
+        assert _coord_module._resolve_addr_from_sid("X1") is None
+
+    def test_resolve_addr_from_sid_non_integer_tail(self):
+        """sids whose tail is not a base-10 integer return None."""
+        assert _coord_module._resolve_addr_from_sid("DABC") is None
+
+    # _decode_subdevice_payload
+    def test_decode_subdevice_payload_known_model(self):
+        """Known models dispatch through DECODER_REGISTRY and return the decoded dict."""
+        result = _coord_module._decode_subdevice_payload(MODEL_MOISTURE_SIMPLE, _MOISTURE_SIMPLE_PAYLOAD)
+        assert result["type"] == "moisture_simple"
+
+    def test_decode_subdevice_payload_display_hub_special_case(self):
+        """MODEL_DISPLAY_HUB routes to decode_hws019wrf_v2, not the registry."""
+        result = _coord_module._decode_subdevice_payload(MODEL_DISPLAY_HUB, _DISPLAY_HUB_PAYLOAD)
+        assert result["type"] == "hws019wrf_v2"
+
+    def test_decode_subdevice_payload_unknown_model(self):
+        """Unknown models return the {'type': 'unknown', ...} shape."""
+        result = _coord_module._decode_subdevice_payload("UNKNOWN_XYZ", "10#DEAD")
+        assert result == {"type": "unknown", "model": "UNKNOWN_XYZ", "raw_value": "10#DEAD"}
+
+    # _attach_device_timestamp
+    def test_attach_device_timestamp_valid_ms(self):
+        """A valid epoch-ms 'time' adds device_timestamp + timestamp_source."""
+        decoded = {"type": "x"}
+        _coord_module._attach_device_timestamp(decoded, {"time": 1700000000000})
+        assert "device_timestamp" in decoded
+        assert decoded["timestamp_source"] == "device"
+
+    def test_attach_device_timestamp_decoded_is_none_is_noop(self):
+        """A None decoded value is a no-op and does not raise."""
+        # Should not raise; nothing to mutate.
+        _coord_module._attach_device_timestamp(None, {"time": 1700000000000})
+
+    def test_attach_device_timestamp_invalid_time_swallowed(self):
+        """A non-numeric 'time' value is swallowed; decoded gains no timestamp keys."""
+        decoded = {"type": "x"}
+        _coord_module._attach_device_timestamp(decoded, {"time": "not-a-number"})
+        assert "device_timestamp" not in decoded
+
+    def test_attach_device_timestamp_no_time_key_is_noop(self):
+        """Missing 'time' key leaves decoded unchanged."""
+        decoded = {"type": "x"}
+        _coord_module._attach_device_timestamp(decoded, {})
+        assert "device_timestamp" not in decoded
+
+    # _build_sensor_entry
+    def test_build_sensor_entry_returns_all_fields(self):
+        """The returned dict carries every required metadata key."""
+        hub = {"hid": 100, "name": "MyHub", "homeName": "Home", "deviceName": "dev1", "productKey": "pk1"}
+        sub = {"name": "Sensor1", "model": "MODEL_X", "softVer": "1.0"}
+        s = {"id": "D1", "value": "10#AB"}
+        entry = _coord_module._build_sensor_entry(hub, sub, mid=200, addr=1, status_entry=s, decoded={"type": "x"})
+        for key in (
+            "hid",
+            "mid",
+            "addr",
+            "home_name",
+            "hub_name",
+            "sub_name",
+            "model",
+            "firmware_version",
+            "device_name",
+            "product_key",
+            "raw_status",
+            "data",
+        ):
+            assert key in entry
+        assert entry["hub_name"] == "MyHub"
+        assert entry["data"] == {"type": "x"}
+
+    def test_build_sensor_entry_hub_name_defaults_to_Hub(self):
+        """When hub has no 'name' key, hub_name falls back to 'Hub'."""
+        hub = {"hid": 100, "homeName": "Home", "deviceName": "d", "productKey": "p"}  # no "name" key
+        sub = {"name": "S", "model": "M", "softVer": "1.0"}
+        entry = _coord_module._build_sensor_entry(hub, sub, mid=200, addr=1, status_entry={"id": "D1"}, decoded=None)
+        assert entry["hub_name"] == "Hub"
