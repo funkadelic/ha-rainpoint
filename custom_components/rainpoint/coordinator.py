@@ -266,51 +266,65 @@ class RainPointCoordinator(DataUpdateCoordinator):
         return hubs
 
     async def _fetch_status_by_mid(self, hubs: list[dict]) -> dict[int, dict]:
-        """Try multipleDeviceStatus first, fall back to per-hub get_device_status on any Exception."""
-        status_by_mid: dict[int, dict] = {}
-
+        """Try multipleDeviceStatus first, fall back to per-hub get_device_status on empty
+        response or transient (non-API) Exception. RainPointApiError surfaces to UpdateFailed."""
         # Prepare device list for multipleDeviceStatus API
-        device_list = []
-        for hub in hubs:
-            device_list.append(
-                {"mid": hub["mid"], "deviceName": hub.get("deviceName", ""), "productKey": hub.get("productKey", "")}
-            )
+        device_list = [
+            {"mid": hub["mid"], "deviceName": hub.get("deviceName", ""), "productKey": hub.get("productKey", "")} for hub in hubs
+        ]
 
         # Try multipleDeviceStatus first (more efficient)
+        multiple_status: list | None = None
         try:
             multiple_status = await self._client.get_multiple_device_status(device_list)
             _LOGGER.debug(
                 debug_with_version("multipleDeviceStatus successful, got data for %d devices"),
-                len(multiple_status),
+                len(multiple_status) if multiple_status else 0,
             )
+        except RainPointApiError:
+            # Surface API errors to the outer except RainPointApiError -> UpdateFailed wrapper
+            # so HA marks entities unavailable instead of silently falling back.
+            raise
+        except Exception as e:
+            _LOGGER.warning("multipleDeviceStatus failed, falling back to individual calls: %s", e)
 
-            # If multipleDeviceStatus returns empty data, fall back to individual calls
-            if not multiple_status:
-                _LOGGER.warning("multipleDeviceStatus returned empty data, falling back to individual calls")
-                raise RainPointApiError("Empty response from multipleDeviceStatus")
-
-            # Convert response to status_by_mid format
-            # Note: get_multiple_device_status already converts "status" to "subDeviceStatus"
+        # Convert response to status_by_mid format when populated.
+        # Note: get_multiple_device_status already converts "status" to "subDeviceStatus".
+        if multiple_status:
+            status_by_mid: dict[int, dict] = {}
             for device_data in multiple_status:
                 mid = device_data["mid"]
                 status_array = device_data.get("subDeviceStatus", [])
                 status_by_mid[mid] = {"subDeviceStatus": status_array}
                 _LOGGER.debug(debug_with_version("Fetched status for mid=%s using multipleDeviceStatus"), mid)
+            return status_by_mid
 
-        except Exception as e:
-            _LOGGER.warning("multipleDeviceStatus failed, falling back to individual calls: %s", e)
+        # Plain conditional fallback path: empty / None / transient-error multi-status all
+        # converge here, replacing the prior raised-exception sentinel that doubled as
+        # control flow.
+        _LOGGER.warning("multipleDeviceStatus returned empty data, falling back to individual calls")
+        # Class-level dispatch matches the orchestrator pattern in _async_update_data so the
+        # SimpleNamespace-based test fixture in tests/test_coordinator.py keeps working
+        # without modification.
+        return await RainPointCoordinator._fallback_per_hub_status(self, hubs)
 
-            # Fall back to individual device status calls
-            for hub in hubs:
-                mid = hub["mid"]
-                try:
-                    status = await self._client.get_device_status(mid)
-                    status_by_mid[mid] = status
-                    _LOGGER.debug(debug_with_version("Fetched status for mid=%s using individual call"), mid)
-                except Exception as individual_e:
-                    _LOGGER.error("Failed to get status for mid=%s: %s", mid, individual_e)
-                    status_by_mid[mid] = {"subDeviceStatus": []}
-
+    async def _fallback_per_hub_status(self, hubs: list[dict]) -> dict[int, dict]:
+        """Per-hub fallback fetch. RainPointApiError surfaces to UpdateFailed; generic
+        Exceptions record an empty subDeviceStatus list and continue with the next hub
+        so a single transient hub failure does not wipe a multi-hub poll."""
+        status_by_mid: dict[int, dict] = {}
+        for hub in hubs:
+            mid = hub["mid"]
+            try:
+                status = await self._client.get_device_status(mid)
+                status_by_mid[mid] = status
+                _LOGGER.debug(debug_with_version("Fetched status for mid=%s using individual call"), mid)
+            except RainPointApiError:
+                # Surface API errors to the outer except RainPointApiError -> UpdateFailed wrapper.
+                raise
+            except Exception as individual_e:
+                _LOGGER.error("Failed to get status for mid=%s: %s", mid, individual_e)
+                status_by_mid[mid] = {"subDeviceStatus": []}
         return status_by_mid
 
     def _notify_unknown_model(self, model: str | None, mid: int, addr: int, raw_value: str) -> None:
