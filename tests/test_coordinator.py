@@ -649,6 +649,13 @@ class TestPureHelpers:
         _coord_module._attach_device_timestamp(decoded, {})
         assert "device_timestamp" not in decoded
 
+    def test_attach_device_timestamp_zero_is_valid_epoch(self):
+        """A 'time' of 0 is the Unix epoch, not a missing value."""
+        decoded = {"type": "x"}
+        _coord_module._attach_device_timestamp(decoded, {"time": 0})
+        assert decoded["device_timestamp"] == "1970-01-01T00:00:00+00:00"
+        assert decoded["timestamp_source"] == "device"
+
     # _build_sensor_entry
     def test_build_sensor_entry_returns_all_fields(self):
         """The returned dict carries every required metadata key."""

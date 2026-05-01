@@ -161,12 +161,12 @@ def _decode_subdevice_payload(model: str | None, raw_value: str) -> dict:
 def _attach_device_timestamp(decoded: dict | None, status_entry: dict) -> None:
     """Mutate decoded in place to add device_timestamp / timestamp_source.
 
-    No-op when decoded is falsy or status_entry["time"] is missing or not parsable
-    as an epoch-ms integer. Silently swallows ValueError, TypeError, OSError, and
-    OverflowError, matching the original inline behavior.
+    No-op when decoded is falsy or status_entry["time"] is missing (None). A
+    "time" of 0 is treated as a valid epoch-ms (1970-01-01). Silently swallows
+    ValueError, TypeError, OSError, and OverflowError raised while parsing.
     """
     device_time = status_entry.get("time")
-    if not device_time:
+    if device_time is None:
         return
     try:
         dt = datetime.fromtimestamp(device_time / 1000, tz=UTC)
