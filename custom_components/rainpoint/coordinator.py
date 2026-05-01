@@ -126,6 +126,82 @@ DECODER_REGISTRY = {
 }
 
 
+def _resolve_addr_from_sid(sid: str) -> int | None:
+    """Return integer addr from a 'D'-prefixed sid (e.g. 'D1' -> 1).
+
+    Returns None if sid does not start with 'D' or the suffix is not a base-10 integer.
+    """
+    if not sid.startswith("D"):
+        return None
+    try:
+        return int(sid[1:])
+    except ValueError:
+        return None
+
+
+def _decode_subdevice_payload(model: str | None, raw_value: str) -> dict:
+    """Dispatch raw_value through DECODER_REGISTRY or the MODEL_DISPLAY_HUB special case.
+
+    Returns the decoded dict, or an {"type": "unknown", ...} shape if no decoder is
+    registered. Raises whatever the underlying decoder raises - callers handle the
+    try/except and any side-effects (logging, persistent notifications).
+    """
+    if model == MODEL_DISPLAY_HUB:
+        return decode_hws019wrf_v2(raw_value)
+    decoder_func = DECODER_REGISTRY.get(model)
+    if decoder_func:
+        return decoder_func(raw_value)
+    return {
+        "type": "unknown",
+        "model": model,
+        "raw_value": raw_value,
+    }
+
+
+def _attach_device_timestamp(decoded: dict | None, status_entry: dict) -> None:
+    """Mutate decoded in place to add device_timestamp / timestamp_source.
+
+    No-op when decoded is falsy or status_entry["time"] is missing or not parsable
+    as an epoch-ms integer. Silently swallows ValueError, TypeError, OSError, and
+    OverflowError, matching the original inline behavior.
+    """
+    device_time = status_entry.get("time")
+    if not device_time:
+        return
+    try:
+        dt = datetime.fromtimestamp(device_time / 1000, tz=UTC)
+        if decoded:
+            decoded["device_timestamp"] = dt.isoformat()
+            decoded["timestamp_source"] = "device"
+    except (ValueError, TypeError, OSError, OverflowError):
+        pass
+
+
+def _build_sensor_entry(
+    hub: dict,
+    sub: dict,
+    mid: int,
+    addr: int,
+    status_entry: dict,
+    decoded: dict | None,
+) -> dict:
+    """Build the per-sensor metadata dict that goes into the coordinator's sensors output."""
+    return {
+        "hid": hub["hid"],
+        "mid": mid,
+        "addr": addr,
+        "home_name": hub.get("homeName"),
+        "hub_name": hub.get("name", "Hub"),
+        "sub_name": sub.get("name"),
+        "model": sub.get("model"),
+        "firmware_version": sub.get("softVer"),
+        "device_name": hub.get("deviceName"),
+        "product_key": hub.get("productKey"),
+        "raw_status": status_entry,
+        "data": decoded,
+    }
+
+
 class RainPointCoordinator(DataUpdateCoordinator):
     """Coordinator for RainPoint polling."""
 
