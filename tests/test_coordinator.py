@@ -3,6 +3,7 @@
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -201,10 +202,10 @@ class TestCoordinatorUpdate:
 
     @pytest.mark.asyncio
     async def test_update_fallback_to_individual_calls(self):
-        """When get_multiple_device_status raises, falls back to get_device_status."""
+        """When get_multiple_device_status raises a transport error, falls back to get_device_status."""
         coord, client = _make_coord()
         client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
-        client.get_multiple_device_status.side_effect = Exception("API error")
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("API error")
         client.get_device_status.return_value = {"subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD}]}
 
         result = await _run(coord)
@@ -219,7 +220,7 @@ class TestCoordinatorUpdate:
         hub1 = _make_hub(mid=201, model=MODEL_MOISTURE_SIMPLE)
         hub2 = _make_hub(mid=202, model=MODEL_MOISTURE_SIMPLE)
         client.get_devices_by_hid.return_value = [hub1, hub2]
-        client.get_multiple_device_status.side_effect = Exception("fail")
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("fail")
         client.get_device_status.return_value = {"subDeviceStatus": []}
 
         await _run(coord)
@@ -448,23 +449,24 @@ class TestCoordinatorEdgeBranches:
 
     @pytest.mark.asyncio
     async def test_update_individual_fallback_hub_error_continues(self):
-        """When multipleDeviceStatus fails AND a per-hub get_device_status also fails,
-        that hub is recorded with an empty subDeviceStatus list and iteration continues."""
+        """When multipleDeviceStatus fails AND a per-hub get_device_status also fails
+        with a transport error, that hub is recorded with an empty subDeviceStatus list
+        and iteration continues."""
         coord, client = _make_coord()
         hub1 = _make_hub(mid=301, model=MODEL_MOISTURE_SIMPLE)
         hub2 = _make_hub(mid=302, model=MODEL_MOISTURE_SIMPLE)
         client.get_devices_by_hid.return_value = [hub1, hub2]
-        client.get_multiple_device_status.side_effect = Exception("first call fails")
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("first call fails")
 
-        # Second fallback call per-hub: first hub raises, second returns empty
+        # Second fallback call per-hub: first hub raises a transport error, second returns empty
         def per_hub(mid):
             if mid == 301:
-                raise RuntimeError("per-hub boom")
+                raise aiohttp.ClientError("per-hub transport boom")
             return {"subDeviceStatus": []}
 
         client.get_device_status.side_effect = per_hub
 
-        # Should NOT raise: individual errors are swallowed and logged.
+        # Should NOT raise: transport errors per-hub are logged and the loop continues.
         result = await _run(coord)
 
         # Both hubs made it into the output; neither has decoded sensor data
@@ -586,3 +588,195 @@ class TestDecoderRegistry:
         """Every value is a callable decoder function."""
         for model, fn in DECODER_REGISTRY.items():
             assert callable(fn), f"Decoder for {model!r} is not callable"
+
+
+class TestPureHelpers:
+    """Direct-call tests for module-level pure helpers extracted from _async_update_data."""
+
+    # _resolve_addr_from_sid
+    def test_resolve_addr_from_sid_valid(self):
+        """A 'D'-prefixed sid with integer tail returns the integer."""
+        assert _coord_module._resolve_addr_from_sid("D1") == 1
+
+    def test_resolve_addr_from_sid_multi_digit(self):
+        """Multi-digit integer tails are parsed as a single base-10 integer."""
+        assert _coord_module._resolve_addr_from_sid("D42") == 42
+
+    def test_resolve_addr_from_sid_non_d_prefix(self):
+        """sids that do not start with 'D' return None."""
+        assert _coord_module._resolve_addr_from_sid("X1") is None
+
+    def test_resolve_addr_from_sid_non_integer_tail(self):
+        """sids whose tail is not a base-10 integer return None."""
+        assert _coord_module._resolve_addr_from_sid("DABC") is None
+
+    # _decode_subdevice_payload
+    def test_decode_subdevice_payload_known_model(self):
+        """Known models dispatch through DECODER_REGISTRY and return the decoded dict."""
+        result = _coord_module._decode_subdevice_payload(MODEL_MOISTURE_SIMPLE, _MOISTURE_SIMPLE_PAYLOAD)
+        assert result["type"] == "moisture_simple"
+
+    def test_decode_subdevice_payload_display_hub_special_case(self):
+        """MODEL_DISPLAY_HUB routes to decode_hws019wrf_v2, not the registry."""
+        result = _coord_module._decode_subdevice_payload(MODEL_DISPLAY_HUB, _DISPLAY_HUB_PAYLOAD)
+        assert result["type"] == "hws019wrf_v2"
+
+    def test_decode_subdevice_payload_unknown_model(self):
+        """Unknown models return the {'type': 'unknown', ...} shape."""
+        result = _coord_module._decode_subdevice_payload("UNKNOWN_XYZ", "10#DEAD")
+        assert result == {"type": "unknown", "model": "UNKNOWN_XYZ", "raw_value": "10#DEAD"}
+
+    # _attach_device_timestamp
+    def test_attach_device_timestamp_valid_ms(self):
+        """A valid epoch-ms 'time' adds device_timestamp + timestamp_source."""
+        decoded = {"type": "x"}
+        _coord_module._attach_device_timestamp(decoded, {"time": 1700000000000})
+        assert "device_timestamp" in decoded
+        assert decoded["timestamp_source"] == "device"
+
+    def test_attach_device_timestamp_decoded_is_none_is_noop(self):
+        """A None decoded value is a no-op and does not raise."""
+        # Should not raise; nothing to mutate.
+        _coord_module._attach_device_timestamp(None, {"time": 1700000000000})
+
+    def test_attach_device_timestamp_invalid_time_swallowed(self):
+        """A non-numeric 'time' value is swallowed; decoded gains no timestamp keys."""
+        decoded = {"type": "x"}
+        _coord_module._attach_device_timestamp(decoded, {"time": "not-a-number"})
+        assert "device_timestamp" not in decoded
+
+    def test_attach_device_timestamp_no_time_key_is_noop(self):
+        """Missing 'time' key leaves decoded unchanged."""
+        decoded = {"type": "x"}
+        _coord_module._attach_device_timestamp(decoded, {})
+        assert "device_timestamp" not in decoded
+
+    def test_attach_device_timestamp_zero_is_valid_epoch(self):
+        """A 'time' of 0 is the Unix epoch, not a missing value."""
+        decoded = {"type": "x"}
+        _coord_module._attach_device_timestamp(decoded, {"time": 0})
+        assert decoded["device_timestamp"] == "1970-01-01T00:00:00+00:00"
+        assert decoded["timestamp_source"] == "device"
+
+    # _build_sensor_entry
+    def test_build_sensor_entry_returns_all_fields(self):
+        """The returned dict carries every required metadata key."""
+        hub = {"hid": 100, "name": "MyHub", "homeName": "Home", "deviceName": "dev1", "productKey": "pk1"}
+        sub = {"name": "Sensor1", "model": "MODEL_X", "softVer": "1.0"}
+        s = {"id": "D1", "value": "10#AB"}
+        entry = _coord_module._build_sensor_entry(hub, sub, mid=200, addr=1, status_entry=s, decoded={"type": "x"})
+        for key in (
+            "hid",
+            "mid",
+            "addr",
+            "home_name",
+            "hub_name",
+            "sub_name",
+            "model",
+            "firmware_version",
+            "device_name",
+            "product_key",
+            "raw_status",
+            "data",
+        ):
+            assert key in entry
+        assert entry["hub_name"] == "MyHub"
+        assert entry["data"] == {"type": "x"}
+
+    def test_build_sensor_entry_hub_name_defaults_to_Hub(self):
+        """When hub has no 'name' key, hub_name falls back to 'Hub'."""
+        hub = {"hid": 100, "homeName": "Home", "deviceName": "d", "productKey": "p"}  # no "name" key
+        sub = {"name": "S", "model": "M", "softVer": "1.0"}
+        entry = _coord_module._build_sensor_entry(hub, sub, mid=200, addr=1, status_entry={"id": "D1"}, decoded=None)
+        assert entry["hub_name"] == "Hub"
+
+
+class TestApiErrorSurfacing:
+    """RainPointApiError from the multi-status or per-hub fallback path must surface as UpdateFailed."""
+
+    @pytest.mark.asyncio
+    async def test_multi_status_api_error_surfaces_as_update_failed(self):
+        """RainPointApiError from get_multiple_device_status propagates to UpdateFailed.
+
+        Previously the inner ``except Exception`` swallowed RainPointApiError and silently
+        fell back to per-hub get_device_status, masking auth/token/5xx failures from HA.
+        With the narrowed ``except RainPointApiError: raise`` clause, the error must reach
+        the outer UpdateFailed wrapper and the per-hub fallback must NOT run.
+        """
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_multiple_device_status.side_effect = RainPointApiError("token expired")
+        # Even if a fallback per-hub call would have succeeded, RainPointApiError must surface.
+        client.get_device_status.return_value = {"subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD}]}
+
+        with pytest.raises(UpdateFailed):
+            await _run(coord)
+
+        # Critical assertion: the per-hub fallback must NOT have been invoked, because the
+        # narrow ``except RainPointApiError: raise`` re-raises before reaching the per-hub loop.
+        assert client.get_device_status.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_per_hub_api_error_surfaces_as_update_failed(self):
+        """RainPointApiError from per-hub get_device_status (during fallback) propagates to UpdateFailed.
+
+        Previously the inner ``except Exception as individual_e`` swallowed RainPointApiError
+        and silently recorded ``{"subDeviceStatus": []}`` for that hub, hiding the failure.
+        With the narrowed ``except RainPointApiError: raise`` clause in the per-hub fallback,
+        the error must reach the outer UpdateFailed wrapper.
+        """
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        # Force fallback: a transport-level error trips the narrow
+        # ``except (aiohttp.ClientError, TimeoutError):`` clause on multi-status.
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("transient")
+        # Then per-hub raises RainPointApiError.
+        client.get_device_status.side_effect = RainPointApiError("per-hub auth failure")
+
+        with pytest.raises(UpdateFailed):
+            await _run(coord)
+
+
+class TestNonTransportErrorsPropagate:
+    """Non-transport exceptions (programming bugs) must surface as UpdateFailed
+    instead of being silently swallowed by the multi-status / per-hub fallbacks."""
+
+    @pytest.mark.asyncio
+    async def test_multi_status_non_transport_error_does_not_fall_back(self):
+        """A KeyError from get_multiple_device_status surfaces as UpdateFailed and
+        does NOT trigger the per-hub fallback, so the bug is visible to operators."""
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        # Programming bug shape: KeyError is NOT aiohttp.ClientError / TimeoutError.
+        client.get_multiple_device_status.side_effect = KeyError("missing-key")
+        # If the fallback were wrongly invoked, this would mask the bug.
+        client.get_device_status.return_value = {"subDeviceStatus": []}
+
+        with pytest.raises(UpdateFailed, match="Unexpected RainPoint error"):
+            await _run(coord)
+
+        # Critical assertion: the per-hub fallback must NOT have been invoked, because
+        # KeyError no longer matches the narrow except clause.
+        assert client.get_device_status.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_per_hub_non_transport_error_does_not_swallow(self):
+        """An AttributeError raised by per-hub get_device_status surfaces as UpdateFailed
+        instead of being recorded as an empty subDeviceStatus list."""
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        # Force fallback through a real transport error.
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("transient")
+        # Per-hub raises a programming bug, NOT a transport error.
+        client.get_device_status.side_effect = AttributeError("bad attr")
+
+        with pytest.raises(UpdateFailed, match="Unexpected RainPoint error"):
+            await _run(coord)
