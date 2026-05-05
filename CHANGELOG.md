@@ -2,6 +2,19 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.4.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.4.2...v1.4.3) (2026-05-05)
+
+
+### Changed
+
+* **coordinator:** drop _async_update_data cognitive complexity ([#45](https://github.com/funkadelic/ha-rainpoint/issues/45)) ([aaa984c](https://github.com/funkadelic/ha-rainpoint/commit/aaa984c5a760192564fa58c47f8c34112a9dff46))
+
+
+### Other Changes
+
+* bump SonarSource/sonarqube-scan-action from 6 to 8 ([#46](https://github.com/funkadelic/ha-rainpoint/issues/46)) ([b2de2a0](https://github.com/funkadelic/ha-rainpoint/commit/b2de2a0c2fa58d8603a084e4116b8e886900fe0e))
+* document PR-title gate, Codecov, and SonarQube in CONTRIBUTING ([#43](https://github.com/funkadelic/ha-rainpoint/issues/43)) ([313f277](https://github.com/funkadelic/ha-rainpoint/commit/313f277548db96cd02560aceff963eb1fd66eb16))
+
 ## [1.4.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.4.1...v1.4.2) (2026-04-30)
 
 
