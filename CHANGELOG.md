@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.5.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.5.0...v1.5.1) (2026-05-08)
+
+
+### Other Changes
+
+* cover defensive handlers and raise coverage gate to 99 ([#49](https://github.com/funkadelic/ha-rainpoint/issues/49)) ([c037b96](https://github.com/funkadelic/ha-rainpoint/commit/c037b9660cc613242509dea33875f3af50d46a1f))
+
 ## [1.5.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.4.2...v1.5.0) (2026-05-08)
 
 
