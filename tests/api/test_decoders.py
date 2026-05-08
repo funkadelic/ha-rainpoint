@@ -500,3 +500,377 @@ class TestHcsDelegation:
         delegated = decode_hcs027arf(BASIC_HEX_PAYLOAD)
         real = decode_unknown(BASIC_HEX_PAYLOAD)
         assert delegated == real
+
+
+class TestHtv213frfAsciiErrorBranches:
+    """Cover ASCII-format error/guard branches inside _decode_htv213frf_ascii.
+
+    These all enter via the public wrapper decode_htv213frf_valve, which
+    catches the inner re-raise and returns an error dict.
+    """
+
+    def test_ascii_missing_semicolon_returns_error_dict(self):
+        """Comma+pipe but no semicolon routes to ASCII then raises 'missing semicolon'."""
+        result = decode_htv213frf_valve("1,2,3|4,5,6")
+        assert result["decoder"] == "htv213frf_error"
+        assert "missing semicolon" in result["error"]
+
+    def test_ascii_short_header_returns_error_dict(self):
+        """Header with fewer than 3 comma-separated values triggers the header guard."""
+        result = decode_htv213frf_valve("1,2;0,0,0,0,0,0")
+        assert result["decoder"] == "htv213frf_error"
+        assert "header" in result["error"].lower()
+
+    def test_ascii_empty_zone_section_is_skipped(self):
+        """An empty zone section (consecutive '|') is silently skipped, not fatal."""
+        result = decode_htv213frf_valve("1,-84,1;0,149,0,0,0,0||0,6,0,0,0,0")
+        assert result["decoder"] == "htv213frf_ascii"
+        # Two non-empty zones, the empty one between them was skipped.
+        assert len(result["zones"]) == 2
+
+    def test_ascii_short_zone_is_warned_and_skipped(self):
+        """A zone with fewer than 6 fields is logged and skipped, not fatal."""
+        result = decode_htv213frf_valve("1,-84,1;0,149,0|0,6,0,0,0,0")
+        assert result["decoder"] == "htv213frf_ascii"
+        # Only the well-formed zone survives.
+        assert len(result["zones"]) == 1
+
+
+class TestHtv213frfHexErrorBranches:
+    """Cover hex-format error/guard branches inside _decode_htv213frf_hex
+    and the _extract_htv213_hub_state / zone helpers.
+    """
+
+    def test_hex_invalid_hex_returns_error_dict(self):
+        """Non-hex characters after '11#' surface through the wrapper as an error dict."""
+        result = decode_htv213frf_valve("11#zz")
+        assert result["decoder"] == "htv213frf_error"
+        assert "non-hex" in result["error"].lower() or "hexadecimal" in result["error"].lower()
+
+    def test_hex_missing_hub_state_dp_defaults_offline(self):
+        """Hex payload without DP 0x18 yields hub_online=False and hub_state_raw=None."""
+        # Empty payload: parses to empty bytes, no DPs -> 0x18 absent.
+        result = decode_htv213frf_valve("11#")
+        assert result["decoder"] == "htv213frf_hex"
+        assert result["hub_online"] is False
+        assert result["hub_state_raw"] is None
+
+    def test_hex_hub_state_dp_with_wrong_type_is_ignored(self):
+        """DP 0x18 with a type other than 0xDC yields hub_online=False (state_raw still surfaced)."""
+        # DP 0x18, type 0xD8 (zone-state type, not hub-state type), value 0x01.
+        payload = bytes([0x18, 0xD8, 0x01]).hex()
+        result = decode_htv213frf_valve("11#" + payload)
+        assert result["decoder"] == "htv213frf_hex"
+        assert result["hub_online"] is False
+        # The raw value is still passed back for diagnostic visibility.
+        assert result["hub_state_raw"] == 0x01
+
+    def test_hex_zone_dp_with_wrong_type_is_skipped(self):
+        """DP 0x19 (zone-1 state) with type other than 0xD8 is skipped, not misread."""
+        # Hub online + zone-1 DP with type 0xDC (hub-state type) instead of 0xD8.
+        payload = bytes([0x18, 0xDC, 0x01, 0x19, 0xDC, 0x01]).hex()
+        result = decode_htv213frf_valve("11#" + payload)
+        assert result["hub_online"] is True
+        assert result["zones"] == {}
+
+
+class TestDecodeMoistureFullErrorBranches:
+    """Cover decode_moisture_full wrapper and _decode_moisture_full_ascii guards."""
+
+    def test_unknown_format_returns_error_dict(self):
+        """A payload matching neither hex nor ASCII layout yields an error dict."""
+        result = decode_moisture_full("not_matching_any_format")
+        assert result["decoder"] == "hcs021frf_error"
+        assert "Unexpected payload format" in result["error"]
+
+    def test_invalid_hex_returns_error_dict(self):
+        """Bad hex characters after '10#' route through the wrapper exception path."""
+        result = decode_moisture_full("10#zz")
+        assert result["decoder"] == "hcs021frf_error"
+        assert result["type"] == "moisture_full"
+
+    def test_ascii_missing_semicolon_returns_error_dict(self):
+        """ASCII-shaped payload missing ';' raises inside the inner ASCII decoder."""
+        # Comma + '=' routes to ASCII; missing ';' trips the inner guard.
+        result = decode_moisture_full("1,2=3")
+        assert result["decoder"] == "hcs021frf_error"
+        assert "missing semicolon" in result["error"]
+
+    def test_ascii_short_header_returns_error_dict(self):
+        """ASCII header with fewer than 3 fields trips the header guard."""
+        result = decode_moisture_full("1,2;694,70,G=292478")
+        assert result["decoder"] == "hcs021frf_error"
+        assert "header" in result["error"].lower()
+
+    def test_ascii_non_negative_rssi_clamped_to_none(self):
+        """Non-negative ASCII RSSI is clamped to None (hardware never reports >=0 dBm)."""
+        result = decode_moisture_full("1,5,1;694,70,G=292478")
+        assert result["rssi_dbm"] is None
+        assert result["decoder"] == "hcs021frf_ascii"
+
+    def test_ascii_short_sensor_section_returns_error_dict(self):
+        """ASCII sensor section with fewer than 3 fields trips the sensor-data guard."""
+        result = decode_moisture_full("1,-73,1;694,70")
+        assert result["decoder"] == "hcs021frf_error"
+        assert "sensor" in result["error"].lower()
+
+    def test_ascii_lux_with_multi_equals_falls_back_to_zero(self):
+        """A lux token like 'G=A=B' splits into 3 parts and falls back to 0."""
+        result = decode_moisture_full("1,-73,1;694,70,G=A=B")
+        assert result["illuminance_lux"] == 0
+
+    def test_ascii_lux_numeric_no_equals_parsed(self):
+        """A bare numeric lux token (no '=') is parsed as int / 10."""
+        result = decode_moisture_full("1,-73,1;694,70,1234")
+        assert result["illuminance_lux"] == 123.4
+
+    def test_ascii_lux_non_numeric_no_equals_falls_back_to_zero(self):
+        """A non-numeric lux token without '=' falls back to 0 via ValueError."""
+        result = decode_moisture_full("1,-73,1;694,70,abc")
+        assert result["illuminance_lux"] == 0
+
+    def test_hex_payload_too_long_returns_error_dict(self):
+        """A 21-byte hex payload (>20) trips the explicit length cap."""
+        # 21 valid bytes; first 20 mirror the documented layout, 21st is filler.
+        too_long = bytes(
+            [
+                0xE1,
+                0xA2,
+                0x00,
+                0xDC,
+                0x01,
+                0x85,
+                0xAB,
+                0x02,
+                0x88,
+                0x1F,
+                0xC6,
+                0x60,
+                0x06,
+                0x00,
+                0xFF,
+                0x0F,
+                0xFA,
+                0x28,
+                0xF7,
+                0x18,
+                0xAA,
+            ]
+        )
+        result = decode_moisture_full("10#" + too_long.hex())
+        assert result["decoder"] == "hcs021frf_error"
+        assert "too long" in result["error"]
+
+
+class TestDecodeRainTagGuards:
+    """Cover the three FD-tag validation guards in decode_rain."""
+
+    def _padded(self, base: bytes) -> str:
+        """Pad to 24 bytes so _validate_payload accepts the length."""
+        return "10#" + (base + bytes(24 - len(base))).hex()
+
+    def test_missing_fd04_raises(self):
+        """A payload without FD 04 at offset [3:5] raises a tagged error."""
+        # b[3]=0xAA instead of 0xFD.
+        bad = bytes([0xE1, 0, 0, 0xAA, 0x04, 0, 0, 0xFD, 0x05])
+        try:
+            decode_rain(self._padded(bad))
+        except ValueError as e:
+            assert "FD 04" in str(e)
+        else:
+            raise AssertionError("decode_rain should have raised on missing FD 04")
+
+    def test_missing_fd05_raises(self):
+        """A payload without FD 05 at offset [7:9] raises a tagged error."""
+        bad = bytes([0xE1, 0, 0, 0xFD, 0x04, 0, 0, 0xAA, 0x05])
+        try:
+            decode_rain(self._padded(bad))
+        except ValueError as e:
+            assert "FD 05" in str(e)
+        else:
+            raise AssertionError("decode_rain should have raised on missing FD 05")
+
+    def test_missing_fd06_raises(self):
+        """A payload without FD 06 at offset [11:13] raises a tagged error."""
+        bad = bytes([0xE1, 0, 0, 0xFD, 0x04, 0, 0, 0xFD, 0x05, 0, 0, 0xAA, 0x06])
+        try:
+            decode_rain(self._padded(bad))
+        except ValueError as e:
+            assert "FD 06" in str(e)
+        else:
+            raise AssertionError("decode_rain should have raised on missing FD 06")
+
+
+class TestValveHubErrorPath:
+    """Cover decode_valve_hub error fallback and _extract_valve_hub_state default."""
+
+    def test_invalid_payload_returns_error_dict(self):
+        """Garbage input produces the documented error-shaped dict, not an exception."""
+        result = decode_valve_hub("garbage_no_separator")
+        assert result["decoder"] == "valve_hub_error"
+        assert result["zones"] == {}
+        assert result["raw_bytes"] == []
+        assert "missing" in result["error"].lower() or "unknown" in result["error"].lower()
+
+    def test_extract_valve_hub_state_no_dp_returns_false(self):
+        """An empty TLV map yields hub_online=False without raising."""
+        from custom_components.rainpoint.api.decoders import _extract_valve_hub_state
+
+        assert _extract_valve_hub_state({}) is False
+
+
+class TestHws019PartialBranches:
+    """Cover the remaining helper branches in decode_hws019wrf_v2 helpers."""
+
+    def test_keyed_item_without_parens_takes_full_value(self):
+        """A 'K=plain_value' item with no '(' stores the value as-is."""
+        from custom_components.rainpoint.api.decoders import _apply_hws019_keyed_item
+
+        readings: dict = {}
+        _apply_hws019_keyed_item("K=plain_value", readings)
+        assert readings == {"K": "plain_value"}
+
+    def test_third_positional_item_after_humidity_is_ignored(self):
+        """A third positional item is silently dropped once temp + humidity are filled."""
+        from custom_components.rainpoint.api.decoders import _parse_hws019_readings
+
+        result = _parse_hws019_readings("707(707/694/1),42(42/39/1),99(99/0/1)")
+        assert result == {"temp": "707", "humidity": "42"}
+
+    def test_readings_token_without_equals_or_parens_is_ignored(self):
+        """A readings token with neither '=' nor '(' is silently dropped."""
+        from custom_components.rainpoint.api.decoders import _parse_hws019_readings
+
+        result = _parse_hws019_readings("plain_text_no_special_chars")
+        assert result == {}
+
+
+class TestBasicDecoderShortBufferBranches:
+    """Cover the 'len(b) > 1' False branch on the eight basic decoders.
+
+    A '10#' payload with 0 or 1 hex bytes parses successfully but falls through
+    the RSSI extraction guard, leaving rssi=None on the returned dict.
+    """
+
+    def test_decode_flow_meter_short_buffer_leaves_rssi_none(self):
+        """0-byte buffer skips the rssi branch."""
+        result = decode_flow_meter("10#")
+        assert result["type"] == "flowmeter"
+        assert result["rssi"] is None
+
+    def test_decode_pool_plus_short_buffer_leaves_rssi_none(self):
+        """0-byte buffer skips the rssi branch."""
+        result = decode_pool_plus("10#")
+        assert result["type"] == "co2"
+        assert result["rssi"] is None
+
+    def test_decode_soil_short_buffer_leaves_rssi_none(self):
+        """1-byte buffer (len==1) still fails the >1 guard."""
+        result = decode_soil("10#aa")
+        assert result["type"] == "soil"
+        assert result["rssi"] is None
+
+    def test_decode_temp_hum_short_buffer_leaves_rssi_none(self):
+        """0-byte buffer skips the rssi branch."""
+        result = decode_temp_hum("10#")
+        assert result["type"] == "temphum"
+        assert result["rssi"] is None
+
+    def test_decode_temp_hum_full_short_buffer_leaves_rssi_none(self):
+        """0-byte buffer skips the rssi branch."""
+        result = decode_temp_hum_full("10#")
+        assert result["type"] == "temphum_full"
+        assert result["rssi"] is None
+
+    def test_decode_co2_short_buffer_leaves_rssi_none(self):
+        """0-byte buffer skips the rssi branch."""
+        result = decode_co2("10#")
+        assert result["type"] == "co2"
+        assert result["rssi"] is None
+
+    def test_decode_display_short_buffer_leaves_rssi_none(self):
+        """0-byte buffer skips the rssi branch."""
+        result = decode_display("10#")
+        assert result["type"] == "display"
+        assert result["rssi"] is None
+
+    def test_decode_temphum_short_buffer_leaves_rssi_none(self):
+        """0-byte buffer skips the rssi branch (HCS014ARF)."""
+        result = decode_temphum("10#")
+        assert result["type"] == "temphum"
+        assert result["rssi"] is None
+
+    def test_decode_pool_short_buffer_leaves_rssi_none(self):
+        """0-byte buffer skips the rssi branch (HCS0528ARF)."""
+        result = decode_pool("10#")
+        assert result["type"] == "pool"
+        assert result["rssi"] is None
+
+    def test_decode_unknown_short_buffer_leaves_rssi_none(self):
+        """0-byte buffer skips the rssi branch (catch-all fallback)."""
+        result = decode_unknown("10#")
+        assert result["type"] == "unknown"
+        assert result["rssi"] is None
+
+
+class TestBasicDecoderLogAndSwallowBranches:
+    """Cover the bare 'except Exception: log' blocks on the eight basic decoders.
+
+    Feeding a payload that survives the function entry but trips
+    _parse_rainpoint_payload (no '#' separator) reaches the log-and-swallow
+    branch and returns the default dict with rssi=None.
+    """
+
+    def test_decode_flow_meter_swallows_parse_error(self):
+        """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed."""
+        result = decode_flow_meter("garbage_no_separator")
+        assert result["type"] == "flowmeter"
+        assert result["rssi"] is None
+
+    def test_decode_pool_plus_swallows_parse_error(self):
+        """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed."""
+        result = decode_pool_plus("garbage_no_separator")
+        assert result["type"] == "co2"
+        assert result["rssi"] is None
+
+    def test_decode_soil_swallows_parse_error(self):
+        """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed."""
+        result = decode_soil("garbage_no_separator")
+        assert result["type"] == "soil"
+        assert result["rssi"] is None
+
+    def test_decode_temp_hum_swallows_parse_error(self):
+        """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed."""
+        result = decode_temp_hum("garbage_no_separator")
+        assert result["type"] == "temphum"
+        assert result["rssi"] is None
+
+    def test_decode_temp_hum_full_swallows_parse_error(self):
+        """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed."""
+        result = decode_temp_hum_full("garbage_no_separator")
+        assert result["type"] == "temphum_full"
+        assert result["rssi"] is None
+
+    def test_decode_co2_swallows_parse_error(self):
+        """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed."""
+        result = decode_co2("garbage_no_separator")
+        assert result["type"] == "co2"
+        assert result["rssi"] is None
+
+    def test_decode_display_swallows_parse_error(self):
+        """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed."""
+        result = decode_display("garbage_no_separator")
+        assert result["type"] == "display"
+        assert result["rssi"] is None
+
+    def test_decode_temphum_swallows_parse_error(self):
+        """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed (HCS014ARF)."""
+        result = decode_temphum("garbage_no_separator")
+        assert result["type"] == "temphum"
+        assert result["rssi"] is None
+
+    def test_decode_pool_swallows_parse_error(self):
+        """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed (HCS0528ARF)."""
+        result = decode_pool("garbage_no_separator")
+        assert result["type"] == "pool"
+        assert result["rssi"] is None
