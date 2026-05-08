@@ -368,3 +368,34 @@ class TestLastUpdatedSensorBadTimestamp:
         sensor = RainPointLastUpdatedSensor.__new__(RainPointLastUpdatedSensor)
         RainPointLastUpdatedSensor.__init__(sensor, coord, "100_200_1", sensor_info, "100_200_1")
         assert sensor.native_value is None
+
+
+class TestLooksLikeDeviceId:
+    """Cover the _looks_like_device_id type guard."""
+
+    def test_int_with_nine_digits_is_valid(self):
+        """A 9-digit int is a valid device id."""
+        from custom_components.rainpoint.diagnostic_sensors import _looks_like_device_id
+
+        assert _looks_like_device_id(123456789) is True
+
+    def test_string_with_nine_digits_is_valid(self):
+        """A 9-digit numeric string is a valid device id."""
+        from custom_components.rainpoint.diagnostic_sensors import _looks_like_device_id
+
+        assert _looks_like_device_id("123456789") is True
+
+    def test_short_numeric_string_rejected(self):
+        """A numeric string shorter than 9 digits is rejected."""
+        from custom_components.rainpoint.diagnostic_sensors import _looks_like_device_id
+
+        assert _looks_like_device_id("12345") is False
+
+    def test_non_int_non_str_inputs_return_false(self):
+        """Inputs that are neither int nor str are rejected without raising."""
+        from custom_components.rainpoint.diagnostic_sensors import _looks_like_device_id
+
+        assert _looks_like_device_id(None) is False
+        assert _looks_like_device_id([1, 2, 3]) is False
+        assert _looks_like_device_id({"id": 123}) is False
+        assert _looks_like_device_id(1.5) is False
