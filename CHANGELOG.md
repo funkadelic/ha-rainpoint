@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.5.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.5.1...v1.5.2) (2026-06-09)
+
+
+### Other Changes
+
+* bump codecov/codecov-action from 6 to 7 ([#52](https://github.com/funkadelic/ha-rainpoint/issues/52)) ([ab378f4](https://github.com/funkadelic/ha-rainpoint/commit/ab378f4716748cca51e52305737a7a5c32f726de))
+
 ## [1.5.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.5.0...v1.5.1) (2026-05-08)
 
 
