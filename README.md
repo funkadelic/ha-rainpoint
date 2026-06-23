@@ -4,7 +4,7 @@
 [![Codecov](https://img.shields.io/codecov/c/github/funkadelic/ha-rainpoint?logo=codecov)](https://codecov.io/gh/funkadelic/ha-rainpoint)
 [![Release](https://img.shields.io/github/release/funkadelic/ha-rainpoint.svg)](https://github.com/funkadelic/ha-rainpoint/releases)
 [![License](https://img.shields.io/github/license/funkadelic/ha-rainpoint.svg)](LICENSE)
-[![HACS](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/hacs/integration)
+[![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
 
 A Home Assistant custom integration for RainPoint Smart+ irrigation devices via the RainPoint cloud API.
 
@@ -33,12 +33,15 @@ All devices communicate via the RainPoint cloud backend. There is no local LAN p
 
 ## Installation via HACS
 
+This integration is part of the default HACS store, so no custom repository is needed.
+
 1. In Home Assistant, open **HACS** from the sidebar.
-2. Click the three-dot menu and select **Custom repositories**.
-3. Add `funkadelic/ha-rainpoint` with category **Integration**.
-4. Search for **RainPoint Cloud** in the HACS integration list and install it.
-5. Restart Home Assistant.
-6. Go to **Settings → Devices & Services → Add Integration** and search for **RainPoint Cloud**.
+2. Search for **RainPoint Cloud** and open it.
+3. Click **Download** to install it.
+4. Restart Home Assistant.
+5. Go to **Settings → Devices & Services → Add Integration** and search for **RainPoint Cloud**.
+
+> Installing an older release? Versions published before HACS default inclusion may require adding `funkadelic/ha-rainpoint` as a custom repository (category **Integration**) first.
 
 ---
 
