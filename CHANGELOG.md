@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.5.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.5.2...v1.5.3) (2026-06-23)
+
+
+### Other Changes
+
+* reflect HACS default repository inclusion ([#54](https://github.com/funkadelic/ha-rainpoint/issues/54)) ([22fa0bd](https://github.com/funkadelic/ha-rainpoint/commit/22fa0bdfe1284efb415aaa0518e05626ea4781d4))
+
 ## [1.5.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.5.1...v1.5.2) (2026-06-09)
 
 
