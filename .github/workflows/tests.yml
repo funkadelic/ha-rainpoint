@@ -56,6 +56,8 @@ jobs:
         if: >-
           !contains(github.event.pull_request.labels.*.name, 'autorelease: pending')
           && github.actor != 'dependabot[bot]'
+          && (github.event_name != 'pull_request'
+              || github.event.pull_request.head.repo.full_name == github.repository)
         uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
