@@ -1,6 +1,7 @@
 """Tests for RainPointCoordinator: data fetching, decoder dispatch, fallback, and error handling."""
 
 import types
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -40,8 +41,10 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_TEMPHUM,
     MODEL_VALVE_213,
     MODEL_VALVE_245,
+    MODEL_VALVE_345,
     MODEL_VALVE_HUB,
 )
+from tests.payload_samples import SAMPLE_HTV245_TLV_PAYLOAD  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Sample raw payloads
@@ -70,8 +73,14 @@ def _make_coord(hids=None):
         _client=mock_client,
         _hids=hids if hids is not None else [100],
         _notified_unknown_models=set(),
+        _last_valve_command_at={},
+        data={},
         hass=mock_hass,
         logger=MagicMock(),
+    )
+    coord._preserve_recent_valve_command_state = types.MethodType(
+        _coord_module.RainPointCoordinator.__dict__["_preserve_recent_valve_command_state"],
+        coord,
     )
     return coord, mock_client
 
@@ -384,6 +393,132 @@ class TestCoordinatorUpdate:
 
         assert result["sensors"]["100_200_1"]["data"] is None
 
+    @pytest.mark.asyncio
+    async def test_stale_valve_poll_does_not_overwrite_command_state(self):
+        """Older valve cloud status is ignored after a newer command response."""
+        coord, client = _make_coord()
+        closed_zone = {"open": False, "duration_seconds": 0, "state_raw": 0}
+        coord.data = {
+            "sensors": {
+                "100_200_1": {
+                    "data": {"zones": {1: closed_zone}},
+                }
+            }
+        }
+        coord._last_valve_command_at = {("100_200_1", 1): datetime(2024, 1, 2, tzinfo=UTC)}
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_VALVE_245)]
+        client.get_multiple_device_status.return_value = _make_status(
+            value=SAMPLE_HTV245_TLV_PAYLOAD,
+            time_ms=int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000),
+        )
+
+        result = await _run(coord)
+
+        zone1 = result["sensors"]["100_200_1"]["data"]["zones"][1]
+        assert zone1 == closed_zone
+
+    @pytest.mark.asyncio
+    async def test_newer_valve_poll_overwrites_command_state(self):
+        """Valve status newer than the command timestamp is accepted."""
+        coord, client = _make_coord()
+        coord.data = {
+            "sensors": {
+                "100_200_1": {
+                    "data": {"zones": {1: {"open": False, "duration_seconds": 0, "state_raw": 0}}},
+                }
+            }
+        }
+        coord._last_valve_command_at = {("100_200_1", 1): datetime(2024, 1, 1, tzinfo=UTC)}
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_VALVE_245)]
+        client.get_multiple_device_status.return_value = _make_status(
+            value=SAMPLE_HTV245_TLV_PAYLOAD,
+            time_ms=int(datetime(2024, 1, 2, tzinfo=UTC).timestamp() * 1000),
+        )
+
+        result = await _run(coord)
+
+        zone1 = result["sensors"]["100_200_1"]["data"]["zones"][1]
+        assert zone1["open"] is True
+        assert zone1["duration_seconds"] == 60
+        assert zone1["state_raw"] == 1
+
+    @pytest.mark.asyncio
+    async def test_missing_timestamp_valve_poll_uses_short_guard_window(self):
+        """Untimestamped valve polls are ignored only shortly after a command."""
+        coord, client = _make_coord()
+        closed_zone = {"open": False, "duration_seconds": 0, "state_raw": 0}
+        coord.data = {"sensors": {"100_200_1": {"data": {"zones": {1: closed_zone}}}}}
+        coord._last_valve_command_at = {("100_200_1", 1): datetime.now(UTC) - timedelta(minutes=1)}
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_VALVE_245)]
+        client.get_multiple_device_status.return_value = _make_status(value=SAMPLE_HTV245_TLV_PAYLOAD, time_ms=None)
+
+        result = await _run(coord)
+
+        assert result["sensors"]["100_200_1"]["data"]["zones"][1] == closed_zone
+
+    def test_stale_poll_guard_is_scoped_to_valve_models(self):
+        """Non-valve decoded data is returned unchanged."""
+        coord, _ = _make_coord()
+        decoded = {"type": "not_valve", "zones": {1: {"open": True, "duration_seconds": 60, "state_raw": 1}}}
+        coord.data = {"sensors": {"100_200_1": {"data": {"zones": {1: {"open": False}}}}}}
+        coord._last_valve_command_at = {("100_200_1", 1): datetime(2024, 1, 2, tzinfo=UTC)}
+
+        result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
+            coord,
+            "100_200_1",
+            MODEL_MOISTURE_SIMPLE,
+            decoded,
+            {"time": int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000)},
+        )
+
+        assert result is decoded
+        assert result["zones"][1]["open"] is True
+
+    def test_preserve_skips_when_no_prior_zone_data(self):
+        """First refresh has no prior zone state to preserve."""
+        coord, _ = _make_coord()
+        decoded = {"zones": {1: {"open": True, "duration_seconds": 60, "state_raw": 1}}}
+
+        result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
+            coord,
+            "100_200_1",
+            MODEL_VALVE_245,
+            decoded,
+            {},
+        )
+
+        assert result is decoded
+
+    def test_preserve_handles_none_data_on_first_poll(self):
+        """First poll runs while self.data is still None; must not raise AttributeError."""
+        coord, _ = _make_coord()
+        coord.data = None
+        decoded = {"zones": {1: {"open": True, "duration_seconds": 60, "state_raw": 1}}}
+
+        result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
+            coord,
+            "100_200_1",
+            MODEL_VALVE_245,
+            decoded,
+            {"time": int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000)},
+        )
+
+        assert result is decoded
+
+    def test_status_entry_time_returns_none_for_invalid_time(self):
+        """A malformed status time cannot participate in stale-poll comparisons."""
+        assert _coord_module._status_entry_time({"time": "not-a-number"}) is None
+
+    def test_record_valve_command_stores_current_aware_time(self):
+        """record_valve_command writes the real command timestamp used by stale-poll protection."""
+        instance = object.__new__(_coord_module.RainPointCoordinator)
+        instance._last_valve_command_at = {}
+
+        recorded = _coord_module.RainPointCoordinator.record_valve_command(instance, "100_200_1", 1)
+
+        assert recorded.tzinfo is UTC
+        assert instance._last_valve_command_at[("100_200_1", 1)] is recorded
+
 
 class TestCoordinatorEdgeBranches:
     """Edge branches: non-integer addr, device_timestamp ValueError, outer generic except."""
@@ -502,6 +637,7 @@ class TestCoordinatorConstructor:
         assert instance._entry is entry
         assert instance._hids == [11, 22, 33]
         assert instance._notified_unknown_models == set()
+        assert instance._last_valve_command_at == {}
 
     def test_constructor_empty_hids_defaults_to_empty_list(self):
         """__init__ falls back to [] when CONF_HIDS missing from entry.data."""
@@ -539,6 +675,7 @@ class TestDecoderRegistry:
             MODEL_TEMPHUM,
             MODEL_VALVE_213,
             MODEL_VALVE_245,
+            MODEL_VALVE_345,
             MODEL_VALVE_HUB,
         }
         missing = required - DECODER_REGISTRY.keys()
@@ -571,6 +708,10 @@ class TestDecoderRegistry:
     def test_registry_contains_valve_245(self):
         """Registry contains valve 245."""
         assert MODEL_VALVE_245 in DECODER_REGISTRY
+
+    def test_registry_contains_valve_345(self):
+        """Registry contains valve 345."""
+        assert MODEL_VALVE_345 in DECODER_REGISTRY
 
     def test_registry_contains_valve_213(self):
         """Registry contains valve 213."""
@@ -615,6 +756,12 @@ class TestPureHelpers:
         """Known models dispatch through DECODER_REGISTRY and return the decoded dict."""
         result = _coord_module._decode_subdevice_payload(MODEL_MOISTURE_SIMPLE, _MOISTURE_SIMPLE_PAYLOAD)
         assert result["type"] == "moisture_simple"
+
+    def test_decode_subdevice_payload_valve_345_model(self):
+        """HTV345FRF dispatches through the shared HTV213/245 valve decoder."""
+        result = _coord_module._decode_subdevice_payload(MODEL_VALVE_345, SAMPLE_HTV245_TLV_PAYLOAD)
+        assert result["type"] == "valve_hub"
+        assert result["decoder"] == "htv213frf_hex"
 
     def test_decode_subdevice_payload_display_hub_special_case(self):
         """MODEL_DISPLAY_HUB routes to decode_hws019wrf_v2, not the registry."""

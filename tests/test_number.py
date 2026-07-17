@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.rainpoint.const import DOMAIN
+from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_345
 from custom_components.rainpoint.number import (
     DURATION_DEFAULT_MINUTES,
     DURATION_MAX_MINUTES,
@@ -301,6 +301,37 @@ class TestNumberSetupEntry:
         added.assert_called_once()
         entities = added.call_args[0][0]
         assert len(entities) == 3
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_creates_numbers_for_valve_345(self):
+        """HTV345FRF creates one duration number per reported zone."""
+        from custom_components.rainpoint.number import async_setup_entry
+
+        coord = MagicMock()
+        coord.data = {
+            "sensors": {
+                "1_2_3": {
+                    "hid": 1,
+                    "mid": 2,
+                    "addr": 3,
+                    "sub_name": "HTV345",
+                    "model": MODEL_VALVE_345,
+                    "data": {"zones": {1: {}, 2: {}, 3: {}}},
+                }
+            }
+        }
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        added = MagicMock()
+        await async_setup_entry(hass, entry, added)
+
+        added.assert_called_once()
+        entities = added.call_args[0][0]
+        assert [entity._zone_num for entity in entities] == [1, 2, 3]
+        assert all(entity._sensor_info["model"] == MODEL_VALVE_345 for entity in entities)
 
     @pytest.mark.asyncio
     async def test_setup_entry_skips_non_valve_models(self):

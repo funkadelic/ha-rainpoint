@@ -56,7 +56,7 @@ Device: HTV213FRF
 State: Valve CLOSED, Duration: 30 minutes
 Payload: E1C700DC01881DFF0F587DF718
 
-State: Valve OPEN, Duration: 30 minutes  
+State: Valve OPEN, Duration: 30 minutes
 Payload: E1C800DC01881DFF0F587DF718
 
 State: Valve CLOSED, Duration: 60 minutes

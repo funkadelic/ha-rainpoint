@@ -200,18 +200,30 @@ def _extract_htv213_hub_state(dp_map: dict[int, tuple[int, int]], raw: str) -> t
     """Pull (hub_online, hub_state_raw) from the dp_map.
 
     Hub online DP is 0x18 with type 0xDC enforced; value 0x01 means online.
+    Some HTV345FRF payloads omit that DP but include zone 1 state at 0x19; in
+    that case, the payload itself is evidence that the hub is online.
     """
+    zone_1_present = 0x19 in dp_map
     if 0x18 not in dp_map:
-        _LOGGER.warning(
-            "HTV213FRF: hub online DP (0x18) absent from payload %r; defaulting hub_online=False",
-            raw,
-        )
+        if zone_1_present:
+            _LOGGER.debug(
+                "HTV213FRF: hub online DP (0x18) absent from payload %r; using zone 1 DP (0x19) presence as online",
+                raw,
+            )
+            return True, None
+        _LOGGER.debug("HTV213FRF: hub online DP (0x18) and zone 1 DP (0x19) absent from payload %r", raw)
         return False, None
 
     hub_type, hub_state_raw = dp_map[0x18]
     if hub_type != 0xDC:
+        if zone_1_present:
+            _LOGGER.warning(
+                "HTV213FRF: hub DP 0x18 has unexpected type 0x%02X (expected 0xDC); using zone 1 DP (0x19) presence as online",
+                hub_type,
+            )
+            return True, hub_state_raw
         _LOGGER.warning(
-            "HTV213FRF: hub DP 0x18 has unexpected type 0x%02X (expected 0xDC); ignoring hub state",
+            "HTV213FRF: hub DP 0x18 has unexpected type 0x%02X (expected 0xDC); zone 1 DP (0x19) absent",
             hub_type,
         )
         return False, hub_state_raw

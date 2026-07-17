@@ -882,8 +882,6 @@ class TestRawPayloadSensor:
 # ---------------------------------------------------------------------------
 
 
-
-
 class TestHCSSensorDispatch:
     """Verify async_setup_entry creates the right entities for each HCS model."""
 

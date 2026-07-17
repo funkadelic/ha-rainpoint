@@ -58,26 +58,57 @@ class TestParseTlvPayload:
         # dp_id=0x08 type=0xC4 val=0x0A (1 byte)
         # dp_id=0x09 type=0xC5 val=0x0B (1 byte)
         # dp_id=0x0A type=0xC6 val=0x0C (1 byte)
-        payload_bytes = bytes([
-            0x01, 0xD8, 0xFF,
-            0x02, 0xDC, 0x01,
-            0x03, 0xAD, 0xE8, 0x03,
-            0x04, 0x20, 0x00, 0x0A,
-            0x05, 0xE1, 0x00, 0x14,
-            0x06, 0xB7, 0x00, 0x00, 0x00, 0x64,
-            0x07, 0x9F, 0x00, 0x00, 0x00, 0xC8,
-            0x08, 0xC4, 0x0A,
-            0x09, 0xC5, 0x0B,
-            0x0A, 0xC6, 0x0C,
-        ])
+        payload_bytes = bytes(
+            [
+                0x01,
+                0xD8,
+                0xFF,
+                0x02,
+                0xDC,
+                0x01,
+                0x03,
+                0xAD,
+                0xE8,
+                0x03,
+                0x04,
+                0x20,
+                0x00,
+                0x0A,
+                0x05,
+                0xE1,
+                0x00,
+                0x14,
+                0x06,
+                0xB7,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x07,
+                0x9F,
+                0x00,
+                0x00,
+                0x00,
+                0xC8,
+                0x08,
+                0xC4,
+                0x0A,
+                0x09,
+                0xC5,
+                0x0B,
+                0x0A,
+                0xC6,
+                0x0C,
+            ]
+        )
         raw = "11#" + payload_bytes.hex()
         result = _parse_tlv_payload(raw)
 
         assert result[0x01] == (0xD8, 0xFF, b"\xff")
         assert result[0x02] == (0xDC, 0x01, b"\x01")
         assert result[0x03] == (0xAD, 1000, b"\xe8\x03")  # LE
-        assert result[0x04] == (0x20, 10, b"\x00\x0a")     # BE
-        assert result[0x05] == (0xE1, 20, b"\x00\x14")     # BE
+        assert result[0x04] == (0x20, 10, b"\x00\x0a")  # BE
+        assert result[0x05] == (0xE1, 20, b"\x00\x14")  # BE
         assert result[0x06] == (0xB7, 100, bytes.fromhex("00000064"))  # BE
         assert result[0x07] == (0x9F, 200, bytes.fromhex("000000C8"))  # BE
         assert result[0x08] == (0xC4, 0x0A, b"\x0a")

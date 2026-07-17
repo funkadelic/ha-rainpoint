@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_245
+from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_245, MODEL_VALVE_345
 from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
     RainPointValveEntity,
@@ -77,6 +77,12 @@ class TestValveProperties:
     def test_unavailable_when_hub_offline(self):
         """hub_online=False should give available == False."""
         valve = _make_valve(hub_online=False)
+        assert valve.available is False
+
+    def test_unavailable_when_hub_online_missing(self):
+        """Decoder error dicts do not include hub_online and should be unavailable."""
+        valve = _make_valve()
+        del valve.coordinator.data["sensors"]["100_200_1"]["data"]["hub_online"]
         assert valve.available is False
 
     def test_unavailable_when_no_data(self):
@@ -185,6 +191,34 @@ class TestValveControl:
             mode=0,
             duration=0,
         )
+
+    @pytest.mark.asyncio
+    async def test_async_close_valve_applies_closed_response_state(self, monkeypatch):
+        """A successful close response immediately updates coordinator state."""
+        from custom_components.rainpoint import valve as valve_mod
+
+        valve = _make_valve(model=MODEL_VALVE_245)
+        valve.coordinator.async_set_updated_data = MagicMock()
+        valve.coordinator.record_valve_command = MagicMock()
+        valve.coordinator._client.control_work_mode = AsyncMock(return_value="close-response")
+        monkeypatch.setattr(
+            valve_mod,
+            "decode_htv213frf_valve",
+            MagicMock(
+                return_value={
+                    "type": "valve_hub",
+                    "hub_online": True,
+                    "zones": {1: {"open": False, "duration_seconds": 0, "state_raw": 0}},
+                }
+            ),
+        )
+
+        await valve.async_close_valve()
+
+        valve.coordinator.record_valve_command.assert_called_once_with("100_200_1", 1)
+        updated = valve.coordinator.async_set_updated_data.call_args.args[0]
+        assert updated["sensors"]["100_200_1"]["data"]["zones"][1]["open"] is False
+        assert updated["sensors"]["100_200_1"]["data"]["zones"][1]["duration_seconds"] == 0
 
     def test_apply_response_state_updates_coordinator(self):
         """_apply_response_state should call async_set_updated_data when raw_state given."""
@@ -407,6 +441,44 @@ class TestValveSetupEntry:
         assert captured[1]._zone_num == 2
 
     @pytest.mark.asyncio
+    async def test_setup_entry_creates_entities_for_valve_345(self):
+        """HTV345FRF creates one valve entity per reported zone."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        sensors = {
+            "10_20_1": {
+                "hid": 10,
+                "mid": 20,
+                "addr": 1,
+                "sub_name": "HTV345",
+                "model": MODEL_VALVE_345,
+                "data": {
+                    "hub_online": True,
+                    "zones": {
+                        1: {"open": False, "duration_seconds": 0, "state_raw": 0},
+                        2: {"open": False, "duration_seconds": 0, "state_raw": 0},
+                        3: {"open": True, "duration_seconds": 300, "state_raw": 1},
+                    },
+                },
+            }
+        }
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {"sensors": sensors}
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        hass.data = {DOMAIN: {"e1": {"coordinator": mock_coordinator}}}
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert [entity._zone_num for entity in captured] == [1, 2, 3]
+        assert all(entity._sensor_info["model"] == MODEL_VALVE_345 for entity in captured)
+
+    @pytest.mark.asyncio
     async def test_setup_entry_skips_non_valve_models(self):
         """Non-valve models are skipped; no entities created."""
         from custom_components.rainpoint.valve import async_setup_entry
@@ -552,6 +624,26 @@ class TestApplyResponseStateBranches:
 
         spy.assert_called_once_with("whatever-payload")
         valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_apply_response_state_uses_htv_decoder_for_valve_345(self, monkeypatch):
+        """HTV345FRF routes control responses through the shared HTV213/245 decoder."""
+        from custom_components.rainpoint import valve as valve_mod
+
+        valve = _make_valve(model=MODEL_VALVE_345)
+        valve.coordinator.async_set_updated_data = MagicMock()
+
+        decoded = {
+            "type": "valve_hub",
+            "hub_online": True,
+            "zones": {1: {"open": False, "duration_seconds": 0, "state_raw": 0}},
+        }
+        spy = MagicMock(return_value=decoded)
+        monkeypatch.setattr(valve_mod, "decode_htv213frf_valve", spy)
+
+        valve._apply_response_state("whatever-payload")
+
+        spy.assert_called_once_with("whatever-payload")
+        valve.coordinator.async_set_updated_data.assert_called_once()
 
     def test_apply_response_state_key_missing_in_sensors(self):
         """If the sensor_key is not in coordinator.data['sensors'], return without update."""

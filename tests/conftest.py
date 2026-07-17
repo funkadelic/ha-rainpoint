@@ -25,6 +25,7 @@ def _make_stub(name: str) -> ModuleType:
 # instantiated as a normal Python object.
 # ---------------------------------------------------------------------------
 
+
 class DataUpdateCoordinator:
     """Minimal real DataUpdateCoordinator stub for tests."""
 
@@ -60,6 +61,7 @@ _HA_STUBS = [
     "homeassistant.helpers",
     "homeassistant.helpers.aiohttp_client",
     "homeassistant.helpers.entity_platform",
+    "homeassistant.helpers.selector",
     "homeassistant.helpers.entity",
     "homeassistant.components",
     "homeassistant.components.persistent_notification",
@@ -178,26 +180,31 @@ class _RestoreEntity:
 # RainPointHubDevice→_HABaseEntity) creates an unresolvable C3 cycle.
 class _ValveEntity:
     """_ValveEntity."""
+
     pass
 
 
 class _SensorEntity:
     """_SensorEntity."""
+
     pass
 
 
 class _NumberEntity:
     """_NumberEntity."""
+
     pass
 
 
 class _SelectEntity:
     """_SelectEntity."""
+
     pass
 
 
 class _SwitchEntity:
     """_SwitchEntity."""
+
     pass
 
 
@@ -217,9 +224,11 @@ sys.modules["homeassistant.components.number"].NumberMode = MagicMock()
 sys.modules["homeassistant.components.select"].SelectEntity = _SelectEntity
 sys.modules["homeassistant.components.switch"].SwitchEntity = _SwitchEntity
 
+
 # DeviceInfo: callable that stores kwargs as a dict subclass.
 class _DeviceInfo(dict):
     """_DeviceInfo."""
+
     def __init__(self, **kwargs):
         """Init helper."""
         super().__init__(**kwargs)
@@ -227,17 +236,21 @@ class _DeviceInfo(dict):
 
 sys.modules["homeassistant.helpers.device_registry"].DeviceInfo = _DeviceInfo
 
+
 # HomeAssistantError must be a real exception class so `raise HomeAssistantError(...)` works.
 class _HomeAssistantError(Exception):
     """_HomeAssistantError."""
+
     pass
 
 
 sys.modules["homeassistant.exceptions"].HomeAssistantError = _HomeAssistantError
 
+
 # EntityCategory is accessed as EntityCategory.DIAGNOSTIC / .CONFIG — use a simple namespace.
 class _EntityCategory:
     """_EntityCategory."""
+
     DIAGNOSTIC = "diagnostic"
     CONFIG = "config"
 

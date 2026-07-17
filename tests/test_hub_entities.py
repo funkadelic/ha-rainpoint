@@ -179,6 +179,7 @@ class TestRainPointHubChannelSelect:
         select = self._make()
         # HomeAssistantError is stubbed as a real Exception subclass in conftest
         from homeassistant.exceptions import HomeAssistantError
+
         with pytest.raises(HomeAssistantError):
             await select.async_select_option("5")
 
@@ -209,6 +210,7 @@ class TestRainPointHubBroadcastSwitch:
         """async_turn_on should raise HomeAssistantError."""
         switch = self._make()
         from homeassistant.exceptions import HomeAssistantError
+
         with pytest.raises(HomeAssistantError):
             await switch.async_turn_on()
 
@@ -217,6 +219,7 @@ class TestRainPointHubBroadcastSwitch:
         """async_turn_off should raise HomeAssistantError."""
         switch = self._make()
         from homeassistant.exceptions import HomeAssistantError
+
         with pytest.raises(HomeAssistantError):
             await switch.async_turn_off()
 

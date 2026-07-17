@@ -83,11 +83,15 @@ from .const import (
     MODEL_TEMPHUM,
     MODEL_VALVE_213,  # HTV213FRF support
     MODEL_VALVE_245,  # HTV245FRF support
+    MODEL_VALVE_345,  # HTV345FRF support
     MODEL_VALVE_HUB,
+    VALVE_MODELS,
     debug_with_version,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+STALE_VALVE_POLL_GUARD = timedelta(minutes=5)
 
 # Decoder registry - maps device models to their decoder functions
 DECODER_REGISTRY = {
@@ -102,6 +106,7 @@ DECODER_REGISTRY = {
     MODEL_VALVE_HUB: decode_valve_hub,
     MODEL_VALVE_213: decode_htv213frf_valve,  # HTV213FRF uses custom decoder
     MODEL_VALVE_245: decode_htv213frf_valve,  # HTV245FRF uses custom decoder
+    MODEL_VALVE_345: decode_htv213frf_valve,  # HTV345FRF uses custom decoder
     # HCS sensor models (v1.3.0)
     MODEL_HCS005FRF: decode_hcs005frf,
     MODEL_HCS003FRF: decode_hcs003frf,
@@ -178,6 +183,17 @@ def _attach_device_timestamp(decoded: dict | None, status_entry: dict) -> None:
         pass
 
 
+def _status_entry_time(status_entry: dict) -> datetime | None:
+    """Return status_entry["time"] as a UTC datetime, or None when unavailable."""
+    device_time = status_entry.get("time")
+    if device_time is None:
+        return None
+    try:
+        return datetime.fromtimestamp(device_time / 1000, tz=UTC)
+    except (ValueError, TypeError, OSError, OverflowError):
+        return None
+
+
 def _build_sensor_entry(
     hub: dict,
     sub: dict,
@@ -217,6 +233,13 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._entry = entry
         self._hids = entry.data.get(CONF_HIDS, [])
         self._notified_unknown_models: set[str] = set()
+        self._last_valve_command_at: dict[tuple[str, int], datetime] = {}
+
+    def record_valve_command(self, sensor_key: str, zone_num: int) -> datetime:
+        """Remember the latest successful valve command time for stale-poll protection."""
+        command_dt = datetime.now(UTC)
+        self._last_valve_command_at[(sensor_key, zone_num)] = command_dt
+        return command_dt
 
     async def _async_update_data(self):
         """Fetch and decode data from RainPoint."""
@@ -408,9 +431,63 @@ class RainPointCoordinator(DataUpdateCoordinator):
         _attach_device_timestamp(decoded, status_entry)
 
         sensor_key = f"{hub['hid']}_{mid}_{addr}"
+        decoded = self._preserve_recent_valve_command_state(
+            sensor_key,
+            model,
+            decoded,
+            status_entry,
+        )
         sensor_entry = _build_sensor_entry(hub, sub, mid, addr, status_entry, decoded)
         _LOGGER.debug(debug_with_version("Sensor entity key=%s info=%s"), sensor_key, sensor_entry)
         return sensor_key, sensor_entry
+
+    def _preserve_recent_valve_command_state(
+        self,
+        sensor_key: str,
+        model: str | None,
+        decoded: dict | None,
+        status_entry: dict,
+    ) -> dict | None:
+        """Keep fresh command response zone state when a cloud poll is stale."""
+        if model not in VALVE_MODELS or not decoded or not isinstance(decoded.get("zones"), dict):
+            return decoded
+
+        current_data = (self.data or {}).get("sensors", {}).get(sensor_key, {}).get("data") or {}
+        current_zones = current_data.get("zones") or {}
+        if not current_zones:
+            return decoded
+
+        poll_time = _status_entry_time(status_entry)
+        now = datetime.now(UTC)
+        zones = dict(decoded["zones"])
+        changed = False
+
+        for zone_num in list(zones):
+            last_command_time = self._last_valve_command_at.get((sensor_key, zone_num))
+            if last_command_time is None:
+                continue
+
+            stale = poll_time < last_command_time if poll_time is not None else now - last_command_time < STALE_VALVE_POLL_GUARD
+
+            if not stale or zone_num not in current_zones:
+                continue
+
+            _LOGGER.debug(
+                "Ignoring stale RainPoint valve poll for key=%s zone=%s: poll_time=%s, last_command_time=%s",
+                sensor_key,
+                zone_num,
+                poll_time.isoformat() if poll_time else None,
+                last_command_time.isoformat(),
+            )
+            zones[zone_num] = current_zones[zone_num]
+            changed = True
+
+        if not changed:
+            return decoded
+
+        preserved = dict(decoded)
+        preserved["zones"] = zones
+        return preserved
 
     def _decode_hub_subdevices(self, hub: dict, status: dict) -> dict[str, dict]:
         """Walk the sub_status entries for one hub and return a {sensor_key: sensor_entry} dict."""

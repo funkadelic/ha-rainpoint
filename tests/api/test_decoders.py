@@ -158,6 +158,23 @@ class TestDecodeHtv213frfValve:
         result = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)
         assert result["hub_online"] is True
 
+    def test_htv345_payload_with_zone_dp_is_online(self):
+        """HTV345FRF payloads with DP 0x19 but no hub DP are treated as online."""
+        raw = (
+            "11#"
+            "2A9F00000000299F0000000017E1CA0019D8001AD8001BD8001D201E201F2018DC01"
+            "21B70000000022B70000000023B70000000025AD000026AD000027AD00002B9F00000000"
+            "FEFF0FEC4BCB19"
+        )
+        result = decode_htv213frf_valve(raw)
+
+        assert result["decoder"] == "htv213frf_hex"
+        assert result["hub_online"] is True
+        assert result["hub_state_raw"] is None
+        assert result["zones"][1]["open"] is False
+        assert result["zones"][2]["open"] is False
+        assert result["zones"][3]["open"] is False
+
 
 class TestLittleEndianTripwire:
     """Regression test: 0xAD duration values MUST be decoded as little-endian.
@@ -547,16 +564,25 @@ class TestHtv213frfHexErrorBranches:
         assert result["decoder"] == "htv213frf_error"
         assert "non-hex" in result["error"].lower() or "hexadecimal" in result["error"].lower()
 
-    def test_hex_missing_hub_state_dp_defaults_offline(self):
-        """Hex payload without DP 0x18 yields hub_online=False and hub_state_raw=None."""
+    def test_hex_missing_hub_state_and_zone_1_dp_is_offline(self):
+        """Hex payload without DP 0x18 or 0x19 yields hub_online=False."""
         # Empty payload: parses to empty bytes, no DPs -> 0x18 absent.
         result = decode_htv213frf_valve("11#")
         assert result["decoder"] == "htv213frf_hex"
         assert result["hub_online"] is False
         assert result["hub_state_raw"] is None
 
+    def test_hex_missing_hub_state_dp_with_zone_1_dp_is_online(self):
+        """DP 0x19 presence is enough to mark the hub online when DP 0x18 is absent."""
+        payload = bytes([0x19, 0xD8, 0x01]).hex()
+        result = decode_htv213frf_valve("11#" + payload)
+        assert result["decoder"] == "htv213frf_hex"
+        assert result["hub_online"] is True
+        assert result["hub_state_raw"] is None
+        assert result["zones"][1]["open"] is True
+
     def test_hex_hub_state_dp_with_wrong_type_is_ignored(self):
-        """DP 0x18 with a type other than 0xDC yields hub_online=False (state_raw still surfaced)."""
+        """DP 0x18 with a type other than 0xDC and no 0x19 yields hub_online=False."""
         # DP 0x18, type 0xD8 (zone-state type, not hub-state type), value 0x01.
         payload = bytes([0x18, 0xD8, 0x01]).hex()
         result = decode_htv213frf_valve("11#" + payload)
@@ -564,6 +590,16 @@ class TestHtv213frfHexErrorBranches:
         assert result["hub_online"] is False
         # The raw value is still passed back for diagnostic visibility.
         assert result["hub_state_raw"] == 0x01
+
+    def test_hex_wrong_hub_state_type_with_zone_1_dp_is_online(self):
+        """DP 0x19 presence marks the hub online even when DP 0x18 has the wrong type."""
+        payload = bytes([0x18, 0xD8, 0x01, 0x19, 0xD8, 0x01]).hex()
+        result = decode_htv213frf_valve("11#" + payload)
+
+        assert result["decoder"] == "htv213frf_hex"
+        assert result["hub_online"] is True
+        assert result["hub_state_raw"] == 0x01
+        assert result["zones"][1]["open"] is True
 
     def test_hex_zone_dp_with_wrong_type_is_skipped(self):
         """DP 0x19 (zone-1 state) with type other than 0xD8 is skipped, not misread."""

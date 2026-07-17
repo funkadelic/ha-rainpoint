@@ -100,9 +100,16 @@ class TestBatteryStatusToPercent:
     def test_all_mapped_values(self):
         """Verify all 10 mapped values from 100 down to 10."""
         expected = {
-            0x0FFF: 100, 0x0FFE: 90, 0x0FFD: 80, 0x0FFC: 70,
-            0x0FFB: 60, 0x0FFA: 50, 0x0FF9: 40, 0x0FF8: 30,
-            0x0FF7: 20, 0x0FF6: 10,
+            0x0FFF: 100,
+            0x0FFE: 90,
+            0x0FFD: 80,
+            0x0FFC: 70,
+            0x0FFB: 60,
+            0x0FFA: 50,
+            0x0FF9: 40,
+            0x0FF8: 30,
+            0x0FF7: 20,
+            0x0FF6: 10,
         }
         for code, pct in expected.items():
             assert _battery_status_to_percent(code) == pct, f"Code 0x{code:04X} should be {pct}%"
