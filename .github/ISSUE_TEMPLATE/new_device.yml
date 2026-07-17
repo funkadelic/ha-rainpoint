@@ -1,6 +1,6 @@
 name: New device support request
 description: Request support for a RainPoint device that reports as "unsupported"
-title: "Add support for <MODEL>"
+title: "Add support for "
 labels: ["enhancement"]
 body:
   - type: markdown
@@ -75,6 +75,10 @@ body:
         then copy the `unsupported model` warning plus a few surrounding lines. The
         log carries the model, product key, raw payload, and internal ids in the exact
         form the code sees - no transcription errors on the long hex string.
+
+        Before posting: this is a public issue, so remove account and device
+        identifiers, tokens, credentials, and any unrelated personal data. Keep the
+        model, payload, and surrounding lines that describe the unsupported device.
       render: text
     validations:
       required: false
