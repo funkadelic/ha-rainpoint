@@ -42,9 +42,10 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_VALVE_213,
     MODEL_VALVE_245,
     MODEL_VALVE_345,
+    MODEL_VALVE_405,
     MODEL_VALVE_HUB,
 )
-from tests.payload_samples import SAMPLE_HTV245_TLV_PAYLOAD  # noqa: E402
+from tests.payload_samples import SAMPLE_HTV245_TLV_PAYLOAD, SAMPLE_HTV405_TLV_PAYLOAD  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Sample raw payloads
@@ -676,6 +677,7 @@ class TestDecoderRegistry:
             MODEL_VALVE_213,
             MODEL_VALVE_245,
             MODEL_VALVE_345,
+            MODEL_VALVE_405,
             MODEL_VALVE_HUB,
         }
         missing = required - DECODER_REGISTRY.keys()
@@ -712,6 +714,10 @@ class TestDecoderRegistry:
     def test_registry_contains_valve_345(self):
         """Registry contains valve 345."""
         assert MODEL_VALVE_345 in DECODER_REGISTRY
+
+    def test_registry_contains_valve_405(self):
+        """Registry contains valve 405."""
+        assert MODEL_VALVE_405 in DECODER_REGISTRY
 
     def test_registry_contains_valve_213(self):
         """Registry contains valve 213."""
@@ -762,6 +768,13 @@ class TestPureHelpers:
         result = _coord_module._decode_subdevice_payload(MODEL_VALVE_345, SAMPLE_HTV245_TLV_PAYLOAD)
         assert result["type"] == "valve_hub"
         assert result["decoder"] == "htv213frf_hex"
+
+    def test_decode_subdevice_payload_valve_405_model(self):
+        """HTV405FRF dispatches through the shared HTV213/245 valve decoder."""
+        result = _coord_module._decode_subdevice_payload(MODEL_VALVE_405, SAMPLE_HTV405_TLV_PAYLOAD)
+        assert result["type"] == "valve_hub"
+        assert result["decoder"] == "htv213frf_hex"
+        assert set(result["zones"]) == {1, 2, 3, 4}
 
     def test_decode_subdevice_payload_display_hub_special_case(self):
         """MODEL_DISPLAY_HUB routes to decode_hws019wrf_v2, not the registry."""
