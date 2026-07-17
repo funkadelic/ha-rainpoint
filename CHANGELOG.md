@@ -2,6 +2,22 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.6.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.5.3...v1.6.0) (2026-07-17)
+
+
+### Added
+
+* adding 3 valve HTV345FRF integration; polling fix ([#60](https://github.com/funkadelic/ha-rainpoint/issues/60)) ([3a90bcb](https://github.com/funkadelic/ha-rainpoint/commit/3a90bcb5f06c7f7a27abf3232d925d54e36241fa))
+
+
+### Other Changes
+
+* bump actions/checkout from 6 to 7 ([#56](https://github.com/funkadelic/ha-rainpoint/issues/56)) ([9114780](https://github.com/funkadelic/ha-rainpoint/commit/91147804d10eea6140dc196799e49b9c0b9b1592))
+* enable pre-commit.ci for automated hook enforcement ([#66](https://github.com/funkadelic/ha-rainpoint/issues/66)) ([6f848e0](https://github.com/funkadelic/ha-rainpoint/commit/6f848e002a1024e777a3255c1d9ce1b971ab3b7e))
+* enforce pyproject coverage gate in CI instead of hardcoded 90 ([#62](https://github.com/funkadelic/ha-rainpoint/issues/62)) ([b864c12](https://github.com/funkadelic/ha-rainpoint/commit/b864c12eb014c0a8057c42a927cf11c5f3db902a))
+* list HTV345FRF as a supported valve and document VALVE_MODELS registration ([#67](https://github.com/funkadelic/ha-rainpoint/issues/67)) ([4825943](https://github.com/funkadelic/ha-rainpoint/commit/4825943b09c08dd29e9a757b5001b3df519ae596))
+* skip SonarQube scan on fork pull requests ([#61](https://github.com/funkadelic/ha-rainpoint/issues/61)) ([9d3d872](https://github.com/funkadelic/ha-rainpoint/commit/9d3d8720c3155cd3756dd88acf07edf601cb1471))
+
 ## [1.5.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.5.2...v1.5.3) (2026-06-23)
 
 
