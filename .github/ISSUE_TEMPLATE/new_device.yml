@@ -1,0 +1,145 @@
+name: New device support request
+description: Request support for a RainPoint device that reports as "unsupported"
+title: "Add support for <MODEL>"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping add a new device! To write a correct decoder we need the
+        device's **raw payload** in one or more **known states**. A single payload
+        shows the byte layout but not what each byte means; captures in different
+        states (valve closed vs open, a sensor at a known reading) are what let us
+        map bytes to values.
+
+        See `DEBUG_VALVE_PAYLOAD.md` for how to capture payloads. The short version:
+        enable the per-device **"Raw Payload"** diagnostic sensor (disabled by default),
+        then read its value from the entity's attributes or the logs.
+  - type: input
+    id: model
+    attributes:
+      label: Model number
+      description: The exact model as printed on the device or shown in the RainPoint app (e.g. HTV145FRF, HIC801W).
+      placeholder: HTV145FRF
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Device category
+      options:
+        - Valve / irrigation timer (single zone)
+        - Valve hub / controller (multiple zones)
+        - Soil sensor
+        - Rain sensor
+        - Temperature / humidity sensor
+        - Weather station / display hub
+        - Pool sensor
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: zones
+    attributes:
+      label: Number of zones / stations
+      description: For valves and controllers only. How many independent outlets does the device control?
+      placeholder: "1"
+    validations:
+      required: false
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      description: Shown in the RainPoint app under device details, if available.
+    validations:
+      required: false
+  - type: textarea
+    id: primary_payload
+    attributes:
+      label: Raw payload (idle / resting state)
+      description: >
+        Paste the raw payload from the "Raw Payload" diagnostic sensor with the device
+        idle - valve closed, or the sensor sitting at a normal reading. Include the
+        `10#` or `11#` prefix exactly as shown.
+      placeholder: "10#E1BC00DC01D80020B700000000AD00009F95110000FF0F5D81D019"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: debug_log
+    attributes:
+      label: Debug log excerpt (preferred over hand-copied payloads)
+      description: >
+        If you can, paste the integration's own log line for this device instead of
+        (or as well as) the payload above. Enable debug logging for the integration,
+        then copy the `unsupported model` warning plus a few surrounding lines. The
+        log carries the model, product key, raw payload, and internal ids in the exact
+        form the code sees - no transcription errors on the long hex string.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: state_payloads
+    attributes:
+      label: Additional payloads in known states
+      description: >
+        This is the most useful part. Capture the payload again after changing the
+        device to a known state, and label each one with what the device was doing.
+
+        For multi-zone valves/controllers, capture one zone at a time: open ONLY
+        zone 1 and capture, then close it and open ONLY zone 2, and so on. Isolating
+        one zone per capture is what tells us which bytes belong to which zone - an
+        all-closed payload alone cannot.
+
+        For sensors, note the app-shown value at capture time. One payload per line,
+        each with a short label.
+      placeholder: |
+        only zone 1 open, 5 min set: 10#....
+        only zone 2 open, 5 min set: 10#....
+        all zones closed:            10#....
+        app shows 42% moisture, 21.5 C: 10#....
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: app_values
+    attributes:
+      label: Current readings shown in the RainPoint app (include units)
+      description: >
+        What does the official app show for this device right now? List each reading
+        WITH its unit, because the decoders scale raw values (e.g. temperature is
+        stored x10) and a number without a unit cannot confirm the scaling. Include
+        battery %, signal, zone open/closed, and remaining run time where relevant.
+      placeholder: |
+        temperature: 21.5 C  (not F)
+        moisture: 42 %
+        battery: 80 %
+        zone 1: closed
+    validations:
+      required: false
+  - type: input
+    id: region
+    attributes:
+      label: Region / country
+      description: Helps confirm which cloud region and hub the device is paired to.
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I enabled the disabled-by-default "Raw Payload" diagnostic sensor to capture the payload(s) above.
+          required: true
+        - label: I searched existing issues and this model is not already requested or supported.
+          required: true
+        - label: I understand the maintainer only owns some of these devices, so support may require follow-up captures from me to get the decoding right.
+          required: true
+  - type: checkboxes
+    id: can_test
+    attributes:
+      label: Testing help
+      description: The maintainer likely does not own this device, so iterating on the decoder depends on you.
+      options:
+        - label: I can install a patched/pre-release build and send additional captures to help verify the decoding.
+          required: false
