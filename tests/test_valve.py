@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_245, MODEL_VALVE_345
+from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_145, MODEL_VALVE_245, MODEL_VALVE_345
 from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
     RainPointValveEntity,
 )
 from tests.helpers import make_sensor_coordinator
-from tests.payload_samples import SAMPLE_HTV245_ASCII_PAYLOAD
+from tests.payload_samples import SAMPLE_HTV145_OPEN_PAYLOAD, SAMPLE_HTV245_ASCII_PAYLOAD
 
 
 def _make_valve(zone_data=None, hub_online=True, model="HTV245FRF"):
@@ -231,6 +231,19 @@ class TestValveControl:
         valve.coordinator.async_set_updated_data.assert_called_once()
         updated = valve.coordinator.async_set_updated_data.call_args.args[0]
         assert updated["sensors"]["100_200_1"]["data"]["zones"]  # non-empty
+
+    def test_apply_response_state_routes_htv145(self):
+        """HTV145FRF control responses decode via the HTV145 decoder."""
+        valve = _make_valve(model=MODEL_VALVE_145)
+        valve.coordinator.async_set_updated_data = MagicMock()
+
+        valve._apply_response_state(SAMPLE_HTV145_OPEN_PAYLOAD)
+
+        valve.coordinator.async_set_updated_data.assert_called_once()
+        updated = valve.coordinator.async_set_updated_data.call_args.args[0]
+        zones = updated["sensors"]["100_200_1"]["data"]["zones"]
+        assert zones[1]["open"] is True
+        assert zones[1]["duration_seconds"] == 1200
 
     def test_apply_response_state_none_skips(self):
         """_apply_response_state with None should not call async_set_updated_data."""
