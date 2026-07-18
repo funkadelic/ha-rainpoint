@@ -13,6 +13,15 @@ SAMPLE_HTV245_ASCII_PAYLOAD = "1,-84,1;0,149,0,0,0,0|0,6,0,0,0,0"
 #   DP 0x26 type 0xAD value 0x0000 (zone 2 duration = 0s)
 SAMPLE_HTV245_TLV_PAYLOAD = "11#18dc0119d8011ad80025ad3c0026ad0000"
 
+# Real hex (11#) payload from a reporter's HTV405FRF (4-zone valve), all zones idle.
+#   DP 0x18 type 0xDC value 0x01 (hub online)
+#   DP 0x19-0x1C type 0xD8 value 0x00 (zones 1-4 closed)
+#   DP 0x25-0x28 type 0xAD value 0x0000 (zone 1-4 durations = 0s)
+SAMPLE_HTV405_TLV_PAYLOAD = (
+    "11#17E1CD0019D8001AD8001BD8001CD8001D201E201F20202018DC01"
+    "21B70000000022B70000000023B70000000024B70000000025AD000026AD000027AD000028AD0000FEFF0F5B55D219"
+)
+
 # --- Phase 5 Plan 01: Additional decoder payload constants ---
 
 # HCS021FRF (moisture_full) hex payload from docstring.

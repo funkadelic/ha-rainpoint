@@ -30,6 +30,7 @@ from tests.payload_samples import (
     RAIN_HEX_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
+    SAMPLE_HTV405_TLV_PAYLOAD,
     VALVE_HUB_TLV_PAYLOAD,
 )
 
@@ -157,6 +158,23 @@ class TestDecodeHtv213frfValve:
         """TLV payload hub_online reflects the 0x18 DP with type 0xDC."""
         result = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)
         assert result["hub_online"] is True
+
+    # --- HTV405FRF (4-zone valve, reuses the HTV213/245 hex decoder) ---
+
+    def test_htv405_payload_decodes_four_zones(self):
+        """Real HTV405FRF (11#) payload decodes to four idle zones with the hub online."""
+        result = decode_htv213frf_valve(SAMPLE_HTV405_TLV_PAYLOAD)
+
+        assert result["type"] == "valve_hub"
+        assert result["decoder"] == "htv213frf_hex"
+        assert result["hub_online"] is True
+
+        zones = result["zones"]
+        assert set(zones) == {1, 2, 3, 4}
+        for zone in zones.values():
+            assert zone["open"] is False
+            assert zone["duration_seconds"] == 0
+            assert zone["state_raw"] == 0
 
     def test_htv345_payload_with_zone_dp_is_online(self):
         """HTV345FRF payloads with DP 0x19 but no hub DP are treated as online."""
