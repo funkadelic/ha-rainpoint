@@ -9,14 +9,14 @@ To help add support for your valve device, we need to capture the raw payload da
 logger:
   default: info
   logs:
-    custom_components.homgar: debug
+    custom_components.rainpoint: debug
 ```
 
 2. **Restart Home Assistant**
 
 3. **Check your logs** (Settings → System → Logs) for entries like:
 ```
-DEBUG (MainThread) [custom_components.homgar.coordinator] Processing hub mid=XXXXX with status
+DEBUG (MainThread) [custom_components.rainpoint.coordinator] Processing hub mid=XXXXX with status
 ```
 
 4. **Find the raw payload** for your valve device - it will look like:
