@@ -27,7 +27,9 @@ permissions:
   contents: write
 
 concurrency:
-  group: prerelease-${{ github.ref }}
+  # Serialize by the target version/tag (the shared resource), not the branch,
+  # so two branches publishing the same v<version> can't race to create the tag.
+  group: prerelease-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
