@@ -106,7 +106,16 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           TAG: ${{ steps.ver.outputs.tag }}
           REF_NAME: ${{ github.ref_name }}
+        shell: bash
         run: |
+          set -euo pipefail
+          # gh release create makes the release + tag, then uploads the asset. If it
+          # fails partway, delete both so a rerun is not blocked by the tag guard.
+          cleanup() {
+            echo "::warning::Pre-release creation failed; removing $TAG so a rerun starts clean."
+            gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          }
+          trap cleanup ERR
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --prerelease \
@@ -116,3 +125,4 @@ jobs:
 
           Enable it in HACS via the integration's ⋮ menu -> Redownload -> \"Show beta versions\", then pick this version. Stable users are not notified." \
             rainpoint.zip
+          trap - ERR
