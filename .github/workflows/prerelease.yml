@@ -1,0 +1,101 @@
+name: Pre-release (beta)
+
+# Manually publish a HACS beta build without touching the release-please flow.
+#
+# It builds the rainpoint.zip asset (exactly like release-please.yml does),
+# rewrites the version in the packaged files IN THE RUNNER ONLY (nothing is
+# committed or pushed), and creates a GitHub *pre-release*. HACS hides
+# pre-releases from everyone except users who enable "Show beta versions" for
+# this integration, so stable users get no update notification.
+#
+# NOTE: workflow_dispatch only lists workflows that exist on the default
+# branch, so this file must be merged to main before it can be run. When
+# dispatching, pick the FEATURE BRANCH in the "Use workflow from" selector -
+# the release is cut from that branch's HEAD, main is never modified, and
+# .release-please-manifest.json stays put so the eventual stable release is
+# unaffected.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Beta version (e.g. 1.7.0b1). A leading 'v' is stripped for files; the tag is v<version>."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prerelease-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prerelease:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to run against the default branch
+        if: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          echo "::error::Pre-releases must be cut from a feature branch, not main. Re-run and pick the feature branch in 'Use workflow from'."
+          exit 1
+
+      - uses: actions/checkout@v7
+
+      - name: Resolve version and tag
+        id: ver
+        env:
+          RAW: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${RAW#v}"           # strip any leading 'v' for the file version
+          # Allow only sane version characters to keep this safe for shell/tag/file use
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+([.-]?(a|b|rc|alpha|beta|dev)\.?[0-9]+)?$'; then
+            echo "::error::Invalid version '$VERSION'. Expected e.g. 1.7.0b1, 1.7.0-beta.1, 1.7.0rc1."
+            exit 1
+          fi
+          TAG="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building $TAG from $REF_NAME @ ${GITHUB_SHA::7}"
+
+      - name: Stamp version into packaged files (runner only, not committed)
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # manifest.json
+          tmp="$(mktemp)"
+          jq --arg v "$VERSION" '.version = $v' custom_components/rainpoint/manifest.json > "$tmp"
+          mv "$tmp" custom_components/rainpoint/manifest.json
+          # const.py (only the release-please-annotated line)
+          sed -i -E "s/^(VERSION = \")[^\"]*(\"[[:space:]]*# x-release-please-version)/\1${VERSION}\2/" custom_components/rainpoint/const.py
+          # Fail loudly if either stamp did not take
+          grep -q "\"version\": \"${VERSION}\"" custom_components/rainpoint/manifest.json
+          grep -q "^VERSION = \"${VERSION}\"" custom_components/rainpoint/const.py
+          echo "Stamped version ${VERSION}"
+
+      - name: Package integration
+        run: |
+          cd custom_components/rainpoint
+          zip -r ../../rainpoint.zip .
+
+      - name: Create pre-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --latest=false \
+            --title "$TAG (beta)" \
+            --notes "Beta test build from \`$REF_NAME\`. Not a production release.
+
+          Enable it in HACS via the integration's ⋮ menu -> Redownload -> \"Show beta versions\", then pick this version. Stable users are not notified." \
+            rainpoint.zip
