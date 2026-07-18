@@ -2,6 +2,14 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.7.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.7.0...v1.7.1) (2026-07-18)
+
+
+### Other Changes
+
+* add manual pre-release (beta) workflow ([#72](https://github.com/funkadelic/ha-rainpoint/issues/72)) ([33eb9d0](https://github.com/funkadelic/ha-rainpoint/commit/33eb9d0cf3862f823cef5f8d145e2d164a66a633))
+* fix homgar domain references and drop unused scripts dir ([#75](https://github.com/funkadelic/ha-rainpoint/issues/75)) ([9c30839](https://github.com/funkadelic/ha-rainpoint/commit/9c30839a66778cf0427199c0419f69f54c51432c))
+
 ## [1.7.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.6.0...v1.7.0) (2026-07-18)
 
 
