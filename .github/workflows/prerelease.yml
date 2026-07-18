@@ -34,29 +34,46 @@ jobs:
   prerelease:
     runs-on: ubuntu-latest
     steps:
-      - name: Refuse to run against the default branch
-        if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Refuse to run against a tag, SHA, or the default branch
+        if: ${{ github.ref_type != 'branch' || github.ref == 'refs/heads/main' }}
         run: |
-          echo "::error::Pre-releases must be cut from a feature branch, not main. Re-run and pick the feature branch in 'Use workflow from'."
+          echo "::error::Pre-releases must be cut from a non-main feature branch. Re-run and pick the branch in 'Use workflow from'."
           exit 1
 
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Resolve version and tag
         id: ver
         env:
           RAW: ${{ inputs.version }}
           REF_NAME: ${{ github.ref_name }}
+        shell: bash
         run: |
+          # Reject control characters (e.g. newlines) up front so a crafted input
+          # cannot inject extra keys into $GITHUB_OUTPUT further down.
+          if [[ "$RAW" == *$'\n'* || "$RAW" == *$'\r'* ]]; then
+            echo "::error::Version must be a single line with no control characters."
+            exit 1
+          fi
           VERSION="${RAW#v}"           # strip any leading 'v' for the file version
-          # Allow only sane version characters to keep this safe for shell/tag/file use
-          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+([.-]?(a|b|rc|alpha|beta|dev)\.?[0-9]+)?$'; then
-            echo "::error::Invalid version '$VERSION'. Expected e.g. 1.7.0b1, 1.7.0-beta.1, 1.7.0rc1."
+          # Require a pre-release suffix (a, b, rc, alpha, beta, dev): a bare stable
+          # version like 1.7.0 must not be published here, since that tag would later
+          # collide with the stable tag release-please creates for the same version.
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+[.-]?(a|b|rc|alpha|beta|dev)\.?[0-9]+$'; then
+            echo "::error::Invalid version '$VERSION'. A pre-release suffix is required, e.g. 1.7.0b1, 1.7.0-beta.1, 1.7.0rc1."
             exit 1
           fi
           TAG="v$VERSION"
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+          # git ls-remote --exit-code: 0 = tag exists, 2 = tag absent, other = query failure.
+          rc=0
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1 || rc=$?
+          if [ "$rc" -eq 0 ]; then
             echo "::error::Tag $TAG already exists"
+            exit 1
+          elif [ "$rc" -ne 2 ]; then
+            echo "::error::Could not query remote tags (git ls-remote exit $rc)"
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
