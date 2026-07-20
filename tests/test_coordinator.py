@@ -240,6 +240,24 @@ class TestCoordinatorUpdate:
         assert mock_notify.call_args.kwargs["notification_id"] == "rainpoint_unsupported_UNKNOWN_CODED_279"
 
     @pytest.mark.asyncio
+    async def test_notification_id_unchanged_when_model_code_absent(self):
+        """Without a modelCode the notification keeps its pre-existing id.
+
+        Suffixing an absent code would produce "..._None", so reloading the
+        integration would leave the old notification in place and add a second
+        one rather than replacing it.
+        """
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            coord, client = _make_coord()
+            client.get_devices_by_hid.return_value = [_make_hub(model="UNKNOWN_NOCODE")]
+            client.get_multiple_device_status.return_value = _make_status()
+
+            await _run(coord)
+
+        assert mock_notify.call_args.kwargs["notification_id"] == "rainpoint_unsupported_UNKNOWN_NOCODE"
+        assert "modelCode" not in mock_notify.call_args.args[1]
+
+    @pytest.mark.asyncio
     async def test_same_model_different_model_code_each_notify(self):
         """Two variants sharing a model string are reported separately, not deduped.
 

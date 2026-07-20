@@ -396,6 +396,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
         if model and variant not in self._notified_unknown_models:
             self._notified_unknown_models.add(variant)
             code_line = f" (modelCode `{model_code}`)" if model_code is not None else ""
+            # Only suffix the notification id when a code is present. Devices
+            # without a modelCode must keep the pre-existing
+            # "rainpoint_unsupported_{model}" id, otherwise reloading the
+            # integration leaves the old notification in place and adds a
+            # second one under "..._None" instead of replacing it.
+            code_suffix = f"_{model_code}" if model_code is not None else ""
             async_create(
                 self.hass,
                 f"RainPoint detected an unsupported sensor model: **{model}**{code_line}\n\n"
@@ -405,7 +411,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 f"```\n{raw_value}\n```\n\n"
                 f"You can also find this data in the sensor's attributes in Home Assistant.",
                 title="RainPoint: Unsupported Sensor Detected",
-                notification_id=f"rainpoint_unsupported_{model}_{model_code}",
+                notification_id=f"rainpoint_unsupported_{model}{code_suffix}",
             )
 
     def _decode_one_subdevice(
