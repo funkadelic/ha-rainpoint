@@ -213,6 +213,7 @@ def _build_sensor_entry(
         "hub_name": hub.get("name", "Hub"),
         "sub_name": sub.get("name"),
         "model": sub.get("model"),
+        "model_code": sub.get("modelCode"),
         "firmware_version": sub.get("softVer"),
         "device_name": hub.get("deviceName"),
         "product_key": hub.get("productKey"),
@@ -234,7 +235,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._client = client
         self._entry = entry
         self._hids = entry.data.get(CONF_HIDS, [])
-        self._notified_unknown_models: set[str] = set()
+        self._notified_unknown_models: set[tuple[str | None, int | None]] = set()
         self._last_valve_command_at: dict[tuple[str, int], datetime] = {}
 
     def record_valve_command(self, sensor_key: str, zone_num: int) -> datetime:
@@ -359,36 +360,52 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 status_by_mid[mid] = {"subDeviceStatus": []}
         return status_by_mid
 
-    def _notify_unknown_model(self, model: str | None, mid: int, addr: int, raw_value: str) -> None:
-        """Log the unsupported-sensor warning and fire a once-per-model persistent notification."""
+    def _notify_unknown_model(
+        self, model: str | None, mid: int, addr: int, raw_value: str, model_code: int | None = None
+    ) -> None:
+        """Log the unsupported-sensor warning and fire a once-per-variant persistent notification.
+
+        Reports modelCode alongside the model string because the two are not
+        equivalent: the vendor catalog contains model strings that map to more
+        than one modelCode, and the variants can differ in port count. A report
+        carrying only the model string can therefore be ambiguous.
+
+        Deduplication is keyed on (model, model_code) for the same reason, so
+        two variants sharing a model string are each reported once rather than
+        the second being suppressed as a duplicate of the first.
+        """
         _LOGGER.warning(
             "=" * 60 + "\n"
             "UNSUPPORTED SENSOR MODEL DETECTED\n"
             "Please report this to: %s\n"
             "Include the following information:\n"
             "  Model: %s\n"
+            "  Model Code: %s\n"
             "  Device ID (mid): %s\n"
             "  Address: %s\n"
             "  Raw Payload: %s\n" + "=" * 60,
             ISSUE_URL,
             model,
+            model_code,
             mid,
             addr,
             raw_value,
         )
-        # Send persistent notification (once per model)
-        if model and model not in self._notified_unknown_models:
-            self._notified_unknown_models.add(model)
+        # Send persistent notification (once per model/modelCode variant)
+        variant = (model, model_code)
+        if model and variant not in self._notified_unknown_models:
+            self._notified_unknown_models.add(variant)
+            code_line = f" (modelCode `{model_code}`)" if model_code is not None else ""
             async_create(
                 self.hass,
-                f"RainPoint detected an unsupported sensor model: **{model}**\n\n"
+                f"RainPoint detected an unsupported sensor model: **{model}**{code_line}\n\n"
                 f"To help add support for this sensor, please open an issue at:\n"
                 f"{ISSUE_URL}\n\n"
                 f"Include the following raw payload data:\n"
                 f"```\n{raw_value}\n```\n\n"
                 f"You can also find this data in the sensor's attributes in Home Assistant.",
                 title="RainPoint: Unsupported Sensor Detected",
-                notification_id=f"rainpoint_unsupported_{model}",
+                notification_id=f"rainpoint_unsupported_{model}_{model_code}",
             )
 
     def _decode_one_subdevice(
@@ -419,7 +436,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 )
                 decoded = _decode_subdevice_payload(model, raw_value)
                 if decoded.get("type") == "unknown":
-                    RainPointCoordinator._notify_unknown_model(self, model, mid, addr, raw_value)
+                    RainPointCoordinator._notify_unknown_model(self, model, mid, addr, raw_value, sub.get("modelCode"))
                 _LOGGER.debug(debug_with_version("Decoded data for mid=%s addr=%s: %s"), mid, addr, decoded)
             except Exception as ex:
                 _LOGGER.warning(
