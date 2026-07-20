@@ -822,6 +822,26 @@ class TestHws019PartialBranches:
         assert readings == {"temp": "707", "P": "9709"}
         assert stats == {}
 
+    def test_embedded_bracket_group_yields_no_stats(self):
+        """A reading with more than one bracketed group contributes no stats.
+
+        Searching for the triple anywhere in the token would pick up the second
+        group and record stats for a token that is structurally malformed.
+        """
+        from custom_components.rainpoint.api.decoders import _parse_hws019_readings
+
+        readings, stats = _parse_hws019_readings("707(abc)(798/750/1)")
+        assert readings == {"temp": "707"}
+        assert stats == {}
+
+    def test_trailing_junk_after_trailer_yields_no_stats(self):
+        """Text after the trailer marks the token malformed, so no stats are recorded."""
+        from custom_components.rainpoint.api.decoders import _parse_hws019_readings
+
+        readings, stats = _parse_hws019_readings("707(798/750/1)junk")
+        assert readings == {"temp": "707"}
+        assert stats == {}
+
     def test_negative_daily_min_is_captured(self):
         """
         A sub-zero daily minimum still yields stats.

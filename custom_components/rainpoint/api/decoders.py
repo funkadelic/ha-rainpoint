@@ -520,11 +520,16 @@ def _parse_hws019_flags(flags_part: str) -> list[int]:
     return flags
 
 
+# Matched with fullmatch against the whole reading, so the trailer must be the
+# only bracketed group and nothing may follow it. Searching for the triple
+# anywhere in the string would accept malformed readings such as
+# '707(abc)(798/750/1)' or '707(798/750/1)junk'.
+#
 # Each field accepts an optional leading '-': temperature is reported in tenths
 # of a degree Fahrenheit, so a daily minimum below 0F arrives as e.g.
 # '20(50/-50/1)'. Matching only digits would drop the whole trailer for those
 # readings.
-_HWS019_STATS_RE = re.compile(r"\((-?\d+)/(-?\d+)/(-?\d+)\)")
+_HWS019_STATS_RE = re.compile(r"[^()]*\((-?\d+)/(-?\d+)/(-?\d+)\)")
 
 # Keys whose '(a/b/c)' trailer is NOT a day-max/day-min pair. The rain sensor's
 # 'R=' field reuses the same syntax for cumulative totals per time window
@@ -541,8 +546,12 @@ def _parse_hws019_stats(rest: str) -> dict[str, str] | None:
     reading, in the same units and scaling as the current value. The third
     field is 1 in every captured sample; its meaning is not established, so it
     is preserved verbatim rather than named.
+
+    Returns None when the reading is not exactly one value followed by one
+    complete trailer, so a malformed token contributes no stats rather than
+    silently yielding a partial reading.
     """
-    match = _HWS019_STATS_RE.search(rest)
+    match = _HWS019_STATS_RE.fullmatch(rest.strip())
     if match is None:
         return None
     return {"max": match.group(1), "min": match.group(2), "unknown": match.group(3)}
