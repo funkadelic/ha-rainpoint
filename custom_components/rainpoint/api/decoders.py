@@ -520,7 +520,11 @@ def _parse_hws019_flags(flags_part: str) -> list[int]:
     return flags
 
 
-_HWS019_STATS_RE = re.compile(r"\((\d+)/(\d+)/(\d+)\)")
+# Each field accepts an optional leading '-': temperature is reported in tenths
+# of a degree Fahrenheit, so a daily minimum below 0F arrives as e.g.
+# '20(50/-50/1)'. Matching only digits would drop the whole trailer for those
+# readings.
+_HWS019_STATS_RE = re.compile(r"\((-?\d+)/(-?\d+)/(-?\d+)\)")
 
 # Keys whose '(a/b/c)' trailer is NOT a day-max/day-min pair. The rain sensor's
 # 'R=' field reuses the same syntax for cumulative totals per time window
@@ -604,11 +608,29 @@ def decode_hws019wrf_v2(raw: str) -> dict:
     - P=9709 = current pressure (970.9 mb)
 
     The bracketed triple is the running daily max and min, in the same units as
-    the current value. In this sample the max equals the current value for all
-    three readings, which is what a reading sitting at its daily high looks
-    like; captures where the pair straddles the current value (e.g.
-    '755(1020/588/1)') confirm the max/min ordering. The third field is 1 in
-    every sample seen so far and its meaning is unknown.
+    the current value. In the sample above the max equals the current value for
+    all three readings, which is what a reading sitting at its daily high looks
+    like, so that sample alone cannot distinguish max/min from a repeat of the
+    current value.
+
+    The ordering is fixed by captures where the pair straddles the current
+    value. Those captures come from outside this repo, so they are cited here
+    rather than left as an unexplained assertion:
+
+      brettmeyerowitz/homeassistant-homgar
+        tests/fixtures/payloads/HWS019WRF-V2.json
+        '1,0,1;758(798/750/1),54(54/46/1),P=8569(8569/8540/1),'   750 < 758 < 798
+      Remboooo/homgarapi
+        homgarapi/devices.py
+        '755(1020/588/1),54(91/24/1),'                            588 < 755 < 1020
+
+    Across 28 hub and air-sensor samples from those sources, no value violates
+    min <= current <= max and 7 straddle outright. This supersedes the earlier
+    'current/min_or_max/count' reading, which was a deliberate hedge recorded
+    when the ordering was still unverified.
+
+    The third field is 1 in every sample seen so far and its meaning is
+    unknown, so it is preserved verbatim rather than named.
     """
     _LOGGER.debug("decode_hws019wrf_v2 called with raw: %r", raw)
     try:

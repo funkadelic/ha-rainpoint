@@ -822,6 +822,28 @@ class TestHws019PartialBranches:
         assert readings == {"temp": "707", "P": "9709"}
         assert stats == {}
 
+    def test_negative_daily_min_is_captured(self):
+        """
+        A sub-zero daily minimum still yields stats.
+
+        Temperature is reported in tenths of a degree Fahrenheit, so a day-min
+        below 0F arrives with a leading '-'. A digits-only pattern matches
+        nothing and drops the entire trailer, losing the max as well.
+        """
+        from custom_components.rainpoint.api.decoders import _parse_hws019_readings
+
+        readings, stats = _parse_hws019_readings("20(50/-50/1)")
+        assert readings == {"temp": "20"}
+        assert stats["temp"] == {"max": "50", "min": "-50", "unknown": "1"}
+
+    def test_negative_current_value_and_min_are_captured(self):
+        """A reading that is itself below zero keeps both its value and its stats."""
+        from custom_components.rainpoint.api.decoders import _parse_hws019_readings
+
+        readings, stats = _parse_hws019_readings("-50(20/-90/1)")
+        assert readings == {"temp": "-50"}
+        assert stats["temp"] == {"max": "20", "min": "-90", "unknown": "1"}
+
     def test_daily_max_min_straddle_the_current_value(self):
         """
         A capture where the trailer brackets the current reading fixes the slot order.
@@ -829,6 +851,9 @@ class TestHws019PartialBranches:
         Temperature reads 758 with a trailer of (798/750): 750 < 758 < 798. Only
         max-then-min explains that ordering, which is what distinguishes this
         format from a 'current/min/count' reading.
+
+        Payload provenance: brettmeyerowitz/homeassistant-homgar,
+        tests/fixtures/payloads/HWS019WRF-V2.json. It is not a synthetic value.
         """
         from custom_components.rainpoint.api.decoders import decode_hws019wrf_v2
 
