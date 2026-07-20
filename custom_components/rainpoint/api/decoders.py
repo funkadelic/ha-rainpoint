@@ -6,6 +6,7 @@ RainPoint device types.
 """
 
 import logging
+import re
 
 from .utils import _base_decoder_dict, _f10_to_c, _le16, _parse_rainpoint_payload, _parse_tlv_payload
 from .validators import _battery_status_to_percent, _extract_rssi, _extract_status_code, _validate_payload, _validate_tag
@@ -519,37 +520,77 @@ def _parse_hws019_flags(flags_part: str) -> list[int]:
     return flags
 
 
-def _apply_hws019_keyed_item(item: str, readings: dict) -> None:
+_HWS019_STATS_RE = re.compile(r"\((\d+)/(\d+)/(\d+)\)")
+
+# Keys whose '(a/b/c)' trailer is NOT a day-max/day-min pair. The rain sensor's
+# 'R=' field reuses the same syntax for cumulative totals per time window
+# (e.g. 'R=4870(10/20/430)'), where a < b and the values do not bracket the
+# current reading. Parsing those as max/min would silently invert them.
+_HWS019_NON_MINMAX_KEYS = frozenset({"R"})
+
+
+def _parse_hws019_stats(rest: str) -> dict[str, str] | None:
+    """
+    Extract the '(day-max/day-min/unknown)' trailer from a reading.
+
+    The bracketed triple holds the running daily maximum and minimum for the
+    reading, in the same units and scaling as the current value. The third
+    field is 1 in every captured sample; its meaning is not established, so it
+    is preserved verbatim rather than named.
+    """
+    match = _HWS019_STATS_RE.search(rest)
+    if match is None:
+        return None
+    return {"max": match.group(1), "min": match.group(2), "unknown": match.group(3)}
+
+
+def _apply_hws019_keyed_item(item: str, readings: dict, stats: dict) -> None:
     """Apply a 'KEY=VALUE(...)' style reading (e.g. 'P=9709(9709/9701/1)') to readings."""
     key, rest = item.split("=", 1)
     key = key.strip()
     if "(" in rest:
         readings[key] = rest.split("(")[0].strip()
+        if key not in _HWS019_NON_MINMAX_KEYS:
+            parsed = _parse_hws019_stats(rest)
+            if parsed is not None:
+                stats[key] = parsed
     else:
         readings[key] = rest.strip()
 
 
-def _apply_hws019_positional_item(item: str, readings: dict) -> None:
-    """Apply a positional 'CURRENT(min/max/count)' reading; first slot is temp, second is humidity."""
+def _apply_hws019_positional_item(item: str, readings: dict, stats: dict) -> None:
+    """Apply a positional 'CURRENT(...)' reading; first slot is temp, second is humidity."""
     current_value = item.split("(")[0].strip()
     if "temp" not in readings:
-        readings["temp"] = current_value
+        key = "temp"
     elif "humidity" not in readings:
-        readings["humidity"] = current_value
+        key = "humidity"
+    else:
+        return
+    readings[key] = current_value
+    parsed = _parse_hws019_stats(item)
+    if parsed is not None:
+        stats[key] = parsed
 
 
-def _parse_hws019_readings(readings_part: str) -> dict[str, str]:
-    """Parse the readings segment (e.g. '707(...),42(...),P=9709(...)') into a key/value dict."""
+def _parse_hws019_readings(readings_part: str) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    """
+    Parse the readings segment (e.g. '707(...),42(...),P=9709(...)').
+
+    Returns (readings, stats): current values keyed by reading name, and the
+    per-reading daily max/min trailer for those readings that carry one.
+    """
     readings: dict[str, str] = {}
+    stats: dict[str, dict[str, str]] = {}
     for raw_item in readings_part.split(","):
         item = raw_item.strip()
         if not item:
             continue
         if "=" in item:
-            _apply_hws019_keyed_item(item, readings)
+            _apply_hws019_keyed_item(item, readings, stats)
         elif "(" in item:
-            _apply_hws019_positional_item(item, readings)
-    return readings
+            _apply_hws019_positional_item(item, readings, stats)
+    return readings, stats
 
 
 def decode_hws019wrf_v2(raw: str) -> dict:
@@ -557,10 +598,17 @@ def decode_hws019wrf_v2(raw: str) -> dict:
     Decode HWS019WRF-V2 (Display Hub) CSV/semicolon payload.
     Example: '1,0,1;707(707/694/1),42(42/39/1),P=9709(9709/9701/1),'
 
-    Format: current_value(current/min_or_max/count)
+    Format: current_value(day-max/day-min/unknown)
     - 707 = current temperature (70.7°F)
     - 42 = current humidity (42%)
     - P=9709 = current pressure (970.9 mb)
+
+    The bracketed triple is the running daily max and min, in the same units as
+    the current value. In this sample the max equals the current value for all
+    three readings, which is what a reading sitting at its daily high looks
+    like; captures where the pair straddles the current value (e.g.
+    '755(1020/588/1)') confirm the max/min ordering. The third field is 1 in
+    every sample seen so far and its meaning is unknown.
     """
     _LOGGER.debug("decode_hws019wrf_v2 called with raw: %r", raw)
     try:
@@ -568,11 +616,12 @@ def decode_hws019wrf_v2(raw: str) -> dict:
         if len(parts) < 2:
             raise ValueError(f"expected ';' separator between flags and readings in HWS019 payload: {raw!r}")
         flags = _parse_hws019_flags(parts[0])
-        readings = _parse_hws019_readings(parts[1])
+        readings, reading_stats = _parse_hws019_readings(parts[1])
         result = {
             "type": "hws019wrf_v2",
             "flags": flags,
             "readings": readings,
+            "reading_stats": reading_stats,
             "raw": raw,
         }
         _LOGGER.debug("decode_hws019wrf_v2 result: %r", result)

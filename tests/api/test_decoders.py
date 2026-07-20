@@ -781,22 +781,75 @@ class TestHws019PartialBranches:
         from custom_components.rainpoint.api.decoders import _apply_hws019_keyed_item
 
         readings: dict = {}
-        _apply_hws019_keyed_item("K=plain_value", readings)
+        stats: dict = {}
+        _apply_hws019_keyed_item("K=plain_value", readings, stats)
         assert readings == {"K": "plain_value"}
+        assert stats == {}
 
     def test_third_positional_item_after_humidity_is_ignored(self):
         """A third positional item is silently dropped once temp + humidity are filled."""
         from custom_components.rainpoint.api.decoders import _parse_hws019_readings
 
-        result = _parse_hws019_readings("707(707/694/1),42(42/39/1),99(99/0/1)")
-        assert result == {"temp": "707", "humidity": "42"}
+        readings, stats = _parse_hws019_readings("707(707/694/1),42(42/39/1),99(99/0/1)")
+        assert readings == {"temp": "707", "humidity": "42"}
+        assert set(stats) == {"temp", "humidity"}
 
     def test_readings_token_without_equals_or_parens_is_ignored(self):
         """A readings token with neither '=' nor '(' is silently dropped."""
         from custom_components.rainpoint.api.decoders import _parse_hws019_readings
 
-        result = _parse_hws019_readings("plain_text_no_special_chars")
-        assert result == {}
+        readings, stats = _parse_hws019_readings("plain_text_no_special_chars")
+        assert readings == {}
+        assert stats == {}
+
+    def test_daily_max_min_are_captured_for_each_reading(self):
+        """The bracketed trailer is preserved as day max/min alongside the current value."""
+        from custom_components.rainpoint.api.decoders import _parse_hws019_readings
+
+        readings, stats = _parse_hws019_readings("707(707/694/1),42(42/39/1),P=9709(9709/9701/1)")
+        assert readings == {"temp": "707", "humidity": "42", "P": "9709"}
+        assert stats == {
+            "temp": {"max": "707", "min": "694", "unknown": "1"},
+            "humidity": {"max": "42", "min": "39", "unknown": "1"},
+            "P": {"max": "9709", "min": "9701", "unknown": "1"},
+        }
+
+    def test_malformed_trailer_yields_no_stats(self):
+        """A '(...)' trailer that is not a numeric triple is dropped, keeping the current value."""
+        from custom_components.rainpoint.api.decoders import _parse_hws019_readings
+
+        readings, stats = _parse_hws019_readings("707(abc),P=9709(x/y)")
+        assert readings == {"temp": "707", "P": "9709"}
+        assert stats == {}
+
+    def test_daily_max_min_straddle_the_current_value(self):
+        """
+        A capture where the trailer brackets the current reading fixes the slot order.
+
+        Temperature reads 758 with a trailer of (798/750): 750 < 758 < 798. Only
+        max-then-min explains that ordering, which is what distinguishes this
+        format from a 'current/min/count' reading.
+        """
+        from custom_components.rainpoint.api.decoders import decode_hws019wrf_v2
+
+        result = decode_hws019wrf_v2("1,0,1;758(798/750/1),54(54/46/1),P=8569(8569/8540/1),")
+        assert result["readings"] == {"temp": "758", "humidity": "54", "P": "8569"}
+        assert result["reading_stats"]["temp"] == {"max": "798", "min": "750", "unknown": "1"}
+        assert int(result["reading_stats"]["temp"]["min"]) < int(result["readings"]["temp"])
+        assert int(result["readings"]["temp"]) < int(result["reading_stats"]["temp"]["max"])
+
+    def test_rain_window_trailer_is_not_treated_as_max_min(self):
+        """
+        'R=' reuses the trailer syntax for cumulative windows, not a max/min pair.
+
+        In 'R=4870(10/20/430)' the values ascend and do not bracket the current
+        reading, so recording them as max/min would invert their meaning.
+        """
+        from custom_components.rainpoint.api.decoders import _parse_hws019_readings
+
+        readings, stats = _parse_hws019_readings("R=4870(10/20/430)")
+        assert readings == {"R": "4870"}
+        assert stats == {}
 
 
 class TestBasicDecoderShortBufferBranches:
