@@ -198,6 +198,88 @@ class TestCoordinatorUpdate:
         assert mock_notify.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_model_code_is_exposed_on_sensor_entry(self):
+        """modelCode from the device list is carried through to the sensor entry."""
+        coord, client = _make_coord()
+        hub = _make_hub(model=MODEL_MOISTURE_SIMPLE)
+        hub["subDevices"][0]["modelCode"] = 303
+        client.get_devices_by_hid.return_value = [hub]
+        client.get_multiple_device_status.return_value = _make_status()
+
+        result = await _run(coord)
+
+        sensor = next(iter(result["sensors"].values()))
+        assert sensor["model_code"] == 303
+
+    @pytest.mark.asyncio
+    async def test_model_code_absent_is_none_not_an_error(self):
+        """A device list without modelCode still decodes, leaving model_code None."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_multiple_device_status.return_value = _make_status()
+
+        result = await _run(coord)
+
+        sensor = next(iter(result["sensors"].values()))
+        assert sensor["model_code"] is None
+
+    @pytest.mark.asyncio
+    async def test_unknown_model_notification_includes_model_code(self):
+        """The unsupported-model notification carries modelCode so reports are unambiguous."""
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            coord, client = _make_coord()
+            hub = _make_hub(model="UNKNOWN_CODED")
+            hub["subDevices"][0]["modelCode"] = 279
+            client.get_devices_by_hid.return_value = [hub]
+            client.get_multiple_device_status.return_value = _make_status()
+
+            await _run(coord)
+
+        body = mock_notify.call_args.args[1]
+        assert "279" in body
+        assert mock_notify.call_args.kwargs["notification_id"] == "rainpoint_unsupported_UNKNOWN_CODED_279"
+
+    @pytest.mark.asyncio
+    async def test_notification_id_unchanged_when_model_code_absent(self):
+        """Without a modelCode the notification keeps its pre-existing id.
+
+        Suffixing an absent code would produce "..._None", so reloading the
+        integration would leave the old notification in place and add a second
+        one rather than replacing it.
+        """
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            coord, client = _make_coord()
+            client.get_devices_by_hid.return_value = [_make_hub(model="UNKNOWN_NOCODE")]
+            client.get_multiple_device_status.return_value = _make_status()
+
+            await _run(coord)
+
+        assert mock_notify.call_args.kwargs["notification_id"] == "rainpoint_unsupported_UNKNOWN_NOCODE"
+        assert "modelCode" not in mock_notify.call_args.args[1]
+
+    @pytest.mark.asyncio
+    async def test_same_model_different_model_code_each_notify(self):
+        """Two variants sharing a model string are reported separately, not deduped.
+
+        The vendor catalog contains model strings mapping to more than one
+        modelCode (e.g. HIC801W is both 278 and 279) whose port counts differ,
+        so suppressing the second as a duplicate of the first would hide a
+        genuinely distinct device.
+        """
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            coord, client = _make_coord()
+            client.get_multiple_device_status.return_value = _make_status()
+
+            for code in (278, 279):
+                hub = _make_hub(model="UNKNOWN_VARIANT")
+                hub["subDevices"][0]["modelCode"] = code
+                client.get_devices_by_hid.return_value = [hub]
+                await _run(coord)
+
+        assert mock_notify.call_count == 2
+        assert coord._notified_unknown_models == {("UNKNOWN_VARIANT", 278), ("UNKNOWN_VARIANT", 279)}
+
+    @pytest.mark.asyncio
     async def test_update_display_hub_model(self):
         """MODEL_DISPLAY_HUB routes to decode_hws019wrf_v2 (special-case path)."""
         coord, client = _make_coord()
