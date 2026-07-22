@@ -56,6 +56,7 @@ class RainPointPushWatchdog:
         *,
         time_source=time.monotonic,
     ) -> None:
+        """Wire the watchdog to a hub's MQTT client; time_source is injectable for tests."""
         self._hass = hass
         self._entry = entry
         self._mqtt_client = mqtt_client

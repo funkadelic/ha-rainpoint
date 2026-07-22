@@ -170,6 +170,7 @@ class _RainPointPushDiagnosticBase(RainPointHubDevice):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, mqtt_client, hub_info: dict) -> None:
+        """Bind the diagnostic to the MQTT client it reads its live state from."""
         RainPointHubDevice.__init__(self, hub_info)
         self._mqtt_client = mqtt_client
 
@@ -188,6 +189,7 @@ class _RainPointPushDiagnosticBase(RainPointHubDevice):
 
     @property
     def available(self) -> bool:
+        """Available whenever the push MQTT client is present."""
         return self._mqtt_client is not None
 
 
@@ -198,12 +200,14 @@ class RainPointPushConnectedBinarySensor(_RainPointPushDiagnosticBase, BinarySen
     _attr_icon = "mdi:cloud-check-variant"
 
     def __init__(self, mqtt_client, hub_info: dict) -> None:
+        """Build the connection-state entity with a stable per-hub unique id."""
         super().__init__(mqtt_client, hub_info)
         self._attr_unique_id = f"{self._attr_unique_id}_{PUSH_CONNECTED_UNIQUE_ID_SUFFIX}"
         self._attr_name = f"{self._attr_name} Push Connected"
 
     @property
     def is_on(self) -> bool:
+        """Return True while the MQTT client is connected."""
         return self._mqtt_client.connected
 
 
@@ -220,6 +224,7 @@ class RainPointPushLastMessageSensor(_RainPointPushDiagnosticBase, SensorEntity)
     _attr_icon = "mdi:clock-check-outline"
 
     def __init__(self, mqtt_client, hub_info: dict, *, time_source: Callable[[], float] = time.monotonic) -> None:
+        """Build the last-message entity; time_source is injectable for tests."""
         super().__init__(mqtt_client, hub_info)
         self._time_source = time_source
         self._attr_unique_id = f"{self._attr_unique_id}_{PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX}"
@@ -227,6 +232,7 @@ class RainPointPushLastMessageSensor(_RainPointPushDiagnosticBase, SensorEntity)
 
     @property
     def native_value(self) -> datetime | None:
+        """Return the last-message time as an absolute UTC datetime, or None."""
         last = self._mqtt_client.last_message_at
         if last is None:
             return None
