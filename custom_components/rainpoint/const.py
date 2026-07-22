@@ -1,3 +1,5 @@
+from pathlib import Path
+
 # Display Hub model constant
 DOMAIN = "rainpoint"
 
@@ -40,8 +42,17 @@ CONF_PUSH_ENABLED = "push_enabled"
 MQTT_TOPIC_PROPERTY_SET = "/sys/{product_key}/{device_name}/thing/service/property/set"
 MQTT_TOPIC_EVENT_POST = "/sys/{product_key}/{device_name}/thing/event/property/post"
 MQTT_BROKER_HOST_TEMPLATE = "{product_key}.iot-as-mqtt.us-west-1.aliyuncs.com"
-MQTT_BROKER_PORT = 1883
+# TLS port. The credential's mqttHostUrl advertises the vendor's plaintext 1883,
+# but the same broker also serves TLS on 8883. We always connect over TLS and
+# ignore the advertised port, verifying the chain against the pinned root below.
+MQTT_BROKER_PORT = 8883
 MQTT_KEEPALIVE = 30
+# Pinned Aliyun IoT private root CA ("Aliyun IoT Root CA", self-signed, valid
+# until 2053). The broker's TLS leaf chains to this root, which is absent from
+# every public trust store, so it must be supplied explicitly for the handshake
+# to verify. Shipped in the package under certs/; its integrity is guarded by a
+# test against Aliyun's published MD5.
+MQTT_TLS_CA_CERT = str(Path(__file__).parent / "certs" / "ali_iot_ca.crt")
 
 # Push envelope layout (confirmed against live hardware).
 # The state-carrying message arrives as a standard AliCloud IoT payload whose

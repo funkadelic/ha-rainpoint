@@ -9,11 +9,12 @@ backoff. It subscribes to both candidate state topics and
 logs message receipt; it never touches coordinator state -- feeding push
 data into coordinator.data is out of scope here.
 
-Transport is plain TCP, no TLS (confirmed against the live broker) -- this overrides any
-TLS assumption elsewhere. Every paho on_* callback runs on paho's own network
-thread and must never touch HA/integration state directly; each hops onto the
-HA event loop via hass.loop.call_soon_threadsafe into an @callback method
-before touching self.
+Transport is TLS on port 8883, verified against a pinned private root CA
+("Aliyun IoT Root CA") that is absent from public trust stores -- the broker's
+mqttHostUrl advertises the plaintext 1883 port, which is deliberately ignored.
+Every paho on_* callback runs on paho's own network thread and must never touch
+HA/integration state directly; each hops onto the HA event loop via
+hass.loop.call_soon_threadsafe into an @callback method before touching self.
 """
 
 import asyncio
@@ -40,6 +41,7 @@ from ..const import (
     MQTT_PUSH_SUBDEVICE_PREFIX,
     MQTT_PUSH_TIME_FIELD,
     MQTT_PUSH_VALUE_FIELD,
+    MQTT_TLS_CA_CERT,
     MQTT_TOPIC_EVENT_POST,
     MQTT_TOPIC_PROPERTY_SET,
 )
@@ -416,17 +418,18 @@ class RainPointMqttClient:
         self._renew_event.set()
 
     async def _connect(self, creds: dict) -> None:
-        """Build the paho client from fresh creds and connect. No TLS.
+        """Build the paho client from fresh creds and connect over TLS.
 
         paho's connect() is blocking (DNS resolution + a synchronous
         socket.connect); calling it directly on the HA event loop would freeze
         all of Home Assistant for the connection timeout on every initial
         connect, every renewal cycle, and every backoff retry against an
-        unreachable broker. It is therefore dispatched to the executor,
-        while loop_start() (a cheap network-thread spawn) stays on the loop.
-        The blocking connect() still creates the socket before returning, so the
-        subscribe-after-connect ordering in _renew() continues to find a live
-        connection.
+        unreachable broker. tls_set() is likewise blocking (it reads and parses
+        the CA file and builds an SSLContext). Both are therefore dispatched to
+        the executor in a single hop, while loop_start() (a cheap network-thread
+        spawn) stays on the loop. The blocking connect() still creates the
+        socket before returning, so the subscribe-after-connect ordering in
+        _renew() continues to find a live connection.
         """
         device_name = creds.get("deviceName", "")
         product_key = creds.get("productKey", "")
@@ -461,13 +464,26 @@ class RainPointMqttClient:
 
         # The credential response's host is authoritative for the account's
         # region; fall back to the template host when absent. mqttHostUrl is
-        # formatted as "host:port"; parse both, defaulting the port when it is
-        # missing or non-numeric.
+        # formatted as "host:port", but the advertised port is the vendor's
+        # plaintext 1883 -- we take only the host and always connect over TLS on
+        # MQTT_BROKER_PORT (8883).
         host_url = creds.get("mqttHostUrl") or MQTT_BROKER_HOST_TEMPLATE.format(product_key=product_key)
-        host, _, port_str = host_url.partition(":")
-        port = int(port_str) if port_str.isdigit() else MQTT_BROKER_PORT
-        # connect() blocks on DNS + socket.connect; keep it off the event loop.
-        await self._hass.async_add_executor_job(paho_client.connect, host, port, MQTT_KEEPALIVE)
+        host = host_url.partition(":")[0]
+        port = MQTT_BROKER_PORT
+
+        # Pin Aliyun's private IoT root CA: the broker's leaf chains to
+        # "Aliyun IoT Root CA", which no public trust store carries, so the
+        # system default would reject it. tls_set() with this CA gives full
+        # chain + hostname verification (the leaf SAN covers the regional mqtt
+        # host). No client cert -- auth stays the HMAC password, and the
+        # clientId's securemode=2 already signals TLS. tls_set() and connect()
+        # both block, so they share one executor hop; tls_set must precede
+        # connect.
+        def _tls_and_connect() -> None:
+            paho_client.tls_set(ca_certs=MQTT_TLS_CA_CERT)
+            paho_client.connect(host, port, MQTT_KEEPALIVE)
+
+        await self._hass.async_add_executor_job(_tls_and_connect)
         paho_client.loop_start()
 
         self._paho = paho_client
