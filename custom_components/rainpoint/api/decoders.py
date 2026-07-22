@@ -412,7 +412,7 @@ def decode_htv145frf(raw: str) -> dict:
         }
 
     except Exception as e:
-        _LOGGER.error("HTV145FRF decoder error for payload %r: %s", raw, e, exc_info=True)
+        _LOGGER.exception("HTV145FRF decoder error for payload %r", raw)
         return {
             "type": "valve_hub",
             "rssi_dbm": 0,
