@@ -101,6 +101,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # re-fetch + reconnect -- the supervisor never keeps running on
             # credentials the HTTP layer has superseded.
             client.register_relogin_listener(mqtt_client.on_http_relogin)
+            # Liveness watchdog: surfaces a silently dead push channel as a
+            # repair issue. Detection-only -- it never reconnects and never
+            # changes the poll cadence. Torn down alongside the client on unload.
+            from .repairs import RainPointPushWatchdog
+
+            watchdog = RainPointPushWatchdog(hass, entry, mqtt_client)
+            hass.data[DOMAIN][entry.entry_id]["watchdog"] = watchdog
+            entry.async_on_unload(watchdog.async_stop)
+            watchdog.start()
             # Backgrounded and never awaited: a broker-unreachable failure must
             # never block or fail config-entry setup. Polling
             # already has entities covered via async_config_entry_first_refresh.

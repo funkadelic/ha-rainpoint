@@ -305,6 +305,74 @@ class TestAsyncSetupEntry:
         assert result is True
         mock_client.register_relogin_listener.assert_called_once_with(mock_mqtt_client.on_http_relogin)
 
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_push_enabled_starts_watchdog(self):
+        """When push is enabled, a watchdog is constructed, started, stored, and torn down on unload."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        mock_mqtt_client = MagicMock()
+        mock_mqtt_client.async_start = AsyncMock()
+        mock_mqtt_client.async_disconnect = AsyncMock()
+
+        mock_watchdog = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch(
+                "custom_components.rainpoint.RainPointMqttClient",
+                return_value=mock_mqtt_client,
+            ),
+            patch(
+                "custom_components.rainpoint.repairs.RainPointPushWatchdog",
+                return_value=mock_watchdog,
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        assert hass.data[DOMAIN][entry.entry_id]["watchdog"] is mock_watchdog
+        mock_watchdog.start.assert_called_once_with()
+        entry.async_on_unload.assert_any_call(mock_watchdog.async_stop)
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_push_disabled_no_watchdog(self):
+        """With push disabled, no watchdog is constructed or stored."""
+        hass = _make_hass()
+        entry = _make_entry()  # options == {} => push disabled
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        assert "watchdog" not in hass.data[DOMAIN][entry.entry_id]
+
 
 class TestAsyncUnloadEntry:
     """Tests for AsyncUnloadEntry."""
