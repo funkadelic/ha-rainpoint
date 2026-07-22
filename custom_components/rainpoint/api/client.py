@@ -157,7 +157,13 @@ class RainPointClient:
             # credentials the HTTP layer just superseded. The initial login
             # of a session does not fire -- there is nothing to supersede yet.
             for callback in self._relogin_listeners:
-                callback()
+                # Isolate each listener: a raising listener must not propagate out
+                # of _login() (called from ensure_logged_in() at the top of every
+                # API method) nor skip the listeners registered after it (CR-03).
+                try:
+                    callback()
+                except Exception:
+                    _LOGGER.exception("RainPoint relogin listener raised; continuing")
 
     # --- API calls ---
 

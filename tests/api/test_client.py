@@ -377,6 +377,27 @@ class TestReloginListeners:
         listener_one.assert_called_once_with()
         listener_two.assert_called_once_with()
 
+    @pytest.mark.asyncio
+    async def test_relogin_listener_exception_is_isolated(self, caplog):
+        """A raising listener does not propagate out of _login() and does not
+        prevent later-registered listeners from firing (CR-03)."""
+        client = _make_client()
+        assert client._token is not None
+
+        raising = MagicMock(side_effect=RuntimeError("listener boom"))
+        after = MagicMock()
+        client.register_relogin_listener(raising)
+        client.register_relogin_listener(after)
+
+        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        with caplog.at_level(logging.ERROR):
+            await client._login()  # must not raise despite the raising listener
+
+        raising.assert_called_once_with()
+        after.assert_called_once_with()  # a listener after the raising one still fires
+        assert any("relogin listener raised" in r.message for r in caplog.records)
+
 
 class TestTokenManagement:
     """Tests for token lifecycle: validity checks, restore, export, ensure_logged_in."""
