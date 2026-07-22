@@ -1167,8 +1167,10 @@ class TestBrokerHostSelection:
 
         host, port, _keepalive = fake_paho.connect.call_args.args
         assert host == "pk123.iot-as-mqtt.us-west-1.aliyuncs.com"
+        # The advertised plaintext 1883 is ignored: connect uses the const, and
+        # the const pins the TLS port 8883 as a transport-contract invariant.
+        assert mqtt_module.MQTT_BROKER_PORT == 8883
         assert port == mqtt_module.MQTT_BROKER_PORT
-        assert port != 1883
 
         await client.async_disconnect()
 
