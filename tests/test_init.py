@@ -1,5 +1,7 @@
 """Tests for custom_components.rainpoint.__init__ (integration lifecycle)."""
 
+import asyncio
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +13,7 @@ from custom_components.rainpoint import (
     async_setup_entry,
     async_unload_entry,
 )
+from custom_components.rainpoint.const import CONF_PUSH_ENABLED
 
 
 def _make_entry(entry_id="test_entry_id"):
@@ -26,6 +29,7 @@ def _make_entry(entry_id="test_entry_id"):
         "refresh_token": "ref",
         "token_expires_at": 9999999999,
     }
+    entry.options = {}
     return entry
 
 
@@ -81,6 +85,190 @@ class TestAsyncSetupEntry:
         stored = hass.data[DOMAIN][entry.entry_id]
         assert "client" in stored
         assert "coordinator" in stored
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_registers_reload_listener(self):
+        """An update listener is registered so an options change reloads the entry (OPTS-01/D-01)."""
+        hass = _make_hass()
+        entry = _make_entry()
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            from custom_components.rainpoint import async_reload_entry
+
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        entry.add_update_listener.assert_called_once_with(async_reload_entry)
+        entry.async_on_unload.assert_any_call(entry.add_update_listener.return_value)
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_push_disabled_no_mqtt_client(self):
+        """With push disabled (default), no mqtt_client is stored and no background task runs."""
+        hass = _make_hass()
+        entry = _make_entry()
+        # entry.options == {} => push_enabled defaults to False
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        assert "mqtt_client" not in hass.data[DOMAIN][entry.entry_id]
+        hass.async_create_background_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_push_enabled_creates_and_backgrounds_mqtt_client(self):
+        """With push enabled, an mqtt_client is stored and async_start is backgrounded, not awaited."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        mock_mqtt_client = MagicMock()
+        mock_mqtt_client.async_start = AsyncMock()
+        mock_mqtt_client.async_disconnect = AsyncMock()
+
+        created_tasks = []
+
+        def _create_background_task(coro, name=None):
+            """Schedule the coroutine like the real HA helper would, without awaiting it here."""
+            task = asyncio.ensure_future(coro)
+            created_tasks.append(task)
+            return task
+
+        hass.async_create_background_task = MagicMock(side_effect=_create_background_task)
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch(
+                "custom_components.rainpoint.RainPointMqttClient",
+                return_value=mock_mqtt_client,
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        assert hass.data[DOMAIN][entry.entry_id]["mqtt_client"] is mock_mqtt_client
+        hass.async_create_background_task.assert_called_once()
+        # Not awaited synchronously by setup itself.
+        assert mock_mqtt_client.async_start.await_count == 0
+        entry.async_on_unload.assert_any_call(mock_mqtt_client.async_disconnect)
+
+        for task in created_tasks:
+            with contextlib.suppress(Exception):
+                await task
+        assert mock_mqtt_client.async_start.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_push_enabled_broker_unreachable_still_returns_true(self):
+        """A broker-unreachable async_start failure never blocks/fails setup (PUSH-04/D-09)."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        mock_mqtt_client = MagicMock()
+        mock_mqtt_client.async_start = AsyncMock(side_effect=RuntimeError("broker unreachable"))
+        mock_mqtt_client.async_disconnect = AsyncMock()
+
+        created_tasks = []
+
+        def _create_background_task(coro, name=None):
+            """Create background task helper."""
+            task = asyncio.ensure_future(coro)
+            created_tasks.append(task)
+            return task
+
+        hass.async_create_background_task = MagicMock(side_effect=_create_background_task)
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch(
+                "custom_components.rainpoint.RainPointMqttClient",
+                return_value=mock_mqtt_client,
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        assert hass.data[DOMAIN][entry.entry_id]["coordinator"] is mock_coordinator
+
+        for task in created_tasks:
+            with contextlib.suppress(RuntimeError):
+                await task
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_push_enabled_no_hub_found_skips_mqtt(self):
+        """Push enabled but no hub record available logs a warning and skips MQTT entirely."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": []}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        assert "mqtt_client" not in hass.data[DOMAIN][entry.entry_id]
+        hass.async_create_background_task.assert_not_called()
 
 
 class TestAsyncUnloadEntry:

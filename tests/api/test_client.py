@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.rainpoint.api import RainPointApiError, RainPointClient
+from custom_components.rainpoint.api.client import _redact_secret
 
 
 def _make_client() -> RainPointClient:
@@ -766,3 +767,16 @@ class TestGetSubscribeStatus:
             await client.get_subscribe_status("hub-device", "pk123")
 
         assert "SEKRIT-value-9f3a" not in caplog.text
+
+    def test_redact_secret_short_value(self):
+        """A short (<=4 char) secret is rendered as length + <short>, never the raw value."""
+        assert _redact_secret("ab") == "len=2 <short>"
+
+    def test_redact_secret_empty_value(self):
+        """An empty/None secret is rendered as <empty>."""
+        assert _redact_secret(None) == "<empty>"
+        assert _redact_secret("") == "<empty>"
+
+    def test_redact_secret_long_value(self):
+        """A secret longer than 4 chars is rendered as length + last-4 only."""
+        assert _redact_secret("SEKRIT-value-9f3a") == "len=17 last4=9f3a"

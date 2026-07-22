@@ -8,7 +8,8 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import RainPointClient
-from .const import DOMAIN
+from .api.mqtt import RainPointMqttClient
+from .const import CONF_PUSH_ENABLED, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +36,19 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
+def _resolve_hub_identity(coordinator) -> tuple[str | None, str | None]:
+    """Resolve the first available hub's deviceName/productKey for MQTT credential fetch.
+
+    Hub discovery already scans all configured homes (D-12); this just picks
+    the first hub record the coordinator collected.
+    """
+    hubs = (coordinator.data or {}).get("hubs", [])
+    if not hubs:
+        return None, None
+    hub = hubs[0]
+    return hub.get("deviceName"), hub.get("productKey")
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up RainPoint from a config entry."""
     session = async_get_clientsession(hass)
@@ -59,6 +73,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "client": client,
         "coordinator": coordinator,
     }
+
+    # An options change (e.g. toggling push) reloads through the existing
+    # unload->setup path, no bespoke start/stop code path needed (OPTS-01/D-01).
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+
+    if entry.options.get(CONF_PUSH_ENABLED, False):
+        hub_device_name, hub_product_key = _resolve_hub_identity(coordinator)
+        if hub_device_name and hub_product_key:
+            mqtt_client = RainPointMqttClient(hass, client, entry, hub_device_name, hub_product_key)
+            hass.data[DOMAIN][entry.entry_id]["mqtt_client"] = mqtt_client
+            # Registered immediately after construction so it fires even if a
+            # later setup step raises (D-10).
+            entry.async_on_unload(mqtt_client.async_disconnect)
+            # Backgrounded and never awaited: a broker-unreachable failure must
+            # never block or fail config-entry setup (PUSH-04/D-09). Polling
+            # already has entities covered via async_config_entry_first_refresh.
+            hass.async_create_background_task(mqtt_client.async_start(), name="rainpoint_mqtt_start")
+        else:
+            _LOGGER.warning("Push enabled but no hub was found; skipping MQTT connect")
 
     # Set up services
     await async_setup_services(hass)

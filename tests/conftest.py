@@ -280,6 +280,19 @@ class _FakeConfigFlow:
 sys.modules["homeassistant.config_entries"].ConfigFlow = _FakeConfigFlow
 
 
+class _FakeOptionsFlow:
+    """Minimal stand-in for homeassistant.config_entries.OptionsFlow.
+
+    Real instances get `config_entry` assigned by the flow manager; tests
+    set it directly on the instance before calling a step.
+    """
+
+    pass
+
+
+sys.modules["homeassistant.config_entries"].OptionsFlow = _FakeOptionsFlow
+
+
 class _FakeClientError(OSError):
     """Stand-in for aiohttp.ClientError."""
 
