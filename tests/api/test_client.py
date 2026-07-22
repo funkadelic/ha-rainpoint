@@ -317,6 +317,67 @@ class TestLogin:
         assert payload["deviceId"] == expected_device_id
 
 
+class TestReloginListeners:
+    """Re-login notifies registered listeners; initial login does not."""
+
+    @staticmethod
+    def _login_json_body() -> dict:
+        return {
+            "code": 0,
+            "data": {"token": "tok", "refreshToken": "ref", "tokenExpired": 3600},
+            "ts": 1700000000000,
+        }
+
+    @pytest.mark.asyncio
+    async def test_initial_login_does_not_fire_listener(self):
+        """The first _login() of a session (no prior token) does not invoke listeners."""
+        client = _make_client()
+        client._token = None  # no prior token => this is the initial login
+
+        listener = MagicMock()
+        client.register_relogin_listener(listener)
+
+        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        await client._login()
+
+        listener.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_relogin_fires_listener_exactly_once(self):
+        """A second _login() while a token is already held (re-login) fires the listener once."""
+        client = _make_client()
+        # _make_client() already sets a token, so this call is a re-login.
+        assert client._token is not None
+
+        listener = MagicMock()
+        client.register_relogin_listener(listener)
+
+        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        await client._login()
+
+        listener.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_relogin_fires_all_registered_listeners(self):
+        """Multiple registered listeners all fire on re-login."""
+        client = _make_client()
+        assert client._token is not None
+
+        listener_one = MagicMock()
+        listener_two = MagicMock()
+        client.register_relogin_listener(listener_one)
+        client.register_relogin_listener(listener_two)
+
+        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        await client._login()
+
+        listener_one.assert_called_once_with()
+        listener_two.assert_called_once_with()
+
+
 class TestTokenManagement:
     """Tests for token lifecycle: validity checks, restore, export, ensure_logged_in."""
 

@@ -7,6 +7,7 @@ with the RainPoint cloud API.
 
 import hashlib
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import aiohttp
@@ -44,7 +45,22 @@ class RainPointClient:
         # region host: you had region3; we can later make this configurable
         self._base_url = "https://region3.homgarus.com"
 
+        # Listeners notified when the HTTP layer rotates its token via a
+        # re-login (not the initial login). Kept decoupled from any
+        # particular subscriber (e.g. the MQTT client) so this module never
+        # imports the mqtt layer -- the supervisor must never keep running on
+        # credentials the HTTP layer has superseded.
+        self._relogin_listeners: list[Callable[[], None]] = []
+
     # --- token state helpers ---
+
+    def register_relogin_listener(self, callback: Callable[[], None]) -> None:
+        """Register a callback fired synchronously after a re-login rotates the token.
+
+        Not fired on the initial login of a session -- only when the token is
+        replaced while a previous token was already held.
+        """
+        self._relogin_listeners.append(callback)
 
     def _auth_headers(self) -> dict:
         """Generate authentication headers for API calls."""
@@ -96,6 +112,7 @@ class RainPointClient:
 
     async def _login(self) -> None:
         """Login with areaCode/email/password and store token info."""
+        is_relogin = self._token is not None
         url = f"{self._base_url}/auth/basic/app/login"
 
         # Client-side MD5 hashing as per app/Postman flow
@@ -133,6 +150,14 @@ class RainPointClient:
         self._token_expires_at = base + timedelta(seconds=token_expired_secs)
 
         _LOGGER.info("RainPoint login successful; token expires in %s seconds", token_expired_secs)
+
+        if is_relogin:
+            # Token rotation: notify subscribers (e.g. the MQTT credential
+            # supervisor) so they re-fetch rather than keep running on
+            # credentials the HTTP layer just superseded. The initial login
+            # of a session does not fire -- there is nothing to supersede yet.
+            for callback in self._relogin_listeners:
+                callback()
 
     # --- API calls ---
 

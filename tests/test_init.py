@@ -270,6 +270,41 @@ class TestAsyncSetupEntry:
         assert "mqtt_client" not in hass.data[DOMAIN][entry.entry_id]
         hass.async_create_background_task.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_push_enabled_registers_relogin_listener(self):
+        """When push is enabled, the client's re-login listener is wired to the mqtt client."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        mock_mqtt_client = MagicMock()
+        mock_mqtt_client.async_start = AsyncMock()
+        mock_mqtt_client.async_disconnect = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch(
+                "custom_components.rainpoint.RainPointMqttClient",
+                return_value=mock_mqtt_client,
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        mock_client.register_relogin_listener.assert_called_once_with(mock_mqtt_client.on_http_relogin)
+
 
 class TestAsyncUnloadEntry:
     """Tests for AsyncUnloadEntry."""

@@ -86,6 +86,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Registered immediately after construction so it fires even if a
             # later setup step raises (D-10).
             entry.async_on_unload(mqtt_client.async_disconnect)
+            # An HTTP re-login must trigger an immediate MQTT credential
+            # re-fetch + reconnect -- the supervisor never keeps running on
+            # credentials the HTTP layer has superseded.
+            client.register_relogin_listener(mqtt_client.on_http_relogin)
             # Backgrounded and never awaited: a broker-unreachable failure must
             # never block or fail config-entry setup (PUSH-04/D-09). Polling
             # already has entities covered via async_config_entry_first_refresh.
