@@ -84,6 +84,10 @@ class TestCountryToPhoneCodeMap:
         """Au is 61."""
         assert COUNTRY_TO_PHONE_CODE["AU"] == "61"
 
+    def test_hu_is_36(self):
+        """Hu is 36."""
+        assert COUNTRY_TO_PHONE_CODE["HU"] == "36"
+
 
 class TestCountryNames:
     """Tests for COUNTRY_NAMES mapping."""
@@ -100,6 +104,10 @@ class TestCountryNames:
     def test_gb_name(self):
         """GB maps to United Kingdom."""
         assert COUNTRY_NAMES["GB"] == "United Kingdom"
+
+    def test_hu_name(self):
+        """HU maps to Hungary."""
+        assert COUNTRY_NAMES["HU"] == "Hungary"
 
 
 class TestGetCountryCodeOptions:
