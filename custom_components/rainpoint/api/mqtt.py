@@ -65,14 +65,23 @@ _BACKOFF_CEILING_SECONDS = 480.0
 _JITTER_MIN_FRACTION = 0.10
 _JITTER_MAX_FRACTION = 0.30
 
+# Credential renewal cadence (CRED-02/D-06): max(120, expire - now - 60), jittered.
+# The exact subscribeStatus expiry field name was not captured empirically by the
+# Phase 8 spike (FINDINGS.md), so absence defaults to the spike-observed ~570s
+# disconnect-old/reconnect-new cycle.
+_RENEWAL_MIN_INTERVAL_SECONDS = 120.0
+_RENEWAL_SAFETY_MARGIN_SECONDS = 60.0
+_DEFAULT_CREDENTIAL_LIFETIME_SECONDS = 570.0
+
 
 class RainPointMqttClient:
     """Supervised push channel to the RainPoint MQTT broker.
 
-    One owned asyncio.Task (_run_supervisor) connects, subscribes, and stays
-    connected; on any connect failure it retries indefinitely under jittered
-    backoff. paho's own auto-reconnect is disabled so the supervisor is the
-    sole reconnect authority (CONN-01/D-05).
+    One owned asyncio.Task (_run_supervisor) connects, subscribes, renews
+    credentials before their ~570s expiry via a clean disconnect-old/
+    reconnect-new cycle, and retries indefinitely under jittered backoff on
+    any failure. paho's own auto-reconnect is disabled so the supervisor is
+    the sole reconnect authority (CONN-01/D-05, CRED-02/D-06).
     """
 
     def __init__(
@@ -101,6 +110,7 @@ class RainPointMqttClient:
         self._stopping = False
         self._supervisor_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
+        self._renew_event = asyncio.Event()
 
     @property
     def message_count(self) -> int:
@@ -126,24 +136,28 @@ class RainPointMqttClient:
         self._supervisor_task = self._hass.loop.create_task(self._run_supervisor())
 
     async def _run_supervisor(self) -> None:
-        """Own connect -> run -> reconnect indefinitely (D-05).
+        """Own connect -> run -> renew -> reconnect indefinitely (D-05, D-06).
 
-        Only the backoff DELAY is capped -- never the attempt count (Pitfall 2).
-        Any exception in the loop body still results in a scheduled retry
-        (Pitfall 7): there is no bare return and no uncaught exception that
-        silently ends the chain.
+        _renew() is reused both for the very first connect and every
+        subsequent renewal cycle, so there is exactly one state machine here
+        -- not two independent call_later chains that could silently diverge
+        (Pitfall 6). Only the backoff DELAY is capped -- never the attempt
+        count (Pitfall 2). Any exception in the loop body (connect failure or
+        renewal failure alike) still results in a scheduled retry (Pitfall 7):
+        there is no bare return and no uncaught exception that silently ends
+        the chain.
         """
         attempt = 0
         while not self._stopping:
             try:
-                await self._connect_and_subscribe()
+                renew_in = await self._renew()
             except asyncio.CancelledError:
                 raise
-            except Exception as err:  # must always re-arm, see Pitfall 2/7
+            except Exception as err:  # must always re-arm, see Pitfall 2/6/7
                 attempt += 1
                 delay = self._backoff_delay(attempt)
                 _LOGGER.warning(
-                    "RainPoint MQTT connect failed (attempt=%s): %s; retrying in %.1fs",
+                    "RainPoint MQTT connect/renew failed (attempt=%s): %s; retrying in %.1fs",
                     attempt,
                     err,
                     delay,
@@ -152,16 +166,18 @@ class RainPointMqttClient:
                 continue
 
             attempt = 0
-            await self._stop_event.wait()
-        # Loop exits only when self._stopping is set.
+            await self._wait_for_renewal(renew_in)
+        # Loop exits only when self._stopping is set (async_disconnect handles teardown).
+
+    async def _sleep(self, delay: float) -> None:
+        """Thin wrapper around asyncio.sleep -- a single patchable seam shared
+        by the backoff and renewal waits, so tests can avoid real wall-clock
+        waiting without reaching into the global asyncio module."""
+        await asyncio.sleep(delay)
 
     async def _schedule_reconnect(self, delay: float) -> None:
-        """Sleep for the computed backoff delay before the next attempt.
-
-        A thin wrapper around asyncio.sleep so tests can patch a single
-        module-level seam without real wall-clock waiting.
-        """
-        await asyncio.sleep(delay)
+        """Sleep for the computed backoff delay before the next attempt."""
+        await self._sleep(delay)
 
     def _backoff_delay(self, attempt: int) -> float:
         """Exponential backoff capped at a ceiling, with jitter (D-05/Pitfall 7).
@@ -182,11 +198,70 @@ class RainPointMqttClient:
         sign = random.choice((-1.0, 1.0))
         return value * (1 + sign * magnitude)
 
-    async def _connect_and_subscribe(self) -> None:
-        """Fetch fresh credentials, connect, and subscribe to both topics."""
+    # --- credential renewal (CRED-02/D-06, D-07) ---
+
+    async def _renew(self) -> float:
+        """Fetch fresh credentials and (re)connect: disconnect-old/reconnect-new.
+
+        Reused both for the very first connect and every subsequent renewal
+        cycle (D-06/spike-confirmed: renewal is a clean disconnect-old/
+        reconnect-new cycle, never an in-place credential swap). Returns the
+        jittered delay in seconds until the next renewal is due.
+        """
         creds = await self._client.get_subscribe_status(self._hub_device_name, self._hub_product_key)
+        now = self._time_source()
+        self._disconnect_paho()
         self._connect(creds)
         self._subscribe(creds)
+        expire_at = now + self._credential_lifetime_seconds(creds)
+        return self._renewal_delay_seconds(expire_at, now)
+
+    @staticmethod
+    def _credential_lifetime_seconds(creds: dict) -> float:
+        """Credential lifetime in seconds from the moment of fetch.
+
+        The exact subscribeStatus response field for this was not captured by
+        the Phase 8 spike; if present, `expire` is treated as a lifetime-in-
+        seconds duration. Absence defaults to the spike-observed ~570s cycle.
+        """
+        lifetime = creds.get("expire")
+        if isinstance(lifetime, int | float) and lifetime > 0:
+            return float(lifetime)
+        return _DEFAULT_CREDENTIAL_LIFETIME_SECONDS
+
+    @staticmethod
+    def _renewal_base_delay(expire_at: float, now: float) -> float:
+        """max(120, expire - now - 60), before jitter (D-06)."""
+        return max(_RENEWAL_MIN_INTERVAL_SECONDS, expire_at - now - _RENEWAL_SAFETY_MARGIN_SECONDS)
+
+    def _renewal_delay_seconds(self, expire_at: float, now: float) -> float:
+        """Jittered renewal cadence: max(120, expire - now - 60) +-10-30% (D-06/Pitfall 7)."""
+        return self._apply_jitter(self._renewal_base_delay(expire_at, now))
+
+    async def _wait_for_renewal(self, delay: float) -> None:
+        """Wait for the renewal deadline, an on_http_relogin signal, or a stop
+        request -- whichever comes first. A single wait primitive keeps
+        renewal and reconnect inside the same supervised loop rather than two
+        independent call_later chains that could diverge (Pitfall 6/7).
+        """
+        self._renew_event.clear()
+        sleep_task = asyncio.ensure_future(self._sleep(delay))
+        stop_task = asyncio.ensure_future(self._stop_event.wait())
+        renew_task = asyncio.ensure_future(self._renew_event.wait())
+        try:
+            await asyncio.wait({sleep_task, stop_task, renew_task}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (sleep_task, stop_task, renew_task):
+                if not task.done():
+                    task.cancel()
+
+    def on_http_relogin(self) -> None:
+        """Signal that the HTTP layer rotated its token: force an immediate
+        credential re-fetch + reconnect rather than waiting for the timed
+        renewal deadline, so the supervisor never keeps running on
+        credentials the HTTP layer has superseded (D-07/Pitfall 6).
+        """
+        self._renew_event.set()
 
     def _connect(self, creds: dict) -> None:
         """Build the paho client from fresh creds and connect. No TLS (D-11)."""

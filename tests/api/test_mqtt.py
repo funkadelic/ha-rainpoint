@@ -61,10 +61,11 @@ async def _settle(times: int = 5) -> None:
         await asyncio.sleep(0)
 
 
-async def _instant_reconnect_delay(*_args, **_kwargs) -> None:
-    """A _schedule_reconnect replacement that yields once (real checkpoint) instead of
-    actually sleeping for the computed backoff delay -- keeps supervisor-retry tests fast
-    while still giving the test driver's _settle() loop a chance to observe each iteration.
+async def _instant_sleep(*_args, **_kwargs) -> None:
+    """A RainPointMqttClient._sleep replacement that yields once (real checkpoint)
+    instead of actually sleeping for the computed delay -- keeps supervisor-retry
+    and renewal tests fast while still giving the test driver's _settle() loop a
+    chance to observe each iteration.
     """
     await asyncio.sleep(0)
 
@@ -373,7 +374,7 @@ class TestSupervisorUnboundedRetry:
         fake_paho.connect.side_effect = [OSError("connection refused")] * 6 + [None] * 10
         client = _make_mqtt_client(hass, fake_paho)
 
-        with patch.object(RainPointMqttClient, "_schedule_reconnect", new=AsyncMock(side_effect=_instant_reconnect_delay)):
+        with patch.object(RainPointMqttClient, "_schedule_reconnect", new=AsyncMock(side_effect=_instant_sleep)):
             await client.async_start()
             await _settle(times=30)
 
@@ -392,7 +393,7 @@ class TestSupervisorUnboundedRetry:
         fake_paho.connect.side_effect = RainPointMqttError("boom")
         client = _make_mqtt_client(hass, fake_paho)
 
-        with patch.object(RainPointMqttClient, "_schedule_reconnect", new=AsyncMock(side_effect=_instant_reconnect_delay)):
+        with patch.object(RainPointMqttClient, "_schedule_reconnect", new=AsyncMock(side_effect=_instant_sleep)):
             await client.async_start()
             await _settle(times=50)
 
@@ -408,3 +409,138 @@ def test_no_bounded_range_governs_reconnect():
 
     source = _inspect.getsource(mqtt_module.RainPointMqttClient._run_supervisor)
     assert "range(" not in source
+
+
+def _make_mqtt_client_with_distinct_paho_instances(hass, get_subscribe_status_mock=None) -> tuple:
+    """Build a client whose paho factory returns a NEW mock instance per call, so
+    tests can distinguish the old (pre-renewal) client from the new one."""
+    rainpoint_client = MagicMock()
+    rainpoint_client.get_subscribe_status = get_subscribe_status_mock or AsyncMock(return_value=_fake_creds())
+    instances: list = []
+
+    def _factory(*_args, **_kwargs):
+        instance = MagicMock(spec=paho.Client)
+        instances.append(instance)
+        return instance
+
+    factory = MagicMock(side_effect=_factory)
+    client = RainPointMqttClient(
+        hass,
+        rainpoint_client,
+        entry=MagicMock(),
+        hub_device_name="hub-device",
+        hub_product_key="hub-pk",
+        paho_client_factory=factory,
+        time_source=lambda: 1000.0,
+    )
+    return client, rainpoint_client, instances
+
+
+class TestCredentialRenewal:
+    """CRED-02/D-06: clean disconnect-old/reconnect-new renewal cycle before ~570s expiry."""
+
+    @pytest.mark.asyncio
+    async def test_renewal_crosses_boundary_and_reconnects_with_fresh_creds(self):
+        """Crossing the (patched-instant) renewal deadline re-fetches creds, disconnects
+        the old paho client, and reconnects+resubscribes a new one (D-15b/D-06)."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        client, rainpoint_client, instances = _make_mqtt_client_with_distinct_paho_instances(hass)
+
+        with patch.object(RainPointMqttClient, "_sleep", new=AsyncMock(side_effect=_instant_sleep)):
+            await client.async_start()
+            await _settle(times=15)
+
+            assert rainpoint_client.get_subscribe_status.call_count >= 1
+            first_paho = instances[0]
+
+            await _settle(times=15)
+
+        assert rainpoint_client.get_subscribe_status.call_count >= 2
+        assert len(instances) >= 2
+        first_paho.loop_stop.assert_called()
+        first_paho.disconnect.assert_called()
+        # The new client subscribed to both topics again after renewal.
+        assert instances[-1].subscribe.call_count == 2
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_on_http_relogin_forces_immediate_reconnect_without_waiting_deadline(self):
+        """on_http_relogin() re-fetches credentials and reconnects immediately -- the
+        real (unpatched, ~510s) renewal delay is never actually waited out (D-07)."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        client, rainpoint_client, instances = _make_mqtt_client_with_distinct_paho_instances(hass)
+
+        await client.async_start()
+        await _settle(times=15)
+        assert rainpoint_client.get_subscribe_status.call_count == 1
+
+        client.on_http_relogin()
+        await _settle(times=15)
+
+        assert rainpoint_client.get_subscribe_status.call_count >= 2
+        assert len(instances) >= 2
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_renewal_failure_does_not_kill_supervisor(self):
+        """A get_subscribe_status failure during renewal is caught by the same
+        retry path -- the supervisor keeps running, a retry is scheduled."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        call_state = {"n": 0}
+
+        async def _flaky_get_subscribe_status(*_args, **_kwargs):
+            call_state["n"] += 1
+            if call_state["n"] == 2:
+                raise RuntimeError("renewal boom")
+            return _fake_creds()
+
+        get_subscribe_status_mock = AsyncMock(side_effect=_flaky_get_subscribe_status)
+        client, _rainpoint_client, _instances = _make_mqtt_client_with_distinct_paho_instances(hass, get_subscribe_status_mock)
+
+        with patch.object(RainPointMqttClient, "_sleep", new=AsyncMock(side_effect=_instant_sleep)):
+            await client.async_start()
+            await _settle(times=40)
+
+        assert call_state["n"] >= 3
+        assert not client._supervisor_task.done()
+
+        await client.async_disconnect()
+
+
+class TestRenewalDelayFormula:
+    """D-06: renew_in = max(120, expire - now - 60), jittered."""
+
+    def _client(self):
+        return _make_mqtt_client(MagicMock(), _make_fake_paho())
+
+    def test_renewal_base_delay_formula(self):
+        client = self._client()
+        assert client._renewal_base_delay(expire_at=1570.0, now=1000.0) == 510.0
+
+    def test_renewal_base_delay_clamps_to_floor_for_short_expire(self):
+        client = self._client()
+        assert client._renewal_base_delay(expire_at=1050.0, now=1000.0) == mqtt_module._RENEWAL_MIN_INTERVAL_SECONDS
+
+    def test_renewal_delay_seconds_applies_jitter_within_band(self):
+        client = self._client()
+        samples = {client._renewal_delay_seconds(1570.0, 1000.0) for _ in range(10)}
+
+        assert len(samples) > 1
+        assert all(510.0 * 0.7 <= delay <= 510.0 * 1.3 for delay in samples)
+
+    def test_credential_lifetime_defaults_when_absent(self):
+        assert RainPointMqttClient._credential_lifetime_seconds({}) == mqtt_module._DEFAULT_CREDENTIAL_LIFETIME_SECONDS
+
+    def test_credential_lifetime_uses_expire_field_when_present(self):
+        assert RainPointMqttClient._credential_lifetime_seconds({"expire": 300}) == 300.0
+
+
+def test_on_http_relogin_is_a_public_method():
+    """D-07: on_http_relogin() exists as the documented HTTP-re-login trigger."""
+    assert hasattr(RainPointMqttClient, "on_http_relogin")
+    assert not inspect.iscoroutinefunction(RainPointMqttClient.on_http_relogin)
