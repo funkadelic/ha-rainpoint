@@ -286,4 +286,21 @@ class _FakeClientError(OSError):
 
 sys.modules["aiohttp"].ClientError = _FakeClientError
 
+
+# ---------------------------------------------------------------------------
+# homeassistant.core.callback: real identity decorator, not a MagicMock.
+#
+# `homeassistant.core` is a bare MagicMock stub (see _HA_STUBS above), so
+# `from homeassistant.core import callback` would otherwise resolve to a
+# MagicMock. Decorating a function with a MagicMock replaces it with the
+# mock's return value instead of the original function, silently breaking
+# any `@callback`-decorated method (e.g. api/mqtt.py's _handle_message).
+# ---------------------------------------------------------------------------
+def _identity_callback(func):
+    """Real stand-in for homeassistant.core.callback -- returns func unchanged."""
+    return func
+
+
+sys.modules["homeassistant.core"].callback = _identity_callback
+
 import tests.helpers  # noqa: E402, F401 — ensures helpers are importable in tests
