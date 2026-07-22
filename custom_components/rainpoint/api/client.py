@@ -28,6 +28,20 @@ class RainPointApiError(Exception):
     pass
 
 
+class RainPointThrottledError(RainPointApiError):
+    """Login is refused because the server is throttling us, not because the
+    credentials are wrong.
+
+    Carries ``retry_after`` (seconds) so callers can surface a "please wait"
+    message or back off, instead of treating it as an authentication failure.
+    Subclasses RainPointApiError so existing handlers keep working.
+    """
+
+    def __init__(self, message: str, retry_after: float) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 def _redact_secret(value: str | None) -> str:
     """Render a secret as length + last-4 only -- never the raw value."""
     if not value:
@@ -144,7 +158,7 @@ class RainPointClient:
         # Fast-fail without a network call while the server is throttling us.
         remaining = self._cooldown_remaining()
         if remaining > 0:
-            raise RainPointApiError(f"login throttled by server; cooling down {remaining:.0f}s before retry")
+            raise RainPointThrottledError(f"login throttled by server; cooling down {remaining:.0f}s before retry", remaining)
         async with self._login_lock:
             # Re-check under the lock: a concurrent caller may have already
             # logged in or tripped the cooldown while we waited for the lock.
@@ -152,7 +166,7 @@ class RainPointClient:
                 return
             remaining = self._cooldown_remaining()
             if remaining > 0:
-                raise RainPointApiError(f"login throttled by server; cooling down {remaining:.0f}s before retry")
+                raise RainPointThrottledError(f"login throttled by server; cooling down {remaining:.0f}s before retry", remaining)
             await self._login()
 
     async def _login(self) -> None:
@@ -182,7 +196,7 @@ class RainPointClient:
                 # A hard edge/WAF block -- the server is refusing us outright,
                 # typically after sustained request volume. Back off hard.
                 self._enter_login_cooldown("HTTP 403")
-                raise RainPointApiError(f"Login HTTP 403; cooling down {_LOGIN_COOLDOWN_SECONDS}s")
+                raise RainPointThrottledError(f"Login HTTP 403; cooling down {_LOGIN_COOLDOWN_SECONDS}s", _LOGIN_COOLDOWN_SECONDS)
             if resp.status != 200:
                 raise RainPointApiError(f"Login HTTP {resp.status}")
             data = await resp.json()
@@ -192,7 +206,9 @@ class RainPointClient:
             # Soft rate limit ("operate too frequently"). Honor it before it
             # escalates into a 403.
             self._enter_login_cooldown("code 9993 operate too frequently")
-            raise RainPointApiError(f"Login rate-limited (code 9993); cooling down {_LOGIN_COOLDOWN_SECONDS}s")
+            raise RainPointThrottledError(
+                f"Login rate-limited (code 9993); cooling down {_LOGIN_COOLDOWN_SECONDS}s", _LOGIN_COOLDOWN_SECONDS
+            )
         if code != 0 or "data" not in data:
             _LOGGER.debug("Login failed response: %s", data)
             raise RainPointApiError(f"Login failed: code {code}")

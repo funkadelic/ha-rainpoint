@@ -4,7 +4,7 @@ RainPoint API module.
 This module provides a clean, organized interface to the RainPoint API functionality.
 """
 
-from .client import RainPointApiError, RainPointClient
+from .client import RainPointApiError, RainPointClient, RainPointThrottledError
 from .decoders import (
     decode_co2,
     decode_display,
@@ -65,6 +65,7 @@ __all__ = [
     # Client
     "RainPointApiError",
     "RainPointClient",
+    "RainPointThrottledError",
     # Utils
     "_base_decoder_dict",
     # Validators

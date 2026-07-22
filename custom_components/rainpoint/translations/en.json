@@ -43,6 +43,7 @@
         "error": {
             "auth_failed": "Authentication failed. Please check your credentials.",
             "cannot_connect": "Unable to connect to RainPoint. Please try again.",
+            "rate_limited": "RainPoint is temporarily rate-limiting sign-ins. Please wait a couple of minutes and try again.",
             "no_homes": "No homes were found for this account.",
             "select_at_least_one": "Please select a home."
         },

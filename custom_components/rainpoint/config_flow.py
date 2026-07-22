@@ -15,7 +15,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from .api import RainPointApiError, RainPointClient
+from .api import RainPointApiError, RainPointClient, RainPointThrottledError
 from .const import (
     CONF_AREA_CODE,
     CONF_COUNTRY,
@@ -87,6 +87,9 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 homes = await client.list_homes()
                 _LOGGER.info("Found %d homes", len(homes))
                 _LOGGER.debug("Homes data: %s", homes)
+            except RainPointThrottledError:
+                _LOGGER.warning("RainPoint login is rate-limited; asking the user to retry later")
+                errors["base"] = "rate_limited"
             except RainPointApiError:
                 _LOGGER.exception("Error logging in to RainPoint")
                 errors["base"] = "auth_failed"
@@ -208,6 +211,13 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await client.ensure_logged_in()
                 homes = await client.list_homes()
                 _LOGGER.info("Found %d homes for reconfigure", len(homes))
+            except RainPointThrottledError:
+                _LOGGER.warning("RainPoint login is rate-limited during reconfigure; asking the user to retry later")
+                return self.async_show_form(
+                    step_id="reconfigure",
+                    data_schema=data_schema,
+                    errors={"base": "rate_limited"},
+                )
             except RainPointApiError:
                 _LOGGER.exception("Error logging in to RainPoint during reconfigure")
                 return self.async_show_form(
