@@ -33,6 +33,7 @@ from ..const import (
     MQTT_BROKER_HOST_TEMPLATE,
     MQTT_BROKER_PORT,
     MQTT_KEEPALIVE,
+    MQTT_PUSH_MAX_PAYLOAD_BYTES,
     MQTT_PUSH_METHOD,
     MQTT_PUSH_PARAMS_KEY,
     MQTT_PUSH_SECTION_DELIMITER,
@@ -78,6 +79,9 @@ def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
     sub-device status, and each carries the raw value string the poll-path
     decoders already consume plus a device millisecond timestamp.
     """
+    if len(payload) > MQTT_PUSH_MAX_PAYLOAD_BYTES:
+        # Real envelopes are ~425 bytes; drop anything far larger before parsing.
+        return []
     try:
         outer = json.loads(payload)
         if not isinstance(outer, dict) or outer.get("method") != MQTT_PUSH_METHOD:
@@ -196,6 +200,15 @@ class RainPointMqttClient:
     def message_count(self) -> int:
         """Return the running count of messages received since connect (test/diagnostic seam)."""
         return self._message_count
+
+    @property
+    def hub_mid(self):
+        """Return the mid of the single hub this client is bound to (or None).
+
+        The client is constructed for exactly one hub, so the push diagnostics
+        and any push updates belong to this hub only.
+        """
+        return self._hub_mid
 
     @property
     def last_message_at(self) -> float | None:

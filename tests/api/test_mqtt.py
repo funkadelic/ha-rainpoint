@@ -349,6 +349,15 @@ class TestPushEnvelopeFailSafe:
         payload = json.dumps({"method": "thing.service.property.set", "params": {"anything": param}}).encode()
         assert mqtt_module._parse_push_envelope(payload) == [("D01", "11#ab", 123)]
 
+    def test_parse_push_envelope_drops_oversized_payload(self):
+        """An oversized payload is dropped before parsing, even if it would
+        otherwise be valid JSON, so a huge message cannot drive work."""
+        inner = {"D01": {"time": 123, "value": "11#" + "a" * 20000}}
+        param = "|".join(["#P" + "0" * 10, json.dumps(inner), "123", "tok#"])
+        payload = json.dumps({"method": "thing.service.property.set", "params": {"param": param}}).encode()
+        assert len(payload) > mqtt_module.MQTT_PUSH_MAX_PAYLOAD_BYTES
+        assert mqtt_module._parse_push_envelope(payload) == []
+
     @pytest.mark.asyncio
     async def test_malformed_payload_through_handler_never_calls_coordinator(self):
         """A malformed payload driven through the HA-loop handler drops silently."""
@@ -408,6 +417,7 @@ class TestPushEnvelopeParsing:
         fake_paho = _make_fake_paho()
         coordinator = MagicMock()
         client = _make_push_client(hass, fake_paho, coordinator, hub_mid=4242)
+        assert client.hub_mid == 4242
         await client.async_start()
         await _settle()
 

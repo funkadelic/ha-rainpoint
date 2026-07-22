@@ -26,6 +26,28 @@ from .coordinator import RainPointCoordinator
 from .device import RainPointHubDevice
 
 
+def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client) -> list[dict]:
+    """Return the hub(s) the push diagnostics belong to.
+
+    The MQTT client is built for exactly one hub, so the connection and
+    last-message diagnostics are created only for that bound hub. Creating one
+    per configured hub would make every hub on a multi-hub account display the
+    shared client's state, even though push only ever targets the bound hub.
+    """
+    hubs_cfg = (coordinator.data or {}).get("hubs", [])
+    hubs = list(hubs_cfg.values()) if isinstance(hubs_cfg, dict) else list(hubs_cfg)
+    if not hubs:
+        return []
+    bound_mid = getattr(mqtt_client, "hub_mid", None)
+    if bound_mid is not None:
+        match = next((hub for hub in hubs if hub.get("mid") == bound_mid), None)
+        if match is not None:
+            return [match]
+    # No mid to match on (or no matching hub): fall back to the first hub, which
+    # is the one the client was built from.
+    return [hubs[0]]
+
+
 class RainPointHubSensorBase(CoordinatorEntity, SensorEntity, RainPointHubDevice):
     """Base class for RainPoint hub sensors."""
 

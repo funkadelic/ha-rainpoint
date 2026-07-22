@@ -8,7 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import RainPointCoordinator
-from .hub_entities import RainPointPushConnectedBinarySensor
+from .hub_entities import RainPointPushConnectedBinarySensor, resolve_push_diagnostic_hubs
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,11 +29,12 @@ async def async_setup_entry(
         return
 
     coordinator: RainPointCoordinator = data["coordinator"]
-    hubs_cfg = coordinator.data.get("hubs", [])
-    hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
 
-    entities = [RainPointPushConnectedBinarySensor(mqtt_client, hub_info) for hub_info in hubs_dict.values()]
+    entities = [
+        RainPointPushConnectedBinarySensor(mqtt_client, hub_info)
+        for hub_info in resolve_push_diagnostic_hubs(coordinator, mqtt_client)
+    ]
 
-    _LOGGER.info("Added %d binary sensor entities", len(entities))
+    _LOGGER.debug("Added %d binary sensor entities", len(entities))
     if entities:
         async_add_entities(entities)

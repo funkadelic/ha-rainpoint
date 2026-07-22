@@ -62,6 +62,7 @@ from .hub_entities import (
     RainPointHubFirmwareSensor,
     RainPointHubMACSensor,
     RainPointPushLastMessageSensor,
+    resolve_push_diagnostic_hubs,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -298,8 +299,7 @@ async def async_setup_entry(
     # the MQTT client's liveness clock, not coordinator.data).
     mqtt_client = data.get("mqtt_client")
     if mqtt_client is not None:
-        hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
-        for hub_info in hubs_dict.values():
+        for hub_info in resolve_push_diagnostic_hubs(coordinator, mqtt_client):
             entities.append(RainPointPushLastMessageSensor(mqtt_client, hub_info))
 
     if entities:

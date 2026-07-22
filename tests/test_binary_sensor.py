@@ -25,8 +25,8 @@ def _make_hass(hubs=None, mqtt_client=MagicMock):
     return hass, entry, coord
 
 
-def _hub(hid=100, name="Hub 1"):
-    return {"hid": hid, "name": name, "model": "HTV0540FRF"}
+def _hub(hid=100, name="Hub 1", mid=None):
+    return {"hid": hid, "mid": mid if mid is not None else hid, "name": name, "model": "HTV0540FRF"}
 
 
 class TestBinarySensorSetupEntry:
@@ -43,18 +43,22 @@ class TestBinarySensorSetupEntry:
         add.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_one_connected_entity_per_hub_when_push_enabled(self):
-        """One push-connected binary sensor is created per hub when push is enabled."""
-        hubs = [_hub(100, "Hub 1"), _hub(200, "Hub 2")]
-        hass, entry, _coord = _make_hass(hubs=hubs, mqtt_client=MagicMock())
+    async def test_one_connected_entity_bound_to_the_clients_hub(self):
+        """Exactly one push-connected sensor is created, for the hub the single
+        MQTT client is bound to -- not one per configured hub (which would show
+        unrelated hubs the shared client's state)."""
+        hubs = [_hub(100, "Hub 1", mid=111), _hub(200, "Hub 2", mid=222)]
+        client = MagicMock()
+        client.hub_mid = 222  # client is bound to the second hub
+        hass, entry, _coord = _make_hass(hubs=hubs, mqtt_client=client)
         add = MagicMock()
 
         await async_setup_entry(hass, entry, add)
 
         add.assert_called_once()
         entities = add.call_args[0][0]
-        assert len(entities) == 2
-        assert all(isinstance(e, RainPointPushConnectedBinarySensor) for e in entities)
+        assert len(entities) == 1
+        assert isinstance(entities[0], RainPointPushConnectedBinarySensor)
 
     @pytest.mark.asyncio
     async def test_no_hubs_adds_no_entities(self):

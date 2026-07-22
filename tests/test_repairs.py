@@ -12,6 +12,7 @@ from custom_components.rainpoint.const import (
     DOMAIN,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
     PUSH_WATCHDOG_ISSUE_ID,
+    PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS,
     PUSH_WATCHDOG_SCAN_INTERVAL_SECONDS,
 )
 from custom_components.rainpoint.repairs import RainPointPushWatchdog
@@ -137,20 +138,46 @@ class TestWatchdogTransient:
         create.assert_not_called()
         delete.assert_not_called()
 
-    def test_recent_message_keeps_channel_alive_while_disconnected(self, issue_mocks):
-        """A message within the window proves liveness even if connected is False."""
+    def test_message_grace_uses_short_window_not_dead_after(self, issue_mocks):
+        """While disconnected, a message keeps the channel alive only within the
+        short grace window, not the full dead-after window. This is what stops
+        the message grace and the sustained-dead clock from stacking into a
+        doubled time-to-flag."""
         create, _delete = issue_mocks
         clock = _Clock(start=10_000.0)
-        # Disconnected, but a message arrived well within the window.
-        client = _make_client(connected=False, last_message_at=10_000.0 - 10)
+        client = _make_client(connected=False, last_message_at=None)
         watchdog = _make_watchdog(client, clock)
 
-        # Even long after, as long as the message stays within the window it is alive.
+        # A message inside the grace window keeps it alive despite being disconnected.
+        client.last_message_at = clock.t - (PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS - 1)
         watchdog._async_check()
-        clock.advance(PUSH_WATCHDOG_DEAD_AFTER_SECONDS)  # message now exactly at the window edge... still <= window
-        # Move the message just outside the window and let the outage build.
-        client.last_message_at = clock.t - PUSH_WATCHDOG_DEAD_AFTER_SECONDS - 1
-        watchdog._async_check()  # now non-functional -> outage clock starts
+        assert watchdog._dead_since is None
+
+        # A message older than the grace window (but far within dead-after) no
+        # longer counts as alive: the outage clock starts. Under the old code
+        # (grace == dead-after) this same message would still read as alive.
+        client.last_message_at = clock.t - (PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS + 1)
+        watchdog._async_check()
+        assert watchdog._dead_since is not None
+        create.assert_not_called()
+
+    def test_connected_channel_is_alive_regardless_of_message_age(self, issue_mocks):
+        """A connected channel is treated as alive even with no recent message.
+
+        This encodes the deliberate limitation: an idle channel with no device
+        activity is indistinguishable from a silently detached one from message
+        age alone, so staleness while connected is not flagged (which would spam
+        repairs during normal quiet periods)."""
+        create, _delete = issue_mocks
+        clock = _Clock(start=100_000.0)
+        client = _make_client(connected=True, last_message_at=0.0)  # ancient message
+        watchdog = _make_watchdog(client, clock)
+
+        watchdog._async_check()
+        clock.advance(PUSH_WATCHDOG_DEAD_AFTER_SECONDS * 3)
+        watchdog._async_check()
+
+        assert watchdog._dead_since is None
         create.assert_not_called()
 
 

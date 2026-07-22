@@ -15,6 +15,7 @@ from custom_components.rainpoint.hub_entities import (
     RainPointHubMACSensor,
     RainPointHubRSSISensor,
     RainPointPushLastMessageSensor,
+    resolve_push_diagnostic_hubs,
 )
 
 
@@ -35,6 +36,48 @@ def _make_hub_info(hid=100, name="Test Hub", soft_ver="2.0", mac="AA:BB:CC"):
         "model": "HTV0540FRF",
         "hardwareVersion": "1.0",
     }
+
+
+class TestResolvePushDiagnosticHubs:
+    """resolve_push_diagnostic_hubs binds the diagnostics to the client's one hub."""
+
+    @staticmethod
+    def _coord(hubs):
+        coord = MagicMock()
+        coord.data = {"hubs": hubs}
+        return coord
+
+    def test_no_hubs_returns_empty(self):
+        assert resolve_push_diagnostic_hubs(self._coord([]), MagicMock()) == []
+
+    def test_none_data_returns_empty(self):
+        coord = MagicMock()
+        coord.data = None
+        assert resolve_push_diagnostic_hubs(coord, MagicMock()) == []
+
+    def test_returns_only_the_hub_matching_the_client_mid(self):
+        hubs = [{"mid": 111}, {"mid": 222}, {"mid": 333}]
+        client = MagicMock()
+        client.hub_mid = 222
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 222}]
+
+    def test_falls_back_to_first_hub_when_mid_is_none(self):
+        hubs = [{"mid": 111}, {"mid": 222}]
+        client = MagicMock()
+        client.hub_mid = None
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111}]
+
+    def test_falls_back_to_first_hub_when_no_hub_matches(self):
+        hubs = [{"mid": 111}, {"mid": 222}]
+        client = MagicMock()
+        client.hub_mid = 999  # no such hub
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111}]
+
+    def test_accepts_dict_shaped_hubs(self):
+        hubs = {"a": {"mid": 111}, "b": {"mid": 222}}
+        client = MagicMock()
+        client.hub_mid = 222
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 222}]
 
 
 class TestRainPointHubRSSISensor:

@@ -1,7 +1,9 @@
 """Push-channel liveness watchdog.
 
-Surfaces a silently dead push channel as a dismissible Settings > Repairs issue
-and clears it on recovery, so an outage cannot hide behind the polling fallback.
+Surfaces a disconnected push channel as a dismissible Settings > Repairs issue
+and clears it on recovery, so a sustained outage cannot hide behind the polling
+fallback. It catches disconnection-based death; a channel that stays connected
+but silently stops delivering data is not flagged (see _channel_functional).
 
 Detection-only by design: it never reconnects (the supervisor owns reconnect)
 and never changes the poll cadence. It reads the same connection state and
@@ -32,6 +34,7 @@ from .const import (
     DOMAIN,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
     PUSH_WATCHDOG_ISSUE_ID,
+    PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS,
     PUSH_WATCHDOG_SCAN_INTERVAL_SECONDS,
 )
 
@@ -84,14 +87,22 @@ class RainPointPushWatchdog:
     def _channel_functional(self) -> bool:
         """Return whether the channel currently looks alive.
 
-        Alive when connected, or when a message arrived within the dead-after
-        window (a message proves the pipe worked recently even if the connected
-        flag is briefly stale during a renewal cycle).
+        Alive when connected, or when a message arrived within the short grace
+        window. The grace window only bridges the brief connected=False gap while
+        the supervisor reconnects at a renewal boundary; it is intentionally much
+        shorter than the dead-after window so the two do not stack (a message
+        just before a disconnect must not delay flagging by a second dead-after
+        window).
+
+        Known limitation: a channel that stays connected but silently stops
+        delivering data is reported alive here, because message-absence while
+        connected is indistinguishable from a healthy idle channel. Detecting
+        that requires an active probe and is out of scope.
         """
         if self._mqtt_client.connected:
             return True
         last = self._mqtt_client.last_message_at
-        return last is not None and (self._time_source() - last) <= PUSH_WATCHDOG_DEAD_AFTER_SECONDS
+        return last is not None and (self._time_source() - last) <= PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS
 
     @callback
     def _async_check(self, now=None) -> None:
