@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.rainpoint.const import PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX
 from custom_components.rainpoint.hub_entities import (
     RainPointHubBroadcastSwitch,
     RainPointHubChannelSelect,
@@ -13,6 +14,8 @@ from custom_components.rainpoint.hub_entities import (
     RainPointHubFirmwareSensor,
     RainPointHubMACSensor,
     RainPointHubRSSISensor,
+    RainPointPushLastMessageSensor,
+    resolve_push_diagnostic_hubs,
 )
 
 
@@ -33,6 +36,48 @@ def _make_hub_info(hid=100, name="Test Hub", soft_ver="2.0", mac="AA:BB:CC"):
         "model": "HTV0540FRF",
         "hardwareVersion": "1.0",
     }
+
+
+class TestResolvePushDiagnosticHubs:
+    """resolve_push_diagnostic_hubs binds the diagnostics to the client's one hub."""
+
+    @staticmethod
+    def _coord(hubs):
+        coord = MagicMock()
+        coord.data = {"hubs": hubs}
+        return coord
+
+    def test_no_hubs_returns_empty(self):
+        assert resolve_push_diagnostic_hubs(self._coord([]), MagicMock()) == []
+
+    def test_none_data_returns_empty(self):
+        coord = MagicMock()
+        coord.data = None
+        assert resolve_push_diagnostic_hubs(coord, MagicMock()) == []
+
+    def test_returns_only_the_hub_matching_the_client_mid(self):
+        hubs = [{"mid": 111}, {"mid": 222}, {"mid": 333}]
+        client = MagicMock()
+        client.hub_mid = 222
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 222}]
+
+    def test_falls_back_to_first_hub_when_mid_is_none(self):
+        hubs = [{"mid": 111}, {"mid": 222}]
+        client = MagicMock()
+        client.hub_mid = None
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111}]
+
+    def test_falls_back_to_first_hub_when_no_hub_matches(self):
+        hubs = [{"mid": 111}, {"mid": 222}]
+        client = MagicMock()
+        client.hub_mid = 999  # no such hub
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111}]
+
+    def test_accepts_dict_shaped_hubs(self):
+        hubs = {"a": {"mid": 111}, "b": {"mid": 222}}
+        client = MagicMock()
+        client.hub_mid = 222
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 222}]
 
 
 class TestRainPointHubRSSISensor:
@@ -227,3 +272,63 @@ class TestRainPointHubBroadcastSwitch:
         """unique_id should contain 'broadcast'."""
         switch = self._make()
         assert "broadcast" in switch._attr_unique_id
+
+
+class TestRainPointPushLastMessageSensor:
+    """Tests for the push last-message-age timestamp entity."""
+
+    def _make(self, last_message_at=None, now=1000.0):
+        """Build the entity with an injected monotonic clock for deterministic age math."""
+        mqtt_client = MagicMock()
+        mqtt_client.last_message_at = last_message_at
+        entity = RainPointPushLastMessageSensor(
+            mqtt_client,
+            _make_hub_info(),
+            time_source=lambda: now,
+        )
+        return entity, mqtt_client
+
+    def test_native_value_none_before_first_message(self):
+        """No message yet -> native_value is None."""
+        entity, _ = self._make(last_message_at=None)
+        assert entity.native_value is None
+
+    def test_native_value_is_message_wall_clock_time(self):
+        """A monotonic last-message value converts to an absolute UTC datetime in the past."""
+        from datetime import UTC, datetime
+
+        # Message arrived 30s ago on the monotonic clock.
+        entity, _ = self._make(last_message_at=970.0, now=1000.0)
+        value = entity.native_value
+        assert value is not None
+        assert value.tzinfo is not None
+        age = (datetime.now(UTC) - value).total_seconds()
+        # Rendered timestamp is ~30s in the past (allow scheduling slack).
+        assert 29.0 <= age <= 31.0
+
+    def test_native_value_clamps_negative_age_to_now(self):
+        """A last-message value slightly ahead of the clock never renders a future time."""
+        from datetime import UTC, datetime
+
+        entity, _ = self._make(last_message_at=1005.0, now=1000.0)
+        value = entity.native_value
+        age = (datetime.now(UTC) - value).total_seconds()
+        assert -0.5 <= age <= 0.5
+
+    def test_unique_id_and_category(self):
+        entity, _ = self._make()
+        assert entity._attr_unique_id.endswith(f"_{PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX}")
+        assert entity._attr_entity_category == "diagnostic"
+        assert getattr(entity, "_attr_entity_registry_enabled_default", True) is True
+
+    def test_available_true_when_client_present(self):
+        entity, _ = self._make()
+        assert entity.available is True
+
+    @pytest.mark.asyncio
+    async def test_registers_and_unregisters_state_listener(self):
+        entity, mqtt_client = self._make()
+        await entity.async_added_to_hass()
+        mqtt_client.add_state_listener.assert_called_once_with(entity._handle_client_state)
+        await entity.async_will_remove_from_hass()
+        mqtt_client.remove_state_listener.assert_called_once_with(entity._handle_client_state)

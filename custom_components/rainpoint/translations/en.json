@@ -1,4 +1,10 @@
 {
+    "issues": {
+        "push_channel_down": {
+            "title": "Real-time push updates are not being received",
+            "description": "The real-time push connection to RainPoint has been down for a while, so changes from your devices may be delayed. Your devices keep updating because polling every couple of minutes is still running as a fallback. If this keeps happening, try reloading the integration, or turn push updates off and back on in the integration options."
+        }
+    },
     "config": {
         "step": {
             "user": {

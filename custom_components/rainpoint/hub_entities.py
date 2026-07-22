@@ -2,15 +2,50 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
 from homeassistant.components.select import SelectEntity
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .const import (
+    PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
+    PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
+)
 from .coordinator import RainPointCoordinator
 from .device import RainPointHubDevice
+
+
+def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client) -> list[dict]:
+    """Return the hub(s) the push diagnostics belong to.
+
+    The MQTT client is built for exactly one hub, so the connection and
+    last-message diagnostics are created only for that bound hub. Creating one
+    per configured hub would make every hub on a multi-hub account display the
+    shared client's state, even though push only ever targets the bound hub.
+    """
+    hubs_cfg = (coordinator.data or {}).get("hubs", [])
+    hubs = list(hubs_cfg.values()) if isinstance(hubs_cfg, dict) else list(hubs_cfg)
+    if not hubs:
+        return []
+    bound_mid = getattr(mqtt_client, "hub_mid", None)
+    if bound_mid is not None:
+        match = next((hub for hub in hubs if hub.get("mid") == bound_mid), None)
+        if match is not None:
+            return [match]
+    # No mid to match on (or no matching hub): fall back to the first hub, which
+    # is the one the client was built from.
+    return [hubs[0]]
 
 
 class RainPointHubSensorBase(CoordinatorEntity, SensorEntity, RainPointHubDevice):
@@ -121,6 +156,90 @@ class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDev
     async def async_select_option(self, option: str) -> None:
         """Change the RF channel."""
         raise HomeAssistantError("RF channel selection is not yet supported by the RainPoint API")
+
+
+class _RainPointPushDiagnosticBase(RainPointHubDevice):
+    """Shared wiring for the hub-level push diagnostic entities.
+
+    These read their live state directly from the MQTT client (not from
+    coordinator.data), so they register a state listener on the client and
+    re-render on every connect/disconnect/message transition.
+    """
+
+    _attr_should_poll = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, mqtt_client, hub_info: dict) -> None:
+        """Bind the diagnostic to the MQTT client it reads its live state from."""
+        RainPointHubDevice.__init__(self, hub_info)
+        self._mqtt_client = mqtt_client
+
+    async def async_added_to_hass(self) -> None:
+        """Register for MQTT state-change notifications while the entity lives."""
+        self._mqtt_client.add_state_listener(self._handle_client_state)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop receiving MQTT state-change notifications."""
+        self._mqtt_client.remove_state_listener(self._handle_client_state)
+
+    @callback
+    def _handle_client_state(self) -> None:
+        """Re-render on a connect/disconnect/message transition."""
+        self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        """Available whenever the push MQTT client is present."""
+        return self._mqtt_client is not None
+
+
+class RainPointPushConnectedBinarySensor(_RainPointPushDiagnosticBase, BinarySensorEntity):
+    """Hub-level push connection state (on when the MQTT client is connected)."""
+
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_icon = "mdi:cloud-check-variant"
+
+    def __init__(self, mqtt_client, hub_info: dict) -> None:
+        """Build the connection-state entity with a stable per-hub unique id."""
+        super().__init__(mqtt_client, hub_info)
+        self._attr_unique_id = f"{self._attr_unique_id}_{PUSH_CONNECTED_UNIQUE_ID_SUFFIX}"
+        self._attr_name = f"{self._attr_name} Push Connected"
+
+    @property
+    def is_on(self) -> bool:
+        """Return True while the MQTT client is connected."""
+        return self._mqtt_client.connected
+
+
+class RainPointPushLastMessageSensor(_RainPointPushDiagnosticBase, SensorEntity):
+    """Hub-level timestamp of the last received push message.
+
+    The client's liveness clock is a monotonic value (immune to wall-clock
+    steps), so it is converted to an absolute UTC datetime for display by
+    subtracting its age from the current wall-clock time. The rendered timestamp
+    is stable between reads because the age grows in lockstep with the clock.
+    """
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:clock-check-outline"
+
+    def __init__(self, mqtt_client, hub_info: dict, *, time_source: Callable[[], float] = time.monotonic) -> None:
+        """Build the last-message entity; time_source is injectable for tests."""
+        super().__init__(mqtt_client, hub_info)
+        self._time_source = time_source
+        self._attr_unique_id = f"{self._attr_unique_id}_{PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX}"
+        self._attr_name = f"{self._attr_name} Push Last Message"
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Return the last-message time as an absolute UTC datetime, or None."""
+        last = self._mqtt_client.last_message_at
+        if last is None:
+            return None
+        age = self._time_source() - last
+        if age < 0:
+            age = 0.0
+        return datetime.now(UTC) - timedelta(seconds=age)
 
 
 class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubDevice):

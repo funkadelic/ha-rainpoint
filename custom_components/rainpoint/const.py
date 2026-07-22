@@ -43,6 +43,55 @@ MQTT_BROKER_HOST_TEMPLATE = "{product_key}.iot-as-mqtt.us-west-1.aliyuncs.com"
 MQTT_BROKER_PORT = 1883
 MQTT_KEEPALIVE = 30
 
+# Push envelope layout (confirmed against live hardware).
+# The state-carrying message arrives as a standard AliCloud IoT payload whose
+# params.param value is a pipe-delimited string; one of its sections is an inner
+# JSON object keyed by sub-device id. Only "D"-prefixed keys are sub-device
+# status; each carries the same raw value string the poll-path decoders consume.
+MQTT_PUSH_METHOD = "thing.service.property.set"
+MQTT_PUSH_PARAMS_KEY = "param"
+MQTT_PUSH_SECTION_DELIMITER = "|"
+MQTT_PUSH_SUBDEVICE_PREFIX = "D"
+MQTT_PUSH_VALUE_FIELD = "value"
+MQTT_PUSH_TIME_FIELD = "time"
+
+# Upper bound on an inbound push payload. Real envelopes are ~425 bytes; anything
+# far larger is junk (or hostile) and is dropped before parsing. Generous so a
+# firmware that grows the envelope is not rejected, small enough to bound work.
+MQTT_PUSH_MAX_PAYLOAD_BYTES = 8192
+
+# Push observability: hub-level diagnostic entities that surface the live push
+# connection state and the age of the last received message. The unique_id is
+# built by appending these suffixes to the hub's base unique_id, so they stay
+# stable across restarts and are never regenerated.
+PUSH_CONNECTED_UNIQUE_ID_SUFFIX = "push_connected"
+PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX = "push_last_message"
+
+# Push watchdog: surfaces a disconnected push channel as a dismissible
+# Settings > Repairs issue and clears it on recovery. Detection-only -- it never
+# reconnects (the supervisor owns that) and never changes the poll cadence.
+#
+# Liveness = connected, OR a message arrived within the short message-grace
+# window. The grace window exists only to bridge the brief connected=False gap
+# while the supervisor tears down the old session and reconnects the new one at
+# a renewal boundary; it is deliberately short so it does not stack with the
+# dead-after clock (a message just before a disconnect must not delay flagging by
+# a second full dead-after window). The channel is flagged only after staying
+# non-functional continuously past the dead-after threshold, so worst-case
+# latency to a raised issue is dead-after plus at most one grace window.
+#
+# Known limitation: a channel that stays TCP-connected but silently stops
+# delivering data (a subscription detached cloud-side) is NOT flagged, because
+# from message-absence alone it is indistinguishable from a healthy but idle
+# channel (no device activity legitimately means no pushes). Detecting that would
+# need an active probe/heartbeat; it is out of scope for this cut. Values are a
+# conservative first cut chosen without field reconnect data (the renewal cycle
+# is ~570s) and are expected to be tuned once real outage data exists.
+PUSH_WATCHDOG_SCAN_INTERVAL_SECONDS = 60
+PUSH_WATCHDOG_DEAD_AFTER_SECONDS = 900
+PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS = 180
+PUSH_WATCHDOG_ISSUE_ID = "push_channel_down"
+
 # Known models (original devices)
 MODEL_HCS026FRF = "HCS026FRF"  # Moisture only
 MODEL_HCS021FRF = "HCS021FRF"  # Moisture + temp + lux

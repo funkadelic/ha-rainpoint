@@ -26,7 +26,7 @@ _RELOAD_STATUS_NOTIFS: dict[_ReloadStatus, tuple[str, str]] = {
     "failed": _NOTIF_FAILED,
 }
 
-PLATFORMS: list[str] = ["sensor", "select", "valve", "number", "switch"]
+PLATFORMS: list[str] = ["sensor", "binary_sensor", "select", "valve", "number", "switch"]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -36,17 +36,20 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
-def _resolve_hub_identity(coordinator) -> tuple[str | None, str | None]:
-    """Resolve the first available hub's deviceName/productKey for MQTT credential fetch.
+def _resolve_hub_identity(coordinator) -> tuple[str | None, str | None, int | None]:
+    """Resolve the first hub's deviceName/productKey/mid for the MQTT client.
 
-    Hub discovery already scans all configured homes; this just picks
-    the first hub record the coordinator collected.
+    Hub discovery already scans all configured homes; this just picks the first
+    hub record the coordinator collected. The mid is returned alongside the
+    credential-fetch identity because the push payload does not carry it and the
+    observer topic's deviceName is ephemeral, so the client must be told which
+    hub it belongs to at construction.
     """
     hubs = (coordinator.data or {}).get("hubs", [])
     if not hubs:
-        return None, None
+        return None, None, None
     hub = hubs[0]
-    return hub.get("deviceName"), hub.get("productKey")
+    return hub.get("deviceName"), hub.get("productKey"), hub.get("mid")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -79,9 +82,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     if entry.options.get(CONF_PUSH_ENABLED, False):
-        hub_device_name, hub_product_key = _resolve_hub_identity(coordinator)
+        hub_device_name, hub_product_key, hub_mid = _resolve_hub_identity(coordinator)
         if hub_device_name and hub_product_key:
-            mqtt_client = RainPointMqttClient(hass, client, entry, hub_device_name, hub_product_key)
+            mqtt_client = RainPointMqttClient(
+                hass,
+                client,
+                entry,
+                hub_device_name,
+                hub_product_key,
+                coordinator=coordinator,
+                hub_mid=hub_mid,
+            )
             hass.data[DOMAIN][entry.entry_id]["mqtt_client"] = mqtt_client
             # Registered immediately after construction so it fires even if a
             # later setup step raises.
@@ -90,6 +101,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # re-fetch + reconnect -- the supervisor never keeps running on
             # credentials the HTTP layer has superseded.
             client.register_relogin_listener(mqtt_client.on_http_relogin)
+            # Liveness watchdog: surfaces a silently dead push channel as a
+            # repair issue. Detection-only -- it never reconnects and never
+            # changes the poll cadence. Torn down alongside the client on unload.
+            from .repairs import RainPointPushWatchdog
+
+            watchdog = RainPointPushWatchdog(hass, entry, mqtt_client)
+            hass.data[DOMAIN][entry.entry_id]["watchdog"] = watchdog
+            entry.async_on_unload(watchdog.async_stop)
+            watchdog.start()
             # Backgrounded and never awaited: a broker-unreachable failure must
             # never block or fail config-entry setup. Polling
             # already has entities covered via async_config_entry_first_refresh.

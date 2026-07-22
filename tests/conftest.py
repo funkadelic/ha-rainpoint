@@ -68,6 +68,7 @@ _HA_STUBS = [
     "homeassistant.components.select",
     "homeassistant.components.valve",
     "homeassistant.components.sensor",
+    "homeassistant.components.binary_sensor",
     "homeassistant.components.number",
     "homeassistant.components.switch",
     "homeassistant.const",
@@ -75,6 +76,8 @@ _HA_STUBS = [
     "homeassistant.exceptions",
     "homeassistant.helpers.device_registry",
     "homeassistant.helpers.restore_state",
+    "homeassistant.helpers.issue_registry",
+    "homeassistant.helpers.event",
     "aiohttp",
 ]
 
@@ -208,6 +211,12 @@ class _SwitchEntity:
     pass
 
 
+class _BinarySensorEntity:
+    """_BinarySensorEntity."""
+
+    pass
+
+
 # Patch the stub modules with real classes so multi-inheritance works.
 sys.modules["homeassistant.helpers.update_coordinator"].CoordinatorEntity = _CoordinatorEntity
 sys.modules["homeassistant.helpers.entity"].Entity = _HABaseEntity
@@ -223,6 +232,27 @@ sys.modules["homeassistant.components.number"].NumberEntity = _NumberEntity
 sys.modules["homeassistant.components.number"].NumberMode = MagicMock()
 sys.modules["homeassistant.components.select"].SelectEntity = _SelectEntity
 sys.modules["homeassistant.components.switch"].SwitchEntity = _SwitchEntity
+sys.modules["homeassistant.components.binary_sensor"].BinarySensorEntity = _BinarySensorEntity
+sys.modules["homeassistant.components.binary_sensor"].BinarySensorDeviceClass = MagicMock()
+
+
+# issue_registry: real functions (MagicMock) so tests can assert create/delete
+# calls, plus an IssueSeverity namespace accessed as IssueSeverity.WARNING.
+class _IssueSeverity:
+    """Stand-in for homeassistant.helpers.issue_registry.IssueSeverity."""
+
+    CRITICAL = "critical"
+    ERROR = "error"
+    WARNING = "warning"
+
+
+sys.modules["homeassistant.helpers.issue_registry"].IssueSeverity = _IssueSeverity
+sys.modules["homeassistant.helpers.issue_registry"].async_create_issue = MagicMock()
+sys.modules["homeassistant.helpers.issue_registry"].async_delete_issue = MagicMock()
+
+# event.async_track_time_interval returns a cancel callback; the watchdog stores
+# it and calls it on stop.
+sys.modules["homeassistant.helpers.event"].async_track_time_interval = MagicMock(return_value=MagicMock())
 
 
 # DeviceInfo: callable that stores kwargs as a dict subclass.
