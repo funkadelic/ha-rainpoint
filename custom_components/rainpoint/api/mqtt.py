@@ -289,7 +289,7 @@ class RainPointMqttClient:
         socket.connect); calling it directly on the HA event loop would freeze
         all of Home Assistant for the connection timeout on every initial
         connect, every renewal cycle, and every backoff retry against an
-        unreachable broker (CR-01). It is therefore dispatched to the executor,
+        unreachable broker. It is therefore dispatched to the executor,
         while loop_start() (a cheap network-thread spawn) stays on the loop.
         The blocking connect() still creates the socket before returning, so the
         subscribe-after-connect ordering in _renew() continues to find a live
@@ -309,10 +309,9 @@ class RainPointMqttClient:
         password = hmac.new(device_secret.encode(), sign_content.encode(), hashlib.sha1).hexdigest()
 
         _LOGGER.debug(
-            "RainPoint MQTT connecting: username=%s client_id=%s password=%s",
+            "RainPoint MQTT connecting: username=%s client_id=%s",
             username,
             _redact(client_id),
-            _redact(password),
         )
 
         # The supervisor is the sole reconnect authority -- paho
@@ -327,9 +326,15 @@ class RainPointMqttClient:
         paho_client.on_message = self._on_message
         paho_client.on_disconnect = self._on_disconnect
 
-        host = MQTT_BROKER_HOST_TEMPLATE.format(product_key=product_key)
-        # connect() blocks on DNS + socket.connect; keep it off the event loop (CR-01).
-        await self._hass.async_add_executor_job(paho_client.connect, host, MQTT_BROKER_PORT, MQTT_KEEPALIVE)
+        # The credential response's host is authoritative for the account's
+        # region; fall back to the template host when absent. mqttHostUrl is
+        # formatted as "host:port"; parse both, defaulting the port when it is
+        # missing or non-numeric.
+        host_url = creds.get("mqttHostUrl") or MQTT_BROKER_HOST_TEMPLATE.format(product_key=product_key)
+        host, _, port_str = host_url.partition(":")
+        port = int(port_str) if port_str.isdigit() else MQTT_BROKER_PORT
+        # connect() blocks on DNS + socket.connect; keep it off the event loop.
+        await self._hass.async_add_executor_job(paho_client.connect, host, port, MQTT_KEEPALIVE)
         paho_client.loop_start()
 
         self._paho = paho_client
@@ -355,9 +360,9 @@ class RainPointMqttClient:
         if paho_client is None:
             return
         try:
-            paho_client.loop_stop()
-        finally:
             paho_client.disconnect()
+        finally:
+            paho_client.loop_stop()
 
     # --- paho callbacks: run on paho's network thread, never on the HA loop.
     # Only cheap, pure reads are allowed here; everything else is dispatched
@@ -384,7 +389,7 @@ class RainPointMqttClient:
         """Runs on the HA event loop.
 
         reason_code is 0 on success and a non-zero failure ReasonCode (e.g. "Not
-        authorized") on rejection; only a zero code counts as connected (CR-02).
+        authorized") on rejection; only a zero code counts as connected.
         """
         self._connected = reason_code == 0
         if reason_code == 0:
@@ -424,7 +429,12 @@ class RainPointMqttClient:
             try:
                 await task
             except asyncio.CancelledError:
-                pass
+                # We requested the supervisor task's cancellation, so its
+                # CancelledError is expected and absorbed here. But if
+                # async_disconnect itself is being cancelled, we must not
+                # swallow that -- re-raise so our own cancellation propagates.
+                if asyncio.current_task().cancelling() > 0:
+                    raise
             except Exception:
                 _LOGGER.exception("RainPoint MQTT supervisor task raised during teardown")
 

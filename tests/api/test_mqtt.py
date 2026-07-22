@@ -121,8 +121,9 @@ class TestAsyncStartSubscribesBothTopics:
         fake_paho = _make_fake_paho()
         client = _make_mqtt_client(hass, fake_paho)
 
+        creds = _fake_creds()
         with pytest.raises(RainPointMqttError):
-            client._subscribe(_fake_creds())
+            client._subscribe(creds)
 
 
 class TestMessageReceiptLogging:
@@ -825,3 +826,122 @@ class TestSupervisorTeardown:
             await client.async_disconnect()  # must not raise
 
         assert any("paho teardown raised" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_disconnect_paho_disconnects_before_stopping_loop(self):
+        """paho's clean-shutdown order is disconnect() then loop_stop()."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+
+        await client.async_start()
+        await _settle()
+
+        await client.async_disconnect()
+
+        ordered = [c[0] for c in fake_paho.mock_calls if c[0] in ("disconnect", "loop_stop")]
+        assert ordered.index("disconnect") < ordered.index("loop_stop")
+
+    @pytest.mark.asyncio
+    async def test_async_disconnect_reraises_when_itself_cancelled(self):
+        """If async_disconnect is itself cancelled while awaiting the supervisor
+        task's own cancellation, the CancelledError must propagate rather than be
+        swallowed as the (expected) supervisor cancellation."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+
+        started = asyncio.Event()
+        cancels = {"n": 0}
+
+        async def _supervisor_stub() -> None:
+            """Stand-in supervisor that swallows the FIRST cancellation (the one
+            async_disconnect issues via task.cancel()), so async_disconnect stays
+            parked at `await task`. It honors the SECOND cancellation -- the one
+            forwarded when we cancel the async_disconnect task itself -- so that
+            `await task` finally raises CancelledError back into async_disconnect
+            while its own cancelling() count is positive."""
+            started.set()
+            while True:
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    cancels["n"] += 1
+                    if cancels["n"] >= 2:
+                        raise
+                    continue
+
+        supervisor = asyncio.ensure_future(_supervisor_stub())
+        await started.wait()
+        client._supervisor_task = supervisor
+
+        disconnect_task = asyncio.ensure_future(client.async_disconnect())
+        await _settle()  # let async_disconnect reach `await task` (first cancel swallowed)
+
+        disconnect_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await disconnect_task
+
+        assert supervisor.cancelled()
+
+
+class TestBrokerHostSelection:
+    """The broker host/port prefers the credential-provided mqttHostUrl, falling
+    back to the templated host and default port when absent or portless."""
+
+    @pytest.mark.asyncio
+    async def test_connect_uses_credential_host_and_port(self):
+        """mqttHostUrl "host:port" is parsed into the paho connect() host + port."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)  # _fake_creds carries mqttHostUrl :1883
+
+        await client.async_start()
+        await _settle()
+
+        host, port, _keepalive = fake_paho.connect.call_args.args
+        assert host == "pk123.iot-as-mqtt.us-west-1.aliyuncs.com"
+        assert port == 1883
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_connect_falls_back_to_template_host_when_url_absent(self):
+        """No mqttHostUrl -> templated host + default MQTT_BROKER_PORT."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        creds = _fake_creds()
+        creds.pop("mqttHostUrl")
+        client = _make_mqtt_client(hass, fake_paho, creds=creds)
+
+        await client.async_start()
+        await _settle()
+
+        host, port, _keepalive = fake_paho.connect.call_args.args
+        assert host == "pk123.iot-as-mqtt.us-west-1.aliyuncs.com"
+        assert port == mqtt_module.MQTT_BROKER_PORT
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_connect_uses_default_port_when_url_has_no_numeric_port(self):
+        """mqttHostUrl with a host but no numeric port -> default MQTT_BROKER_PORT."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        creds = _fake_creds()
+        creds["mqttHostUrl"] = "broker.example.com"
+        client = _make_mqtt_client(hass, fake_paho, creds=creds)
+
+        await client.async_start()
+        await _settle()
+
+        host, port, _keepalive = fake_paho.connect.call_args.args
+        assert host == "broker.example.com"
+        assert port == mqtt_module.MQTT_BROKER_PORT
+
+        await client.async_disconnect()
