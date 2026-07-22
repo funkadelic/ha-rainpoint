@@ -18,6 +18,15 @@ class RainPointApiError(Exception):
     pass
 
 
+def _redact_secret(value: str | None) -> str:
+    """Render a secret as length + last-4 only -- never the raw value (CRED-03/D-16)."""
+    if not value:
+        return "<empty>"
+    if len(value) <= 4:
+        return f"len={len(value)} <short>"
+    return f"len={len(value)} last4={value[-4:]}"
+
+
 class RainPointClient:
     def __init__(self, area_code: str, email: str, password: str, session: aiohttp.ClientSession):
         self._area_code = area_code
@@ -203,6 +212,35 @@ class RainPointClient:
             _LOGGER.debug("getDeviceStatus failed response: %s", data)
             raise RainPointApiError(f"getDeviceStatus failed: code {data.get('code')}")
         return data.get("data", {})
+
+    async def get_subscribe_status(self, device_name: str, product_key: str) -> dict:
+        """Fetch fresh per-session MQTT observer credentials from subscribeStatus.
+
+        device_name/product_key identify the hub (sourced from the hub record,
+        not a second login call -- CRED-01/D-12). The response carries
+        deviceSecret; it must never be logged in the clear (CRED-03/D-16).
+        """
+        await self.ensure_logged_in()
+        url = f"{self._base_url}/app/device/subscribeStatus"
+        payload = {"userInfo": {"deviceName": device_name, "productKey": product_key}}
+        _LOGGER.debug("API call: get_subscribe_status URL=%s deviceName=%s productKey=%s", url, device_name, product_key)
+        async with self._session.post(url, json=payload, headers=self._auth_headers()) as resp:
+            if resp.status != 200:
+                raise RainPointApiError(f"subscribeStatus HTTP {resp.status}")
+            data = await resp.json()
+
+        resp_data = data.get("data") or {}
+        # Never reuse the verbatim "API response: ... data=%s" convention here --
+        # the response contains deviceSecret. Log a redacted summary instead.
+        _LOGGER.debug(
+            "API response: get_subscribe_status keys=%s deviceSecret=%s",
+            sorted(resp_data.keys()),
+            _redact_secret(resp_data.get("deviceSecret")),
+        )
+        if data.get("code") != 0:
+            _LOGGER.debug("subscribeStatus failed response: code=%s", data.get("code"))
+            raise RainPointApiError(f"subscribeStatus failed: code {data.get('code')}")
+        return resp_data
 
     async def set_device_state(self, home_id: int, device_name: str, mid: int, product_key: str, state: dict) -> bool:
         """Set device state."""

@@ -1,6 +1,7 @@
 """Tests for RainPoint API client (COVR-06)."""
 
 import hashlib
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -691,3 +692,77 @@ class TestSetDeviceState:
 
         with pytest.raises(RainPointApiError):
             await client.set_device_state(home_id=1, device_name="dev", mid=100, product_key="pk", state={})
+
+
+class TestGetSubscribeStatus:
+    """get_subscribe_status() fetches fresh per-session MQTT credentials (CRED-01, CRED-03)."""
+
+    def _make_client(self) -> RainPointClient:
+        """Make client helper."""
+        return _make_client()
+
+    def _mock_response(self, json_data: dict, status: int = 200) -> AsyncMock:
+        """Mock response helper."""
+        return _mock_response(json_data, status)
+
+    @pytest.mark.asyncio
+    async def test_subscribe_status_success_returns_data(self):
+        """A code-0 response returns the response's data dict verbatim."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {
+            "code": 0,
+            "data": {
+                "deviceSecret": "SEKRIT-value-9f3a",
+                "deviceName": "name-A",
+                "productKey": "pk123",
+                "mqttHostUrl": "pk123.iot-as-mqtt.us-west-1.aliyuncs.com:1883",
+            },
+        }
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        result = await client.get_subscribe_status("hub-device", "pk123")
+
+        assert result == json_body["data"]
+
+    @pytest.mark.asyncio
+    async def test_subscribe_status_http_error_raises(self):
+        """An HTTP 500 status raises subscribeStatus HTTP 500."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({}, status=500))
+
+        with pytest.raises(RainPointApiError, match="subscribeStatus HTTP 500"):
+            await client.get_subscribe_status("hub-device", "pk123")
+
+    @pytest.mark.asyncio
+    async def test_subscribe_status_code_error_raises(self):
+        """A non-zero app-level code raises subscribeStatus failed: code N."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        json_body = {"code": 1, "msg": "error"}
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        with pytest.raises(RainPointApiError, match="code 1"):
+            await client.get_subscribe_status("hub-device", "pk123")
+
+    @pytest.mark.asyncio
+    async def test_subscribe_status_never_logs_device_secret(self, caplog):
+        """deviceSecret never appears in any DEBUG log line (CRED-03/D-16)."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        json_body = {
+            "code": 0,
+            "data": {
+                "deviceSecret": "SEKRIT-value-9f3a",
+                "deviceName": "name-A",
+                "productKey": "pk123",
+            },
+        }
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        with caplog.at_level(logging.DEBUG):
+            await client.get_subscribe_status("hub-device", "pk123")
+
+        assert "SEKRIT-value-9f3a" not in caplog.text
