@@ -1,10 +1,10 @@
-"""Tests for RainPointMqttClient (PUSH-04, CRED-01/03, CONN-02, D-03/D-04/D-08/D-14)."""
+"""Tests for RainPointMqttClient (PUSH-04, CRED-01/03, CONN-01/02, D-03/D-04/D-05/D-08/D-14)."""
 
 import asyncio
 import inspect
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import paho.mqtt.client as paho
 import pytest
@@ -55,6 +55,20 @@ def _make_fake_paho() -> MagicMock:
     return MagicMock(spec=paho.Client)
 
 
+async def _settle(times: int = 5) -> None:
+    """Yield control back to the event loop repeatedly so a background task can progress."""
+    for _ in range(times):
+        await asyncio.sleep(0)
+
+
+async def _instant_reconnect_delay(*_args, **_kwargs) -> None:
+    """A _schedule_reconnect replacement that yields once (real checkpoint) instead of
+    actually sleeping for the computed backoff delay -- keeps supervisor-retry tests fast
+    while still giving the test driver's _settle() loop a chance to observe each iteration.
+    """
+    await asyncio.sleep(0)
+
+
 class TestConstructorSeams:
     """D-14: constructor accepts an injectable paho factory + time source."""
 
@@ -70,18 +84,21 @@ class TestAsyncStartSubscribesBothTopics:
 
     @pytest.mark.asyncio
     async def test_async_start_subscribes_both_topics(self):
-        """async_start() calls client.subscribe for both formatted topics."""
+        """async_start() launches the supervisor, which subscribes both formatted topics."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
         client = _make_mqtt_client(hass, fake_paho)
 
         await client.async_start()
+        await _settle()
 
         subscribed_topics = [call.args[0] for call in fake_paho.subscribe.call_args_list]
         assert "/sys/pk123/name-A/thing/service/property/set" in subscribed_topics
         assert "/sys/pk123/name-A/thing/event/property/post" in subscribed_topics
         assert len(subscribed_topics) == 2
+
+        await client.async_disconnect()
 
     @pytest.mark.asyncio
     async def test_subscribe_before_connect_raises(self):
@@ -106,6 +123,7 @@ class TestMessageReceiptLogging:
         fake_paho = _make_fake_paho()
         client = _make_mqtt_client(hass, fake_paho)
         await client.async_start()
+        await _settle()
 
         payload = b"x" * 425
         msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
@@ -126,6 +144,8 @@ class TestMessageReceiptLogging:
         assert "425" in record.message
         assert payload.decode() not in record.message
 
+        await client.async_disconnect()
+
     @pytest.mark.asyncio
     async def test_message_count_increments_across_two_messages(self):
         """The running count increments once per delivered message."""
@@ -134,6 +154,7 @@ class TestMessageReceiptLogging:
         fake_paho = _make_fake_paho()
         client = _make_mqtt_client(hass, fake_paho)
         await client.async_start()
+        await _settle()
 
         msg1 = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=b"one")
         msg2 = SimpleNamespace(topic="/sys/pk123/name-A/thing/event/property/post", payload=b"two")
@@ -146,15 +167,22 @@ class TestMessageReceiptLogging:
         await asyncio.sleep(0)
         assert client.message_count == 2
 
+        await client.async_disconnect()
+
     @pytest.mark.asyncio
     async def test_on_message_never_mutates_state_directly(self):
         """_on_message only schedules work via call_soon_threadsafe -- no direct mutation."""
         loop = asyncio.get_running_loop()
         hass = MagicMock()
-        hass.loop = MagicMock()  # replaced with a plain mock: call_soon_threadsafe never fires
+        hass.loop = loop  # real loop for the supervisor task; call_soon_threadsafe is patched below
         fake_paho = _make_fake_paho()
         client = _make_mqtt_client(hass, fake_paho)
         await client.async_start()
+        await _settle()
+
+        # Replace call_soon_threadsafe with a plain mock so it never actually fires.
+        hass.loop = MagicMock()
+        client._hass = hass
 
         msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=b"hello")
         client._on_message(fake_paho, None, msg)
@@ -170,9 +198,6 @@ class TestMessageReceiptLogging:
         scheduled_func(*scheduled_args)
         assert client.message_count == 1
 
-        await asyncio.sleep(0)
-        _ = loop  # silence unused-variable style checks; loop unused in this mocked-loop test
-
 
 class TestSecretRedaction:
     """CRED-03/D-16: no log line emits deviceSecret, the derived password, or a full clientId."""
@@ -187,6 +212,7 @@ class TestSecretRedaction:
 
         with caplog.at_level(logging.DEBUG):
             await client.async_start()
+            await _settle()
 
             derived_password = client._paho.username_pw_set.call_args.args[1]
 
@@ -221,6 +247,7 @@ class TestAsyncDisconnect:
         fake_paho = _make_fake_paho()
         client = _make_mqtt_client(hass, fake_paho)
         await client.async_start()
+        await _settle()
 
         await client.async_disconnect()
 
@@ -239,11 +266,14 @@ class TestConnectCallbackHandling:
         fake_paho = _make_fake_paho()
         client = _make_mqtt_client(hass, fake_paho)
         await client.async_start()
+        await _settle()
 
         assert client.connected is False
         client._on_connect(fake_paho, None, MagicMock(), 0, None)
         await asyncio.sleep(0)
         assert client.connected is True
+
+        await client.async_disconnect()
 
     @pytest.mark.asyncio
     async def test_on_disconnect_marks_disconnected_via_loop(self):
@@ -253,6 +283,7 @@ class TestConnectCallbackHandling:
         fake_paho = _make_fake_paho()
         client = _make_mqtt_client(hass, fake_paho)
         await client.async_start()
+        await _settle()
 
         client._on_connect(fake_paho, None, MagicMock(), 0, None)
         await asyncio.sleep(0)
@@ -262,6 +293,8 @@ class TestConnectCallbackHandling:
         await asyncio.sleep(0)
         assert client.connected is False
 
+        await client.async_disconnect()
+
 
 def test_module_defines_to_redact_and_redact_helper():
     """TO_REDACT + _redact() are established from the first credential-issuing commit (D-16)."""
@@ -269,3 +302,109 @@ def test_module_defines_to_redact_and_redact_helper():
     assert mqtt_module._redact("SEKRIT-value-9f3a") == "len=17 last4=9f3a"
     assert mqtt_module._redact(None) == "<empty>"
     assert mqtt_module._redact("ab") == "len=2 <short>"
+
+
+class TestPahoAutoReconnectDisabled:
+    """CONN-01/D-05: paho's own auto-reconnect must never race the supervisor."""
+
+    @pytest.mark.asyncio
+    async def test_connect_passes_reconnect_on_failure_false_to_factory(self):
+        """The paho client factory is called with reconnect_on_failure=False."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        rainpoint_client = MagicMock()
+        rainpoint_client.get_subscribe_status = AsyncMock(return_value=_fake_creds())
+        factory = MagicMock(return_value=fake_paho)
+
+        client = RainPointMqttClient(
+            hass,
+            rainpoint_client,
+            entry=MagicMock(),
+            hub_device_name="hub-device",
+            hub_product_key="hub-pk",
+            paho_client_factory=factory,
+            time_source=lambda: 1000.0,
+        )
+        await client.async_start()
+        await _settle()
+
+        assert factory.call_args.kwargs["reconnect_on_failure"] is False
+
+        await client.async_disconnect()
+
+
+class TestBackoffDelay:
+    """D-05/Pitfall 7: exponential backoff capped at a ceiling, with jitter."""
+
+    def _client(self):
+        hass = MagicMock()
+        return _make_mqtt_client(hass, _make_fake_paho())
+
+    def test_backoff_delay_monotonic_then_capped(self):
+        """Pre-jitter base grows exponentially then flattens at the ceiling."""
+        client = self._client()
+        with patch.object(RainPointMqttClient, "_apply_jitter", staticmethod(lambda value: value)):
+            delays = [client._backoff_delay(attempt) for attempt in range(1, 8)]
+
+        assert delays == sorted(delays)
+        assert delays[-1] == delays[-2] == mqtt_module._BACKOFF_CEILING_SECONDS
+        assert delays[0] == mqtt_module._BACKOFF_BASE_SECONDS
+
+    def test_backoff_delay_jitter_present_and_bounded(self):
+        """Two calls at the same attempt differ (jitter) and never exceed ceiling*1.3."""
+        client = self._client()
+        samples = {client._backoff_delay(5) for _ in range(10)}
+
+        assert len(samples) > 1
+        assert all(delay <= mqtt_module._BACKOFF_CEILING_SECONDS * 1.3 for delay in samples)
+        assert all(delay >= mqtt_module._BACKOFF_CEILING_SECONDS * 0.7 for delay in samples)
+
+
+class TestSupervisorUnboundedRetry:
+    """D-15a/CONN-01: 6+ consecutive connect failures still schedule a further retry."""
+
+    @pytest.mark.asyncio
+    async def test_supervisor_retries_after_six_plus_failures(self):
+        """A fake paho whose connect() raises repeatedly never permanently kills the supervisor."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        fake_paho.connect.side_effect = [OSError("connection refused")] * 6 + [None] * 10
+        client = _make_mqtt_client(hass, fake_paho)
+
+        with patch.object(RainPointMqttClient, "_schedule_reconnect", new=AsyncMock(side_effect=_instant_reconnect_delay)):
+            await client.async_start()
+            await _settle(times=30)
+
+        assert fake_paho.connect.call_count >= 7
+        assert client._supervisor_task is not None
+        assert not client._supervisor_task.done()
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_supervisor_reraises_on_generic_exception_not_bounded_by_range(self):
+        """No bounded range(N) governs the loop -- it keeps re-arming past any fixed count."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        fake_paho.connect.side_effect = RainPointMqttError("boom")
+        client = _make_mqtt_client(hass, fake_paho)
+
+        with patch.object(RainPointMqttClient, "_schedule_reconnect", new=AsyncMock(side_effect=_instant_reconnect_delay)):
+            await client.async_start()
+            await _settle(times=50)
+
+        assert fake_paho.connect.call_count > 10
+        assert not client._supervisor_task.done()
+
+        await client.async_disconnect()
+
+
+def test_no_bounded_range_governs_reconnect():
+    """Pitfall 2 guard: no bounded attempt-count loop governs reconnect in the module source."""
+    import inspect as _inspect
+
+    source = _inspect.getsource(mqtt_module.RainPointMqttClient._run_supervisor)
+    assert "range(" not in source

@@ -3,9 +3,11 @@ RainPoint MQTT push channel client.
 
 Connects to the Alibaba Cloud IoT (Aliyun) MQTT broker using fresh,
 per-session observer credentials fetched from RainPointClient.get_subscribe_status().
-This is the Phase 9 proof-of-pipe: it connects once, subscribes to both
-candidate state topics, and logs message receipt. It never touches
-coordinator state -- feeding push data into coordinator.data is Phase 10.
+A single owned asyncio.Task (_run_supervisor) drives the full lifecycle --
+connect, subscribe, wait, renew, reconnect -- indefinitely under jittered
+backoff (CONN-01/D-05). It subscribes to both candidate state topics and
+logs message receipt; it never touches coordinator state -- feeding push
+data into coordinator.data is Phase 10.
 
 Transport is plain TCP, no TLS (spike-confirmed, D-11) -- this overrides any
 TLS assumption elsewhere. Every paho on_* callback runs on paho's own network
@@ -14,9 +16,11 @@ HA event loop via hass.loop.call_soon_threadsafe into an @callback method
 before touching self (CONN-02/D-08).
 """
 
+import asyncio
 import hashlib
 import hmac
 import logging
+import random
 import time
 
 import paho.mqtt.client as paho_mqtt
@@ -53,13 +57,22 @@ def _redact(value: str | None) -> str:
     return f"len={len(value)} last4={value[-4:]}"
 
 
-class RainPointMqttClient:
-    """Single-connect push channel to the RainPoint MQTT broker (proof-of-pipe).
+# Supervisor backoff (CONN-01/D-05, Pitfall 2/7): only the DELAY is capped, never
+# the attempt count. 30s base doubling up to a 480s ceiling (within the 300-600s
+# band), with +-10-30% jitter to avoid a synchronized reconnect storm.
+_BACKOFF_BASE_SECONDS = 30.0
+_BACKOFF_CEILING_SECONDS = 480.0
+_JITTER_MIN_FRACTION = 0.10
+_JITTER_MAX_FRACTION = 0.30
 
-    Connects once, subscribes to both candidate state topics, and logs
-    message receipt with a running count -- never the payload contents
-    (D-03). The supervised reconnect/renewal state machine is expansion
-    work in a later plan; this client proves the pipe end-to-end first.
+
+class RainPointMqttClient:
+    """Supervised push channel to the RainPoint MQTT broker.
+
+    One owned asyncio.Task (_run_supervisor) connects, subscribes, and stays
+    connected; on any connect failure it retries indefinitely under jittered
+    backoff. paho's own auto-reconnect is disabled so the supervisor is the
+    sole reconnect authority (CONN-01/D-05).
     """
 
     def __init__(
@@ -85,6 +98,10 @@ class RainPointMqttClient:
         self._message_count = 0
         self._connected = False
 
+        self._stopping = False
+        self._supervisor_task: asyncio.Task | None = None
+        self._stop_event = asyncio.Event()
+
     @property
     def message_count(self) -> int:
         """Return the running count of messages received since connect (test/diagnostic seam)."""
@@ -95,12 +112,78 @@ class RainPointMqttClient:
         """Return whether the last on_connect callback reported success."""
         return self._connected
 
-    async def async_start(self) -> None:
-        """Fetch fresh observer credentials, connect once, and subscribe to both topics.
+    # --- supervisor lifecycle (CONN-01/D-05) ---
 
-        Never raises out to the caller in a way that should block config-entry
-        setup -- callers must schedule this as a background task (PUSH-04/D-09).
+    async def async_start(self) -> None:
+        """Launch the supervisor task that owns connect->run->reconnect.
+
+        Never blocks -- callers must schedule this as a background task; the
+        supervisor itself retries indefinitely and this method never raises
+        out in a way that should block config-entry setup (PUSH-04/D-09).
         """
+        self._stopping = False
+        self._stop_event.clear()
+        self._supervisor_task = self._hass.loop.create_task(self._run_supervisor())
+
+    async def _run_supervisor(self) -> None:
+        """Own connect -> run -> reconnect indefinitely (D-05).
+
+        Only the backoff DELAY is capped -- never the attempt count (Pitfall 2).
+        Any exception in the loop body still results in a scheduled retry
+        (Pitfall 7): there is no bare return and no uncaught exception that
+        silently ends the chain.
+        """
+        attempt = 0
+        while not self._stopping:
+            try:
+                await self._connect_and_subscribe()
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # must always re-arm, see Pitfall 2/7
+                attempt += 1
+                delay = self._backoff_delay(attempt)
+                _LOGGER.warning(
+                    "RainPoint MQTT connect failed (attempt=%s): %s; retrying in %.1fs",
+                    attempt,
+                    err,
+                    delay,
+                )
+                await self._schedule_reconnect(delay)
+                continue
+
+            attempt = 0
+            await self._stop_event.wait()
+        # Loop exits only when self._stopping is set.
+
+    async def _schedule_reconnect(self, delay: float) -> None:
+        """Sleep for the computed backoff delay before the next attempt.
+
+        A thin wrapper around asyncio.sleep so tests can patch a single
+        module-level seam without real wall-clock waiting.
+        """
+        await asyncio.sleep(delay)
+
+    def _backoff_delay(self, attempt: int) -> float:
+        """Exponential backoff capped at a ceiling, with jitter (D-05/Pitfall 7).
+
+        There is no cap on `attempt` itself -- the supervisor retries forever
+        (Pitfall 2) -- so the exponent is clamped defensively before raising
+        2**exponent to avoid an OverflowError on very large attempt counts;
+        the ceiling is already reached at a small exponent in practice.
+        """
+        exponent = min(max(attempt - 1, 0), 32)
+        base = min(_BACKOFF_BASE_SECONDS * (2**exponent), _BACKOFF_CEILING_SECONDS)
+        return self._apply_jitter(base)
+
+    @staticmethod
+    def _apply_jitter(value: float) -> float:
+        """Apply +-10-30% random jitter to avoid a synchronized reconnect storm (Pitfall 7)."""
+        magnitude = random.uniform(_JITTER_MIN_FRACTION, _JITTER_MAX_FRACTION)
+        sign = random.choice((-1.0, 1.0))
+        return value * (1 + sign * magnitude)
+
+    async def _connect_and_subscribe(self) -> None:
+        """Fetch fresh credentials, connect, and subscribe to both topics."""
         creds = await self._client.get_subscribe_status(self._hub_device_name, self._hub_product_key)
         self._connect(creds)
         self._subscribe(creds)
@@ -124,7 +207,13 @@ class RainPointMqttClient:
             _redact(password),
         )
 
-        paho_client = self._paho_client_factory(paho_mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
+        # The supervisor is the sole reconnect authority (CONN-01/D-05) -- paho
+        # must never attempt its own reconnect_on_failure behavior in parallel.
+        # reconnect_on_failure is a paho-mqtt constructor-only kwarg (no public
+        # setter), so it must be passed here rather than set post-construction.
+        paho_client = self._paho_client_factory(
+            paho_mqtt.CallbackAPIVersion.VERSION2, client_id=client_id, reconnect_on_failure=False
+        )
         paho_client.username_pw_set(username, password)
         paho_client.on_connect = self._on_connect
         paho_client.on_message = self._on_message
@@ -147,6 +236,19 @@ class RainPointMqttClient:
         for template in (MQTT_TOPIC_PROPERTY_SET, MQTT_TOPIC_EVENT_POST):
             topic = template.format(product_key=product_key, device_name=device_name)
             self._paho.subscribe(topic)
+
+    def _disconnect_paho(self) -> None:
+        """Cleanly stop and disconnect the current paho client, if any.
+
+        Tolerant of no active client.
+        """
+        paho_client, self._paho = self._paho, None
+        if paho_client is None:
+            return
+        try:
+            paho_client.loop_stop()
+        finally:
+            paho_client.disconnect()
 
     # --- paho callbacks: run on paho's network thread, never on the HA loop.
     # Only cheap, pure reads are allowed here; everything else is dispatched
@@ -187,7 +289,7 @@ class RainPointMqttClient:
         _LOGGER.debug("RainPoint MQTT message received: topic=%s len=%s count=%s", topic, payload_len, self._message_count)
 
     async def async_disconnect(self) -> None:
-        """Tear down the single connection. Tolerant of a never-connected client."""
+        """Tear down the connection. Tolerant of a never-connected client."""
         if self._paho is None:
             return
         try:
