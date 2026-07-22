@@ -261,12 +261,11 @@ class RainPointClient:
             data = await resp.json()
 
         resp_data = data.get("data") or {}
-        # Never reuse the verbatim "API response: ... data=%s" convention here --
-        # the response contains deviceSecret. Log a redacted summary instead.
+        # The response carries deviceSecret, so log only the key set -- never the
+        # secret itself, not even redacted.
         _LOGGER.debug(
-            "API response: get_subscribe_status keys=%s deviceSecret=%s",
+            "API response: get_subscribe_status keys=%s",
             sorted(resp_data.keys()),
-            _redact_secret(resp_data.get("deviceSecret")),
         )
         if data.get("code") != 0:
             _LOGGER.debug("subscribeStatus failed response: code=%s", data.get("code"))
