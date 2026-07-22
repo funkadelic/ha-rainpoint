@@ -1150,12 +1150,13 @@ class TestSupervisorTeardown:
 
 
 class TestBrokerHostSelection:
-    """The broker host/port prefers the credential-provided mqttHostUrl, falling
-    back to the templated host and default port when absent or portless."""
+    """The broker host comes from the credential-provided mqttHostUrl (or the
+    templated host when absent); the port is always the TLS port, never the
+    plaintext one the mqttHostUrl advertises."""
 
     @pytest.mark.asyncio
-    async def test_connect_uses_credential_host_and_port(self):
-        """mqttHostUrl "host:port" is parsed into the paho connect() host + port."""
+    async def test_connect_uses_credential_host_and_ignores_advertised_plaintext_port(self):
+        """mqttHostUrl "host:1883" yields that host but the TLS port, not 1883."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -1166,13 +1167,16 @@ class TestBrokerHostSelection:
 
         host, port, _keepalive = fake_paho.connect.call_args.args
         assert host == "pk123.iot-as-mqtt.us-west-1.aliyuncs.com"
-        assert port == 1883
+        # The advertised plaintext 1883 is ignored: connect uses the const, and
+        # the const pins the TLS port 8883 as a transport-contract invariant.
+        assert mqtt_module.MQTT_BROKER_PORT == 8883
+        assert port == mqtt_module.MQTT_BROKER_PORT
 
         await client.async_disconnect()
 
     @pytest.mark.asyncio
     async def test_connect_falls_back_to_template_host_when_url_absent(self):
-        """No mqttHostUrl -> templated host + default MQTT_BROKER_PORT."""
+        """No mqttHostUrl -> templated host + the TLS MQTT_BROKER_PORT."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -1190,8 +1194,8 @@ class TestBrokerHostSelection:
         await client.async_disconnect()
 
     @pytest.mark.asyncio
-    async def test_connect_uses_default_port_when_url_has_no_numeric_port(self):
-        """mqttHostUrl with a host but no numeric port -> default MQTT_BROKER_PORT."""
+    async def test_connect_uses_bare_host_url_and_tls_port(self):
+        """mqttHostUrl with a bare host (no port) -> that host + the TLS port."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -1207,6 +1211,46 @@ class TestBrokerHostSelection:
         assert port == mqtt_module.MQTT_BROKER_PORT
 
         await client.async_disconnect()
+
+
+class TestTlsConnection:
+    """The broker connection is TLS, verified against the pinned private root CA."""
+
+    @pytest.mark.asyncio
+    async def test_connect_calls_tls_set_with_pinned_ca_before_connecting(self):
+        """tls_set(ca_certs=MQTT_TLS_CA_CERT) is invoked, and before connect()."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+
+        call_order = []
+        fake_paho.tls_set.side_effect = lambda *a, **k: call_order.append("tls_set")
+        fake_paho.connect.side_effect = lambda *a, **k: call_order.append("connect")
+
+        client = _make_mqtt_client(hass, fake_paho)
+        await client.async_start()
+        await _settle()
+
+        fake_paho.tls_set.assert_called_once_with(ca_certs=mqtt_module.MQTT_TLS_CA_CERT)
+        assert call_order == ["tls_set", "connect"], "tls_set must precede connect"
+
+        await client.async_disconnect()
+
+    def test_pinned_ca_file_exists_and_matches_published_md5(self):
+        """The vendored CA is Aliyun's published root, guarded by its MD5.
+
+        Aliyun publishes ali_iot_ca.crt (the 8883/TLS root, "Aliyun IoT Root CA")
+        with MD5 c7a6afb466713832af778a7bcb6d1aef. A mismatch means the pinned
+        trust anchor was corrupted or swapped -- fail loudly rather than ship a
+        cert that will not verify the live broker.
+        """
+        import hashlib
+        from pathlib import Path
+
+        ca_path = Path(mqtt_module.MQTT_TLS_CA_CERT)
+        assert ca_path.is_file(), f"pinned CA missing at {ca_path}"
+        digest = hashlib.md5(ca_path.read_bytes(), usedforsecurity=False).hexdigest()
+        assert digest == "c7a6afb466713832af778a7bcb6d1aef"
 
 
 class TestStateListeners:
