@@ -1022,3 +1022,118 @@ class TestNonTransportErrorsPropagate:
 
         with pytest.raises(UpdateFailed, match="Unexpected RainPoint error"):
             await _run(coord)
+
+
+def _push_hub(hid=100, mid=200, addr=1, model=MODEL_VALVE_245):
+    """Hub record shaped as coordinator.data carries it (hid already injected)."""
+    return {
+        "hid": hid,
+        "mid": mid,
+        "name": "Hub1",
+        "deviceName": "dev1",
+        "productKey": "pk1",
+        "homeName": "Home",
+        "subDevices": [{"addr": addr, "model": model, "name": "Valve", "softVer": "1.0"}],
+    }
+
+
+def _seed_push_coord(hub, sensors=None, status=None):
+    """Build a coord namespace with data seeded and listener spies attached."""
+    coord, _client = _make_coord()
+    coord.data = {
+        "hubs": [hub],
+        "status": status if status is not None else {},
+        "sensors": sensors if sensors is not None else {},
+    }
+    coord.async_update_listeners = MagicMock()
+    coord.async_set_updated_data = MagicMock()
+    return coord
+
+
+_APPLY = _coord_module.RainPointCoordinator.apply_push_update
+
+
+class TestApplyPushUpdate:
+    """apply_push_update: copy-on-write merge through the poll decode path,
+    notifying listeners without resetting the poll timer, and dropping misses."""
+
+    def test_push_updates_target_and_preserves_sibling_identity(self):
+        """The pushed sub-device's data is decoded and merged; every other sensors
+        key keeps its object identity and listeners are notified exactly once."""
+        hub = _push_hub()
+        sibling = {"data": {"unchanged": True}}
+        coord = _seed_push_coord(
+            hub,
+            sensors={"100_200_1": {"data": None}, "999_999_9": sibling},
+            status={200: {"subDeviceStatus": [{"id": "D1", "value": "old", "time": 1}]}},
+        )
+        device_ts = int(datetime(2024, 6, 1, tzinfo=UTC).timestamp() * 1000)
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, device_ts)
+
+        updated = coord.data["sensors"]["100_200_1"]["data"]
+        assert updated is not None
+        assert "zones" in updated
+        # Sibling sensor object identity preserved (copy-on-write, not rebuild).
+        assert coord.data["sensors"]["999_999_9"] is sibling
+        # Hub list carried by reference.
+        assert coord.data["hubs"][0] is hub
+        # device_ts threaded into the synthetic status entry.
+        assert coord.data["status"][200]["subDeviceStatus"][0]["time"] == device_ts
+        coord.async_update_listeners.assert_called_once()
+        coord.async_set_updated_data.assert_not_called()
+
+    def test_push_status_entry_appended_when_absent(self):
+        """A push for a mid with no prior status branch appends a fresh entry."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}}, status={})
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        sub_status = coord.data["status"][200]["subDeviceStatus"]
+        assert [e["id"] for e in sub_status] == ["D1"]
+        coord.async_update_listeners.assert_called_once()
+
+    def test_unknown_mid_is_dropped_without_mutating_or_notifying(self):
+        """A push whose mid is not in data['hubs'] leaves data identity-unchanged."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+        original = coord.data
+
+        _APPLY(coord, 999, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        assert coord.data is original
+        coord.async_update_listeners.assert_not_called()
+        coord.async_set_updated_data.assert_not_called()
+
+    def test_unknown_addr_is_dropped_without_mutating_or_notifying(self):
+        """A push whose resolved addr is not a reported sub-device is dropped."""
+        hub = _push_hub(addr=1)
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+        original = coord.data
+
+        _APPLY(coord, 200, "D9", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        assert coord.data is original
+        coord.async_update_listeners.assert_not_called()
+
+    def test_unresolvable_sid_is_dropped(self):
+        """A sid that does not resolve to an integer addr is dropped."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+        original = coord.data
+
+        _APPLY(coord, 200, "state", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        assert coord.data is original
+        coord.async_update_listeners.assert_not_called()
+
+    def test_push_before_first_poll_is_dropped(self):
+        """A push arriving before the first poll seeded data is dropped safely."""
+        coord, _ = _make_coord()
+        coord.data = None
+        coord.async_update_listeners = MagicMock()
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        coord.async_update_listeners.assert_not_called()

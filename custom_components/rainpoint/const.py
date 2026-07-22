@@ -43,6 +43,18 @@ MQTT_BROKER_HOST_TEMPLATE = "{product_key}.iot-as-mqtt.us-west-1.aliyuncs.com"
 MQTT_BROKER_PORT = 1883
 MQTT_KEEPALIVE = 30
 
+# Push envelope layout (confirmed against live hardware).
+# The state-carrying message arrives as a standard AliCloud IoT payload whose
+# params.param value is a pipe-delimited string; one of its sections is an inner
+# JSON object keyed by sub-device id. Only "D"-prefixed keys are sub-device
+# status; each carries the same raw value string the poll-path decoders consume.
+MQTT_PUSH_METHOD = "thing.service.property.set"
+MQTT_PUSH_PARAMS_KEY = "param"
+MQTT_PUSH_SECTION_DELIMITER = "|"
+MQTT_PUSH_SUBDEVICE_PREFIX = "D"
+MQTT_PUSH_VALUE_FIELD = "value"
+MQTT_PUSH_TIME_FIELD = "time"
+
 # Known models (original devices)
 MODEL_HCS026FRF = "HCS026FRF"  # Moisture only
 MODEL_HCS021FRF = "HCS021FRF"  # Moisture + temp + lux

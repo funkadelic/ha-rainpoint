@@ -244,6 +244,81 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._last_valve_command_at[(sensor_key, zone_num)] = command_dt
         return command_dt
 
+    def apply_push_update(self, mid: int, sid: str, raw_value: str, device_ts: int | None) -> None:
+        """Merge a single pushed sub-device reading into coordinator data.
+
+        The one sanctioned entry point for the push channel. Resolves the hub by
+        mid and the sub-device by sid, runs the reading through the SAME decode
+        and valve-staleness path the 120s poll uses, then merges the result
+        copy-on-write and notifies listeners. Any miss (unknown mid, unresolvable
+        addr, or a sub-device the hub does not report) is logged at DEBUG and
+        dropped without mutating coordinator data, mirroring the poll path's
+        continue-on-miss. Never touches the poll timer, so polling keeps running
+        as the fallback.
+        """
+        data = self.data
+        if not data:
+            _LOGGER.debug("Dropping push before first poll: mid=%s sid=%s", mid, sid)
+            return
+
+        hub = next((h for h in data.get("hubs", []) if h.get("mid") == mid), None)
+        if hub is None:
+            _LOGGER.debug("Dropping push for unknown mid=%s (sid=%s)", mid, sid)
+            return
+
+        addr = _resolve_addr_from_sid(sid)
+        if addr is None:
+            _LOGGER.debug("Dropping push with unresolvable sid=%s for mid=%s", sid, mid)
+            return
+
+        sub = {sd["addr"]: sd for sd in hub.get("subDevices", [])}.get(addr)
+        if sub is None:
+            _LOGGER.debug("Dropping push for unknown addr=%s (mid=%s sid=%s)", addr, mid, sid)
+            return
+
+        status_entry = {"id": sid, "value": raw_value, "time": device_ts}
+        sensor_key, sensor_entry = RainPointCoordinator._decode_one_subdevice(self, hub, mid, addr, sub, status_entry)
+        RainPointCoordinator._merge_push_sensor_entry(self, mid, sid, sensor_key, sensor_entry, status_entry)
+        # Notify listeners WITHOUT async_set_updated_data so the poll interval
+        # timer is never reset; the 120s poll keeps running as the fallback.
+        self.async_update_listeners()
+
+    def _merge_push_sensor_entry(
+        self,
+        mid: int,
+        sid: str,
+        sensor_key: str,
+        sensor_entry: dict,
+        status_entry: dict,
+    ) -> None:
+        """Copy-on-write merge of one pushed reading into self.data.
+
+        Replaces only the touched sensors[sensor_key] and status[mid] branches,
+        shallow-copying the containers along the way so every other sensors key
+        and status mid keeps its object identity (and hubs is carried by
+        reference). Assigns the rebuilt top-level dict back to self.data.
+        """
+        data = dict(self.data)
+
+        sensors = dict(data.get("sensors", {}))
+        sensors[sensor_key] = sensor_entry
+        data["sensors"] = sensors
+
+        status = dict(data.get("status", {}))
+        mid_status = dict(status.get(mid, {"subDeviceStatus": []}))
+        sub_status = list(mid_status.get("subDeviceStatus", []))
+        for index, existing in enumerate(sub_status):
+            if existing.get("id") == sid:
+                sub_status[index] = status_entry
+                break
+        else:
+            sub_status.append(status_entry)
+        mid_status["subDeviceStatus"] = sub_status
+        status[mid] = mid_status
+        data["status"] = status
+
+        self.data = data
+
     async def _async_update_data(self):
         """Fetch and decode data from RainPoint."""
         try:

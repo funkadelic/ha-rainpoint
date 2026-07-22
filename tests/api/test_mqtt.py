@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import json
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -294,6 +295,141 @@ class TestPushStructureCapture:
         skeleton = mqtt_module._redacted_payload_skeleton(secret.encode())
         assert secret not in skeleton
         assert skeleton == f"S[{len(secret)}]"
+
+
+def _captured_push_payload(subdevices, ts=1784707302285):
+    """Build a realistic captured-shape push payload from the confirmed envelope.
+
+    subdevices maps sid -> raw_value ("11#..." TLV strings). The "update"/"state"
+    housekeeping keys are included so tests prove they are ignored.
+    """
+    inner = {sid: {"time": ts, "value": value} for sid, value in subdevices.items()}
+    inner["update"] = {"time": ts, "value": 1}
+    inner["state"] = {"time": ts, "value": "0,-56"}
+    param = "|".join(
+        [
+            "#P" + "0" * 30,
+            json.dumps(inner),
+            str(ts),
+            "abcdef012345#",
+        ]
+    )
+    outer = {
+        "method": "thing.service.property.set",
+        "id": "123456789",
+        "params": {"param": param},
+        "version": "1.0.0",
+    }
+    return json.dumps(outer).encode()
+
+
+def _make_push_client(hass, fake_paho, coordinator, hub_mid=4242) -> RainPointMqttClient:
+    """Build an MQTT client wired to a coordinator and a fixed hub mid."""
+    rainpoint_client = MagicMock()
+    rainpoint_client.get_subscribe_status = AsyncMock(return_value=_fake_creds())
+    factory = MagicMock(return_value=fake_paho)
+    return RainPointMqttClient(
+        hass,
+        rainpoint_client,
+        entry=MagicMock(),
+        hub_device_name="hub-device",
+        hub_product_key="hub-pk",
+        coordinator=coordinator,
+        hub_mid=hub_mid,
+        paho_client_factory=factory,
+        time_source=lambda: 1000.0,
+    )
+
+
+class TestPushEnvelopeParsing:
+    """The HA-loop handler parses the confirmed envelope and routes each
+    D-subdevice to coordinator.apply_push_update with the fixed hub mid."""
+
+    @pytest.mark.asyncio
+    async def test_captured_payload_drives_one_apply_push_update_per_subdevice(self):
+        """Each D-prefixed sub-device produces exactly one apply_push_update call
+        with the fixed hub mid, the sid, its raw value, and the device timestamp."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        coordinator = MagicMock()
+        client = _make_push_client(hass, fake_paho, coordinator, hub_mid=4242)
+        await client.async_start()
+        await _settle()
+
+        body_a = "11#" + "0a1b" * 28
+        body_b = "11#" + "1c2d" * 28
+        payload = _captured_push_payload({"D01": body_a, "D02": body_b}, ts=1784707302285)
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
+
+        client._on_message(fake_paho, None, msg)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        calls = coordinator.apply_push_update.call_args_list
+        assert len(calls) == 2
+        by_sid = {call.args[1]: call.args for call in calls}
+        assert by_sid["D01"] == (4242, "D01", body_a, 1784707302285)
+        assert by_sid["D02"] == (4242, "D02", body_b, 1784707302285)
+        # Liveness clock updated from the injected monotonic seam.
+        assert client.last_message_at == 1000.0
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_housekeeping_keys_are_ignored(self):
+        """Only D-prefixed keys route; the update/state keys never call the coordinator."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        coordinator = MagicMock()
+        client = _make_push_client(hass, fake_paho, coordinator)
+        await client.async_start()
+        await _settle()
+
+        payload = _captured_push_payload({"D01": "11#" + "0a1b" * 28})
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
+
+        client._on_message(fake_paho, None, msg)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert coordinator.apply_push_update.call_count == 1
+        assert coordinator.apply_push_update.call_args.args[1] == "D01"
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_last_message_at_updates_even_on_undecodable_payload(self):
+        """An undecodable payload still stamps liveness and never calls the coordinator."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        coordinator = MagicMock()
+        client = _make_push_client(hass, fake_paho, coordinator)
+        await client.async_start()
+        await _settle()
+
+        assert client.last_message_at is None
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=b"not-json-at-all")
+
+        client._on_message(fake_paho, None, msg)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert client.last_message_at == 1000.0
+        coordinator.apply_push_update.assert_not_called()
+
+        await client.async_disconnect()
+
+    def test_parse_push_envelope_returns_updates_for_valid_payload(self):
+        """The parser returns (sid, raw_value, device_ts) tuples for D-subdevices."""
+        payload = _captured_push_payload({"D01": "11#ab", "D02": "11#cd"}, ts=1784707302285)
+        updates = mqtt_module._parse_push_envelope(payload)
+        assert sorted(updates) == [
+            ("D01", "11#ab", 1784707302285),
+            ("D02", "11#cd", 1784707302285),
+        ]
 
 
 class TestAsyncDisconnect:

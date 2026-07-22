@@ -19,6 +19,7 @@ before touching self.
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import random
 import time
@@ -30,6 +31,12 @@ from ..const import (
     MQTT_BROKER_HOST_TEMPLATE,
     MQTT_BROKER_PORT,
     MQTT_KEEPALIVE,
+    MQTT_PUSH_METHOD,
+    MQTT_PUSH_PARAMS_KEY,
+    MQTT_PUSH_SECTION_DELIMITER,
+    MQTT_PUSH_SUBDEVICE_PREFIX,
+    MQTT_PUSH_TIME_FIELD,
+    MQTT_PUSH_VALUE_FIELD,
     MQTT_TOPIC_EVENT_POST,
     MQTT_TOPIC_PROPERTY_SET,
 )
@@ -97,6 +104,57 @@ def _redacted_payload_skeleton(payload: bytes) -> str:
     return "".join(parts)
 
 
+def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
+    """Parse an inbound push payload into a list of (sid, raw_value, device_ts).
+
+    Fully fail-safe: any malformed, truncated, oversized, non-JSON,
+    prefix-missing, or sub-device-token-missing payload yields an empty list
+    rather than raising, so a bad message is dropped without touching
+    coordinator state. The outer payload is a standard AliCloud IoT message
+    whose params.param value is a pipe-delimited string; the section that is an
+    inner JSON object is keyed by sub-device id. Only "D"-prefixed keys are
+    sub-device status, and each carries the raw value string the poll-path
+    decoders already consume plus a device millisecond timestamp.
+    """
+    try:
+        outer = json.loads(payload)
+        if not isinstance(outer, dict) or outer.get("method") != MQTT_PUSH_METHOD:
+            return []
+
+        params = outer.get("params")
+        if not isinstance(params, dict):
+            return []
+        param_str = params.get(MQTT_PUSH_PARAMS_KEY)
+        if param_str is None and len(params) == 1:
+            param_str = next(iter(params.values()))
+        if not isinstance(param_str, str):
+            return []
+
+        inner_json = next(
+            (section for section in param_str.split(MQTT_PUSH_SECTION_DELIMITER) if section.lstrip().startswith("{")),
+            None,
+        )
+        if inner_json is None:
+            return []
+        inner = json.loads(inner_json)
+        if not isinstance(inner, dict):
+            return []
+
+        updates: list[tuple[str, str, int]] = []
+        for key, entry in inner.items():
+            if not key.startswith(MQTT_PUSH_SUBDEVICE_PREFIX) or not isinstance(entry, dict):
+                continue
+            raw_value = entry.get(MQTT_PUSH_VALUE_FIELD)
+            device_ts = entry.get(MQTT_PUSH_TIME_FIELD)
+            # bool is an int subclass; exclude it so a stray True/False ts is dropped.
+            if isinstance(raw_value, str) and isinstance(device_ts, int) and not isinstance(device_ts, bool):
+                updates.append((key, raw_value, device_ts))
+        return updates
+    except (ValueError, TypeError):
+        # json.loads failures and any defensive type error -> drop the message.
+        return []
+
+
 # Supervisor backoff: only the DELAY is capped, never
 # the attempt count. 30s base doubling up to a 480s ceiling (within the 300-600s
 # band), with +-10-30% jitter to avoid a synchronized reconnect storm.
@@ -132,6 +190,8 @@ class RainPointMqttClient:
         hub_device_name: str,
         hub_product_key: str,
         *,
+        coordinator=None,
+        hub_mid=None,
         paho_client_factory=paho_mqtt.Client,
         time_source=time.monotonic,
         wall_clock_source=time.time,
@@ -141,6 +201,13 @@ class RainPointMqttClient:
         self._entry = entry
         self._hub_device_name = hub_device_name
         self._hub_product_key = hub_product_key
+        # The client is constructed per-hub, so the hub's mid is fixed for its
+        # lifetime. It is not present in (and must not be inferred from) the push
+        # payload or the ephemeral observer topic, so it is supplied here and
+        # passed straight into apply_push_update -- the only coordinator method
+        # this client ever calls.
+        self._coordinator = coordinator
+        self._hub_mid = hub_mid
         self._paho_client_factory = paho_client_factory
         # Monotonic seam: renewal-interval bookkeeping only (immune to clock steps).
         self._time_source = time_source
@@ -151,6 +218,7 @@ class RainPointMqttClient:
 
         self._paho = None
         self._message_count = 0
+        self._last_message_at: float | None = None
         self._connected = False
 
         self._stopping = False
@@ -162,6 +230,16 @@ class RainPointMqttClient:
     def message_count(self) -> int:
         """Return the running count of messages received since connect (test/diagnostic seam)."""
         return self._message_count
+
+    @property
+    def last_message_at(self) -> float | None:
+        """Return the monotonic time of the last inbound message, or None if none yet.
+
+        Set on every inbound message before parsing, so any message -- even one
+        whose payload fails to decode -- proves the pipe is alive. This is the
+        liveness clock the observability/watchdog layer consumes.
+        """
+        return self._last_message_at
 
     @property
     def connected(self) -> bool:
@@ -455,14 +533,15 @@ class RainPointMqttClient:
 
     @callback
     def _handle_message(self, topic: str, payload: bytes) -> None:
-        """Runs on the HA event loop. Logs receipt plus a redacted structure capture.
+        """Runs on the HA event loop. Records liveness, logs receipt, and dispatches.
 
-        The receipt line carries topic + byte-length + running count only. The
-        structure line is a TEMPORARY diagnostic (removed once the envelope is
-        confirmed) that logs the redacted skeleton of the payload -- delimiters
-        and segment lengths, never raw value bytes.
+        _last_message_at is stamped first, before any parse, so even a payload
+        that fails to decode still proves the pipe is alive. The receipt line
+        carries topic + byte-length + running count only.
         """
         self._message_count += 1
+        # Liveness clock: set BEFORE parse so an undecodable message still counts.
+        self._last_message_at = self._time_source()
         payload_len = len(payload)
         _LOGGER.debug("RainPoint MQTT message received: topic=%s len=%s count=%s", topic, payload_len, self._message_count)
         # TEMPORARY push-envelope structure capture -- remove once confirmed.
@@ -472,6 +551,25 @@ class RainPointMqttClient:
             payload_len,
             _redacted_payload_skeleton(payload),
         )
+        self._dispatch_push(topic, payload)
+
+    def _dispatch_push(self, topic: str, payload: bytes) -> None:
+        """Parse the payload and route each sub-device reading to the coordinator.
+
+        A payload that carries no decodable sub-device update is dropped quietly.
+        apply_push_update is the only coordinator method this client ever calls,
+        and the per-hub mid is supplied from construction (never parsed from the
+        payload or the ephemeral observer topic).
+        """
+        updates = _parse_push_envelope(payload)
+        if not updates:
+            _LOGGER.debug("RainPoint MQTT push carried no sub-device update: topic=%s", topic)
+            return
+        if self._coordinator is None:
+            _LOGGER.debug("RainPoint MQTT push received before coordinator wiring; dropping")
+            return
+        for sid, raw_value, device_ts in updates:
+            self._coordinator.apply_push_update(self._hub_mid, sid, raw_value, device_ts)
 
     async def async_disconnect(self) -> None:
         """Cancel and await the supervisor task, then stop the paho loop and
