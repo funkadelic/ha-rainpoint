@@ -1,12 +1,14 @@
 """Tests for RainPoint API client (COVR-06)."""
 
 import hashlib
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from custom_components.rainpoint.api import RainPointApiError, RainPointClient
+from custom_components.rainpoint.api.client import _redact_secret
 
 
 def _make_client() -> RainPointClient:
@@ -313,6 +315,88 @@ class TestLogin:
         # email="test@example.com", area_code="1" => MD5("test@example.com1")
         expected_device_id = hashlib.md5(b"test@example.com1").hexdigest()
         assert payload["deviceId"] == expected_device_id
+
+
+class TestReloginListeners:
+    """Re-login notifies registered listeners; initial login does not."""
+
+    @staticmethod
+    def _login_json_body() -> dict:
+        return {
+            "code": 0,
+            "data": {"token": "tok", "refreshToken": "ref", "tokenExpired": 3600},
+            "ts": 1700000000000,
+        }
+
+    @pytest.mark.asyncio
+    async def test_initial_login_does_not_fire_listener(self):
+        """The first _login() of a session (no prior token) does not invoke listeners."""
+        client = _make_client()
+        client._token = None  # no prior token => this is the initial login
+
+        listener = MagicMock()
+        client.register_relogin_listener(listener)
+
+        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        await client._login()
+
+        listener.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_relogin_fires_listener_exactly_once(self):
+        """A second _login() while a token is already held (re-login) fires the listener once."""
+        client = _make_client()
+        # _make_client() already sets a token, so this call is a re-login.
+        assert client._token is not None
+
+        listener = MagicMock()
+        client.register_relogin_listener(listener)
+
+        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        await client._login()
+
+        listener.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_relogin_fires_all_registered_listeners(self):
+        """Multiple registered listeners all fire on re-login."""
+        client = _make_client()
+        assert client._token is not None
+
+        listener_one = MagicMock()
+        listener_two = MagicMock()
+        client.register_relogin_listener(listener_one)
+        client.register_relogin_listener(listener_two)
+
+        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        await client._login()
+
+        listener_one.assert_called_once_with()
+        listener_two.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_relogin_listener_exception_is_isolated(self, caplog):
+        """A raising listener does not propagate out of _login() and does not
+        prevent later-registered listeners from firing (CR-03)."""
+        client = _make_client()
+        assert client._token is not None
+
+        raising = MagicMock(side_effect=RuntimeError("listener boom"))
+        after = MagicMock()
+        client.register_relogin_listener(raising)
+        client.register_relogin_listener(after)
+
+        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        with caplog.at_level(logging.ERROR):
+            await client._login()  # must not raise despite the raising listener
+
+        raising.assert_called_once_with()
+        after.assert_called_once_with()  # a listener after the raising one still fires
+        assert any("relogin listener raised" in r.message for r in caplog.records)
 
 
 class TestTokenManagement:
@@ -691,3 +775,90 @@ class TestSetDeviceState:
 
         with pytest.raises(RainPointApiError):
             await client.set_device_state(home_id=1, device_name="dev", mid=100, product_key="pk", state={})
+
+
+class TestGetSubscribeStatus:
+    """get_subscribe_status() fetches fresh per-session MQTT credentials (CRED-01, CRED-03)."""
+
+    def _make_client(self) -> RainPointClient:
+        """Make client helper."""
+        return _make_client()
+
+    def _mock_response(self, json_data: dict, status: int = 200) -> AsyncMock:
+        """Mock response helper."""
+        return _mock_response(json_data, status)
+
+    @pytest.mark.asyncio
+    async def test_subscribe_status_success_returns_data(self):
+        """A code-0 response returns the response's data dict verbatim."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {
+            "code": 0,
+            "data": {
+                "deviceSecret": "SEKRIT-value-9f3a",
+                "deviceName": "name-A",
+                "productKey": "pk123",
+                "mqttHostUrl": "pk123.iot-as-mqtt.us-west-1.aliyuncs.com:1883",
+            },
+        }
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        result = await client.get_subscribe_status("hub-device", "pk123")
+
+        assert result == json_body["data"]
+
+    @pytest.mark.asyncio
+    async def test_subscribe_status_http_error_raises(self):
+        """An HTTP 500 status raises subscribeStatus HTTP 500."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({}, status=500))
+
+        with pytest.raises(RainPointApiError, match="subscribeStatus HTTP 500"):
+            await client.get_subscribe_status("hub-device", "pk123")
+
+    @pytest.mark.asyncio
+    async def test_subscribe_status_code_error_raises(self):
+        """A non-zero app-level code raises subscribeStatus failed: code N."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        json_body = {"code": 1, "msg": "error"}
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        with pytest.raises(RainPointApiError, match="code 1"):
+            await client.get_subscribe_status("hub-device", "pk123")
+
+    @pytest.mark.asyncio
+    async def test_subscribe_status_never_logs_device_secret(self, caplog):
+        """deviceSecret never appears in any DEBUG log line (CRED-03/D-16)."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        json_body = {
+            "code": 0,
+            "data": {
+                "deviceSecret": "SEKRIT-value-9f3a",
+                "deviceName": "name-A",
+                "productKey": "pk123",
+            },
+        }
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        with caplog.at_level(logging.DEBUG):
+            await client.get_subscribe_status("hub-device", "pk123")
+
+        assert "SEKRIT-value-9f3a" not in caplog.text
+
+    def test_redact_secret_short_value(self):
+        """A short (<=4 char) secret is rendered as length + <short>, never the raw value."""
+        assert _redact_secret("ab") == "len=2 <short>"
+
+    def test_redact_secret_empty_value(self):
+        """An empty/None secret is rendered as <empty>."""
+        assert _redact_secret(None) == "<empty>"
+        assert _redact_secret("") == "<empty>"
+
+    def test_redact_secret_long_value(self):
+        """A secret longer than 4 chars is rendered as length + last-4 only."""
+        assert _redact_secret("SEKRIT-value-9f3a") == "len=17 last4=9f3a"

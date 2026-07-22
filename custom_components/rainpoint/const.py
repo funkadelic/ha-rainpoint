@@ -35,6 +35,14 @@ CONF_DEBUG_LAST_SUBMISSION = "debug_last_submission"
 DEBUG_WORKER_URL = ""
 DEBUG_SUBMISSION_INTERVAL = 86400  # 24 hours in seconds
 
+# === Push channel (MQTT) ===
+CONF_PUSH_ENABLED = "push_enabled"
+MQTT_TOPIC_PROPERTY_SET = "/sys/{product_key}/{device_name}/thing/service/property/set"
+MQTT_TOPIC_EVENT_POST = "/sys/{product_key}/{device_name}/thing/event/property/post"
+MQTT_BROKER_HOST_TEMPLATE = "{product_key}.iot-as-mqtt.us-west-1.aliyuncs.com"
+MQTT_BROKER_PORT = 1883
+MQTT_KEEPALIVE = 30
+
 # Known models (original devices)
 MODEL_HCS026FRF = "HCS026FRF"  # Moisture only
 MODEL_HCS021FRF = "HCS021FRF"  # Moisture + temp + lux

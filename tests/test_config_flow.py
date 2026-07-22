@@ -11,13 +11,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.rainpoint.api import RainPointApiError
-from custom_components.rainpoint.config_flow import RainPointConfigFlow
+from custom_components.rainpoint.config_flow import RainPointConfigFlow, RainPointOptionsFlow
 from custom_components.rainpoint.const import (
     CONF_AREA_CODE,
     CONF_COUNTRY,
     CONF_EMAIL,
     CONF_HIDS,
     CONF_PASSWORD,
+    CONF_PUSH_ENABLED,
 )
 
 # ---------------------------------------------------------------------------
@@ -460,3 +461,70 @@ class TestConfigFlowSelectHomesReconfigure:
         flow.async_show_form.assert_called_once()
         errors = flow.async_show_form.call_args.kwargs.get("errors", {})
         assert errors.get("base") == "select_at_least_one"
+
+
+# ---------------------------------------------------------------------------
+# Options flow tests (OPTS-01, D-01, D-02)
+# ---------------------------------------------------------------------------
+
+
+def _make_options_flow(current_push_enabled: bool = False) -> RainPointOptionsFlow:
+    """Create a RainPointOptionsFlow with a fake config_entry and HA stub methods wired up."""
+    flow = RainPointOptionsFlow()
+    flow.config_entry = MagicMock()
+    flow.config_entry.options = {CONF_PUSH_ENABLED: current_push_enabled}
+    flow.async_show_form = MagicMock(return_value={"type": "form"})
+    flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
+    return flow
+
+
+class TestAsyncGetOptionsFlow:
+    """RainPointConfigFlow.async_get_options_flow returns a RainPointOptionsFlow."""
+
+    def test_returns_options_flow_instance(self):
+        """async_get_options_flow returns a RainPointOptionsFlow instance."""
+        result = RainPointConfigFlow.async_get_options_flow(MagicMock())
+
+        assert isinstance(result, RainPointOptionsFlow)
+
+
+class TestOptionsFlowInitStep:
+    """RainPointOptionsFlow.async_step_init shows/handles the push toggle form."""
+
+    @pytest.mark.asyncio
+    async def test_no_input_shows_form_with_current_default(self):
+        """No input shows the form, defaulted from the current entry.options value."""
+        flow = _make_options_flow(current_push_enabled=True)
+
+        await flow.async_step_init(None)
+
+        flow.async_show_form.assert_called_once()
+        call_kwargs = flow.async_show_form.call_args.kwargs
+        assert call_kwargs["step_id"] == "init"
+        schema = call_kwargs["data_schema"]
+        # The vol.Required marker's default is a callable; invoke it to read the value.
+        (marker,) = [k for k in schema.schema if k == CONF_PUSH_ENABLED]
+        assert marker.default() is True
+
+    @pytest.mark.asyncio
+    async def test_no_input_shows_form_defaulting_false_when_unset(self):
+        """Form defaults to False when entry.options has no push_enabled key yet."""
+        flow = _make_options_flow(current_push_enabled=False)
+        flow.config_entry.options = {}
+
+        await flow.async_step_init(None)
+
+        call_kwargs = flow.async_show_form.call_args.kwargs
+        schema = call_kwargs["data_schema"]
+        (marker,) = [k for k in schema.schema if k == CONF_PUSH_ENABLED]
+        assert marker.default() is False
+
+    @pytest.mark.asyncio
+    async def test_submitting_true_writes_to_entry_options(self):
+        """Submitting {push_enabled: True} produces a create-entry result with that data."""
+        flow = _make_options_flow(current_push_enabled=False)
+
+        result = await flow.async_step_init({CONF_PUSH_ENABLED: True})
+
+        flow.async_create_entry.assert_called_once_with(title="", data={CONF_PUSH_ENABLED: True})
+        assert result == {"type": "create_entry"}

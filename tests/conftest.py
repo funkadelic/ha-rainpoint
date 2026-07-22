@@ -280,10 +280,40 @@ class _FakeConfigFlow:
 sys.modules["homeassistant.config_entries"].ConfigFlow = _FakeConfigFlow
 
 
+class _FakeOptionsFlow:
+    """Minimal stand-in for homeassistant.config_entries.OptionsFlow.
+
+    Real instances get `config_entry` assigned by the flow manager; tests
+    set it directly on the instance before calling a step.
+    """
+
+    pass
+
+
+sys.modules["homeassistant.config_entries"].OptionsFlow = _FakeOptionsFlow
+
+
 class _FakeClientError(OSError):
     """Stand-in for aiohttp.ClientError."""
 
 
 sys.modules["aiohttp"].ClientError = _FakeClientError
+
+
+# ---------------------------------------------------------------------------
+# homeassistant.core.callback: real identity decorator, not a MagicMock.
+#
+# `homeassistant.core` is a bare MagicMock stub (see _HA_STUBS above), so
+# `from homeassistant.core import callback` would otherwise resolve to a
+# MagicMock. Decorating a function with a MagicMock replaces it with the
+# mock's return value instead of the original function, silently breaking
+# any `@callback`-decorated method (e.g. api/mqtt.py's _handle_message).
+# ---------------------------------------------------------------------------
+def _identity_callback(func):
+    """Real stand-in for homeassistant.core.callback -- returns func unchanged."""
+    return func
+
+
+sys.modules["homeassistant.core"].callback = _identity_callback
 
 import tests.helpers  # noqa: E402, F401 — ensures helpers are importable in tests

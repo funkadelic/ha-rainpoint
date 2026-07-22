@@ -7,6 +7,7 @@ with the RainPoint cloud API.
 
 import hashlib
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import aiohttp
@@ -16,6 +17,15 @@ _LOGGER = logging.getLogger(__name__)
 
 class RainPointApiError(Exception):
     pass
+
+
+def _redact_secret(value: str | None) -> str:
+    """Render a secret as length + last-4 only -- never the raw value."""
+    if not value:
+        return "<empty>"
+    if len(value) <= 4:
+        return f"len={len(value)} <short>"
+    return f"len={len(value)} last4={value[-4:]}"
 
 
 class RainPointClient:
@@ -35,7 +45,22 @@ class RainPointClient:
         # region host: you had region3; we can later make this configurable
         self._base_url = "https://region3.homgarus.com"
 
+        # Listeners notified when the HTTP layer rotates its token via a
+        # re-login (not the initial login). Kept decoupled from any
+        # particular subscriber (e.g. the MQTT client) so this module never
+        # imports the mqtt layer -- the supervisor must never keep running on
+        # credentials the HTTP layer has superseded.
+        self._relogin_listeners: list[Callable[[], None]] = []
+
     # --- token state helpers ---
+
+    def register_relogin_listener(self, callback: Callable[[], None]) -> None:
+        """Register a callback fired synchronously after a re-login rotates the token.
+
+        Not fired on the initial login of a session -- only when the token is
+        replaced while a previous token was already held.
+        """
+        self._relogin_listeners.append(callback)
 
     def _auth_headers(self) -> dict:
         """Generate authentication headers for API calls."""
@@ -87,6 +112,7 @@ class RainPointClient:
 
     async def _login(self) -> None:
         """Login with areaCode/email/password and store token info."""
+        is_relogin = self._token is not None
         url = f"{self._base_url}/auth/basic/app/login"
 
         # Client-side MD5 hashing as per app/Postman flow
@@ -124,6 +150,20 @@ class RainPointClient:
         self._token_expires_at = base + timedelta(seconds=token_expired_secs)
 
         _LOGGER.info("RainPoint login successful; token expires in %s seconds", token_expired_secs)
+
+        if is_relogin:
+            # Token rotation: notify subscribers (e.g. the MQTT credential
+            # supervisor) so they re-fetch rather than keep running on
+            # credentials the HTTP layer just superseded. The initial login
+            # of a session does not fire -- there is nothing to supersede yet.
+            for callback in self._relogin_listeners:
+                # Isolate each listener: a raising listener must not propagate out
+                # of _login() (called from ensure_logged_in() at the top of every
+                # API method) nor skip the listeners registered after it.
+                try:
+                    callback()
+                except Exception:
+                    _LOGGER.exception("RainPoint relogin listener raised; continuing")
 
     # --- API calls ---
 
@@ -203,6 +243,34 @@ class RainPointClient:
             _LOGGER.debug("getDeviceStatus failed response: %s", data)
             raise RainPointApiError(f"getDeviceStatus failed: code {data.get('code')}")
         return data.get("data", {})
+
+    async def get_subscribe_status(self, device_name: str, product_key: str) -> dict:
+        """Fetch fresh per-session MQTT observer credentials from subscribeStatus.
+
+        device_name/product_key identify the hub (sourced from the hub record,
+        not a second login call). The response carries
+        deviceSecret; it must never be logged in the clear.
+        """
+        await self.ensure_logged_in()
+        url = f"{self._base_url}/app/device/subscribeStatus"
+        payload = {"userInfo": {"deviceName": device_name, "productKey": product_key}}
+        _LOGGER.debug("API call: get_subscribe_status URL=%s deviceName=%s productKey=%s", url, device_name, product_key)
+        async with self._session.post(url, json=payload, headers=self._auth_headers()) as resp:
+            if resp.status != 200:
+                raise RainPointApiError(f"subscribeStatus HTTP {resp.status}")
+            data = await resp.json()
+
+        resp_data = data.get("data") or {}
+        # The response carries deviceSecret, so log only the key set -- never the
+        # secret itself, not even redacted.
+        _LOGGER.debug(
+            "API response: get_subscribe_status keys=%s",
+            sorted(resp_data.keys()),
+        )
+        if data.get("code") != 0:
+            _LOGGER.debug("subscribeStatus failed response: code=%s", data.get("code"))
+            raise RainPointApiError(f"subscribeStatus failed: code {data.get('code')}")
+        return resp_data
 
     async def set_device_state(self, home_id: int, device_name: str, mid: int, product_key: str, state: dict) -> bool:
         """Set device state."""

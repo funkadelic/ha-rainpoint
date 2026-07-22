@@ -6,6 +6,7 @@ from typing import Any
 import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
@@ -21,6 +22,7 @@ from .const import (
     CONF_EMAIL,
     CONF_HIDS,
     CONF_PASSWORD,
+    CONF_PUSH_ENABLED,
     DOMAIN,
 )
 from .country_codes import (
@@ -51,6 +53,12 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize the config flow."""
         self._reconfigure = False
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> RainPointOptionsFlow:
+        """Return the options flow handler."""
+        return RainPointOptionsFlow()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors: dict[str, str] = {}
@@ -283,3 +291,22 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=data_schema,
             errors=errors,
         )
+
+
+class RainPointOptionsFlow(config_entries.OptionsFlow):
+    """Handle the RainPoint options flow -- push toggle."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Show/handle the single push-toggle form."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_PUSH_ENABLED,
+                    default=self.config_entry.options.get(CONF_PUSH_ENABLED, False),
+                ): bool,
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=data_schema)
