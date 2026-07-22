@@ -159,7 +159,7 @@ class RainPointClient:
             for callback in self._relogin_listeners:
                 # Isolate each listener: a raising listener must not propagate out
                 # of _login() (called from ensure_logged_in() at the top of every
-                # API method) nor skip the listeners registered after it (CR-03).
+                # API method) nor skip the listeners registered after it.
                 try:
                     callback()
                 except Exception:
