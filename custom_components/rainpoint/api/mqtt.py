@@ -67,6 +67,27 @@ def _redact(value: str | None) -> str:
     return f"len={len(value)} last4={value[-4:]}"
 
 
+def _subdevice_updates(inner) -> list[tuple[str, str, int]]:
+    """Extract (sid, raw_value, device_ts) for each D-prefixed sub-device entry.
+
+    Non-dict input (or an entry that is not a well-typed value/timestamp pair) is
+    skipped, so a structurally odd payload yields an empty list rather than
+    raising.
+    """
+    if not isinstance(inner, dict):
+        return []
+    updates: list[tuple[str, str, int]] = []
+    for key, entry in inner.items():
+        if not key.startswith(MQTT_PUSH_SUBDEVICE_PREFIX) or not isinstance(entry, dict):
+            continue
+        raw_value = entry.get(MQTT_PUSH_VALUE_FIELD)
+        device_ts = entry.get(MQTT_PUSH_TIME_FIELD)
+        # bool is an int subclass; exclude it so a stray True/False ts is dropped.
+        if isinstance(raw_value, str) and isinstance(device_ts, int) and not isinstance(device_ts, bool):
+            updates.append((key, raw_value, device_ts))
+    return updates
+
+
 def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
     """Parse an inbound push payload into a list of (sid, raw_value, device_ts).
 
@@ -103,18 +124,7 @@ def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
         if inner_json is None:
             return []
         # A section selected on a leading "{" parses to a dict or raises (caught below).
-        inner = json.loads(inner_json)
-
-        updates: list[tuple[str, str, int]] = []
-        for key, entry in inner.items():
-            if not key.startswith(MQTT_PUSH_SUBDEVICE_PREFIX) or not isinstance(entry, dict):
-                continue
-            raw_value = entry.get(MQTT_PUSH_VALUE_FIELD)
-            device_ts = entry.get(MQTT_PUSH_TIME_FIELD)
-            # bool is an int subclass; exclude it so a stray True/False ts is dropped.
-            if isinstance(raw_value, str) and isinstance(device_ts, int) and not isinstance(device_ts, bool):
-                updates.append((key, raw_value, device_ts))
-        return updates
+        return _subdevice_updates(json.loads(inner_json))
     except (ValueError, TypeError):
         # json.loads failures and any defensive type error -> drop the message.
         return []

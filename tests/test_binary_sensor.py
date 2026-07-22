@@ -10,17 +10,25 @@ from custom_components.rainpoint.binary_sensor import async_setup_entry
 from custom_components.rainpoint.const import DOMAIN, PUSH_CONNECTED_UNIQUE_ID_SUFFIX
 from custom_components.rainpoint.hub_entities import RainPointPushConnectedBinarySensor
 
+_UNSET = object()
 
-def _make_hass(hubs=None, mqtt_client=MagicMock):
-    """Return a mock hass whose entry object graph mirrors __init__.async_setup_entry."""
+
+def _make_hass(hubs=None, mqtt_client=_UNSET):
+    """Return a mock hass whose entry object graph mirrors __init__.async_setup_entry.
+
+    A caller-supplied mqtt_client is used as-is (MagicMock instances are callable,
+    so it must not be invoked); the default builds a fresh mock, and None means
+    push is disabled.
+    """
     coord = MagicMock()
     coord.data = {"hubs": hubs if hubs is not None else [], "sensors": {}}
     hass = MagicMock()
     entry = MagicMock()
     entry.entry_id = "test_entry"
     data = {"coordinator": coord}
-    if mqtt_client is not None:
-        data["mqtt_client"] = mqtt_client() if callable(mqtt_client) else mqtt_client
+    client = MagicMock() if mqtt_client is _UNSET else mqtt_client
+    if client is not None:
+        data["mqtt_client"] = client
     hass.data = {DOMAIN: {entry.entry_id: data}}
     return hass, entry, coord
 
@@ -59,6 +67,8 @@ class TestBinarySensorSetupEntry:
         entities = add.call_args[0][0]
         assert len(entities) == 1
         assert isinstance(entities[0], RainPointPushConnectedBinarySensor)
+        # Bound to the second hub (mid 222), not the first (mid 111).
+        assert entities[0]._hub_info["mid"] == 222
 
     @pytest.mark.asyncio
     async def test_no_hubs_adds_no_entities(self):

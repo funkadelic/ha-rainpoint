@@ -205,7 +205,7 @@ class TestWatchdogDetectionOnly:
 class TestWatchdogTimer:
     """Scheduler wiring: start registers a periodic check; stop cancels it, idempotently."""
 
-    def test_start_registers_interval_and_stop_cancels(self):
+    def test_start_registers_interval_and_stop_cancels(self, issue_mocks):
         clock = _Clock()
         client = _make_client()
         watchdog = _make_watchdog(client, clock)
@@ -231,3 +231,15 @@ class TestWatchdogTimer:
         watchdog = _make_watchdog(_make_client(), _Clock())
         # No timer registered yet; must not raise.
         watchdog.async_stop()
+
+    def test_start_clears_stale_issue_from_prior_session(self, issue_mocks):
+        """start() deletes any pre-existing issue so a reloaded watchdog does not
+        leave a stale 'down' issue that a since-recovered channel would never
+        clear (the fresh instance has no in-memory record of it)."""
+        _create, delete = issue_mocks
+        watchdog = _make_watchdog(_make_client(connected=True), _Clock())
+
+        with patch.object(repairs, "async_track_time_interval", return_value=MagicMock()):
+            watchdog.start()
+
+        delete.assert_called_once()

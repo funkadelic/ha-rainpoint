@@ -358,6 +358,11 @@ class TestPushEnvelopeFailSafe:
         assert len(payload) > mqtt_module.MQTT_PUSH_MAX_PAYLOAD_BYTES
         assert mqtt_module._parse_push_envelope(payload) == []
 
+    def test_subdevice_updates_returns_empty_for_non_dict(self):
+        """The sub-device extractor drops a structurally odd (non-dict) inner
+        section instead of raising."""
+        assert mqtt_module._subdevice_updates(["not", "a", "dict"]) == []
+
     @pytest.mark.asyncio
     async def test_malformed_payload_through_handler_never_calls_coordinator(self):
         """A malformed payload driven through the HA-loop handler drops silently."""

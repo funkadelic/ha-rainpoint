@@ -71,6 +71,12 @@ class RainPointPushWatchdog:
     @callback
     def start(self) -> None:
         """Begin periodic liveness checks on the HA event loop."""
+        # A fresh instance (e.g. after a reload) has no memory of an issue a
+        # prior instance raised. Clear any stale one so this session's checks are
+        # authoritative -- otherwise a channel that recovered across the reload
+        # would leave a "down" issue that is never deleted. If it is genuinely
+        # still down, the periodic check re-raises it after the threshold.
+        ir.async_delete_issue(self._hass, DOMAIN, PUSH_WATCHDOG_ISSUE_ID)
         self._cancel_timer = async_track_time_interval(
             self._hass,
             self._async_check,
