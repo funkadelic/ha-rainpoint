@@ -61,6 +61,7 @@ from .hub_entities import (
     RainPointHubDeviceIDSensor,
     RainPointHubFirmwareSensor,
     RainPointHubMACSensor,
+    RainPointPushLastMessageSensor,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -292,6 +293,14 @@ async def async_setup_entry(
     entities.extend(_create_hub_entities(coordinator, hubs_cfg))
     for key, info in sensors_cfg.items():
         entities.extend(_create_sensor_entities(coordinator, key, info))
+
+    # The push last-message age entity only exists when push is enabled (it reads
+    # the MQTT client's liveness clock, not coordinator.data).
+    mqtt_client = data.get("mqtt_client")
+    if mqtt_client is not None:
+        hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
+        for hub_info in hubs_dict.values():
+            entities.append(RainPointPushLastMessageSensor(mqtt_client, hub_info))
 
     if entities:
         async_add_entities(entities)

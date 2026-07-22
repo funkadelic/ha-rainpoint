@@ -1192,3 +1192,80 @@ class TestBrokerHostSelection:
         assert port == mqtt_module.MQTT_BROKER_PORT
 
         await client.async_disconnect()
+
+
+class TestStateListeners:
+    """State listeners fire on every connect/disconnect/message transition so the
+    push diagnostic entities can re-render (their live state is not in coordinator.data)."""
+
+    def _make_offline_client(self):
+        """A client with no running supervisor -- state handlers are driven directly."""
+        hass = MagicMock()
+        return _make_mqtt_client(hass, _make_fake_paho())
+
+    def test_add_and_remove_state_listener(self):
+        """A removed listener is no longer fired; remove is tolerant of an unknown listener."""
+        client = self._make_offline_client()
+        listener = MagicMock()
+
+        client.add_state_listener(listener)
+        client._handle_connect(0)
+        assert listener.call_count == 1
+
+        client.remove_state_listener(listener)
+        client._handle_connect(0)
+        assert listener.call_count == 1  # not fired again after removal
+
+        # Removing an unregistered listener must not raise.
+        client.remove_state_listener(MagicMock())
+
+    def test_handle_connect_fires_listeners(self):
+        """A successful connect notifies every registered listener."""
+        client = self._make_offline_client()
+        listener = MagicMock()
+        client.add_state_listener(listener)
+
+        client._handle_connect(0)
+
+        listener.assert_called_once_with()
+        assert client.connected is True
+
+    def test_handle_disconnect_fires_listeners(self):
+        """A disconnect notifies every registered listener."""
+        client = self._make_offline_client()
+        listener = MagicMock()
+        client.add_state_listener(listener)
+
+        client._handle_disconnect(0)
+
+        listener.assert_called_once_with()
+        assert client.connected is False
+
+    def test_handle_message_fires_listeners(self):
+        """An inbound message notifies every registered listener (and stamps liveness)."""
+        client = self._make_offline_client()
+        listener = MagicMock()
+        client.add_state_listener(listener)
+
+        client._handle_message("topic/x", b"{}")
+
+        listener.assert_called_once_with()
+        assert client.last_message_at == 1000.0
+
+    def test_listener_that_unregisters_during_callback_does_not_break_iteration(self):
+        """A listener removing itself mid-notify is safe (iteration copies the list)."""
+        client = self._make_offline_client()
+        calls = []
+
+        def self_removing():
+            calls.append("fired")
+            client.remove_state_listener(self_removing)
+
+        other = MagicMock()
+        client.add_state_listener(self_removing)
+        client.add_state_listener(other)
+
+        client._handle_connect(0)
+
+        assert calls == ["fired"]
+        other.assert_called_once_with()

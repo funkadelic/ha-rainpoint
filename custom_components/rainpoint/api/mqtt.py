@@ -17,12 +17,14 @@ before touching self.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
 import logging
 import random
 import time
+from collections.abc import Callable
 
 import paho.mqtt.client as paho_mqtt
 from homeassistant.core import HomeAssistant, callback
@@ -179,6 +181,11 @@ class RainPointMqttClient:
         self._message_count = 0
         self._last_message_at: float | None = None
         self._connected = False
+        # Observability seam: listeners registered by the diagnostic entities so
+        # they re-render on connect/disconnect/message. coordinator.async_update_listeners
+        # does not fire on these transitions (the live state is not in coordinator.data),
+        # so the entities drive their own async_write_ha_state from here.
+        self._state_listeners: list[Callable[[], None]] = []
 
         self._stopping = False
         self._supervisor_task: asyncio.Task | None = None
@@ -204,6 +211,32 @@ class RainPointMqttClient:
     def connected(self) -> bool:
         """Return whether the last on_connect callback reported success."""
         return self._connected
+
+    # --- observability state listeners ---
+
+    def add_state_listener(self, listener: Callable[[], None]) -> None:
+        """Register a callback fired whenever connection state or liveness changes.
+
+        The diagnostic entities register here in async_added_to_hass so that a
+        connect/disconnect/message transition re-renders them immediately; their
+        live state is not carried in coordinator.data.
+        """
+        self._state_listeners.append(listener)
+
+    def remove_state_listener(self, listener: Callable[[], None]) -> None:
+        """Unregister a previously added state listener; tolerant of absence."""
+        with contextlib.suppress(ValueError):
+            self._state_listeners.remove(listener)
+
+    @callback
+    def _notify_state_listeners(self) -> None:
+        """Fire every registered state listener. Runs on the HA event loop.
+
+        Iterates a copy so a listener that unregisters itself mid-callback cannot
+        mutate the list under iteration.
+        """
+        for listener in list(self._state_listeners):
+            listener()
 
     # --- supervisor lifecycle ---
 
@@ -478,12 +511,14 @@ class RainPointMqttClient:
             _LOGGER.debug("RainPoint MQTT connected: reason_code=%s", reason_code)
         else:
             _LOGGER.warning("RainPoint MQTT connect rejected: reason_code=%s", reason_code)
+        self._notify_state_listeners()
 
     @callback
     def _handle_disconnect(self, reason_code) -> None:
         """Runs on the HA event loop."""
         self._connected = False
         _LOGGER.debug("RainPoint MQTT disconnected: reason_code=%s", reason_code)
+        self._notify_state_listeners()
         # Reactive reconnect on an unexpected broker-initiated disconnect is
         # intentionally deferred to a later change (resilience/observability). Today the
         # supervisor only re-arms on the renewal deadline, an on_http_relogin
@@ -503,6 +538,7 @@ class RainPointMqttClient:
         # Liveness clock: set BEFORE parse so an undecodable message still counts.
         self._last_message_at = self._time_source()
         _LOGGER.debug("RainPoint MQTT message received: topic=%s len=%s count=%s", topic, len(payload), self._message_count)
+        self._notify_state_listeners()
         self._dispatch_push(topic, payload)
 
     def _dispatch_push(self, topic: str, payload: bytes) -> None:

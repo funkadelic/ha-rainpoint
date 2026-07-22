@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.rainpoint.const import PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX
 from custom_components.rainpoint.hub_entities import (
     RainPointHubBroadcastSwitch,
     RainPointHubChannelSelect,
@@ -13,6 +14,7 @@ from custom_components.rainpoint.hub_entities import (
     RainPointHubFirmwareSensor,
     RainPointHubMACSensor,
     RainPointHubRSSISensor,
+    RainPointPushLastMessageSensor,
 )
 
 
@@ -227,3 +229,63 @@ class TestRainPointHubBroadcastSwitch:
         """unique_id should contain 'broadcast'."""
         switch = self._make()
         assert "broadcast" in switch._attr_unique_id
+
+
+class TestRainPointPushLastMessageSensor:
+    """Tests for the push last-message-age timestamp entity."""
+
+    def _make(self, last_message_at=None, now=1000.0):
+        """Build the entity with an injected monotonic clock for deterministic age math."""
+        mqtt_client = MagicMock()
+        mqtt_client.last_message_at = last_message_at
+        entity = RainPointPushLastMessageSensor(
+            mqtt_client,
+            _make_hub_info(),
+            time_source=lambda: now,
+        )
+        return entity, mqtt_client
+
+    def test_native_value_none_before_first_message(self):
+        """No message yet -> native_value is None."""
+        entity, _ = self._make(last_message_at=None)
+        assert entity.native_value is None
+
+    def test_native_value_is_message_wall_clock_time(self):
+        """A monotonic last-message value converts to an absolute UTC datetime in the past."""
+        from datetime import UTC, datetime
+
+        # Message arrived 30s ago on the monotonic clock.
+        entity, _ = self._make(last_message_at=970.0, now=1000.0)
+        value = entity.native_value
+        assert value is not None
+        assert value.tzinfo is not None
+        age = (datetime.now(UTC) - value).total_seconds()
+        # Rendered timestamp is ~30s in the past (allow scheduling slack).
+        assert 29.0 <= age <= 31.0
+
+    def test_native_value_clamps_negative_age_to_now(self):
+        """A last-message value slightly ahead of the clock never renders a future time."""
+        from datetime import UTC, datetime
+
+        entity, _ = self._make(last_message_at=1005.0, now=1000.0)
+        value = entity.native_value
+        age = (datetime.now(UTC) - value).total_seconds()
+        assert -0.5 <= age <= 0.5
+
+    def test_unique_id_and_category(self):
+        entity, _ = self._make()
+        assert entity._attr_unique_id.endswith(f"_{PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX}")
+        assert entity._attr_entity_category == "diagnostic"
+        assert getattr(entity, "_attr_entity_registry_enabled_default", True) is True
+
+    def test_available_true_when_client_present(self):
+        entity, _ = self._make()
+        assert entity.available is True
+
+    @pytest.mark.asyncio
+    async def test_registers_and_unregisters_state_listener(self):
+        entity, mqtt_client = self._make()
+        await entity.async_added_to_hass()
+        mqtt_client.add_state_listener.assert_called_once_with(entity._handle_client_state)
+        await entity.async_will_remove_from_hass()
+        mqtt_client.remove_state_listener.assert_called_once_with(entity._handle_client_state)

@@ -26,7 +26,7 @@ _RELOAD_STATUS_NOTIFS: dict[_ReloadStatus, tuple[str, str]] = {
     "failed": _NOTIF_FAILED,
 }
 
-PLATFORMS: list[str] = ["sensor", "select", "valve", "number", "switch"]
+PLATFORMS: list[str] = ["sensor", "binary_sensor", "select", "valve", "number", "switch"]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 

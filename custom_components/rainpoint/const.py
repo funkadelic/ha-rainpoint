@@ -55,6 +55,26 @@ MQTT_PUSH_SUBDEVICE_PREFIX = "D"
 MQTT_PUSH_VALUE_FIELD = "value"
 MQTT_PUSH_TIME_FIELD = "time"
 
+# Push observability: hub-level diagnostic entities that surface the live push
+# connection state and the age of the last received message. The unique_id is
+# built by appending these suffixes to the hub's base unique_id, so they stay
+# stable across restarts and are never regenerated.
+PUSH_CONNECTED_UNIQUE_ID_SUFFIX = "push_connected"
+PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX = "push_last_message"
+
+# Push watchdog: surfaces a silently dead push channel as a dismissible
+# Settings > Repairs issue and clears it on recovery. Detection-only -- it never
+# reconnects (the supervisor owns that) and never changes the poll cadence.
+# The channel is considered alive while it is connected or has delivered any
+# message within the message window; it is flagged only after staying
+# non-functional continuously past the dead-after threshold. Values are a
+# conservative first cut chosen without field reconnect data (the renewal cycle
+# is ~570s, so the threshold sits well beyond a single renewal gap) and are
+# expected to be tuned once real outage data exists.
+PUSH_WATCHDOG_SCAN_INTERVAL_SECONDS = 60
+PUSH_WATCHDOG_DEAD_AFTER_SECONDS = 900
+PUSH_WATCHDOG_ISSUE_ID = "push_channel_down"
+
 # Known models (original devices)
 MODEL_HCS026FRF = "HCS026FRF"  # Moisture only
 MODEL_HCS021FRF = "HCS021FRF"  # Moisture + temp + lux

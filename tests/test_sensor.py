@@ -286,6 +286,23 @@ class TestAsyncSetupEntryDispatch:
         assert RainPointHubMACSensor in types
 
     @pytest.mark.asyncio
+    async def test_setup_entry_adds_push_last_message_sensor_when_push_enabled(self):
+        """When push is enabled (mqtt_client present), one last-message entity is added per hub."""
+        from custom_components.rainpoint.hub_entities import RainPointPushLastMessageSensor
+
+        hub = make_hub_info(hid=100)
+        coordinator = _make_mock_coordinator(make_coordinator_data(hubs=[hub], sensors={}))
+        hass, entry = _make_hass(coordinator)
+        hass.data[DOMAIN]["test_entry"]["mqtt_client"] = MagicMock()
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        last_message = [e for e in captured if isinstance(e, RainPointPushLastMessageSensor)]
+        assert len(last_message) == 1
+
+    @pytest.mark.asyncio
     async def test_setup_entry_unknown_model_creates_no_reading_entities(self):
         """Unknown model does not create reading entities, only raw payload."""
         sensor_key = "100_200_1"
