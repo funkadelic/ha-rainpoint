@@ -5,6 +5,7 @@ This module contains the main RainPointClient class for communicating
 with the RainPoint cloud API.
 """
 
+import asyncio
 import hashlib
 import logging
 from collections.abc import Callable
@@ -14,9 +15,31 @@ import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
 
+# When the cloud throttles the login endpoint -- an HTTP 403 block or a
+# code 9993 "operate too frequently" body -- stop issuing further login
+# requests for this long. Every caller (coordinator poll, MQTT credential
+# supervisor, config flow) funnels through ensure_logged_in, so this cap
+# keeps their combined retry pressure from turning a soft throttle into a
+# sustained ban.
+_LOGIN_COOLDOWN_SECONDS = 120
+
 
 class RainPointApiError(Exception):
     pass
+
+
+class RainPointThrottledError(RainPointApiError):
+    """Login is refused because the server is throttling us, not because the
+    credentials are wrong.
+
+    Carries ``retry_after`` (seconds) so callers can surface a "please wait"
+    message or back off, instead of treating it as an authentication failure.
+    Subclasses RainPointApiError so existing handlers keep working.
+    """
+
+    def __init__(self, message: str, retry_after: float) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 def _redact_secret(value: str | None) -> str:
@@ -41,6 +64,14 @@ class RainPointClient:
         self._token: str | None = None
         self._refresh_token: str | None = None
         self._token_expires_at: datetime | None = None
+
+        # Serialize logins so concurrent callers (coordinator + MQTT
+        # supervisor) coalesce into one request instead of firing several
+        # simultaneous login POSTs while the token is invalid.
+        self._login_lock = asyncio.Lock()
+        # Set when the server throttles the login endpoint; blocks further
+        # network login attempts until it passes.
+        self._login_cooldown_until: datetime | None = None
 
         # region host: you had region3; we can later make this configurable
         self._base_url = "https://region3.homgarus.com"
@@ -105,10 +136,38 @@ class RainPointClient:
 
     # --- login / auth ---
 
+    def _cooldown_remaining(self) -> float:
+        """Seconds left on the login cooldown, or 0 if not throttled."""
+        if self._login_cooldown_until is None:
+            return 0.0
+        remaining = (self._login_cooldown_until - datetime.now(UTC)).total_seconds()
+        return remaining if remaining > 0 else 0.0
+
+    def _enter_login_cooldown(self, reason: str) -> None:
+        """Arm the login cooldown after a server throttle signal."""
+        self._login_cooldown_until = datetime.now(UTC) + timedelta(seconds=_LOGIN_COOLDOWN_SECONDS)
+        _LOGGER.warning(
+            "RainPoint login throttled (%s); suppressing login attempts for %ss",
+            reason,
+            _LOGIN_COOLDOWN_SECONDS,
+        )
+
     async def ensure_logged_in(self) -> None:
         if self._token_valid():
             return
-        await self._login()
+        # Fast-fail without a network call while the server is throttling us.
+        remaining = self._cooldown_remaining()
+        if remaining > 0:
+            raise RainPointThrottledError(f"login throttled by server; cooling down {remaining:.0f}s before retry", remaining)
+        async with self._login_lock:
+            # Re-check under the lock: a concurrent caller may have already
+            # logged in or tripped the cooldown while we waited for the lock.
+            if self._token_valid():
+                return
+            remaining = self._cooldown_remaining()
+            if remaining > 0:
+                raise RainPointThrottledError(f"login throttled by server; cooling down {remaining:.0f}s before retry", remaining)
+            await self._login()
 
     async def _login(self) -> None:
         """Login with areaCode/email/password and store token info."""
@@ -133,13 +192,29 @@ class RainPointClient:
 
         login_headers = {"Content-Type": "application/json", "lang": "en", "appCode": self._app_code}
         async with self._session.post(url, json=payload, headers=login_headers) as resp:
+            if resp.status == 403:
+                # A hard edge/WAF block -- the server is refusing us outright,
+                # typically after sustained request volume. Back off hard.
+                self._enter_login_cooldown("HTTP 403")
+                raise RainPointThrottledError(f"Login HTTP 403; cooling down {_LOGIN_COOLDOWN_SECONDS}s", _LOGIN_COOLDOWN_SECONDS)
             if resp.status != 200:
                 raise RainPointApiError(f"Login HTTP {resp.status}")
             data = await resp.json()
 
-        if data.get("code") != 0 or "data" not in data:
+        code = data.get("code")
+        if code == 9993:
+            # Soft rate limit ("operate too frequently"). Honor it before it
+            # escalates into a 403.
+            self._enter_login_cooldown("code 9993 operate too frequently")
+            raise RainPointThrottledError(
+                f"Login rate-limited (code 9993); cooling down {_LOGIN_COOLDOWN_SECONDS}s", _LOGIN_COOLDOWN_SECONDS
+            )
+        if code != 0 or "data" not in data:
             _LOGGER.debug("Login failed response: %s", data)
-            raise RainPointApiError(f"Login failed: code {data.get('code')}")
+            raise RainPointApiError(f"Login failed: code {code}")
+
+        # A clean login clears any prior throttle state.
+        self._login_cooldown_until = None
 
         d = data["data"]
         self._token = d["token"]

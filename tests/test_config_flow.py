@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.rainpoint.api import RainPointApiError
+from custom_components.rainpoint.api import RainPointApiError, RainPointThrottledError
 from custom_components.rainpoint.config_flow import RainPointConfigFlow, RainPointOptionsFlow
 from custom_components.rainpoint.const import (
     CONF_AREA_CODE,
@@ -124,6 +124,29 @@ class TestConfigFlowUserStep:
         flow.async_show_form.assert_called_once()
         errors = flow.async_show_form.call_args.kwargs.get("errors", {})
         assert errors.get("base") == "auth_failed"
+
+    @pytest.mark.asyncio
+    async def test_user_step_throttled_maps_to_rate_limited(self):
+        """A throttle during setup surfaces rate_limited, not auth_failed."""
+        flow = _make_flow()
+        mock_client = _make_mock_client()
+        mock_client.ensure_logged_in = AsyncMock(side_effect=RainPointThrottledError("cooling down 120s", 120))
+
+        with (
+            patch(
+                "custom_components.rainpoint.config_flow.async_get_clientsession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.rainpoint.config_flow.RainPointClient",
+                return_value=mock_client,
+            ),
+        ):
+            await flow.async_step_user(_VALID_USER_INPUT)
+
+        flow.async_show_form.assert_called_once()
+        errors = flow.async_show_form.call_args.kwargs.get("errors", {})
+        assert errors.get("base") == "rate_limited"
 
     @pytest.mark.asyncio
     async def test_user_step_network_error(self):
@@ -322,6 +345,29 @@ class TestConfigFlowReconfigure:
         flow.async_show_form.assert_called_once()
         last_call = flow.async_show_form.call_args.kwargs
         assert last_call.get("errors", {}).get("base") == "auth_failed"
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_throttled_maps_to_rate_limited(self):
+        """A throttle during reconfigure surfaces rate_limited, not auth_failed."""
+        flow = self._make_reconfigure_flow()
+        mock_client = _make_mock_client()
+        mock_client.ensure_logged_in = AsyncMock(side_effect=RainPointThrottledError("cooling down 120s", 120))
+
+        with (
+            patch(
+                "custom_components.rainpoint.config_flow.async_get_clientsession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.rainpoint.config_flow.RainPointClient",
+                return_value=mock_client,
+            ),
+        ):
+            await flow.async_step_reconfigure({CONF_COUNTRY: "US", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "wrong"})
+
+        flow.async_show_form.assert_called_once()
+        last_call = flow.async_show_form.call_args.kwargs
+        assert last_call.get("errors", {}).get("base") == "rate_limited"
 
     @pytest.mark.asyncio
     async def test_reconfigure_network_error(self):

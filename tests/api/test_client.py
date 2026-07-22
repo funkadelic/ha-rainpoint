@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.rainpoint.api import RainPointApiError, RainPointClient
+from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointThrottledError
 from custom_components.rainpoint.api.client import _redact_secret
 
 
@@ -315,6 +315,180 @@ class TestLogin:
         # email="test@example.com", area_code="1" => MD5("test@example.com1")
         expected_device_id = hashlib.md5(b"test@example.com1").hexdigest()
         assert payload["deviceId"] == expected_device_id
+
+
+class TestLoginThrottling:
+    """Login throttle handling: cooldown on 403 / code 9993, and the login lock.
+
+    Both the coordinator poll and the MQTT credential supervisor funnel through
+    ensure_logged_in. When the cloud throttles the login endpoint, the client
+    must stop hammering it -- otherwise their combined retries turn a soft
+    rate limit into a sustained ban.
+    """
+
+    @staticmethod
+    def _ok_body() -> dict:
+        # Far-future server ts so the stored token reads as valid (not expired)
+        # in the concurrency test, where later callers must short-circuit.
+        return {
+            "code": 0,
+            "data": {"token": "tok", "refreshToken": "ref", "tokenExpired": 3600},
+            "ts": 4102444800000,
+        }
+
+    @pytest.mark.asyncio
+    async def test_403_arms_cooldown(self):
+        """An HTTP 403 arms the cooldown so later attempts fast-fail."""
+        client = _make_client()
+        client._token = None
+        client._session.post = MagicMock(return_value=_mock_response({}, status=403))
+
+        with pytest.raises(RainPointThrottledError, match="Login HTTP 403") as exc:
+            await client._login()
+
+        assert exc.value.retry_after > 0
+        assert client._cooldown_remaining() > 0
+
+    @pytest.mark.asyncio
+    async def test_code_9993_arms_cooldown(self):
+        """A code 9993 'operate too frequently' body arms the cooldown."""
+        client = _make_client()
+        client._token = None
+        json_body = {"code": 9993, "msg": "operate too frequently"}
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        with pytest.raises(RainPointThrottledError, match="rate-limited") as exc:
+            await client._login()
+
+        assert exc.value.retry_after > 0
+        assert client._cooldown_remaining() > 0
+
+    @pytest.mark.asyncio
+    async def test_ensure_logged_in_fast_fails_during_cooldown(self):
+        """While cooling down, ensure_logged_in raises without any network call."""
+        client = _make_client()
+        client._token = None
+        client._login_cooldown_until = datetime.now(UTC) + timedelta(seconds=60)
+        client._session.post = MagicMock()
+
+        with pytest.raises(RainPointThrottledError, match="throttled by server") as exc:
+            await client.ensure_logged_in()
+
+        assert exc.value.retry_after > 0
+        client._session.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_expired_cooldown_allows_retry(self):
+        """A cooldown in the past no longer blocks a login attempt."""
+        client = _make_client()
+        client._token = None
+        client._login_cooldown_until = datetime.now(UTC) - timedelta(seconds=1)
+        client._session.post = MagicMock(return_value=_mock_response(self._ok_body()))
+
+        await client.ensure_logged_in()
+
+        assert client._token == "tok"
+
+    @pytest.mark.asyncio
+    async def test_successful_login_clears_cooldown(self):
+        """A clean login clears any prior throttle state."""
+        client = _make_client()
+        client._token = None
+        client._login_cooldown_until = datetime.now(UTC) - timedelta(seconds=1)
+        client._session.post = MagicMock(return_value=_mock_response(self._ok_body()))
+
+        await client._login()
+
+        assert client._login_cooldown_until is None
+
+    @pytest.mark.asyncio
+    async def test_concurrent_callers_coalesce_into_one_login(self):
+        """Under genuine contention, concurrent callers coalesce into exactly
+        one login. The first holds the lock (gated on an Event) while the others
+        queue on it, so a broken lock would let more than one login through."""
+        import asyncio
+
+        client = _make_client()
+        client._token = None
+        release = asyncio.Event()
+        login_calls = 0
+
+        async def fake_login():
+            nonlocal login_calls
+            login_calls += 1
+            await release.wait()  # hold the lock until every other caller has queued
+            client._token = "tok"
+            client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        client._login = fake_login
+        first = asyncio.create_task(client.ensure_logged_in())
+        await asyncio.sleep(0)  # first acquires the lock, blocks on release
+        others = [asyncio.create_task(client.ensure_logged_in()) for _ in range(4)]
+        await asyncio.sleep(0)  # the other four run and block on the held lock
+        release.set()
+        await asyncio.gather(first, *others)
+
+        assert login_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_in_lock_recheck_short_circuits_on_token(self):
+        """A caller queued on the lock returns without a second login once the
+        first caller has established a valid token."""
+        import asyncio
+
+        client = _make_client()
+        client._token = None
+        release = asyncio.Event()
+        login_calls = 0
+
+        async def fake_login():
+            nonlocal login_calls
+            login_calls += 1
+            # Hold the lock until the test releases it, so the second caller is
+            # guaranteed to be queued on the lock before this one finishes.
+            await release.wait()
+            client._token = "tok"
+            client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        client._login = fake_login
+        first = asyncio.create_task(client.ensure_logged_in())
+        await asyncio.sleep(0)  # first acquires the lock, blocks on release
+        second = asyncio.create_task(client.ensure_logged_in())
+        await asyncio.sleep(0)  # second runs, blocks on the held lock
+        release.set()
+        await asyncio.gather(first, second)  # second re-checks token, returns
+
+        # The in-lock recheck must short-circuit the second caller: exactly one
+        # login, even though both callers passed the top-level check while the
+        # token was still unset.
+        assert login_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_in_lock_recheck_honors_cooldown(self):
+        """A caller queued on the lock fast-fails if the first caller armed the
+        cooldown while holding it."""
+        import asyncio
+
+        client = _make_client()
+        client._token = None
+        release = asyncio.Event()
+
+        async def fake_login():
+            await release.wait()
+            client._enter_login_cooldown("test")
+            raise RainPointApiError("throttled")
+
+        client._login = fake_login
+        first = asyncio.create_task(client.ensure_logged_in())
+        await asyncio.sleep(0)
+        second = asyncio.create_task(client.ensure_logged_in())
+        await asyncio.sleep(0)
+        release.set()
+        results = await asyncio.gather(first, second, return_exceptions=True)
+
+        assert all(isinstance(r, RainPointApiError) for r in results)
+        assert "throttled" in str(results[0])
+        assert "cooling down" in str(results[1])
 
 
 class TestReloginListeners:
