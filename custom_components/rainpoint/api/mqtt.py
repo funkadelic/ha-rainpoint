@@ -364,10 +364,22 @@ class RainPointMqttClient:
         _LOGGER.debug("RainPoint MQTT message received: topic=%s len=%s count=%s", topic, payload_len, self._message_count)
 
     async def async_disconnect(self) -> None:
-        """Tear down the connection. Tolerant of a never-connected client."""
-        if self._paho is None:
-            return
-        try:
-            self._paho.loop_stop()
-        finally:
-            self._paho.disconnect()
+        """Cancel and await the supervisor task, then stop the paho loop and
+        disconnect -- in that order, so no reconnect is scheduled after
+        teardown begins (CONN-03/D-10). Idempotent and tolerant of a
+        never-started/never-connected client.
+        """
+        self._stopping = True
+        self._stop_event.set()
+
+        task, self._supervisor_task = self._supervisor_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                _LOGGER.exception("RainPoint MQTT supervisor task raised during teardown")
+
+        self._disconnect_paho()

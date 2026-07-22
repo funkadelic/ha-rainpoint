@@ -544,3 +544,199 @@ def test_on_http_relogin_is_a_public_method():
     """D-07: on_http_relogin() exists as the documented HTTP-re-login trigger."""
     assert hasattr(RainPointMqttClient, "on_http_relogin")
     assert not inspect.iscoroutinefunction(RainPointMqttClient.on_http_relogin)
+
+
+class TestSupervisorTeardown:
+    """CONN-03/D-10, D-15c: async_disconnect cancels AND awaits the supervisor task,
+    leaving no dangling task/thread/timer, and schedules no further reconnect."""
+
+    @pytest.mark.asyncio
+    async def test_disconnect_cancels_and_awaits_task_before_returning(self):
+        """The supervisor task is done() immediately after async_disconnect() returns
+        -- not merely cancel-requested -- so no dangling task remains (D-15c)."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+
+        await client.async_start()
+        await _settle()
+        task = client._supervisor_task
+        assert task is not None
+        assert not task.done()
+
+        await client.async_disconnect()
+
+        assert task.done()
+        assert client._supervisor_task is None
+        fake_paho.loop_stop.assert_called_once()
+        fake_paho.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_further_connect_attempt_after_disconnect(self):
+        """Connect call count is frozen after teardown -- no reconnect is scheduled
+        once teardown has begun, even though the loop would otherwise retry forever."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+
+        await client.async_start()
+        await _settle()
+        assert fake_paho.connect.call_count == 1
+
+        await client.async_disconnect()
+        frozen_count = fake_paho.connect.call_count
+
+        await _settle(times=15)
+
+        assert fake_paho.connect.call_count == frozen_count
+
+    @pytest.mark.asyncio
+    async def test_disconnect_is_idempotent_after_start(self):
+        """Calling async_disconnect() twice after async_start() raises nothing."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+
+        await client.async_start()
+        await _settle()
+
+        await client.async_disconnect()
+        await client.async_disconnect()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_disconnect_before_start_raises_nothing(self):
+        """Calling async_disconnect() when async_start() was never invoked is a no-op."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+
+        await client.async_disconnect()  # must not raise -- no task, no paho client
+
+    @pytest.mark.asyncio
+    async def test_no_task_leak_across_reload_cycles(self):
+        """Repeated start/disconnect cycles (simulating unload-then-setup) leave no
+        growth in live asyncio tasks attributable to the client (D-10/D-15c)."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+
+        async def _one_cycle() -> None:
+            fake_paho = _make_fake_paho()
+            client = _make_mqtt_client(hass, fake_paho)
+            await client.async_start()
+            await _settle()
+            await client.async_disconnect()
+
+        await _one_cycle()
+        await _settle()
+        baseline = len(asyncio.all_tasks())
+
+        for _ in range(3):
+            await _one_cycle()
+            await _settle()
+
+        assert len(asyncio.all_tasks()) == baseline
+
+    @pytest.mark.asyncio
+    async def test_disconnect_cancels_pending_renewal_wait(self):
+        """Cancelling the supervisor task while it is suspended inside the (long,
+        unpatched) renewal wait still tears down cleanly and promptly."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+
+        await client.async_start()
+        await _settle(times=10)  # let it connect and settle into the (real, ~510s) wait
+        assert client._paho is not None
+
+        await client.async_disconnect()
+
+        assert client._supervisor_task is None
+        fake_paho.loop_stop.assert_called_once()
+        fake_paho.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_supervisor_loop_exits_when_stopping_flag_set_without_cancel(self):
+        """Setting _stopping directly (not via task.cancel()) still ends the loop
+        the next time the top-of-loop condition is checked -- a stop flag is
+        checked after every await, not only reachable via cancellation."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+
+        async def _stop_after_connect() -> None:
+            await _settle(times=10)
+            client._stopping = True
+            client._stop_event.set()
+
+        stopper = asyncio.ensure_future(_stop_after_connect())
+        supervisor = asyncio.ensure_future(client._run_supervisor())
+        await asyncio.wait_for(supervisor, timeout=2)
+        await stopper
+
+        assert supervisor.done()
+        assert not supervisor.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_renew_propagates_via_explicit_reraise(self):
+        """Cancelling the supervisor task while it's suspended inside _renew()
+        itself (not the post-connect wait) still results in a cleanly
+        cancelled task -- the explicit `except asyncio.CancelledError: raise`
+        re-arms nothing and lets cancellation propagate."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        rainpoint_client = MagicMock()
+
+        async def _hang_forever(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        rainpoint_client.get_subscribe_status = AsyncMock(side_effect=_hang_forever)
+        factory = MagicMock(return_value=_make_fake_paho())
+        client = RainPointMqttClient(
+            hass,
+            rainpoint_client,
+            entry=MagicMock(),
+            hub_device_name="hub-device",
+            hub_product_key="hub-pk",
+            paho_client_factory=factory,
+            time_source=lambda: 1000.0,
+        )
+
+        task = asyncio.ensure_future(client._run_supervisor())
+        await _settle(times=5)  # supervisor is now hung inside _renew()'s get_subscribe_status await
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_logs_and_swallows_non_cancelled_exception_from_task(self):
+        """If the awaited supervisor task somehow raises something other than
+        CancelledError during teardown, async_disconnect logs it rather than
+        propagating (so a buggy task can never block unload)."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+
+        async def _raises_on_cancel() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                raise RuntimeError("boom during teardown") from None
+
+        task = asyncio.ensure_future(_raises_on_cancel())
+        await asyncio.sleep(0)
+        client._supervisor_task = task
+
+        await client.async_disconnect()  # must not raise
+
+        assert task.done()
+        assert client._supervisor_task is None
