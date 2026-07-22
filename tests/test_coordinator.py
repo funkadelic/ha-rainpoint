@@ -1137,3 +1137,31 @@ class TestApplyPushUpdate:
         _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
 
         coord.async_update_listeners.assert_not_called()
+
+    def test_stale_push_after_command_preserves_commanded_zone(self):
+        """A push whose device timestamp predates a fresh valve command does not
+        revert the just-commanded zone state (the valve-race guard, via push)."""
+        hub = _push_hub(model=MODEL_VALVE_245)
+        closed_zone = {"open": False, "duration_seconds": 0, "state_raw": 0}
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": {"zones": {1: closed_zone}}}})
+        command_dt = _coord_module.RainPointCoordinator.record_valve_command(coord, "100_200_1", 1)
+        stale_ts = int((command_dt - timedelta(seconds=30)).timestamp() * 1000)
+
+        # SAMPLE_HTV245_TLV_PAYLOAD decodes zone 1 to OPEN; the stale push must not apply it.
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, stale_ts)
+
+        assert coord.data["sensors"]["100_200_1"]["data"]["zones"][1] == closed_zone
+
+    def test_fresh_push_after_command_applies_new_zone_state(self):
+        """A push whose device timestamp postdates the command is applied normally."""
+        hub = _push_hub(model=MODEL_VALVE_245)
+        closed_zone = {"open": False, "duration_seconds": 0, "state_raw": 0}
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": {"zones": {1: closed_zone}}}})
+        command_dt = _coord_module.RainPointCoordinator.record_valve_command(coord, "100_200_1", 1)
+        fresh_ts = int((command_dt + timedelta(seconds=30)).timestamp() * 1000)
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, fresh_ts)
+
+        zone1 = coord.data["sensors"]["100_200_1"]["data"]["zones"][1]
+        assert zone1["open"] is True
+        assert zone1["state_raw"] == 1

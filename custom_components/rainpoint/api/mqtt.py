@@ -64,46 +64,6 @@ def _redact(value: str | None) -> str:
     return f"len={len(value)} last4={value[-4:]}"
 
 
-# --- TEMPORARY push-envelope structure capture (remove once the live envelope
-# is confirmed) -------------------------------------------------------------
-# The push payload shape was never captured structurally against live hardware
-# (only its byte length), so this path logs a redacted skeleton of an inbound
-# payload to confirm whether the assumed prefix / subdevice-id / raw-value
-# segmentation is real. Value bytes could embed credential material, so the
-# skeleton preserves only structural delimiters and the leading marker of each
-# value run, masking the remainder to a length -- no raw payload content is
-# ever emitted. Delete this helper and its caller when the format is confirmed.
-_STRUCTURE_DELIMITERS = frozenset("#/,;|:=&{}[]\"' \t\n\r")
-
-
-def _redacted_payload_skeleton(payload: bytes) -> str:
-    """Render an inbound push payload as a redacted structural skeleton.
-
-    Structural delimiters are preserved verbatim so the prefix and segment
-    layout stay visible; every value run is masked to ``<first-char>[<len>]``
-    so no raw payload byte-content survives into the log. For example
-    ``#P1737460800/D01/10#0a1b`` renders as ``#P[11]/D[3]/1[2]#0[4]`` --
-    enough to confirm the envelope shape without leaking any value.
-    """
-    text = payload.decode("utf-8", errors="replace")
-    parts: list[str] = []
-    run: list[str] = []
-
-    def _flush() -> None:
-        if run:
-            parts.append(f"{run[0]}[{len(run)}]")
-            run.clear()
-
-    for char in text:
-        if char in _STRUCTURE_DELIMITERS:
-            _flush()
-            parts.append(char)
-        else:
-            run.append(char)
-    _flush()
-    return "".join(parts)
-
-
 def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
     """Parse an inbound push payload into a list of (sid, raw_value, device_ts).
 
@@ -136,9 +96,8 @@ def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
         )
         if inner_json is None:
             return []
+        # A section selected on a leading "{" parses to a dict or raises (caught below).
         inner = json.loads(inner_json)
-        if not isinstance(inner, dict):
-            return []
 
         updates: list[tuple[str, str, int]] = []
         for key, entry in inner.items():
@@ -498,8 +457,8 @@ class RainPointMqttClient:
         """Runs on paho's network thread. Reads only topic/payload -- no state mutation.
 
         Carries the raw payload bytes across the hop (a cheap attribute read,
-        same discipline as topic) so the HA-loop handler can log a redacted
-        structure capture; the bytes are never inspected on paho's thread.
+        same discipline as topic) so the HA-loop handler can parse the envelope;
+        the bytes are never inspected on paho's thread.
         """
         topic = msg.topic
         payload = msg.payload
@@ -537,20 +496,13 @@ class RainPointMqttClient:
 
         _last_message_at is stamped first, before any parse, so even a payload
         that fails to decode still proves the pipe is alive. The receipt line
-        carries topic + byte-length + running count only.
+        carries topic + byte-length + running count only -- never payload
+        contents.
         """
         self._message_count += 1
         # Liveness clock: set BEFORE parse so an undecodable message still counts.
         self._last_message_at = self._time_source()
-        payload_len = len(payload)
-        _LOGGER.debug("RainPoint MQTT message received: topic=%s len=%s count=%s", topic, payload_len, self._message_count)
-        # TEMPORARY push-envelope structure capture -- remove once confirmed.
-        _LOGGER.debug(
-            "RainPoint MQTT push structure capture (temporary): topic=%s len=%s skeleton=%s",
-            topic,
-            payload_len,
-            _redacted_payload_skeleton(payload),
-        )
+        _LOGGER.debug("RainPoint MQTT message received: topic=%s len=%s count=%s", topic, len(payload), self._message_count)
         self._dispatch_push(topic, payload)
 
     def _dispatch_push(self, topic: str, payload: bytes) -> None:

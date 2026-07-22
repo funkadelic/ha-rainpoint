@@ -240,63 +240,6 @@ class TestSecretRedaction:
         assert derived_password not in caplog.text
 
 
-class TestPushStructureCapture:
-    """Temporary redacted structure capture: confirms the envelope shape is
-    logged while no raw payload byte-content (including a secret-shaped token)
-    ever reaches a log record (D-02)."""
-
-    @pytest.mark.asyncio
-    async def test_structure_captured_but_secret_shaped_token_never_logged(self, caplog):
-        """A payload embedding a deviceSecret-shaped token logs a redacted skeleton
-        (topic + delimiter/segment layout) but never the token's raw value."""
-        loop = asyncio.get_running_loop()
-        hass = _make_hass(loop)
-        fake_paho = _make_fake_paho()
-        client = _make_mqtt_client(hass, fake_paho)
-        await client.async_start()
-        await _settle()
-
-        secret_token = "a9f3c1e2SECRETdeviceSecretValue7b4d0a2f"  # deviceSecret-shaped
-        payload = ('{"deviceSecret":"' + secret_token + '","params":"#P1737460800/D01/10#0a1b"}').encode()
-        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
-
-        with caplog.at_level(logging.DEBUG):
-            client._on_message(fake_paho, None, msg)
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-
-        # The raw secret-shaped token never reaches any log record, in the clear.
-        assert secret_token not in caplog.text
-        # The structure WAS captured: a record carries the topic and the skeleton.
-        structure_records = [r for r in caplog.records if "structure capture" in r.message]
-        assert len(structure_records) == 1
-        record = structure_records[0]
-        assert msg.topic in record.message
-        # Delimiter/segment layout survived so the envelope shape is confirmable.
-        assert "skeleton=" in record.message
-        skeleton = record.message.split("skeleton=", 1)[1]
-        assert "/D[3]/" in skeleton
-        assert "#P[11]" in skeleton
-        # The masked value length is present, but not the value itself.
-        assert f"[{len(secret_token)}]" in skeleton
-
-        await client.async_disconnect()
-
-    def test_redacted_skeleton_masks_value_runs_preserving_delimiters(self):
-        """The skeleton preserves delimiters + a leading marker per run and masks
-        the rest to a length, so no full value run is reproduced verbatim."""
-        skeleton = mqtt_module._redacted_payload_skeleton(b"#P1737460800/D01/10#0a1b2c")
-        assert skeleton == "#P[11]/D[3]/1[2]#0[6]"
-
-    def test_redacted_skeleton_never_reproduces_a_multichar_value(self):
-        """A bare secret-shaped run collapses to first-char + length -- the raw
-        value is not reconstructable from the skeleton."""
-        secret = "SEKRIT-value-9f3a2b"
-        skeleton = mqtt_module._redacted_payload_skeleton(secret.encode())
-        assert secret not in skeleton
-        assert skeleton == f"S[{len(secret)}]"
-
-
 def _captured_push_payload(subdevices, ts=1784707302285):
     """Build a realistic captured-shape push payload from the confirmed envelope.
 
@@ -323,6 +266,17 @@ def _captured_push_payload(subdevices, ts=1784707302285):
     return json.dumps(outer).encode()
 
 
+def _push_outer(method="thing.service.property.set", params=None):
+    """Encode an outer AliCloud IoT payload with the given method/params."""
+    return json.dumps({"method": method, "params": params}).encode()
+
+
+def _push_param_payload(inner):
+    """Encode an outer payload whose params.param pipe-string carries inner JSON."""
+    param = "|".join(["#P0", json.dumps(inner), "1", "t"])
+    return _push_outer(params={"param": param})
+
+
 def _make_push_client(hass, fake_paho, coordinator, hub_mid=4242) -> RainPointMqttClient:
     """Build an MQTT client wired to a coordinator and a fixed hub mid."""
     rainpoint_client = MagicMock()
@@ -339,6 +293,106 @@ def _make_push_client(hass, fake_paho, coordinator, hub_mid=4242) -> RainPointMq
         paho_client_factory=factory,
         time_source=lambda: 1000.0,
     )
+
+
+class TestPushEnvelopeFailSafe:
+    """Malformed, truncated, oversized, prefix-missing, and sub-device-token-
+    missing payloads are dropped without raising and without touching the
+    coordinator (fail-safe parse)."""
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            b"",  # empty
+            b"not-json-at-all",  # non-JSON
+            b'{"method":"thing.service.property.set","params":',  # truncated JSON
+            _push_outer("other.method", {"param": "x|{}"}),  # method mismatch
+            _push_outer(params="not-a-dict"),  # params not a dict
+            _push_outer(params={"param": 123}),  # param value not a string
+            _push_outer(params={"param": "sect1|sect3|tok"}),  # prefix / inner JSON missing
+            _push_param_payload({"update": {"time": 1, "value": 1}}),  # no D-token
+            _push_param_payload({"D01": {"time": 1, "value": 99}}),  # D-entry value not a string
+            ("x" * 100_000).encode(),  # oversized non-JSON blob
+        ],
+    )
+    def test_parse_push_envelope_drops_bad_payload_without_raising(self, payload):
+        """Every malformed shape yields an empty update list, never an exception."""
+        assert mqtt_module._parse_push_envelope(payload) == []
+
+    @pytest.mark.asyncio
+    async def test_valid_payload_without_coordinator_wiring_is_dropped(self, caplog):
+        """A parseable payload received before a coordinator is wired is dropped
+        (defensive) without raising and without any apply_push_update target."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)  # no coordinator wired
+        await client.async_start()
+        await _settle()
+
+        payload = _captured_push_payload({"D01": "11#" + "0a1b" * 28})
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
+
+        with caplog.at_level(logging.DEBUG):
+            client._on_message(fake_paho, None, msg)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        assert any("before coordinator wiring" in r.message for r in caplog.records)
+
+        await client.async_disconnect()
+
+    def test_parse_push_envelope_accepts_single_unnamed_param_value(self):
+        """When params has a single value under a non-'param' key, it is still used."""
+        inner = {"D01": {"time": 123, "value": "11#ab"}}
+        param = "|".join(["#P" + "0" * 10, json.dumps(inner), "123", "tok#"])
+        payload = json.dumps({"method": "thing.service.property.set", "params": {"anything": param}}).encode()
+        assert mqtt_module._parse_push_envelope(payload) == [("D01", "11#ab", 123)]
+
+    @pytest.mark.asyncio
+    async def test_malformed_payload_through_handler_never_calls_coordinator(self):
+        """A malformed payload driven through the HA-loop handler drops silently."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        coordinator = MagicMock()
+        client = _make_push_client(hass, fake_paho, coordinator)
+        await client.async_start()
+        await _settle()
+
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=b'{"method":"nope"}')
+        client._on_message(fake_paho, None, msg)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        coordinator.apply_push_update.assert_not_called()
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_handler_never_logs_raw_payload_content(self, caplog):
+        """The push path logs topic + length only; a secret-shaped token embedded
+        in the payload never reaches a log record in the clear."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        coordinator = MagicMock()
+        client = _make_push_client(hass, fake_paho, coordinator)
+        await client.async_start()
+        await _settle()
+
+        secret_token = "a9f3c1e2SECRETdeviceSecretValue7b4d0a2f"
+        payload = _captured_push_payload({"D01": "11#" + secret_token})
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
+
+        with caplog.at_level(logging.DEBUG):
+            client._on_message(fake_paho, None, msg)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        assert secret_token not in caplog.text
+
+        await client.async_disconnect()
 
 
 class TestPushEnvelopeParsing:
