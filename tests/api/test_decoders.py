@@ -275,6 +275,15 @@ class TestDecodeHtv145frf:
         assert result["decoder"] == "htv145frf_error"
         assert result["zones"] == {}
 
+    def test_non_10_prefix_payload_is_rejected(self):
+        """A 11# TLV payload is rejected before scanning, so bytes that coincide
+        with HTV145 markers cannot fabricate hub-online or valve state."""
+        # DC01 / D821 would read as hub-online + zone-1-open if scanned as markers.
+        result = decode_htv145frf("11#DC01D82100")
+        assert result["decoder"] == "htv145frf_error"
+        assert result["zones"] == {}
+        assert result.get("hub_online") is not True
+
 
 class TestLittleEndianTripwire:
     """Regression test: 0xAD duration values MUST be decoded as little-endian.

@@ -379,6 +379,12 @@ def decode_htv145frf(raw: str) -> dict:
     valve.py and number.py consume it unchanged.
     """
     try:
+        # This decoder only understands the flat 10# marker stream. A 11# TLV
+        # payload would still parse, and its value bytes could coincide with
+        # 0xDC/0xD8 markers, fabricating false hub-online or valve state -- so
+        # reject anything that is not 10# before scanning.
+        if not raw.startswith("10#"):
+            raise ValueError("HTV145FRF payload must use the 10# format")
         b = _parse_rainpoint_payload(raw)
         markers = _scan_htv145_markers(b)
 
