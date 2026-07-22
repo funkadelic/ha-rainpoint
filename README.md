@@ -91,6 +91,30 @@ All entities are grouped under their parent hub device in the Home Assistant dev
 
 ---
 
+## Real-time push updates (opt-in)
+
+In addition to the 120-second polling that always runs, the integration can optionally surface device state changes in near real time over an MQTT push connection. Push is additive, opt-in, and off by default, and polling keeps running as the fallback no matter what, so nothing breaks if you leave push off or the connection drops.
+
+### Enabling or disabling push
+
+1. Go to **Settings → Devices & Services → RainPoint Cloud → Configure**.
+2. In the **RainPoint Push Channel** form, check **Enable push updates** (unchecked by default).
+3. Save. The change applies automatically (the integration reloads itself), so you never have to reload or re-add it by hand.
+
+To turn push back off, revisit the same **Configure** screen and uncheck **Enable push updates**.
+
+### Telling whether push is working
+
+Enabling push adds two hub-level diagnostic entities: **`<hub> Push Connected`** (on when the MQTT client is connected) and **`<hub> Push Last Message`** (timestamp of the last message received). If the push connection drops and stays down while polling keeps devices updating, Home Assistant raises a **Settings → Repairs** issue so you know to look. (A channel that stays connected but quietly stops sending updates looks the same as an idle one, so that case is not flagged.)
+
+### Account implications
+
+> **Push is a convenience, not a safety-critical replacement for the RainPoint app.** It runs over an unofficial MQTT connection to RainPoint's cloud (Alibaba Cloud IoT) that was pieced together by reverse engineering, so it stays opt-in and off by default. In testing it ran alongside the RainPoint mobile app without pushing either one offline. The vendor hands out MQTT connection slots from a small shared pool, so once in a while push and the app can briefly collide and one of them drops; Home Assistant reconnects on its own, and the 120-second polling keeps devices current in the meantime.
+
+The push connection is a separate MQTT connection from the HTTP login session used for setup and polling, so the [one-active-session-per-account guidance above](#use-a-dedicated-home-assistant-account-recommended) and the existing session warning under **Configuration** still apply unchanged. The coexistence finding above is specific to the MQTT push channel, not the HTTP login.
+
+---
+
 ## Attribution
 
 This project is based on [homeassistant-homgar](https://github.com/brettmeyerowitz/homeassistant-homgar) by Brett Meyerowitz.
