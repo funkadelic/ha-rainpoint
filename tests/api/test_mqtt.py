@@ -239,6 +239,63 @@ class TestSecretRedaction:
         assert derived_password not in caplog.text
 
 
+class TestPushStructureCapture:
+    """Temporary redacted structure capture: confirms the envelope shape is
+    logged while no raw payload byte-content (including a secret-shaped token)
+    ever reaches a log record (D-02)."""
+
+    @pytest.mark.asyncio
+    async def test_structure_captured_but_secret_shaped_token_never_logged(self, caplog):
+        """A payload embedding a deviceSecret-shaped token logs a redacted skeleton
+        (topic + delimiter/segment layout) but never the token's raw value."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+        await client.async_start()
+        await _settle()
+
+        secret_token = "a9f3c1e2SECRETdeviceSecretValue7b4d0a2f"  # deviceSecret-shaped
+        payload = ('{"deviceSecret":"' + secret_token + '","params":"#P1737460800/D01/10#0a1b"}').encode()
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
+
+        with caplog.at_level(logging.DEBUG):
+            client._on_message(fake_paho, None, msg)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        # The raw secret-shaped token never reaches any log record, in the clear.
+        assert secret_token not in caplog.text
+        # The structure WAS captured: a record carries the topic and the skeleton.
+        structure_records = [r for r in caplog.records if "structure capture" in r.message]
+        assert len(structure_records) == 1
+        record = structure_records[0]
+        assert msg.topic in record.message
+        # Delimiter/segment layout survived so the envelope shape is confirmable.
+        assert "skeleton=" in record.message
+        skeleton = record.message.split("skeleton=", 1)[1]
+        assert "/D[3]/" in skeleton
+        assert "#P[11]" in skeleton
+        # The masked value length is present, but not the value itself.
+        assert f"[{len(secret_token)}]" in skeleton
+
+        await client.async_disconnect()
+
+    def test_redacted_skeleton_masks_value_runs_preserving_delimiters(self):
+        """The skeleton preserves delimiters + a leading marker per run and masks
+        the rest to a length, so no full value run is reproduced verbatim."""
+        skeleton = mqtt_module._redacted_payload_skeleton(b"#P1737460800/D01/10#0a1b2c")
+        assert skeleton == "#P[11]/D[3]/1[2]#0[6]"
+
+    def test_redacted_skeleton_never_reproduces_a_multichar_value(self):
+        """A bare secret-shaped run collapses to first-char + length -- the raw
+        value is not reconstructable from the skeleton."""
+        secret = "SEKRIT-value-9f3a2b"
+        skeleton = mqtt_module._redacted_payload_skeleton(secret.encode())
+        assert secret not in skeleton
+        assert skeleton == f"S[{len(secret)}]"
+
+
 class TestAsyncDisconnect:
     """async_disconnect() tears down cleanly and tolerates a never-connected client."""
 

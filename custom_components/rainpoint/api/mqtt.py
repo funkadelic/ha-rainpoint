@@ -57,6 +57,46 @@ def _redact(value: str | None) -> str:
     return f"len={len(value)} last4={value[-4:]}"
 
 
+# --- TEMPORARY push-envelope structure capture (remove once the live envelope
+# is confirmed) -------------------------------------------------------------
+# The push payload shape was never captured structurally against live hardware
+# (only its byte length), so this path logs a redacted skeleton of an inbound
+# payload to confirm whether the assumed prefix / subdevice-id / raw-value
+# segmentation is real. Value bytes could embed credential material, so the
+# skeleton preserves only structural delimiters and the leading marker of each
+# value run, masking the remainder to a length -- no raw payload content is
+# ever emitted. Delete this helper and its caller when the format is confirmed.
+_STRUCTURE_DELIMITERS = frozenset("#/,;|:=&{}[]\"' \t\n\r")
+
+
+def _redacted_payload_skeleton(payload: bytes) -> str:
+    """Render an inbound push payload as a redacted structural skeleton.
+
+    Structural delimiters are preserved verbatim so the prefix and segment
+    layout stay visible; every value run is masked to ``<first-char>[<len>]``
+    so no raw payload byte-content survives into the log. For example
+    ``#P1737460800/D01/10#0a1b`` renders as ``#P[11]/D[3]/1[2]#0[4]`` --
+    enough to confirm the envelope shape without leaking any value.
+    """
+    text = payload.decode("utf-8", errors="replace")
+    parts: list[str] = []
+    run: list[str] = []
+
+    def _flush() -> None:
+        if run:
+            parts.append(f"{run[0]}[{len(run)}]")
+            run.clear()
+
+    for char in text:
+        if char in _STRUCTURE_DELIMITERS:
+            _flush()
+            parts.append(char)
+        else:
+            run.append(char)
+    _flush()
+    return "".join(parts)
+
+
 # Supervisor backoff: only the DELAY is capped, never
 # the attempt count. 30s base doubling up to a 480s ceiling (within the 300-600s
 # band), with +-10-30% jitter to avoid a synchronized reconnect storm.
@@ -377,10 +417,15 @@ class RainPointMqttClient:
         self._hass.loop.call_soon_threadsafe(self._handle_disconnect, reason_code)
 
     def _on_message(self, client, userdata, msg) -> None:
-        """Runs on paho's network thread. Reads only topic/payload -- no state mutation."""
+        """Runs on paho's network thread. Reads only topic/payload -- no state mutation.
+
+        Carries the raw payload bytes across the hop (a cheap attribute read,
+        same discipline as topic) so the HA-loop handler can log a redacted
+        structure capture; the bytes are never inspected on paho's thread.
+        """
         topic = msg.topic
-        payload_len = len(msg.payload)
-        self._hass.loop.call_soon_threadsafe(self._handle_message, topic, payload_len)
+        payload = msg.payload
+        self._hass.loop.call_soon_threadsafe(self._handle_message, topic, payload)
 
     # --- @callback methods: run on the HA event loop only.
 
@@ -409,10 +454,24 @@ class RainPointMqttClient:
         # the next scheduled renewal rather than reconnecting immediately.
 
     @callback
-    def _handle_message(self, topic: str, payload_len: int) -> None:
-        """Runs on the HA event loop. Logs receipt only -- never payload contents."""
+    def _handle_message(self, topic: str, payload: bytes) -> None:
+        """Runs on the HA event loop. Logs receipt plus a redacted structure capture.
+
+        The receipt line carries topic + byte-length + running count only. The
+        structure line is a TEMPORARY diagnostic (removed once the envelope is
+        confirmed) that logs the redacted skeleton of the payload -- delimiters
+        and segment lengths, never raw value bytes.
+        """
         self._message_count += 1
+        payload_len = len(payload)
         _LOGGER.debug("RainPoint MQTT message received: topic=%s len=%s count=%s", topic, payload_len, self._message_count)
+        # TEMPORARY push-envelope structure capture -- remove once confirmed.
+        _LOGGER.debug(
+            "RainPoint MQTT push structure capture (temporary): topic=%s len=%s skeleton=%s",
+            topic,
+            payload_len,
+            _redacted_payload_skeleton(payload),
+        )
 
     async def async_disconnect(self) -> None:
         """Cancel and await the supervisor task, then stop the paho loop and
