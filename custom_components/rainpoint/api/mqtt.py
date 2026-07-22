@@ -94,6 +94,7 @@ class RainPointMqttClient:
         *,
         paho_client_factory=paho_mqtt.Client,
         time_source=time.monotonic,
+        wall_clock_source=time.time,
     ) -> None:
         self._hass = hass
         self._client = client
@@ -101,7 +102,12 @@ class RainPointMqttClient:
         self._hub_device_name = hub_device_name
         self._hub_product_key = hub_product_key
         self._paho_client_factory = paho_client_factory
+        # Monotonic seam: renewal-interval bookkeeping only (immune to clock steps).
         self._time_source = time_source
+        # Wall-clock seam: the protocol timestamp embedded in the clientId/HMAC,
+        # which Aliyun expects as a real epoch value -- kept separate from the
+        # monotonic renewal seam (WR-05).
+        self._wall_clock_source = wall_clock_source
 
         self._paho = None
         self._message_count = 0
@@ -211,7 +217,7 @@ class RainPointMqttClient:
         creds = await self._client.get_subscribe_status(self._hub_device_name, self._hub_product_key)
         now = self._time_source()
         self._disconnect_paho()
-        self._connect(creds)
+        await self._connect(creds)
         self._subscribe(creds)
         expire_at = now + self._credential_lifetime_seconds(creds)
         return self._renewal_delay_seconds(expire_at, now)
@@ -244,6 +250,14 @@ class RainPointMqttClient:
         renewal and reconnect inside the same supervised loop rather than two
         independent call_later chains that could diverge (Pitfall 6/7).
         """
+        # Check-before-clear (WR-01/D-07): if a relogin fired mid-_renew() -- after
+        # this cycle captured its credentials but before returning -- the event is
+        # already set for a rotation this cycle never observed. Honor it with an
+        # immediate re-fetch instead of clearing it and sleeping out the interval.
+        if self._renew_event.is_set():
+            self._renew_event.clear()
+            return
+
         self._renew_event.clear()
         sleep_task = asyncio.ensure_future(self._sleep(delay))
         stop_task = asyncio.ensure_future(self._stop_event.wait())
@@ -251,9 +265,14 @@ class RainPointMqttClient:
         try:
             await asyncio.wait({sleep_task, stop_task, renew_task}, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            for task in (sleep_task, stop_task, renew_task):
-                if not task.done():
-                    task.cancel()
+            # Cancel AND await the losers (WR-02): .cancel() only schedules
+            # cancellation, so awaiting confirms it before the tasks go out of
+            # scope -- otherwise asyncio may log "Task was destroyed but it is
+            # pending!" every renewal cycle.
+            pending = [task for task in (sleep_task, stop_task, renew_task) if not task.done()]
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
 
     def on_http_relogin(self) -> None:
         """Signal that the HTTP layer rotated its token: force an immediate
@@ -263,13 +282,27 @@ class RainPointMqttClient:
         """
         self._renew_event.set()
 
-    def _connect(self, creds: dict) -> None:
-        """Build the paho client from fresh creds and connect. No TLS (D-11)."""
+    async def _connect(self, creds: dict) -> None:
+        """Build the paho client from fresh creds and connect. No TLS (D-11).
+
+        paho's connect() is blocking (DNS resolution + a synchronous
+        socket.connect); calling it directly on the HA event loop would freeze
+        all of Home Assistant for the connection timeout on every initial
+        connect, every renewal cycle, and every backoff retry against an
+        unreachable broker (CR-01). It is therefore dispatched to the executor,
+        while loop_start() (a cheap network-thread spawn) stays on the loop.
+        The blocking connect() still creates the socket before returning, so the
+        subscribe-after-connect ordering in _renew() continues to find a live
+        connection.
+        """
         device_name = creds.get("deviceName", "")
         product_key = creds.get("productKey", "")
         device_secret = creds.get("deviceSecret", "")
 
-        timestamp_ms = int(self._time_source() * 1000)
+        # Wall-clock epoch milliseconds for the Aliyun protocol timestamp -- NOT
+        # the monotonic renewal seam, whose reference-point value is nowhere near
+        # epoch time and could fail broker anti-replay checks (WR-05).
+        timestamp_ms = int(self._wall_clock_source() * 1000)
         username = f"{device_name}&{product_key}"
         client_id = f"{device_name}|securemode=2,signmethod=hmacsha1,timestamp={timestamp_ms}|"
         sign_content = f"clientId{device_name}deviceName{device_name}productKey{product_key}timestamp{timestamp_ms}"
@@ -295,7 +328,8 @@ class RainPointMqttClient:
         paho_client.on_disconnect = self._on_disconnect
 
         host = MQTT_BROKER_HOST_TEMPLATE.format(product_key=product_key)
-        paho_client.connect(host, MQTT_BROKER_PORT, MQTT_KEEPALIVE)
+        # connect() blocks on DNS + socket.connect; keep it off the event loop (CR-01).
+        await self._hass.async_add_executor_job(paho_client.connect, host, MQTT_BROKER_PORT, MQTT_KEEPALIVE)
         paho_client.loop_start()
 
         self._paho = paho_client
@@ -347,15 +381,27 @@ class RainPointMqttClient:
 
     @callback
     def _handle_connect(self, reason_code) -> None:
-        """Runs on the HA event loop."""
-        self._connected = True
-        _LOGGER.debug("RainPoint MQTT connected: reason_code=%s", reason_code)
+        """Runs on the HA event loop.
+
+        reason_code is 0 on success and a non-zero failure ReasonCode (e.g. "Not
+        authorized") on rejection; only a zero code counts as connected (CR-02).
+        """
+        self._connected = reason_code == 0
+        if reason_code == 0:
+            _LOGGER.debug("RainPoint MQTT connected: reason_code=%s", reason_code)
+        else:
+            _LOGGER.warning("RainPoint MQTT connect rejected: reason_code=%s", reason_code)
 
     @callback
     def _handle_disconnect(self, reason_code) -> None:
         """Runs on the HA event loop."""
         self._connected = False
         _LOGGER.debug("RainPoint MQTT disconnected: reason_code=%s", reason_code)
+        # Reactive reconnect on an unexpected broker-initiated disconnect is
+        # intentionally deferred to Phase 10 (resilience/observability). Today the
+        # supervisor only re-arms on the renewal deadline, an on_http_relogin
+        # signal, or a stop request, so an unexpected disconnect stays dark until
+        # the next scheduled renewal rather than reconnecting immediately.
 
     @callback
     def _handle_message(self, topic: str, payload_len: int) -> None:
@@ -382,4 +428,10 @@ class RainPointMqttClient:
             except Exception:
                 _LOGGER.exception("RainPoint MQTT supervisor task raised during teardown")
 
-        self._disconnect_paho()
+        # Guard the final teardown too (WR-03): a paho loop_stop()/disconnect()
+        # raising here (e.g. already-closed socket, internal thread-join error)
+        # must never propagate out of the async_on_unload path and block unload.
+        try:
+            self._disconnect_paho()
+        except Exception:
+            _LOGGER.exception("RainPoint MQTT paho teardown raised during disconnect")

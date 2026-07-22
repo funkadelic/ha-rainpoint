@@ -44,9 +44,21 @@ def _make_mqtt_client(hass, paho_instance, creds=None) -> RainPointMqttClient:
 
 
 def _make_hass(loop) -> MagicMock:
-    """Make hass helper with a real event loop wired in."""
+    """Make hass helper with a real event loop wired in.
+
+    async_add_executor_job is stubbed to invoke and await the submitted callable
+    inline (a plain MagicMock hass would return a non-awaitable MagicMock and
+    silently stop exercising the real connect path). Running it inline preserves
+    every behavioral assertion -- connect() side effects, raising to drive retry,
+    call counts -- exactly as when connect() ran synchronously.
+    """
     hass = MagicMock()
     hass.loop = loop
+
+    async def _async_add_executor_job(func, *args):
+        return func(*args)
+
+    hass.async_add_executor_job = _async_add_executor_job
     return hass
 
 
@@ -174,8 +186,7 @@ class TestMessageReceiptLogging:
     async def test_on_message_never_mutates_state_directly(self):
         """_on_message only schedules work via call_soon_threadsafe -- no direct mutation."""
         loop = asyncio.get_running_loop()
-        hass = MagicMock()
-        hass.loop = loop  # real loop for the supervisor task; call_soon_threadsafe is patched below
+        hass = _make_hass(loop)  # real loop for the supervisor task; call_soon_threadsafe is patched below
         fake_paho = _make_fake_paho()
         client = _make_mqtt_client(hass, fake_paho)
         await client.async_start()
@@ -273,6 +284,25 @@ class TestConnectCallbackHandling:
         client._on_connect(fake_paho, None, MagicMock(), 0, None)
         await asyncio.sleep(0)
         assert client.connected is True
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_on_connect_nonzero_reason_code_reports_not_connected(self, caplog):
+        """A non-zero reason_code (auth rejection) keeps connected False and warns (CR-02)."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+        await client.async_start()
+        await _settle()
+
+        with caplog.at_level(logging.WARNING):
+            client._on_connect(fake_paho, None, MagicMock(), 5, None)
+            await asyncio.sleep(0)
+
+        assert client.connected is False
+        assert any("connect rejected" in r.message and "5" in r.message for r in caplog.records)
 
         await client.async_disconnect()
 
@@ -540,6 +570,41 @@ class TestRenewalDelayFormula:
         assert RainPointMqttClient._credential_lifetime_seconds({"expire": 300}) == 300.0
 
 
+class TestProtocolTimestampUsesWallClock:
+    """WR-05: the clientId/HMAC timestamp is a wall-clock epoch value, not monotonic."""
+
+    @pytest.mark.asyncio
+    async def test_protocol_timestamp_uses_wall_clock_source_not_monotonic(self):
+        """The clientId embeds int(wall_clock_source() * 1000), independent of the
+        monotonic renewal seam (time_source)."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        rainpoint_client = MagicMock()
+        rainpoint_client.get_subscribe_status = AsyncMock(return_value=_fake_creds())
+        factory = MagicMock(return_value=fake_paho)
+
+        client = RainPointMqttClient(
+            hass,
+            rainpoint_client,
+            entry=MagicMock(),
+            hub_device_name="hub-device",
+            hub_product_key="hub-pk",
+            paho_client_factory=factory,
+            time_source=lambda: 1000.0,  # monotonic seam -- must NOT feed the timestamp
+            wall_clock_source=lambda: 1_700_000_000.0,  # wall-clock epoch seconds
+        )
+
+        await client.async_start()
+        await _settle()
+
+        client_id = factory.call_args.kwargs["client_id"]
+        assert "timestamp=1700000000000" in client_id
+        assert "timestamp=1000000" not in client_id  # the monotonic seam was not used
+
+        await client.async_disconnect()
+
+
 def test_on_http_relogin_is_a_public_method():
     """D-07: on_http_relogin() exists as the documented HTTP-re-login trigger."""
     assert hasattr(RainPointMqttClient, "on_http_relogin")
@@ -740,3 +805,23 @@ class TestSupervisorTeardown:
 
         assert task.done()
         assert client._supervisor_task is None
+
+    @pytest.mark.asyncio
+    async def test_disconnect_swallows_paho_teardown_exception(self, caplog):
+        """A paho loop_stop()/disconnect() raising during teardown is logged, not
+        propagated -- async_disconnect must never block unload (WR-03)."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+
+        await client.async_start()
+        await _settle()
+
+        with (
+            patch.object(client, "_disconnect_paho", side_effect=RuntimeError("paho boom")),
+            caplog.at_level(logging.ERROR),
+        ):
+            await client.async_disconnect()  # must not raise
+
+        assert any("paho teardown raised" in r.message for r in caplog.records)
