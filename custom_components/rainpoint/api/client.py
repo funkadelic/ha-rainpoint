@@ -20,7 +20,7 @@ class RainPointApiError(Exception):
 
 
 def _redact_secret(value: str | None) -> str:
-    """Render a secret as length + last-4 only -- never the raw value (CRED-03/D-16)."""
+    """Render a secret as length + last-4 only -- never the raw value."""
     if not value:
         return "<empty>"
     if len(value) <= 4:
@@ -248,8 +248,8 @@ class RainPointClient:
         """Fetch fresh per-session MQTT observer credentials from subscribeStatus.
 
         device_name/product_key identify the hub (sourced from the hub record,
-        not a second login call -- CRED-01/D-12). The response carries
-        deviceSecret; it must never be logged in the clear (CRED-03/D-16).
+        not a second login call). The response carries
+        deviceSecret; it must never be logged in the clear.
         """
         await self.ensure_logged_in()
         url = f"{self._base_url}/app/device/subscribeStatus"

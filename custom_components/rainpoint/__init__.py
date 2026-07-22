@@ -39,7 +39,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 def _resolve_hub_identity(coordinator) -> tuple[str | None, str | None]:
     """Resolve the first available hub's deviceName/productKey for MQTT credential fetch.
 
-    Hub discovery already scans all configured homes (D-12); this just picks
+    Hub discovery already scans all configured homes; this just picks
     the first hub record the coordinator collected.
     """
     hubs = (coordinator.data or {}).get("hubs", [])
@@ -75,7 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     # An options change (e.g. toggling push) reloads through the existing
-    # unload->setup path, no bespoke start/stop code path needed (OPTS-01/D-01).
+    # unload->setup path, no bespoke start/stop code path needed.
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     if entry.options.get(CONF_PUSH_ENABLED, False):
@@ -84,14 +84,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             mqtt_client = RainPointMqttClient(hass, client, entry, hub_device_name, hub_product_key)
             hass.data[DOMAIN][entry.entry_id]["mqtt_client"] = mqtt_client
             # Registered immediately after construction so it fires even if a
-            # later setup step raises (D-10).
+            # later setup step raises.
             entry.async_on_unload(mqtt_client.async_disconnect)
             # An HTTP re-login must trigger an immediate MQTT credential
             # re-fetch + reconnect -- the supervisor never keeps running on
             # credentials the HTTP layer has superseded.
             client.register_relogin_listener(mqtt_client.on_http_relogin)
             # Backgrounded and never awaited: a broker-unreachable failure must
-            # never block or fail config-entry setup (PUSH-04/D-09). Polling
+            # never block or fail config-entry setup. Polling
             # already has entities covered via async_config_entry_first_refresh.
             hass.async_create_background_task(mqtt_client.async_start(), name="rainpoint_mqtt_start")
         else:

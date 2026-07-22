@@ -5,15 +5,15 @@ Connects to the Alibaba Cloud IoT (Aliyun) MQTT broker using fresh,
 per-session observer credentials fetched from RainPointClient.get_subscribe_status().
 A single owned asyncio.Task (_run_supervisor) drives the full lifecycle --
 connect, subscribe, wait, renew, reconnect -- indefinitely under jittered
-backoff (CONN-01/D-05). It subscribes to both candidate state topics and
+backoff. It subscribes to both candidate state topics and
 logs message receipt; it never touches coordinator state -- feeding push
-data into coordinator.data is Phase 10.
+data into coordinator.data is out of scope here.
 
-Transport is plain TCP, no TLS (spike-confirmed, D-11) -- this overrides any
+Transport is plain TCP, no TLS (confirmed against the live broker) -- this overrides any
 TLS assumption elsewhere. Every paho on_* callback runs on paho's own network
 thread and must never touch HA/integration state directly; each hops onto the
 HA event loop via hass.loop.call_soon_threadsafe into an @callback method
-before touching self (CONN-02/D-08).
+before touching self.
 """
 
 import asyncio
@@ -42,7 +42,7 @@ class RainPointMqttError(Exception):
     pass
 
 
-# Fields that must never appear in the clear in logs/diagnostics (CRED-03/D-16).
+# Fields that must never appear in the clear in logs/diagnostics.
 # Established here from the first credential-issuing commit so redaction is a
 # drop-in when diagnostics.py arrives, never a retrofit.
 TO_REDACT = {"deviceSecret", "mqtt_password", "client_id"}
@@ -57,7 +57,7 @@ def _redact(value: str | None) -> str:
     return f"len={len(value)} last4={value[-4:]}"
 
 
-# Supervisor backoff (CONN-01/D-05, Pitfall 2/7): only the DELAY is capped, never
+# Supervisor backoff: only the DELAY is capped, never
 # the attempt count. 30s base doubling up to a 480s ceiling (within the 300-600s
 # band), with +-10-30% jitter to avoid a synchronized reconnect storm.
 _BACKOFF_BASE_SECONDS = 30.0
@@ -65,9 +65,9 @@ _BACKOFF_CEILING_SECONDS = 480.0
 _JITTER_MIN_FRACTION = 0.10
 _JITTER_MAX_FRACTION = 0.30
 
-# Credential renewal cadence (CRED-02/D-06): max(120, expire - now - 60), jittered.
-# The exact subscribeStatus expiry field name was not captured empirically by the
-# Phase 8 spike (FINDINGS.md), so absence defaults to the spike-observed ~570s
+# Credential renewal cadence: max(120, expire - now - 60), jittered.
+# The exact subscribeStatus expiry field name was not captured empirically by an
+# earlier connection probe, so absence defaults to the observed ~570s
 # disconnect-old/reconnect-new cycle.
 _RENEWAL_MIN_INTERVAL_SECONDS = 120.0
 _RENEWAL_SAFETY_MARGIN_SECONDS = 60.0
@@ -81,7 +81,7 @@ class RainPointMqttClient:
     credentials before their ~570s expiry via a clean disconnect-old/
     reconnect-new cycle, and retries indefinitely under jittered backoff on
     any failure. paho's own auto-reconnect is disabled so the supervisor is
-    the sole reconnect authority (CONN-01/D-05, CRED-02/D-06).
+    the sole reconnect authority.
     """
 
     def __init__(
@@ -106,7 +106,7 @@ class RainPointMqttClient:
         self._time_source = time_source
         # Wall-clock seam: the protocol timestamp embedded in the clientId/HMAC,
         # which Aliyun expects as a real epoch value -- kept separate from the
-        # monotonic renewal seam (WR-05).
+        # monotonic renewal seam.
         self._wall_clock_source = wall_clock_source
 
         self._paho = None
@@ -128,28 +128,28 @@ class RainPointMqttClient:
         """Return whether the last on_connect callback reported success."""
         return self._connected
 
-    # --- supervisor lifecycle (CONN-01/D-05) ---
+    # --- supervisor lifecycle ---
 
     async def async_start(self) -> None:
         """Launch the supervisor task that owns connect->run->reconnect.
 
         Never blocks -- callers must schedule this as a background task; the
         supervisor itself retries indefinitely and this method never raises
-        out in a way that should block config-entry setup (PUSH-04/D-09).
+        out in a way that should block config-entry setup.
         """
         self._stopping = False
         self._stop_event.clear()
         self._supervisor_task = self._hass.loop.create_task(self._run_supervisor())
 
     async def _run_supervisor(self) -> None:
-        """Own connect -> run -> renew -> reconnect indefinitely (D-05, D-06).
+        """Own connect -> run -> renew -> reconnect indefinitely.
 
         _renew() is reused both for the very first connect and every
         subsequent renewal cycle, so there is exactly one state machine here
-        -- not two independent call_later chains that could silently diverge
-        (Pitfall 6). Only the backoff DELAY is capped -- never the attempt
-        count (Pitfall 2). Any exception in the loop body (connect failure or
-        renewal failure alike) still results in a scheduled retry (Pitfall 7):
+        -- not two independent call_later chains that could silently diverge.
+        Only the backoff DELAY is capped -- never the attempt
+        count. Any exception in the loop body (connect failure or
+        renewal failure alike) still results in a scheduled retry:
         there is no bare return and no uncaught exception that silently ends
         the chain.
         """
@@ -159,7 +159,7 @@ class RainPointMqttClient:
                 renew_in = await self._renew()
             except asyncio.CancelledError:
                 raise
-            except Exception as err:  # must always re-arm, see Pitfall 2/6/7
+            except Exception as err:  # must always re-arm on any connect or renewal failure
                 attempt += 1
                 delay = self._backoff_delay(attempt)
                 _LOGGER.warning(
@@ -186,10 +186,10 @@ class RainPointMqttClient:
         await self._sleep(delay)
 
     def _backoff_delay(self, attempt: int) -> float:
-        """Exponential backoff capped at a ceiling, with jitter (D-05/Pitfall 7).
+        """Exponential backoff capped at a ceiling, with jitter.
 
         There is no cap on `attempt` itself -- the supervisor retries forever
-        (Pitfall 2) -- so the exponent is clamped defensively before raising
+        -- so the exponent is clamped defensively before raising
         2**exponent to avoid an OverflowError on very large attempt counts;
         the ceiling is already reached at a small exponent in practice.
         """
@@ -199,18 +199,18 @@ class RainPointMqttClient:
 
     @staticmethod
     def _apply_jitter(value: float) -> float:
-        """Apply +-10-30% random jitter to avoid a synchronized reconnect storm (Pitfall 7)."""
+        """Apply +-10-30% random jitter to avoid a synchronized reconnect storm."""
         magnitude = random.uniform(_JITTER_MIN_FRACTION, _JITTER_MAX_FRACTION)
         sign = random.choice((-1.0, 1.0))
         return value * (1 + sign * magnitude)
 
-    # --- credential renewal (CRED-02/D-06, D-07) ---
+    # --- credential renewal ---
 
     async def _renew(self) -> float:
         """Fetch fresh credentials and (re)connect: disconnect-old/reconnect-new.
 
         Reused both for the very first connect and every subsequent renewal
-        cycle (D-06/spike-confirmed: renewal is a clean disconnect-old/
+        cycle (renewal is a clean disconnect-old/
         reconnect-new cycle, never an in-place credential swap). Returns the
         jittered delay in seconds until the next renewal is due.
         """
@@ -227,8 +227,8 @@ class RainPointMqttClient:
         """Credential lifetime in seconds from the moment of fetch.
 
         The exact subscribeStatus response field for this was not captured by
-        the Phase 8 spike; if present, `expire` is treated as a lifetime-in-
-        seconds duration. Absence defaults to the spike-observed ~570s cycle.
+        an earlier connection probe; if present, `expire` is treated as a lifetime-in-
+        seconds duration. Absence defaults to the observed ~570s cycle.
         """
         lifetime = creds.get("expire")
         if isinstance(lifetime, int | float) and lifetime > 0:
@@ -237,20 +237,20 @@ class RainPointMqttClient:
 
     @staticmethod
     def _renewal_base_delay(expire_at: float, now: float) -> float:
-        """max(120, expire - now - 60), before jitter (D-06)."""
+        """max(120, expire - now - 60), before jitter."""
         return max(_RENEWAL_MIN_INTERVAL_SECONDS, expire_at - now - _RENEWAL_SAFETY_MARGIN_SECONDS)
 
     def _renewal_delay_seconds(self, expire_at: float, now: float) -> float:
-        """Jittered renewal cadence: max(120, expire - now - 60) +-10-30% (D-06/Pitfall 7)."""
+        """Jittered renewal cadence: max(120, expire - now - 60) +-10-30%."""
         return self._apply_jitter(self._renewal_base_delay(expire_at, now))
 
     async def _wait_for_renewal(self, delay: float) -> None:
         """Wait for the renewal deadline, an on_http_relogin signal, or a stop
         request -- whichever comes first. A single wait primitive keeps
         renewal and reconnect inside the same supervised loop rather than two
-        independent call_later chains that could diverge (Pitfall 6/7).
+        independent call_later chains that could diverge.
         """
-        # Check-before-clear (WR-01/D-07): if a relogin fired mid-_renew() -- after
+        # Check-before-clear: if a relogin fired mid-_renew() -- after
         # this cycle captured its credentials but before returning -- the event is
         # already set for a rotation this cycle never observed. Honor it with an
         # immediate re-fetch instead of clearing it and sleeping out the interval.
@@ -265,7 +265,7 @@ class RainPointMqttClient:
         try:
             await asyncio.wait({sleep_task, stop_task, renew_task}, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            # Cancel AND await the losers (WR-02): .cancel() only schedules
+            # Cancel AND await the losers: .cancel() only schedules
             # cancellation, so awaiting confirms it before the tasks go out of
             # scope -- otherwise asyncio may log "Task was destroyed but it is
             # pending!" every renewal cycle.
@@ -278,12 +278,12 @@ class RainPointMqttClient:
         """Signal that the HTTP layer rotated its token: force an immediate
         credential re-fetch + reconnect rather than waiting for the timed
         renewal deadline, so the supervisor never keeps running on
-        credentials the HTTP layer has superseded (D-07/Pitfall 6).
+        credentials the HTTP layer has superseded.
         """
         self._renew_event.set()
 
     async def _connect(self, creds: dict) -> None:
-        """Build the paho client from fresh creds and connect. No TLS (D-11).
+        """Build the paho client from fresh creds and connect. No TLS.
 
         paho's connect() is blocking (DNS resolution + a synchronous
         socket.connect); calling it directly on the HA event loop would freeze
@@ -301,7 +301,7 @@ class RainPointMqttClient:
 
         # Wall-clock epoch milliseconds for the Aliyun protocol timestamp -- NOT
         # the monotonic renewal seam, whose reference-point value is nowhere near
-        # epoch time and could fail broker anti-replay checks (WR-05).
+        # epoch time and could fail broker anti-replay checks.
         timestamp_ms = int(self._wall_clock_source() * 1000)
         username = f"{device_name}&{product_key}"
         client_id = f"{device_name}|securemode=2,signmethod=hmacsha1,timestamp={timestamp_ms}|"
@@ -315,7 +315,7 @@ class RainPointMqttClient:
             _redact(password),
         )
 
-        # The supervisor is the sole reconnect authority (CONN-01/D-05) -- paho
+        # The supervisor is the sole reconnect authority -- paho
         # must never attempt its own reconnect_on_failure behavior in parallel.
         # reconnect_on_failure is a paho-mqtt constructor-only kwarg (no public
         # setter), so it must be passed here rather than set post-construction.
@@ -337,7 +337,7 @@ class RainPointMqttClient:
         self._product_key = product_key
 
     def _subscribe(self, creds: dict) -> None:
-        """Subscribe to both candidate state topics (D-04, empirically resolved in Phase 10)."""
+        """Subscribe to both candidate state topics (which one carries state is resolved empirically later)."""
         if self._paho is None:
             raise RainPointMqttError("subscribe called before connect")
         device_name = creds.get("deviceName", "")
@@ -361,7 +361,7 @@ class RainPointMqttClient:
 
     # --- paho callbacks: run on paho's network thread, never on the HA loop.
     # Only cheap, pure reads are allowed here; everything else is dispatched
-    # via hass.loop.call_soon_threadsafe into an @callback method (CONN-02/D-08).
+    # via hass.loop.call_soon_threadsafe into an @callback method.
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None) -> None:
         """Runs on paho's network thread."""
@@ -398,21 +398,21 @@ class RainPointMqttClient:
         self._connected = False
         _LOGGER.debug("RainPoint MQTT disconnected: reason_code=%s", reason_code)
         # Reactive reconnect on an unexpected broker-initiated disconnect is
-        # intentionally deferred to Phase 10 (resilience/observability). Today the
+        # intentionally deferred to a later change (resilience/observability). Today the
         # supervisor only re-arms on the renewal deadline, an on_http_relogin
         # signal, or a stop request, so an unexpected disconnect stays dark until
         # the next scheduled renewal rather than reconnecting immediately.
 
     @callback
     def _handle_message(self, topic: str, payload_len: int) -> None:
-        """Runs on the HA event loop. Logs receipt only -- never payload contents (D-03)."""
+        """Runs on the HA event loop. Logs receipt only -- never payload contents."""
         self._message_count += 1
         _LOGGER.debug("RainPoint MQTT message received: topic=%s len=%s count=%s", topic, payload_len, self._message_count)
 
     async def async_disconnect(self) -> None:
         """Cancel and await the supervisor task, then stop the paho loop and
         disconnect -- in that order, so no reconnect is scheduled after
-        teardown begins (CONN-03/D-10). Idempotent and tolerant of a
+        teardown begins. Idempotent and tolerant of a
         never-started/never-connected client.
         """
         self._stopping = True
@@ -428,7 +428,7 @@ class RainPointMqttClient:
             except Exception:
                 _LOGGER.exception("RainPoint MQTT supervisor task raised during teardown")
 
-        # Guard the final teardown too (WR-03): a paho loop_stop()/disconnect()
+        # Guard the final teardown too: a paho loop_stop()/disconnect()
         # raising here (e.g. already-closed socket, internal thread-join error)
         # must never propagate out of the async_on_unload path and block unload.
         try:

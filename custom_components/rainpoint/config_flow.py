@@ -57,7 +57,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> RainPointOptionsFlow:
-        """Return the options flow handler (OPTS-01/D-01)."""
+        """Return the options flow handler."""
         return RainPointOptionsFlow()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
@@ -294,7 +294,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class RainPointOptionsFlow(config_entries.OptionsFlow):
-    """Handle the RainPoint options flow -- push toggle (OPTS-01, D-01, D-02)."""
+    """Handle the RainPoint options flow -- push toggle."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Show/handle the single push-toggle form."""
