@@ -1094,6 +1094,34 @@ class TestApplyPushUpdate:
         assert [e["id"] for e in sub_status] == ["D1"]
         coord.async_update_listeners.assert_called_once()
 
+    def test_push_replaces_matching_entry_after_iterating_past_others(self):
+        """When the mid's status already holds an unrelated sub-device id, the
+        merge iterates past it and replaces the matching entry in place, leaving
+        the unrelated entry untouched."""
+        hub = _push_hub()
+        coord = _seed_push_coord(
+            hub,
+            sensors={"100_200_1": {"data": None}},
+            status={
+                200: {
+                    "subDeviceStatus": [
+                        {"id": "D9", "value": "other", "time": 1},
+                        {"id": "D1", "value": "old", "time": 1},
+                    ]
+                }
+            },
+        )
+        device_ts = 1717200000000
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, device_ts)
+
+        sub_status = coord.data["status"][200]["subDeviceStatus"]
+        # Unrelated D9 entry preserved; only the matching D1 entry is replaced.
+        assert [e["id"] for e in sub_status] == ["D9", "D1"]
+        assert sub_status[0]["value"] == "other"
+        assert sub_status[1]["time"] == device_ts
+        coord.async_update_listeners.assert_called_once()
+
     def test_unknown_mid_is_dropped_without_mutating_or_notifying(self):
         """A push whose mid is not in data['hubs'] leaves data identity-unchanged."""
         hub = _push_hub()
