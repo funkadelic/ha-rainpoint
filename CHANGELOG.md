@@ -2,6 +2,34 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.8.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.7.1...v1.8.0) (2026-07-23)
+
+
+### Added
+
+* add Hungary (+36) to the country code list ([#87](https://github.com/funkadelic/ha-rainpoint/issues/87)) ([aa3a47d](https://github.com/funkadelic/ha-rainpoint/commit/aa3a47de1340cf314775b03419dcfd8ea27d5a85))
+* add opt-in MQTT push channel to the RainPoint cloud broker ([#80](https://github.com/funkadelic/ha-rainpoint/issues/80)) ([fed0675](https://github.com/funkadelic/ha-rainpoint/commit/fed0675ee532d117f545ecd1cd5a3f242d59d382))
+* deliver device state over the MQTT push channel in near real time ([#83](https://github.com/funkadelic/ha-rainpoint/issues/83)) ([92c3cdf](https://github.com/funkadelic/ha-rainpoint/commit/92c3cdf7e5f05a6367a7925dca82251021101690))
+* encrypt the MQTT push channel with TLS ([#85](https://github.com/funkadelic/ha-rainpoint/issues/85)) ([e656068](https://github.com/funkadelic/ha-rainpoint/commit/e656068998b968922af36f3be43d532618bb498d))
+* preserve HWS019 daily max/min readings from status payload ([#76](https://github.com/funkadelic/ha-rainpoint/issues/76)) ([736cfff](https://github.com/funkadelic/ha-rainpoint/commit/736cfff001a5a4e6b7e504139b2c2df7ea504f3b))
+* report modelCode with unsupported device warnings ([#77](https://github.com/funkadelic/ha-rainpoint/issues/77)) ([f3087c4](https://github.com/funkadelic/ha-rainpoint/commit/f3087c44b0751736a2a37196dca43dfef2b09f00))
+
+
+### Fixed
+
+* cap login retries with a cooldown after server throttling ([#81](https://github.com/funkadelic/ha-rainpoint/issues/81)) ([31dca9b](https://github.com/funkadelic/ha-rainpoint/commit/31dca9be5db7bc1cbb3bd3dd6e61aa86fc563306))
+* keep the MQTT push channel connected by not subscribing ([#92](https://github.com/funkadelic/ha-rainpoint/issues/92)) ([71e3d5c](https://github.com/funkadelic/ha-rainpoint/commit/71e3d5c09700435279a791f9e02de73fc8c50f80))
+* re-authenticate when the cloud rejects a stored token as NOT_TOKEN ([#91](https://github.com/funkadelic/ha-rainpoint/issues/91)) ([3f6d635](https://github.com/funkadelic/ha-rainpoint/commit/3f6d6356cdacd720317968c57cc66067e821d22c))
+* send an app-like User-Agent so the cloud edge stops returning 403 ([#89](https://github.com/funkadelic/ha-rainpoint/issues/89)) ([e7be9b2](https://github.com/funkadelic/ha-rainpoint/commit/e7be9b2518d9cdf26f5ff6a02a8c538a52247fd6))
+* send the full subscribeStatus envelope so the push channel can connect ([#90](https://github.com/funkadelic/ha-rainpoint/issues/90)) ([df4208c](https://github.com/funkadelic/ha-rainpoint/commit/df4208c9c90afad82a913c10dc8be37de22dd821))
+* stop hammering the rate-limited login endpoint on setup retries ([#88](https://github.com/funkadelic/ha-rainpoint/issues/88)) ([9e7fb9d](https://github.com/funkadelic/ha-rainpoint/commit/9e7fb9d4c71def98bb33c8934033a9a594cb4b30))
+
+
+### Other Changes
+
+* bump actions/setup-python from 6 to 7 ([#79](https://github.com/funkadelic/ha-rainpoint/issues/79)) ([2318f7b](https://github.com/funkadelic/ha-rainpoint/commit/2318f7bfe09506dd87c48eb5923bf908b71c863a))
+* document the opt-in real-time push channel ([#84](https://github.com/funkadelic/ha-rainpoint/issues/84)) ([cf4fb44](https://github.com/funkadelic/ha-rainpoint/commit/cf4fb44b5042a4794f1e0f81ebe8f92626f47a5e))
+
 ## [1.7.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.7.0...v1.7.1) (2026-07-18)
 
 
