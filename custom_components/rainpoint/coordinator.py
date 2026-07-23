@@ -36,6 +36,7 @@ from .api import (
     decode_hcs888arf_v1,
     decode_hcs999frf,
     decode_hcs999frf_p,
+    decode_htv145frf,
     decode_htv213frf_valve,
     decode_hws019wrf_v2,
     decode_moisture_full,
@@ -81,6 +82,7 @@ from .const import (
     MODEL_POOL_PLUS,
     MODEL_RAIN,
     MODEL_TEMPHUM,
+    MODEL_VALVE_145,  # HTV145FRF support
     MODEL_VALVE_213,  # HTV213FRF support
     MODEL_VALVE_245,  # HTV245FRF support
     MODEL_VALVE_345,  # HTV345FRF support
@@ -105,6 +107,7 @@ DECODER_REGISTRY = {
     MODEL_POOL: decode_pool,
     MODEL_POOL_PLUS: decode_pool_plus,
     MODEL_VALVE_HUB: decode_valve_hub,
+    MODEL_VALVE_145: decode_htv145frf,  # HTV145FRF single-outlet timer (10# compact format)
     MODEL_VALVE_213: decode_htv213frf_valve,  # HTV213FRF uses custom decoder
     MODEL_VALVE_245: decode_htv213frf_valve,  # HTV245FRF uses custom decoder
     MODEL_VALVE_345: decode_htv213frf_valve,  # HTV345FRF uses custom decoder

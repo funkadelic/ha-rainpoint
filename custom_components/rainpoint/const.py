@@ -159,6 +159,7 @@ MODEL_HCS015ARF = "HCS015ARF"  # Pool temperature sensor
 # Note: MODEL_HCS0528ARF defined above as primary pool sensor
 
 # === Valve Controllers (v1.2.0) ===
+MODEL_HTV145FRF = "HTV145FRF"  # Single-outlet WiFi water timer (10# compact valve payload)
 MODEL_HTV213FRF = "HTV213FRF"  # Single-zone RF irrigation timer (similar to HTV0540FRF)
 MODEL_HTV245FRF = "HTV245FRF"  # Irrigation valve (similar to HTV0540FRF)
 MODEL_HTV345FRF = "HTV345FRF"  # Irrigation valve variant (similar to HTV245FRF)
@@ -166,6 +167,7 @@ MODEL_HTV405FRF = "HTV405FRF"  # 4-zone irrigation valve variant (similar to HTV
 MODEL_HTV0540FRF = "HTV0540FRF"  # Multi-zone valve hub (fully supported)
 
 # Legacy valve aliases
+MODEL_VALVE_145 = MODEL_HTV145FRF
 MODEL_VALVE_213 = MODEL_HTV213FRF
 MODEL_VALVE_245 = MODEL_HTV245FRF
 MODEL_VALVE_345 = MODEL_HTV345FRF
@@ -174,6 +176,7 @@ MODEL_VALVE_HUB = MODEL_HTV0540FRF
 
 VALVE_MODELS = {
     MODEL_VALVE_HUB,
+    MODEL_VALVE_145,
     MODEL_VALVE_213,
     MODEL_VALVE_245,
     MODEL_VALVE_345,

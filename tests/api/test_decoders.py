@@ -7,6 +7,7 @@ from custom_components.rainpoint.api import (
     decode_flowmeter,
     decode_hcs005frf,
     decode_hcs027arf,
+    decode_htv145frf,
     decode_htv213frf_valve,
     decode_hws019wrf_v2,
     decode_moisture_full,
@@ -28,6 +29,8 @@ from tests.payload_samples import (
     MOISTURE_FULL_HEX_PAYLOAD,
     MOISTURE_SIMPLE_HEX_PAYLOAD,
     RAIN_HEX_PAYLOAD,
+    SAMPLE_HTV145_CLOSED_PAYLOAD,
+    SAMPLE_HTV145_OPEN_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
@@ -192,6 +195,94 @@ class TestDecodeHtv213frfValve:
         assert result["zones"][1]["open"] is False
         assert result["zones"][2]["open"] is False
         assert result["zones"][3]["open"] is False
+
+
+class TestDecodeHtv145frf:
+    """Tests for decode_htv145frf (single-outlet WiFi water timer, 10# compact format)."""
+
+    def test_closed_payload_zone_idle(self):
+        """Real closed-state payload: hub online, zone 1 closed, duration 0s."""
+        result = decode_htv145frf(SAMPLE_HTV145_CLOSED_PAYLOAD)
+
+        assert result["type"] == "valve_hub"
+        assert result["decoder"] == "htv145frf_hex"
+        assert result["hub_online"] is True
+        assert result["hub_state_raw"] == 0x01
+
+        zones = result["zones"]
+        assert set(zones) == {1}
+        assert zones[1]["open"] is False
+        assert zones[1]["duration_seconds"] == 0
+        assert zones[1]["state_raw"] == 0x00
+
+    def test_open_payload_zone_running(self):
+        """Real open-state payload: zone 1 open (0x21), duration 1200s (20 min)."""
+        result = decode_htv145frf(SAMPLE_HTV145_OPEN_PAYLOAD)
+
+        assert result["decoder"] == "htv145frf_hex"
+        assert result["hub_online"] is True
+
+        zone = result["zones"][1]
+        assert zone["open"] is True
+        assert zone["state_raw"] == 0x21
+        assert zone["duration_seconds"] == 1200
+
+    def test_rssi_is_signed_dbm(self):
+        """byte[1] of the payload is the signed-dBm RSSI."""
+        assert decode_htv145frf(SAMPLE_HTV145_CLOSED_PAYLOAD)["rssi_dbm"] == -68
+        assert decode_htv145frf(SAMPLE_HTV145_OPEN_PAYLOAD)["rssi_dbm"] == -62
+
+    def test_ff_terminator_stops_before_trailing_timestamp(self):
+        """Parsing stops at 0xFF, so the trailing device timestamp is not misread."""
+        # A bogus type byte after the 0xFF terminator must not create a zone.
+        raw = "10#E1BC00DC01D80020B700000000AD00009F95110000FF0FD8FFFFFF"
+        result = decode_htv145frf(raw)
+        assert set(result["zones"]) == {1}
+        assert result["zones"][1]["state_raw"] == 0x00
+
+    def test_unknown_type_byte_realigns(self):
+        """An unrecognized type byte advances 1 byte so parsing re-aligns."""
+        # AA is unknown (+1), then DC01 hub online, D800 zone closed, FF terminator.
+        result = decode_htv145frf("10#AADC01D800FF")
+        assert result["hub_online"] is True
+        assert result["zones"][1]["open"] is False
+
+    def test_truncated_record_stops(self):
+        """A record whose value runs past the payload end stops the scan."""
+        # DC01 hub online, then 9F (needs 4 value bytes) with only 2 remaining.
+        result = decode_htv145frf("10#DC019F9511")
+        assert result["hub_online"] is True
+        assert result["zones"] == {}
+
+    def test_no_zone_marker_yields_empty_zones(self):
+        """A payload with no 0xD8 marker reports no zones but still reads hub state."""
+        # DC01 hub online only, stream ends without a 0xFF terminator.
+        result = decode_htv145frf("10#DC01")
+        assert result["hub_online"] is True
+        assert result["zones"] == {}
+
+    def test_malformed_payload_returns_error_dict(self):
+        """A non-hex payload is caught and returned as a safe error dict."""
+        result = decode_htv145frf("10#not_hex")
+        assert result["type"] == "valve_hub"
+        assert result["decoder"] == "htv145frf_error"
+        assert result["zones"] == {}
+        assert "error" in result
+
+    def test_empty_payload_returns_error_dict(self):
+        """A payload missing the '#' separator is handled gracefully."""
+        result = decode_htv145frf("")
+        assert result["decoder"] == "htv145frf_error"
+        assert result["zones"] == {}
+
+    def test_non_10_prefix_payload_is_rejected(self):
+        """A 11# TLV payload is rejected before scanning, so bytes that coincide
+        with HTV145 markers cannot fabricate hub-online or valve state."""
+        # DC01 / D821 would read as hub-online + zone-1-open if scanned as markers.
+        result = decode_htv145frf("11#DC01D82100")
+        assert result["decoder"] == "htv145frf_error"
+        assert result["zones"] == {}
+        assert result.get("hub_online") is not True
 
 
 class TestLittleEndianTripwire:

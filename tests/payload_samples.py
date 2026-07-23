@@ -22,6 +22,15 @@ SAMPLE_HTV405_TLV_PAYLOAD = (
     "21B70000000022B70000000023B70000000024B70000000025AD000026AD000027AD000028AD0000FEFF0F5B55D219"
 )
 
+# Real hex (10#) payloads from a reporter's HTV145FRF single-outlet WiFi water timer.
+# This model ships a compact [type_byte][value...] marker stream, not the HTV213FRF
+# dp_id/type/value layout. Markers: 0xE1 header (byte[1]=signed RSSI), 0xDC hub online,
+# 0xD8 zone state (0x21 open / 0x00 closed), 0xAD 2-byte LE duration seconds, 0xFF terminator.
+#   Closed sample: hub online, zone 1 closed, duration 0s, RSSI -68 dBm.
+SAMPLE_HTV145_CLOSED_PAYLOAD = "10#E1BC00DC01D80020B700000000AD00009F95110000FF0F5D81D019"
+#   Open sample: hub online, zone 1 open (0x21), duration 1200s (20 min), RSSI -62 dBm.
+SAMPLE_HTV145_OPEN_PAYLOAD = "10#E1C200DC01D82120B7AE44E319ADB0049FA8020000FF0FAE3EE319"
+
 # --- Phase 5 Plan 01: Additional decoder payload constants ---
 
 # HCS021FRF (moisture_full) hex payload from docstring.

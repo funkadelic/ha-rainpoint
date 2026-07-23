@@ -17,6 +17,13 @@ _LOGGER = logging.getLogger(__name__)
 # Subset of types relevant to these models; see _TYPE_WIDTHS in utils.py for the full set.
 _HTV213_TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
 
+# Type byte → value byte count for the HTV145FRF single-outlet timer.
+# Unlike HTV213FRF (11# dp_id/type/value stream), this model ships a 10#-prefixed
+# marker/value stream where each record is [type_byte][value...]. The 0x20 record
+# is a 5-byte compound (a 0xB7 sub-marker plus a 4-byte schedule/timestamp field),
+# and a 0xFF byte terminates the decodable stream (a trailing device timestamp follows).
+_HTV145_TYPE_WIDTHS = {0xE1: 2, 0xDC: 1, 0xD8: 1, 0x20: 5, 0xB7: 4, 0xAD: 2, 0x9F: 4}
+
 
 def decode_htv213frf_valve(raw: str) -> dict:
     """
@@ -314,6 +321,113 @@ def _decode_htv213frf_hex(raw: str) -> dict:
     except Exception as e:
         _LOGGER.error("HTV213FRF hex decoder error for payload %r: %s", raw, e, exc_info=True)
         raise
+
+
+def _scan_htv145_markers(b: bytes) -> dict[int, int]:
+    """Scan the HTV145FRF [type_byte][value...] stream into {type_byte: value_int}.
+
+    Value width comes from _HTV145_TYPE_WIDTHS; the 0xAD duration value is
+    little-endian, all others big-endian. Parsing stops at the first 0xFF byte
+    (stream terminator followed by a trailing device timestamp). Unknown type
+    bytes advance 1 byte to attempt re-alignment. Duplicate type bytes are
+    last-write-wins; the single-outlet payload carries one of each.
+    """
+    markers: dict[int, int] = {}
+    i = 0
+    while i < len(b):
+        type_byte = b[i]
+        if type_byte == 0xFF:
+            break
+        width = _HTV145_TYPE_WIDTHS.get(type_byte)
+        if width is None:
+            _LOGGER.debug(
+                "HTV145FRF: unknown type byte 0x%02X at offset %d; advancing 1 byte for re-alignment",
+                type_byte,
+                i,
+            )
+            i += 1
+            continue
+        if i + 1 + width > len(b):
+            _LOGGER.debug(
+                "HTV145FRF: truncated record for type 0x%02X at offset %d; stopping",
+                type_byte,
+                i,
+            )
+            break
+        val_bytes = b[i + 1 : i + 1 + width]
+        endian = "little" if type_byte == 0xAD else "big"
+        markers[type_byte] = int.from_bytes(val_bytes, endian)
+        i += 1 + width
+    return markers
+
+
+def decode_htv145frf(raw: str) -> dict:
+    """
+    Decode HTV145FRF single-outlet WiFi water timer payload (10# prefix).
+
+    The payload is a flat [type_byte][value...] marker stream (not the HTV213FRF
+    dp_id/type/value layout), so it needs its own scan. Known markers:
+      0xDC (1 byte)  → hub online state (value 0x01 = online)
+      0xD8 (1 byte)  → zone open state  (bit 0 set = open; device uses 0x21/0x20)
+      0xAD (2 bytes) → zone run duration in seconds (little-endian)
+      0x20 (5 bytes) → schedule/timestamp compound (captured but not interpreted)
+      0x9F (4 bytes) → schedule/counter field (captured but not interpreted)
+      0xE1 (2 bytes) → header field; byte[1] doubles as the signed-dBm RSSI
+
+    This is a single-outlet timer, so the one 0xD8 marker maps to zone 1. Output
+    shape matches the other valve decoders (type "valve_hub" with a zones dict) so
+    valve.py and number.py consume it unchanged.
+    """
+    try:
+        # This decoder only understands the flat 10# marker stream. A 11# TLV
+        # payload would still parse, and its value bytes could coincide with
+        # 0xDC/0xD8 markers, fabricating false hub-online or valve state -- so
+        # reject anything that is not 10# before scanning.
+        if not raw.startswith("10#"):
+            raise ValueError("HTV145FRF payload must use the 10# format")
+        b = _parse_rainpoint_payload(raw)
+        markers = _scan_htv145_markers(b)
+
+        hub_state_raw = markers.get(0xDC)
+        hub_online = hub_state_raw == 0x01
+
+        zones: dict[int, dict] = {}
+        if 0xD8 in markers:
+            state_val = markers[0xD8]
+            zones[1] = {
+                "open": bool(state_val & 0x01),
+                "duration_seconds": markers.get(0xAD, 0),
+                "state_raw": state_val,
+            }
+            _LOGGER.info(
+                "HTV145FRF Zone 1: open=%s duration=%ds state_raw=0x%02X",
+                zones[1]["open"],
+                zones[1]["duration_seconds"],
+                state_val,
+            )
+
+        return {
+            "type": "valve_hub",
+            "rssi_dbm": _extract_rssi(b) if len(b) > 1 else 0,
+            "raw_bytes": b,
+            "zones": zones,
+            "tlv_raw": {},
+            "hub_online": hub_online,
+            "hub_state_raw": hub_state_raw,
+            "decoder": "htv145frf_hex",
+        }
+
+    except Exception as e:
+        _LOGGER.exception("HTV145FRF decoder error for payload %r", raw)
+        return {
+            "type": "valve_hub",
+            "rssi_dbm": 0,
+            "raw_bytes": [],
+            "zones": {},
+            "tlv_raw": {},
+            "decoder": "htv145frf_error",
+            "error": str(e),
+        }
 
 
 def decode_moisture_full(raw: str) -> dict:
