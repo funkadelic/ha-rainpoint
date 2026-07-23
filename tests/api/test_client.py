@@ -699,6 +699,41 @@ class TestTokenManagement:
         client._login.assert_awaited_once()
 
 
+class TestNotTokenInvalidation:
+    """A NOT_TOKEN (code 1001) response drops the cached token so the next
+    ensure_logged_in re-authenticates instead of resending a dead token."""
+
+    @pytest.mark.asyncio
+    async def test_not_token_clears_cached_token(self):
+        """code 1001 clears a locally-valid-but-server-rejected token."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token = "stale-token"
+        client._token_expires_at = datetime.now(UTC) + timedelta(days=60)
+        client._session.get = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError, match="code 1001"):
+            await client.get_devices_by_hid(182509)
+
+        assert client._token is None
+        assert client._token_expires_at is None
+
+    @pytest.mark.asyncio
+    async def test_non_auth_error_keeps_token(self):
+        """A non-1001 failure leaves the token intact (only NOT_TOKEN invalidates)."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token = "good-token"
+        client._token_expires_at = datetime.now(UTC) + timedelta(days=60)
+        client._session.get = MagicMock(return_value=_mock_response({"code": 1, "msg": "other"}))
+
+        with pytest.raises(RainPointApiError, match="code 1"):
+            await client.get_devices_by_hid(182509)
+
+        assert client._token == "good-token"
+        assert client._token_expires_at is not None
+
+
 class TestAuthHeaders:
     """Tests for _auth_headers method."""
 

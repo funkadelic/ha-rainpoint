@@ -33,6 +33,12 @@ _LOGIN_COOLDOWN_SECONDS = 120
 # to a captured app version.
 _USER_AGENT = "okhttp/4.9.3"
 
+# The cloud returns this application code ("NOT_TOKEN") when the auth token is
+# missing or has been invalidated server-side -- which can happen before its
+# advertised local expiry, e.g. a login elsewhere under the same deviceId. It
+# means "re-authenticate", not "credentials are wrong".
+_NOT_TOKEN_CODE = 1001
+
 
 class RainPointApiError(Exception):
     pass
@@ -144,6 +150,20 @@ class RainPointClient:
             return False
         # refresh a little before expiry
         return datetime.now(UTC) < (self._token_expires_at - timedelta(minutes=5))
+
+    def _maybe_invalidate_token(self, code) -> None:
+        """Drop the cached token when the server reports NOT_TOKEN (code 1001).
+
+        The local expiry is only advisory: a persisted token can be invalidated
+        server-side before it expires. Clearing it here makes the next
+        ensure_logged_in re-authenticate on the following attempt instead of
+        resending the dead token until its local expiry (which would otherwise
+        wedge the integration for the token's whole lifetime).
+        """
+        if code == _NOT_TOKEN_CODE:
+            _LOGGER.info("RainPoint token rejected (NOT_TOKEN); clearing it to force re-login")
+            self._token = None
+            self._token_expires_at = None
 
     # --- login / auth ---
 
@@ -268,6 +288,7 @@ class RainPointClient:
             data = await resp.json()
         _LOGGER.debug("API response: list_homes data=%s", data)
         if data.get("code") != 0:
+            self._maybe_invalidate_token(data.get("code"))
             _LOGGER.debug("list_homes failed response: %s", data)
             raise RainPointApiError(f"list_homes failed: code {data.get('code')}")
         return data.get("data", [])
@@ -283,6 +304,7 @@ class RainPointClient:
             data = await resp.json()
         _LOGGER.debug("API response: get_devices_by_hid data=%s", data)
         if data.get("code") != 0:
+            self._maybe_invalidate_token(data.get("code"))
             _LOGGER.debug("getDeviceByHid failed response: %s", data)
             raise RainPointApiError(f"getDeviceByHid failed: code {data.get('code')}")
         return data.get("data", [])
@@ -307,6 +329,7 @@ class RainPointClient:
             data = await resp.json()
         _LOGGER.debug("API response: get_multiple_device_status data=%s", data)
         if data.get("code") != 0:
+            self._maybe_invalidate_token(data.get("code"))
             _LOGGER.debug("multipleDeviceStatus failed response: %s", data)
             raise RainPointApiError(f"multipleDeviceStatus failed: code {data.get('code')}")
 
@@ -331,6 +354,7 @@ class RainPointClient:
             data = await resp.json()
         _LOGGER.debug("API response: get_device_status data=%s", data)
         if data.get("code") != 0:
+            self._maybe_invalidate_token(data.get("code"))
             _LOGGER.debug("getDeviceStatus failed response: %s", data)
             raise RainPointApiError(f"getDeviceStatus failed: code {data.get('code')}")
         return data.get("data", {})
@@ -383,6 +407,7 @@ class RainPointClient:
             sorted(resp_data.keys()),
         )
         if data.get("code") != 0:
+            self._maybe_invalidate_token(data.get("code"))
             _LOGGER.debug("subscribeStatus failed response: code=%s", data.get("code"))
             raise RainPointApiError(f"subscribeStatus failed: code {data.get('code')}")
         return resp_data
@@ -403,6 +428,7 @@ class RainPointClient:
                 raise RainPointApiError(f"Failed to set device state: {resp.status}")
             data = await resp.json()
             if data.get("code") != 0:
+                self._maybe_invalidate_token(data.get("code"))
                 raise RainPointApiError(f"Set device state API error: {data.get('msg')}")
             return True
 
@@ -461,6 +487,7 @@ class RainPointClient:
             # Code 4 = device already in requested state or transitioning — not fatal
             _LOGGER.info("controlWorkMode: device already in requested state (code 4, idempotent): %s", data)
         elif code != 0:
+            self._maybe_invalidate_token(code)
             _LOGGER.debug("controlWorkMode failed response: %s", data)
             raise RainPointApiError(f"controlWorkMode failed: code {code}")
         resp_data = data.get("data")
