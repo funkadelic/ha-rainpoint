@@ -93,12 +93,14 @@ class TestConstructorSeams:
         assert "time_source" in sig.parameters
 
 
-class TestAsyncStartSubscribesBothTopics:
-    """D-04: subscribe to both service/property/set and event/property/post."""
+class TestConnectDoesNotSubscribe:
+    """The observer's productKey forbids client subscriptions: any SUBSCRIBE
+    force-closes the connection, and the broker auto-delivers downlink messages
+    unsolicited, so the client must never call subscribe()."""
 
     @pytest.mark.asyncio
-    async def test_async_start_subscribes_both_topics(self):
-        """async_start() launches the supervisor, which subscribes both formatted topics."""
+    async def test_async_start_never_subscribes(self):
+        """async_start() launches the supervisor, which connects but never subscribes."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -107,24 +109,10 @@ class TestAsyncStartSubscribesBothTopics:
         await client.async_start()
         await _settle()
 
-        subscribed_topics = [call.args[0] for call in fake_paho.subscribe.call_args_list]
-        assert "/sys/pk123/name-A/thing/service/property/set" in subscribed_topics
-        assert "/sys/pk123/name-A/thing/event/property/post" in subscribed_topics
-        assert len(subscribed_topics) == 2
+        fake_paho.connect.assert_called()
+        fake_paho.subscribe.assert_not_called()
 
         await client.async_disconnect()
-
-    @pytest.mark.asyncio
-    async def test_subscribe_before_connect_raises(self):
-        """_subscribe() called before _connect() raises RainPointMqttError (no live socket yet)."""
-        loop = asyncio.get_running_loop()
-        hass = _make_hass(loop)
-        fake_paho = _make_fake_paho()
-        client = _make_mqtt_client(hass, fake_paho)
-
-        creds = _fake_creds()
-        with pytest.raises(RainPointMqttError):
-            client._subscribe(creds)
 
 
 class TestMessageReceiptLogging:
@@ -735,7 +723,7 @@ class TestCredentialRenewal:
     @pytest.mark.asyncio
     async def test_renewal_crosses_boundary_and_reconnects_with_fresh_creds(self):
         """Crossing the (patched-instant) renewal deadline re-fetches creds, disconnects
-        the old paho client, and reconnects+resubscribes a new one (D-15b/D-06)."""
+        the old paho client, and reconnects a new one."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         client, rainpoint_client, instances = _make_mqtt_client_with_distinct_paho_instances(hass)
@@ -753,8 +741,8 @@ class TestCredentialRenewal:
         assert len(instances) >= 2
         first_paho.loop_stop.assert_called()
         first_paho.disconnect.assert_called()
-        # The new client subscribed to both topics again after renewal.
-        assert instances[-1].subscribe.call_count == 2
+        # The reconnected client still never subscribes.
+        instances[-1].subscribe.assert_not_called()
 
         await client.async_disconnect()
 
@@ -824,13 +812,58 @@ class TestRenewalDelayFormula:
         samples = {client._renewal_delay_seconds(1570.0, 1000.0) for _ in range(10)}
 
         assert len(samples) > 1
-        assert all(510.0 * 0.7 <= delay <= 510.0 * 1.3 for delay in samples)
+        # Upper bound is now the safe deadline (510), not 510*1.3: positive jitter
+        # is clipped so renewal never lands after expiry.
+        assert all(510.0 * 0.7 <= delay <= 510.0 for delay in samples)
+
+    def test_renewal_delay_never_exceeds_safe_deadline_under_max_jitter(self):
+        """A short-lived credential must renew before expiry even when jitter and
+        the 120s floor would otherwise push the delay past the expiry deadline."""
+        client = self._client()
+        now = 1000.0
+        expire_at = now + 150.0  # 150s lifetime: base delay hits the 120s floor
+        latest_safe = expire_at - now - mqtt_module._RENEWAL_SAFETY_MARGIN_SECONDS  # 90.0
+        # Force jitter to inflate the delay far past the deadline; the cap must hold.
+        with patch.object(RainPointMqttClient, "_apply_jitter", staticmethod(lambda value: value * 10)):
+            delay = client._renewal_delay_seconds(expire_at, now)
+        assert delay == latest_safe
+        assert delay < (expire_at - now)  # renews strictly before expiry
+
+    def _client_with_wall_clock(self, wall_now):
+        rainpoint_client = MagicMock()
+        rainpoint_client.get_subscribe_status = AsyncMock(return_value=_fake_creds())
+        return RainPointMqttClient(
+            MagicMock(),
+            rainpoint_client,
+            entry=MagicMock(),
+            hub_device_name="h",
+            hub_product_key="p",
+            paho_client_factory=MagicMock(return_value=_make_fake_paho()),
+            time_source=lambda: 1000.0,
+            wall_clock_source=lambda: wall_now,
+        )
 
     def test_credential_lifetime_defaults_when_absent(self):
-        assert RainPointMqttClient._credential_lifetime_seconds({}) == mqtt_module._DEFAULT_CREDENTIAL_LIFETIME_SECONDS
+        assert self._client()._credential_lifetime_seconds({}) == mqtt_module._DEFAULT_CREDENTIAL_LIFETIME_SECONDS
 
-    def test_credential_lifetime_uses_expire_field_when_present(self):
-        assert RainPointMqttClient._credential_lifetime_seconds({"expire": 300}) == 300.0
+    def test_credential_lifetime_converts_absolute_expire_ms_to_remaining_seconds(self):
+        # expire is an absolute epoch in MILLISECONDS; lifetime is (expire/1000 - wall_now).
+        wall_now = 1_784_786_000.0
+        client = self._client_with_wall_clock(wall_now)
+        creds = {"expire": (wall_now + 300.0) * 1000}
+        assert client._credential_lifetime_seconds(creds) == 300.0
+
+    def test_credential_lifetime_clamps_far_future_expire_to_default_ceiling(self):
+        wall_now = 1_784_786_000.0
+        client = self._client_with_wall_clock(wall_now)
+        creds = {"expire": (wall_now + 100_000.0) * 1000}
+        assert client._credential_lifetime_seconds(creds) == mqtt_module._DEFAULT_CREDENTIAL_LIFETIME_SECONDS
+
+    def test_credential_lifetime_falls_back_when_expire_already_passed(self):
+        wall_now = 1_784_786_000.0
+        client = self._client_with_wall_clock(wall_now)
+        creds = {"expire": (wall_now - 50.0) * 1000}
+        assert client._credential_lifetime_seconds(creds) == mqtt_module._DEFAULT_CREDENTIAL_LIFETIME_SECONDS
 
 
 class TestProtocolTimestampUsesWallClock:
