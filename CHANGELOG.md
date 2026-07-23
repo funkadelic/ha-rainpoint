@@ -5,6 +5,12 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.8.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.7.1...v1.8.0) (2026-07-23)
 
 
+### What's new
+
+- **Real-time updates (optional, off by default).** Your RainPoint valves, sensors, and other devices can now show changes in Home Assistant almost instantly, instead of waiting for the usual two-minute refresh. It stays optional and is turned off by default. To turn it on: open **Settings → Devices & Services → RainPoint Cloud → Configure**, tick **Enable push updates**, and save. The regular two-minute polling keeps running as a fallback, so nothing breaks if you leave it off or the connection briefly drops.
+- **More reliable sign-in.** Resolved a run of recent login and connection failures that could leave the integration stuck as "not ready" or repeatedly retrying. Getting set up and staying connected is now much steadier.
+
+
 ### Added
 
 * add Hungary (+36) to the country code list ([#87](https://github.com/funkadelic/ha-rainpoint/issues/87)) ([aa3a47d](https://github.com/funkadelic/ha-rainpoint/commit/aa3a47de1340cf314775b03419dcfd8ea27d5a85))
@@ -55,7 +61,7 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ### Added
 
-* adding 3 valve HTV345FRF integration; polling fix ([#60](https://github.com/funkadelic/ha-rainpoint/issues/60)) ([3a90bcb](https://github.com/funkadelic/ha-rainpoint/commit/3a90bcb5f06c7f7a27abf3232d925d54e36241fa))
+* adding 3 valve HTV345FRF integration; polling fix ([#60](https://github.com/funkadelic/ha-rainpoint/issues/60)) ([3a90bcb](https://github.com/funkadelic/ha-rainpoint/commit/3a90bcb5f06c7f7a27abf3232d925d54e36241fa)) - thanks to first-time contributor @spenceh14 🎉
 
 
 ### Other Changes
