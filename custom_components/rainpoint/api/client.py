@@ -8,6 +8,7 @@ with the RainPoint cloud API.
 import asyncio
 import hashlib
 import logging
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
@@ -334,17 +335,41 @@ class RainPointClient:
             raise RainPointApiError(f"getDeviceStatus failed: code {data.get('code')}")
         return data.get("data", {})
 
-    async def get_subscribe_status(self, device_name: str, product_key: str) -> dict:
+    async def get_subscribe_status(self, device_name: str, product_key: str, mid: int, hid) -> dict:
         """Fetch fresh per-session MQTT observer credentials from subscribeStatus.
 
-        device_name/product_key identify the hub (sourced from the hub record,
-        not a second login call). The response carries
-        deviceSecret; it must never be logged in the clear.
+        device_name/product_key/mid identify the hub (sourced from the hub
+        record, not a second login call); hid is the home the hub belongs to.
+        The server requires the full subscribe envelope -- hid, hidList, a
+        subscribe device list (which must carry the mid), and userInfo -- and
+        rejects a bare {deviceName, productKey} with code 9999 "must not be
+        null". The response carries deviceSecret; it must never be logged in the
+        clear.
         """
         await self.ensure_logged_in()
         url = f"{self._base_url}/app/device/subscribeStatus"
-        payload = {"userInfo": {"deviceName": device_name, "productKey": product_key}}
-        _LOGGER.debug("API call: get_subscribe_status URL=%s deviceName=%s productKey=%s", url, device_name, product_key)
+        hid_str = str(hid)
+        payload = {
+            "hid": hid_str,
+            "hidList": [hid_str],
+            "subscribe": [{"deviceName": device_name, "mid": mid, "productKey": product_key}],
+            "unsubscribe": [],
+            "userInfo": {
+                "deviceName": device_name,
+                "deviceType": 1,
+                "notice": 0,
+                "productKey": product_key,
+                "pushId": uuid.uuid4().hex,
+            },
+        }
+        _LOGGER.debug(
+            "API call: get_subscribe_status URL=%s deviceName=%s productKey=%s mid=%s hid=%s",
+            url,
+            device_name,
+            product_key,
+            mid,
+            hid_str,
+        )
         async with self._session.post(url, json=payload, headers=self._auth_headers()) as resp:
             if resp.status != 200:
                 raise RainPointApiError(f"subscribeStatus HTTP {resp.status}")

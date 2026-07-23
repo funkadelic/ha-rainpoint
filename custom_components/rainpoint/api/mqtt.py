@@ -169,6 +169,7 @@ class RainPointMqttClient:
         *,
         coordinator=None,
         hub_mid=None,
+        hub_hid=None,
         paho_client_factory=paho_mqtt.Client,
         time_source=time.monotonic,
         wall_clock_source=time.time,
@@ -185,6 +186,8 @@ class RainPointMqttClient:
         # this client ever calls.
         self._coordinator = coordinator
         self._hub_mid = hub_mid
+        # The hub's home id, needed for the subscribeStatus envelope (hid/hidList).
+        self._hub_hid = hub_hid
         self._paho_client_factory = paho_client_factory
         # Monotonic seam: renewal-interval bookkeeping only (immune to clock steps).
         self._time_source = time_source
@@ -349,7 +352,9 @@ class RainPointMqttClient:
         reconnect-new cycle, never an in-place credential swap). Returns the
         jittered delay in seconds until the next renewal is due.
         """
-        creds = await self._client.get_subscribe_status(self._hub_device_name, self._hub_product_key)
+        creds = await self._client.get_subscribe_status(
+            self._hub_device_name, self._hub_product_key, self._hub_mid, self._hub_hid
+        )
         now = self._time_source()
         self._disconnect_paho()
         await self._connect(creds)

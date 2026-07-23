@@ -36,20 +36,21 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
-def _resolve_hub_identity(coordinator) -> tuple[str | None, str | None, int | None]:
-    """Resolve the first hub's deviceName/productKey/mid for the MQTT client.
+def _resolve_hub_identity(coordinator) -> tuple[str | None, str | None, int | None, int | None]:
+    """Resolve the first hub's deviceName/productKey/mid/hid for the MQTT client.
 
     Hub discovery already scans all configured homes; this just picks the first
-    hub record the coordinator collected. The mid is returned alongside the
-    credential-fetch identity because the push payload does not carry it and the
-    observer topic's deviceName is ephemeral, so the client must be told which
-    hub it belongs to at construction.
+    hub record the coordinator collected. The mid and hid are returned alongside
+    the credential-fetch identity because the push payload does not carry the mid
+    and the subscribeStatus envelope needs the hub's home id, while the observer
+    topic's deviceName is ephemeral, so the client must be told which hub it
+    belongs to at construction.
     """
     hubs = (coordinator.data or {}).get("hubs", [])
     if not hubs:
-        return None, None, None
+        return None, None, None, None
     hub = hubs[0]
-    return hub.get("deviceName"), hub.get("productKey"), hub.get("mid")
+    return hub.get("deviceName"), hub.get("productKey"), hub.get("mid"), hub.get("hid")
 
 
 def _persist_tokens(hass: HomeAssistant, entry: ConfigEntry, client: RainPointClient) -> None:
@@ -118,7 +119,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     if entry.options.get(CONF_PUSH_ENABLED, False):
-        hub_device_name, hub_product_key, hub_mid = _resolve_hub_identity(coordinator)
+        hub_device_name, hub_product_key, hub_mid, hub_hid = _resolve_hub_identity(coordinator)
         if hub_device_name and hub_product_key:
             mqtt_client = RainPointMqttClient(
                 hass,
@@ -128,6 +129,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hub_product_key,
                 coordinator=coordinator,
                 hub_mid=hub_mid,
+                hub_hid=hub_hid,
             )
             hass.data[DOMAIN][entry.entry_id]["mqtt_client"] = mqtt_client
             # Registered immediately after construction so it fires even if a
