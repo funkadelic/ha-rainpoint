@@ -423,6 +423,37 @@ class TestConfigFlowReconfigure:
         assert country_default == "US"
 
     @pytest.mark.asyncio
+    async def test_reconfigure_preserves_stored_country_on_shared_dial_code(self):
+        """An entry with a stored CONF_COUNTRY that shares a dial code with others
+        (e.g. Canada on +1) re-selects that exact country on reconfigure, not the
+        fallback (US). The stored ISO wins over the dial-code resolution path.
+        """
+        flow = _make_flow()
+        flow.hass.config.country = "US"  # HA is US; the entry is Canada
+        flow._reconfigure = True
+
+        mock_entry = MagicMock()
+        mock_entry.data = {
+            CONF_COUNTRY: "CA",
+            CONF_AREA_CODE: "1",
+            CONF_EMAIL: "existing@example.com",
+            CONF_PASSWORD: "oldpass",
+        }
+        flow._get_reconfigure_entry = MagicMock(return_value=mock_entry)
+
+        await flow.async_step_reconfigure(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        country_default = None
+        for key in schema.schema:
+            if getattr(key, "schema", None) == CONF_COUNTRY:
+                raw = key.default
+                country_default = raw() if callable(raw) else raw
+                break
+
+        assert country_default == "CA"
+
+    @pytest.mark.asyncio
     async def test_reconfigure_no_homes_shows_error(self):
         """Reconfigure with empty homes list surfaces a no_homes error on the form."""
         flow = self._make_reconfigure_flow()

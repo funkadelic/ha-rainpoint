@@ -112,6 +112,22 @@ sys.modules["homeassistant.helpers.update_coordinator"] = _update_coordinator_st
 sys.modules["homeassistant.helpers"].update_coordinator = _update_coordinator_stub
 
 
+# homeassistant.generated.countries.COUNTRIES is HA's authoritative ISO set that
+# CountrySelector validates against. Stub it with a container that accepts any
+# code so config-flow tests exercise the full picker; the real intersection is
+# tested directly in test_country_codes.py with explicit sets.
+class _AllCountries:
+    def __contains__(self, item):
+        return True
+
+
+_generated_stub = _make_stub("homeassistant.generated")
+sys.modules["homeassistant"].generated = _generated_stub
+_countries_stub = _make_stub("homeassistant.generated.countries")
+_generated_stub.countries = _countries_stub
+_countries_stub.COUNTRIES = _AllCountries()
+
+
 # ---------------------------------------------------------------------------
 # Provide real Python base classes for HA entity hierarchy.
 #

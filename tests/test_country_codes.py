@@ -3,10 +3,9 @@
 from unittest.mock import MagicMock
 
 from custom_components.rainpoint.country_codes import (
-    COUNTRY_NAMES,
     COUNTRY_TO_PHONE_CODE,
-    get_country_code_options,
     get_default_country_code,
+    get_supported_countries,
     resolve_country_from_phone_code,
 )
 
@@ -88,69 +87,57 @@ class TestCountryToPhoneCodeMap:
         """Hu is 36."""
         assert COUNTRY_TO_PHONE_CODE["HU"] == "36"
 
+    def test_covers_all_countries(self):
+        """The generated map is comprehensive, not the old ~50-entry curated list."""
+        assert len(COUNTRY_TO_PHONE_CODE) > 200
 
-class TestCountryNames:
-    """Tests for COUNTRY_NAMES mapping."""
+    def test_includes_previously_missing_countries(self):
+        """Countries absent from the old curated list are now present, incl. the
+        Malta (+356) entry this change was filed to add."""
+        assert COUNTRY_TO_PHONE_CODE["MT"] == "356"
+        assert COUNTRY_TO_PHONE_CODE["PK"] == "92"
+        assert COUNTRY_TO_PHONE_CODE["UA"] == "380"
 
-    def test_every_phone_code_has_a_country_name(self):
-        """Each ISO code in COUNTRY_TO_PHONE_CODE must have a display name."""
-        missing = [iso for iso in COUNTRY_TO_PHONE_CODE if iso not in COUNTRY_NAMES]
-        assert not missing, f"Missing display names for: {missing}"
+    def test_every_value_is_a_digit_string(self):
+        """Every dial code is a non-empty string of digits (no '+' prefix, no spaces)."""
+        assert all(code.isdigit() for code in COUNTRY_TO_PHONE_CODE.values())
 
-    def test_us_name(self):
-        """US maps to United States."""
-        assert COUNTRY_NAMES["US"] == "United States"
-
-    def test_gb_name(self):
-        """GB maps to United Kingdom."""
-        assert COUNTRY_NAMES["GB"] == "United Kingdom"
-
-    def test_hu_name(self):
-        """HU maps to Hungary."""
-        assert COUNTRY_NAMES["HU"] == "Hungary"
+    def test_every_key_is_iso_alpha2(self):
+        """Every key is a two-letter uppercase ISO 3166-1 alpha-2 code."""
+        assert all(len(iso) == 2 and iso.isupper() and iso.isalpha() for iso in COUNTRY_TO_PHONE_CODE)
 
 
-class TestGetCountryCodeOptions:
-    """Tests for get_country_code_options dropdown helper."""
+class TestGetSupportedCountries:
+    """Tests for get_supported_countries, backing the config-flow country picker."""
 
-    def test_returns_list_of_dicts(self):
-        """Returns a non-empty list of {value, label} dicts."""
-        options = get_country_code_options()
-        assert isinstance(options, list)
-        assert options
-        assert all(set(o.keys()) == {"value", "label"} for o in options)
+    def test_returns_sorted_iso_codes(self):
+        """Returns the ISO codes sorted so the picker restriction is stable."""
+        countries = get_supported_countries()
+        assert countries == sorted(COUNTRY_TO_PHONE_CODE)
+        assert countries == sorted(countries)
 
-    def test_values_are_iso_codes(self):
-        """Every option value is one of the known ISO country codes."""
-        options = get_country_code_options()
-        values = {o["value"] for o in options}
-        assert values == set(COUNTRY_TO_PHONE_CODE.keys())
+    def test_covers_every_mapped_country(self):
+        """Every country with a dial code is offered in the picker."""
+        assert set(get_supported_countries()) == set(COUNTRY_TO_PHONE_CODE)
 
-    def test_us_and_ca_are_separate_rows(self):
-        """US and CA share dial code +1 but appear as two distinct options."""
-        options = get_country_code_options()
-        labels_by_value = {o["value"]: o["label"] for o in options}
-        assert "United States" in labels_by_value["US"]
-        assert "Canada" in labels_by_value["CA"]
-        assert "+1" in labels_by_value["US"]
-        assert "+1" in labels_by_value["CA"]
-
-    def test_label_format_includes_plus_prefix(self):
-        """Labels show the dial code with a '+' prefix."""
-        options = {o["value"]: o["label"] for o in get_country_code_options()}
-        assert "+44" in options["GB"]
-        assert "United Kingdom" in options["GB"]
-
-    def test_options_sorted_alphabetically_by_label(self):
-        """Options are sorted by label so dropdown entries are browsable."""
-        labels = [o["label"] for o in get_country_code_options()]
-        assert labels == sorted(labels)
-
-    def test_fallback_country_is_in_options(self):
+    def test_fallback_country_is_selectable(self):
         """US fallback used by get_default_country must be selectable."""
-        options = {o["value"]: o["label"] for o in get_country_code_options()}
-        assert "US" in options
-        assert "United States" in options["US"]
+        assert "US" in get_supported_countries()
+
+    def test_filters_against_valid_country_set(self):
+        """When given HA's supported set, only its intersection is offered, sorted."""
+        assert get_supported_countries({"US", "GB", "MT"}) == ["GB", "MT", "US"]
+
+    def test_excludes_codes_home_assistant_rejects(self):
+        """Codes we carry a dial code for but HA's CountrySelector rejects (AC, TA,
+        XK) are filtered out so the picker never offers a submit that would fail."""
+        # Simulate HA's set as everything we map except the three HA does not support.
+        ha_countries = set(COUNTRY_TO_PHONE_CODE) - {"AC", "TA", "XK"}
+        offered = get_supported_countries(ha_countries)
+        assert "AC" not in offered
+        assert "TA" not in offered
+        assert "XK" not in offered
+        assert "MT" in offered  # a real country HA supports stays selectable
 
 
 class TestResolveCountryFromPhoneCode:
@@ -164,13 +151,17 @@ class TestResolveCountryFromPhoneCode:
         """If preferred_iso's dial code doesn't match, fall through to any matching ISO."""
         assert resolve_country_from_phone_code("44", preferred_iso="US") == "GB"
 
+    def test_shared_dial_code_prefers_fallback_country(self):
+        """+1 is shared by ~20 territories; a legacy +1 entry resolves to US, not the
+        first territory alphabetically (Antigua), even when preferred_iso doesn't match."""
+        assert resolve_country_from_phone_code("1", preferred_iso="GB") == "US"
+
     def test_unknown_phone_code_returns_fallback_not_preferred(self):
         """Bogus stored dial codes should not silently pre-select the preferred ISO."""
-        # preferred_iso="GB" (dial code "44") does not match "999"; returning
+        # preferred_iso="GB" (dial code "44") does not match "9999"; returning
         # GB would imply a match that doesn't exist. Use the explicit fallback
-        # (US) instead. Using GB here keeps the test discriminative vs. the
-        # fallback, which is itself US.
-        assert resolve_country_from_phone_code("999", preferred_iso="GB") == "US"
+        # (US) instead. "9999" maps to no country in the table.
+        assert resolve_country_from_phone_code("9999", preferred_iso="GB") == "US"
 
     def test_no_phone_code_returns_preferred(self):
         """Fresh entries with no legacy phone_code should use the preferred ISO."""
