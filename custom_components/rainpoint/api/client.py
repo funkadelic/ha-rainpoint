@@ -23,6 +23,15 @@ _LOGGER = logging.getLogger(__name__)
 # sustained ban.
 _LOGIN_COOLDOWN_SECONDS = 120
 
+# The RainPoint cloud edge (nginx) returns a bare HTTP 403 for Home Assistant's
+# default aiohttp User-Agent ("HomeAssistant/<ver> aiohttp/<ver> Python/<ver>")
+# before the request reaches the application, so every API call must send a
+# different one. The block targets the HomeAssistant User-Agent specifically:
+# browser, okhttp, and plain aiohttp User-Agents all pass, so any ordinary
+# non-bot value works. okhttp is a common mobile HTTP stack; this is not pinned
+# to a captured app version.
+_USER_AGENT = "okhttp/4.9.3"
+
 
 class RainPointApiError(Exception):
     pass
@@ -103,6 +112,7 @@ class RainPointClient:
             "appCode": self._app_code,  # Hardcoded to RainPoint appCode "2"
             "version": "1.16.1065",
             "sceneType": "1",
+            "User-Agent": _USER_AGENT,
         }
 
     def restore_tokens(self, data: dict) -> None:
@@ -190,7 +200,12 @@ class RainPointClient:
 
         _LOGGER.debug("RainPoint login request for %s with appCode=%s", self._email, self._app_code)
 
-        login_headers = {"Content-Type": "application/json", "lang": "en", "appCode": self._app_code}
+        login_headers = {
+            "Content-Type": "application/json",
+            "lang": "en",
+            "appCode": self._app_code,
+            "User-Agent": _USER_AGENT,
+        }
         async with self._session.post(url, json=payload, headers=login_headers) as resp:
             if resp.status == 403:
                 # A hard edge/WAF block -- the server is refusing us outright,

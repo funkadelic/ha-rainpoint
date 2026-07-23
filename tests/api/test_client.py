@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointThrottledError
-from custom_components.rainpoint.api.client import _redact_secret
+from custom_components.rainpoint.api.client import _USER_AGENT, _redact_secret
 
 
 def _make_client() -> RainPointClient:
@@ -293,6 +293,10 @@ class TestLogin:
         expected_md5 = hashlib.md5(b"testpass").hexdigest()
         assert expected_md5 == "179ad45c6ce2cb97cf1029e212046e81"
         assert payload["password"] == expected_md5
+
+        # Login must also send the app-like User-Agent; the default one is 403'd.
+        headers = call_kwargs.kwargs.get("headers")
+        assert headers["User-Agent"] == _USER_AGENT
 
     @pytest.mark.asyncio
     async def test_login_device_id_deterministic(self):
@@ -707,6 +711,10 @@ class TestAuthHeaders:
 
         assert headers["auth"] == "mytoken"
         assert headers["appCode"] == "2"
+        # The RainPoint edge 403s Home Assistant's default User-Agent, so every
+        # authed call must present the app-like one.
+        assert headers["User-Agent"] == _USER_AGENT
+        assert "HomeAssistant" not in _USER_AGENT
 
     def test_auth_headers_no_token_raises(self):
         """_auth_headers raises RainPointApiError when no token is set."""
