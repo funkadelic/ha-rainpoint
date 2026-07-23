@@ -72,8 +72,8 @@ class RainPointDebugSwitchEntity(SwitchEntity):
 
             _LOGGER.info(debug_with_version("Debug data submission completed successfully"))
 
-        except Exception as ex:
-            _LOGGER.error(debug_with_version(f"Debug data submission failed: {ex}"))
+        except Exception:
+            _LOGGER.exception(debug_with_version("Debug data submission failed"))
 
             # Show error notification
             self.hass.async_create_task(
@@ -108,8 +108,8 @@ class RainPointDebugSwitchEntity(SwitchEntity):
                 # Submit to worker
                 await self._post_to_worker(device_data)
                 successful_submissions += 1
-            except Exception as ex:
-                _LOGGER.error(debug_with_version(f"Failed to submit device {device_data.get('device_model')}: {ex}"))
+            except Exception:
+                _LOGGER.exception(debug_with_version("Failed to submit device %s"), device_data.get("device_model"))
                 failed_submissions += 1
 
         _LOGGER.info(

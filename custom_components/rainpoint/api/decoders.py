@@ -44,7 +44,7 @@ def decode_htv213frf_valve(raw: str) -> dict:
             raise ValueError(f"Unexpected payload format: {raw}")
 
     except Exception as e:
-        _LOGGER.error("HTV213FRF router error for payload %r: %s", raw, e, exc_info=True)
+        _LOGGER.exception("HTV213FRF router error for payload %r", raw)
         return {
             "type": "valve_hub",
             "rssi_dbm": 0,
@@ -160,8 +160,8 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
         )
         return result
 
-    except Exception as e:
-        _LOGGER.error("HTV213FRF ASCII decoder error for payload %r: %s", raw, e, exc_info=True)
+    except Exception:
+        _LOGGER.exception("HTV213FRF ASCII decoder error for payload %r", raw)
         raise
 
 
@@ -318,8 +318,8 @@ def _decode_htv213frf_hex(raw: str) -> dict:
             "decoder": "htv213frf_hex",
         }
 
-    except Exception as e:
-        _LOGGER.error("HTV213FRF hex decoder error for payload %r: %s", raw, e, exc_info=True)
+    except Exception:
+        _LOGGER.exception("HTV213FRF hex decoder error for payload %r", raw)
         raise
 
 
@@ -448,7 +448,7 @@ def decode_moisture_full(raw: str) -> dict:
             raise ValueError(f"Unexpected payload format: {raw}")
 
     except Exception as e:
-        _LOGGER.error("HCS021FRF decoder error: %s", e)
+        _LOGGER.exception("HCS021FRF decoder error")
         return {"type": "moisture_full", "rssi_dbm": 0, "raw_bytes": [], "decoder": "hcs021frf_error", "error": str(e)}
 
 
@@ -548,8 +548,8 @@ def _decode_moisture_full_ascii(raw: str) -> dict:
         )
         return result
 
-    except Exception as e:
-        _LOGGER.error("HCS021FRF ASCII decoder error: %s", e)
+    except Exception:
+        _LOGGER.exception("HCS021FRF ASCII decoder error")
         raise
 
 
@@ -772,7 +772,7 @@ def decode_hws019wrf_v2(raw: str) -> dict:
         _LOGGER.debug("decode_hws019wrf_v2 result: %r", result)
         return result
     except (ValueError, IndexError) as ex:
-        _LOGGER.error("Failed to decode HWS019WRF-V2 payload: %s (raw: %r)", ex, raw)
+        _LOGGER.exception("Failed to decode HWS019WRF-V2 payload (raw: %r)", raw)
         return {"type": "hws019wrf_v2", "raw": raw, "error": str(ex)}
 
 
@@ -891,7 +891,7 @@ def decode_valve_hub(raw: str) -> dict:
         return result
 
     except Exception as e:
-        _LOGGER.error("Valve hub decoder error: %s", e)
+        _LOGGER.exception("Valve hub decoder error")
         return _valve_hub_error_result(str(e))
 
 
@@ -1016,8 +1016,8 @@ def decode_flow_meter(raw: str) -> dict:
         # Basic flow parsing - can be enhanced with exact RainPoint logic later
         _LOGGER.debug(debug_with_version("HCS008FRF basic parsing completed"))
 
-    except Exception as e:
-        _LOGGER.error(debug_with_version("Error in HCS008FRF decoder: %s"), e)
+    except Exception:
+        _LOGGER.exception(debug_with_version("Error in HCS008FRF decoder"))
 
     return result
 
@@ -1050,8 +1050,8 @@ def decode_pool_plus(raw: str) -> dict:
         # Basic CO2 parsing - can be enhanced with exact RainPoint logic later
         _LOGGER.debug(debug_with_version("HCS0530THO basic parsing completed"))
 
-    except Exception as e:
-        _LOGGER.error(debug_with_version("Error in HCS0530THO decoder: %s"), e)
+    except Exception:
+        _LOGGER.exception(debug_with_version("Error in HCS0530THO decoder"))
 
     return result
 
@@ -1074,8 +1074,8 @@ def decode_soil(raw: str) -> dict:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
 
-    except Exception as e:
-        _LOGGER.error(debug_with_version("Error in soil decoder: %s"), e)
+    except Exception:
+        _LOGGER.exception(debug_with_version("Error in soil decoder"))
 
     return result
 
@@ -1098,8 +1098,8 @@ def decode_temp_hum(raw: str) -> dict:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
 
-    except Exception as e:
-        _LOGGER.error(debug_with_version("Error in temp/hum decoder: %s"), e)
+    except Exception:
+        _LOGGER.exception(debug_with_version("Error in temp/hum decoder"))
 
     return result
 
@@ -1122,8 +1122,8 @@ def decode_temp_hum_full(raw: str) -> dict:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
 
-    except Exception as e:
-        _LOGGER.error(debug_with_version("Error in full temp/hum decoder: %s"), e)
+    except Exception:
+        _LOGGER.exception(debug_with_version("Error in full temp/hum decoder"))
 
     return result
 
@@ -1146,8 +1146,8 @@ def decode_co2(raw: str) -> dict:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
 
-    except Exception as e:
-        _LOGGER.error(debug_with_version("Error in CO2 decoder: %s"), e)
+    except Exception:
+        _LOGGER.exception(debug_with_version("Error in CO2 decoder"))
 
     return result
 
@@ -1170,8 +1170,8 @@ def decode_display(raw: str) -> dict:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
 
-    except Exception as e:
-        _LOGGER.error(debug_with_version("Error in display decoder: %s"), e)
+    except Exception:
+        _LOGGER.exception(debug_with_version("Error in display decoder"))
 
     return result
 
@@ -1194,8 +1194,8 @@ def decode_unknown(raw: str) -> dict:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
 
-    except Exception as e:
-        _LOGGER.error(debug_with_version("Error in unknown decoder: %s"), e)
+    except Exception:
+        _LOGGER.exception(debug_with_version("Error in unknown decoder"))
 
     return result
 
@@ -1219,8 +1219,8 @@ def decode_temphum(raw: str) -> dict:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
 
-    except Exception as e:
-        _LOGGER.error(debug_with_version("Error in HCS014ARF decoder: %s"), e)
+    except Exception:
+        _LOGGER.exception(debug_with_version("Error in HCS014ARF decoder"))
 
     return result
 
@@ -1243,8 +1243,8 @@ def decode_pool(raw: str) -> dict:
             result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
 
-    except Exception as e:
-        _LOGGER.error(debug_with_version("Error in HCS0528ARF decoder: %s"), e)
+    except Exception:
+        _LOGGER.exception(debug_with_version("Error in HCS0528ARF decoder"))
 
     return result
 
