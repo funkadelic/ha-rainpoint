@@ -39,8 +39,10 @@ DEBUG_SUBMISSION_INTERVAL = 86400  # 24 hours in seconds
 
 # === Push channel (MQTT) ===
 CONF_PUSH_ENABLED = "push_enabled"
-MQTT_TOPIC_PROPERTY_SET = "/sys/{product_key}/{device_name}/thing/service/property/set"
-MQTT_TOPIC_EVENT_POST = "/sys/{product_key}/{device_name}/thing/event/property/post"
+# No subscribe topics: the observer's productKey policy forbids client
+# subscriptions (any SUBSCRIBE force-closes the connection), and the broker
+# auto-delivers the hub's thing/service/property/set downlink messages to the
+# connected device unsolicited. See _parse_push_envelope for the payload shape.
 MQTT_BROKER_HOST_TEMPLATE = "{product_key}.iot-as-mqtt.us-west-1.aliyuncs.com"
 # TLS port. The credential's mqttHostUrl advertises the vendor's plaintext 1883,
 # but the same broker also serves TLS on 8883. We always connect over TLS and

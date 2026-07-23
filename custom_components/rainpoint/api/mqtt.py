@@ -4,10 +4,11 @@ RainPoint MQTT push channel client.
 Connects to the Alibaba Cloud IoT (Aliyun) MQTT broker using fresh,
 per-session observer credentials fetched from RainPointClient.get_subscribe_status().
 A single owned asyncio.Task (_run_supervisor) drives the full lifecycle --
-connect, subscribe, wait, renew, reconnect -- indefinitely under jittered
-backoff. It subscribes to both candidate state topics and
-logs message receipt; it never touches coordinator state -- feeding push
-data into coordinator.data is out of scope here.
+connect, wait, renew, reconnect -- indefinitely under jittered backoff. It
+deliberately never SUBSCRIBEs: the observer's productKey policy forbids client
+subscriptions (any SUBSCRIBE force-closes the connection with "Unspecified
+error"), and the broker auto-delivers the hub's thing/service/property/set
+downlink messages to the connected device without one.
 
 Transport is TLS on port 8883, verified against a pinned private root CA
 ("Aliyun IoT Root CA") that is absent from public trust stores -- the broker's
@@ -42,8 +43,6 @@ from ..const import (
     MQTT_PUSH_TIME_FIELD,
     MQTT_PUSH_VALUE_FIELD,
     MQTT_TLS_CA_CERT,
-    MQTT_TOPIC_EVENT_POST,
-    MQTT_TOPIC_PROPERTY_SET,
 )
 from .client import RainPointClient
 
@@ -152,10 +151,11 @@ _DEFAULT_CREDENTIAL_LIFETIME_SECONDS = 570.0
 class RainPointMqttClient:
     """Supervised push channel to the RainPoint MQTT broker.
 
-    One owned asyncio.Task (_run_supervisor) connects, subscribes, renews
-    credentials before their ~570s expiry via a clean disconnect-old/
-    reconnect-new cycle, and retries indefinitely under jittered backoff on
-    any failure. paho's own auto-reconnect is disabled so the supervisor is
+    One owned asyncio.Task (_run_supervisor) connects, renews credentials
+    before their expiry via a clean disconnect-old/reconnect-new cycle, and
+    retries indefinitely under jittered backoff on any failure. It never
+    SUBSCRIBEs -- the broker pushes downlink messages to the connected device
+    unsolicited. paho's own auto-reconnect is disabled so the supervisor is
     the sole reconnect authority.
     """
 
@@ -349,8 +349,10 @@ class RainPointMqttClient:
 
         Reused both for the very first connect and every subsequent renewal
         cycle (renewal is a clean disconnect-old/
-        reconnect-new cycle, never an in-place credential swap). Returns the
-        jittered delay in seconds until the next renewal is due.
+        reconnect-new cycle, never an in-place credential swap). No SUBSCRIBE
+        follows the connect: the observer's productKey forbids client
+        subscriptions and the broker pushes downlink messages unsolicited.
+        Returns the jittered delay in seconds until the next renewal is due.
         """
         creds = await self._client.get_subscribe_status(
             self._hub_device_name, self._hub_product_key, self._hub_mid, self._hub_hid
@@ -358,21 +360,24 @@ class RainPointMqttClient:
         now = self._time_source()
         self._disconnect_paho()
         await self._connect(creds)
-        self._subscribe(creds)
         expire_at = now + self._credential_lifetime_seconds(creds)
         return self._renewal_delay_seconds(expire_at, now)
 
-    @staticmethod
-    def _credential_lifetime_seconds(creds: dict) -> float:
-        """Credential lifetime in seconds from the moment of fetch.
+    def _credential_lifetime_seconds(self, creds: dict) -> float:
+        """Seconds from now until the subscribeStatus credential expires.
 
-        The exact subscribeStatus response field for this was not captured by
-        an earlier connection probe; if present, `expire` is treated as a lifetime-in-
-        seconds duration. Absence defaults to the observed ~570s cycle.
+        `expire` is an absolute Unix epoch in MILLISECONDS (e.g.
+        1784786357107), not a relative lifetime, so it is converted against the
+        current wall clock. The result is clamped to the observed ~570s cycle
+        as a ceiling so a skewed or corrupt timestamp can never stall renewal
+        past a known-safe interval, and falls back to that same default when
+        the field is absent, non-numeric, or already in the past.
         """
-        lifetime = creds.get("expire")
-        if isinstance(lifetime, int | float) and lifetime > 0:
-            return float(lifetime)
+        expire_ms = creds.get("expire")
+        if isinstance(expire_ms, int | float) and not isinstance(expire_ms, bool) and expire_ms > 0:
+            remaining = expire_ms / 1000.0 - self._wall_clock_source()
+            if remaining > 0:
+                return min(remaining, _DEFAULT_CREDENTIAL_LIFETIME_SECONDS)
         return _DEFAULT_CREDENTIAL_LIFETIME_SECONDS
 
     @staticmethod
@@ -494,16 +499,6 @@ class RainPointMqttClient:
         self._paho = paho_client
         self._device_name = device_name
         self._product_key = product_key
-
-    def _subscribe(self, creds: dict) -> None:
-        """Subscribe to both candidate state topics (which one carries state is resolved empirically later)."""
-        if self._paho is None:
-            raise RainPointMqttError("subscribe called before connect")
-        device_name = creds.get("deviceName", "")
-        product_key = creds.get("productKey", "")
-        for template in (MQTT_TOPIC_PROPERTY_SET, MQTT_TOPIC_EVENT_POST):
-            topic = template.format(product_key=product_key, device_name=device_name)
-            self._paho.subscribe(topic)
 
     def _disconnect_paho(self) -> None:
         """Cleanly stop and disconnect the current paho client, if any.
