@@ -10,9 +10,8 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
-    SelectSelector,
-    SelectSelectorConfig,
-    SelectSelectorMode,
+    CountrySelector,
+    CountrySelectorConfig,
 )
 
 from .api import RainPointApiError, RainPointClient, RainPointThrottledError
@@ -27,20 +26,19 @@ from .const import (
 )
 from .country_codes import (
     COUNTRY_TO_PHONE_CODE,
-    get_country_code_options,
     get_default_country,
+    get_supported_countries,
     resolve_country_from_phone_code,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _country_selector() -> SelectSelector:
-    """Build the country dropdown selector (ISO value, 'Name (+code)' label)."""
-    return SelectSelector(
-        SelectSelectorConfig(
-            options=get_country_code_options(),
-            mode=SelectSelectorMode.DROPDOWN,
+def _country_selector() -> CountrySelector:
+    """Build the country picker (HA's localized country dropdown, ISO value)."""
+    return CountrySelector(
+        CountrySelectorConfig(
+            countries=get_supported_countries(),
         )
     )
 
