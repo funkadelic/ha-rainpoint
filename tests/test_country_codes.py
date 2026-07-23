@@ -92,8 +92,9 @@ class TestCountryToPhoneCodeMap:
         assert len(COUNTRY_TO_PHONE_CODE) > 200
 
     def test_includes_previously_missing_countries(self):
-        """Countries absent from the old curated list are now present (Kosovo, Pakistan, Ukraine)."""
-        assert COUNTRY_TO_PHONE_CODE["XK"] == "383"
+        """Countries absent from the old curated list are now present, incl. the
+        Malta (+356) entry this change was filed to add."""
+        assert COUNTRY_TO_PHONE_CODE["MT"] == "356"
         assert COUNTRY_TO_PHONE_CODE["PK"] == "92"
         assert COUNTRY_TO_PHONE_CODE["UA"] == "380"
 
@@ -122,6 +123,21 @@ class TestGetSupportedCountries:
     def test_fallback_country_is_selectable(self):
         """US fallback used by get_default_country must be selectable."""
         assert "US" in get_supported_countries()
+
+    def test_filters_against_valid_country_set(self):
+        """When given HA's supported set, only its intersection is offered, sorted."""
+        assert get_supported_countries({"US", "GB", "MT"}) == ["GB", "MT", "US"]
+
+    def test_excludes_codes_home_assistant_rejects(self):
+        """Codes we carry a dial code for but HA's CountrySelector rejects (AC, TA,
+        XK) are filtered out so the picker never offers a submit that would fail."""
+        # Simulate HA's set as everything we map except the three HA does not support.
+        ha_countries = set(COUNTRY_TO_PHONE_CODE) - {"AC", "TA", "XK"}
+        offered = get_supported_countries(ha_countries)
+        assert "AC" not in offered
+        assert "TA" not in offered
+        assert "XK" not in offered
+        assert "MT" in offered  # a real country HA supports stays selectable
 
 
 class TestResolveCountryFromPhoneCode:

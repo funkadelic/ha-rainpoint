@@ -268,9 +268,21 @@ COUNTRY_TO_PHONE_CODE = {
 _FALLBACK_COUNTRY = "US"
 
 
-def get_supported_countries() -> list[str]:
-    """Return the sorted ISO codes to offer in the config-flow country picker."""
-    return sorted(COUNTRY_TO_PHONE_CODE)
+def get_supported_countries(valid_iso_codes=None) -> list[str]:
+    """Return the sorted ISO codes to offer in the config-flow country picker.
+
+    ``CountrySelector`` validates the chosen code against Home Assistant's
+    generated ``COUNTRIES`` set and rejects anything outside it at submit time,
+    so pass that set as ``valid_iso_codes`` to only offer codes HA accepts. A
+    few exceptionally-reserved regions we carry a dial code for (e.g. AC, TA,
+    XK) are absent from HA's set and are filtered out here to avoid offering a
+    choice that would fail validation. When ``valid_iso_codes`` is None the full
+    table is returned unfiltered.
+    """
+    codes = COUNTRY_TO_PHONE_CODE.keys()
+    if valid_iso_codes is not None:
+        codes = [iso for iso in codes if iso in valid_iso_codes]
+    return sorted(codes)
 
 
 def get_default_country(hass) -> str:

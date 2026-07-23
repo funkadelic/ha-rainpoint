@@ -8,6 +8,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.generated.countries import COUNTRIES
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     CountrySelector,
@@ -38,7 +39,7 @@ def _country_selector() -> CountrySelector:
     """Build the country picker (HA's localized country dropdown, ISO value)."""
     return CountrySelector(
         CountrySelectorConfig(
-            countries=get_supported_countries(),
+            countries=get_supported_countries(COUNTRIES),
         )
     )
 
