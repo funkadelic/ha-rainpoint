@@ -812,7 +812,22 @@ class TestRenewalDelayFormula:
         samples = {client._renewal_delay_seconds(1570.0, 1000.0) for _ in range(10)}
 
         assert len(samples) > 1
-        assert all(510.0 * 0.7 <= delay <= 510.0 * 1.3 for delay in samples)
+        # Upper bound is now the safe deadline (510), not 510*1.3: positive jitter
+        # is clipped so renewal never lands after expiry.
+        assert all(510.0 * 0.7 <= delay <= 510.0 for delay in samples)
+
+    def test_renewal_delay_never_exceeds_safe_deadline_under_max_jitter(self):
+        """A short-lived credential must renew before expiry even when jitter and
+        the 120s floor would otherwise push the delay past the expiry deadline."""
+        client = self._client()
+        now = 1000.0
+        expire_at = now + 150.0  # 150s lifetime: base delay hits the 120s floor
+        latest_safe = expire_at - now - mqtt_module._RENEWAL_SAFETY_MARGIN_SECONDS  # 90.0
+        # Force jitter to inflate the delay far past the deadline; the cap must hold.
+        with patch.object(RainPointMqttClient, "_apply_jitter", staticmethod(lambda value: value * 10)):
+            delay = client._renewal_delay_seconds(expire_at, now)
+        assert delay == latest_safe
+        assert delay < (expire_at - now)  # renews strictly before expiry
 
     def _client_with_wall_clock(self, wall_now):
         rainpoint_client = MagicMock()

@@ -386,8 +386,17 @@ class RainPointMqttClient:
         return max(_RENEWAL_MIN_INTERVAL_SECONDS, expire_at - now - _RENEWAL_SAFETY_MARGIN_SECONDS)
 
     def _renewal_delay_seconds(self, expire_at: float, now: float) -> float:
-        """Jittered renewal cadence: max(120, expire - now - 60) +-10-30%."""
-        return self._apply_jitter(self._renewal_base_delay(expire_at, now))
+        """Jittered renewal cadence, capped so it never lands after expiry.
+
+        Base is max(120, expire - now - 60) with +-10-30% jitter, but both the
+        120s floor and positive jitter can push the delay past a short-lived
+        credential's expiry. Cap the result at the latest safe deadline
+        (expire - now - 60, floored at 0) so renewal always fires before the
+        credential expires, overriding the 120s floor when the lifetime is too
+        short to honor it.
+        """
+        latest_safe_delay = max(0.0, expire_at - now - _RENEWAL_SAFETY_MARGIN_SECONDS)
+        return min(self._apply_jitter(self._renewal_base_delay(expire_at, now)), latest_safe_delay)
 
     async def _wait_for_renewal(self, delay: float) -> None:
         """Wait for the renewal deadline, an on_http_relogin signal, or a stop
