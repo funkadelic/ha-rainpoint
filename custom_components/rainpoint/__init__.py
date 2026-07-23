@@ -9,7 +9,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import RainPointClient
 from .api.mqtt import RainPointMqttClient
-from .const import CONF_PUSH_ENABLED, DOMAIN
+from .const import CONF_PUSH_ENABLED, CONF_TOKEN, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +52,24 @@ def _resolve_hub_identity(coordinator) -> tuple[str | None, str | None, int | No
     return hub.get("deviceName"), hub.get("productKey"), hub.get("mid")
 
 
+def _persist_tokens(hass: HomeAssistant, entry: ConfigEntry, client: RainPointClient) -> None:
+    """Write the client's current token back to the config entry.
+
+    The login endpoint is aggressively rate-limited: a single login succeeds,
+    but repeated logins in quick succession escalate to a sustained HTTP 403
+    block. Runtime re-logins rotate the in-memory token, so persisting it lets a
+    later restart, reload, or setup retry reuse a valid token instead of logging
+    in again. Only token fields change here, so this must not trigger a reload
+    (async_reload_entry ignores data-only changes).
+    """
+    token_data = client.export_tokens()
+    if not token_data.get(CONF_TOKEN):
+        return
+    if all(entry.data.get(key) == value for key, value in token_data.items()):
+        return
+    hass.config_entries.async_update_entry(entry, data={**entry.data, **token_data})
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up RainPoint from a config entry."""
     session = async_get_clientsession(hass)
@@ -60,9 +78,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     email = entry.data["email"]
     password = entry.data["password"]
 
-    client = RainPointClient(area_code, email, password, session)
-    # Restore tokens if present
-    client.restore_tokens(entry.data)
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    entry_store = domain_data.setdefault(entry.entry_id, {})
+    # Snapshot options so the update listener can distinguish an options change
+    # (which needs a reload) from a data-only change like token persistence.
+    entry_store["options_snapshot"] = dict(entry.options)
+
+    # Reuse the client across ConfigEntryNotReady retries. Home Assistant does
+    # not unload the entry between retries, so keeping one client preserves its
+    # login cooldown: a throttle armed on one attempt makes the next attempts
+    # fast-fail without a network call, instead of a fresh client hammering the
+    # rate-limited login endpoint every few seconds.
+    client = entry_store.get("client")
+    if client is None:
+        client = RainPointClient(area_code, email, password, session)
+        client.restore_tokens(entry.data)
+        # Persist rotated tokens so a later restart/reload/retry reuses a valid
+        # token rather than logging in again. Registered once on the client we
+        # keep; retries reuse it without re-registering.
+        client.register_relogin_listener(lambda: _persist_tokens(hass, entry, client))
+        entry_store["client"] = client
 
     # Simple: one coordinator per config entry
     from .coordinator import RainPointCoordinator
@@ -71,11 +106,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await coordinator.async_config_entry_first_refresh()
 
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {
-        "client": client,
-        "coordinator": coordinator,
-    }
+    # A brand-new client that had to log in here holds a fresh token the relogin
+    # listener did not persist (it only fires when a prior token was already
+    # held), so persist whatever we now hold.
+    _persist_tokens(hass, entry, client)
+
+    entry_store["coordinator"] = coordinator
 
     # An options change (e.g. toggling push) reloads through the existing
     # unload->setup path, no bespoke start/stop code path needed.
@@ -134,7 +170,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload a config entry."""
+    """Reload the entry when its options change.
+
+    Registered as the update listener. Token persistence and the debug
+    last-submission timestamp write to entry.data without touching options; a
+    reload rebuilds the client and forces a fresh login against the
+    rate-limited endpoint, so reload only when the options actually change.
+    """
+    store = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if store is not None and store.get("options_snapshot") == dict(entry.options):
+        return
     await async_unload_entry(hass, entry)
     await async_setup_entry(hass, entry)
 

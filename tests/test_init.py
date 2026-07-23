@@ -87,6 +87,39 @@ class TestAsyncSetupEntry:
         assert "coordinator" in stored
 
     @pytest.mark.asyncio
+    async def test_async_setup_entry_reuses_existing_client(self):
+        """A retry (client already stored) reuses it instead of building a new one.
+
+        Keeping one client across ConfigEntryNotReady retries preserves its login
+        cooldown, so a throttle does not get reset into a fresh login every retry.
+        """
+        hass = _make_hass()
+        entry = _make_entry()
+
+        existing_client = MagicMock()
+        hass.data = {DOMAIN: {entry.entry_id: {"client": existing_client}}}
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient") as mock_client_cls,
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        # The stored client was reused, not reconstructed or re-registered.
+        mock_client_cls.assert_not_called()
+        existing_client.restore_tokens.assert_not_called()
+        existing_client.register_relogin_listener.assert_not_called()
+        assert hass.data[DOMAIN][entry.entry_id]["client"] is existing_client
+
+    @pytest.mark.asyncio
     async def test_async_setup_entry_registers_reload_listener(self):
         """An update listener is registered so an options change reloads the entry (OPTS-01/D-01)."""
         hass = _make_hass()
@@ -303,7 +336,10 @@ class TestAsyncSetupEntry:
             result = await async_setup_entry(hass, entry)
 
         assert result is True
-        mock_client.register_relogin_listener.assert_called_once_with(mock_mqtt_client.on_http_relogin)
+        # Two listeners are registered: token persistence (first, on client
+        # creation) and the mqtt credential re-fetch (when push is enabled).
+        assert mock_client.register_relogin_listener.call_count == 2
+        mock_client.register_relogin_listener.assert_any_call(mock_mqtt_client.on_http_relogin)
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_push_enabled_starts_watchdog(self):
@@ -490,6 +526,99 @@ class TestAsyncReloadEntry:
         mu.assert_awaited_once_with(hass, entry)
         ms.assert_awaited_once_with(hass, entry)
         assert [c[0] for c in tracker.mock_calls] == ["unload", "setup"]
+
+    @pytest.mark.asyncio
+    async def test_async_reload_entry_skips_reload_on_data_only_change(self):
+        """A data-only update (e.g. token persistence) must not reload the entry."""
+        from custom_components.rainpoint import async_reload_entry
+
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+        hass.data = {DOMAIN: {entry.entry_id: {"options_snapshot": {CONF_PUSH_ENABLED: True}}}}
+
+        with (
+            patch("custom_components.rainpoint.async_unload_entry", new=AsyncMock()) as mu,
+            patch("custom_components.rainpoint.async_setup_entry", new=AsyncMock()) as ms,
+        ):
+            await async_reload_entry(hass, entry)
+
+        mu.assert_not_awaited()
+        ms.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_async_reload_entry_reloads_on_options_change(self):
+        """An options change reloads the entry through unload then setup."""
+        from custom_components.rainpoint import async_reload_entry
+
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+        hass.data = {DOMAIN: {entry.entry_id: {"options_snapshot": {CONF_PUSH_ENABLED: False}}}}
+
+        with (
+            patch("custom_components.rainpoint.async_unload_entry", new=AsyncMock(return_value=True)) as mu,
+            patch("custom_components.rainpoint.async_setup_entry", new=AsyncMock(return_value=True)) as ms,
+        ):
+            await async_reload_entry(hass, entry)
+
+        mu.assert_awaited_once_with(hass, entry)
+        ms.assert_awaited_once_with(hass, entry)
+
+
+class TestPersistTokens:
+    """Cover _persist_tokens: write-on-change, and the two early returns."""
+
+    def test_persist_tokens_writes_changed_token(self):
+        """A rotated token is written back to the config entry data."""
+        from custom_components.rainpoint import _persist_tokens
+
+        hass = _make_hass()
+        entry = _make_entry()
+        client = MagicMock()
+        client.export_tokens.return_value = {
+            "token": "NEW",
+            "refresh_token": "ref2",
+            "token_expires_at": 123,
+        }
+
+        _persist_tokens(hass, entry, client)
+
+        hass.config_entries.async_update_entry.assert_called_once()
+        _, kwargs = hass.config_entries.async_update_entry.call_args
+        assert kwargs["data"]["token"] == "NEW"
+        # Existing (non-token) data is preserved.
+        assert kwargs["data"]["email"] == "test@example.com"
+
+    def test_persist_tokens_noop_without_token(self):
+        """No token to persist -> no write."""
+        from custom_components.rainpoint import _persist_tokens
+
+        hass = _make_hass()
+        entry = _make_entry()
+        client = MagicMock()
+        client.export_tokens.return_value = {"token": None}
+
+        _persist_tokens(hass, entry, client)
+
+        hass.config_entries.async_update_entry.assert_not_called()
+
+    def test_persist_tokens_noop_when_unchanged(self):
+        """An unchanged token is not rewritten (avoids a needless entry update)."""
+        from custom_components.rainpoint import _persist_tokens
+
+        hass = _make_hass()
+        entry = _make_entry()
+        client = MagicMock()
+        client.export_tokens.return_value = {
+            "token": "tok",
+            "refresh_token": "ref",
+            "token_expires_at": 9999999999,
+        }
+
+        _persist_tokens(hass, entry, client)
+
+        hass.config_entries.async_update_entry.assert_not_called()
 
 
 class TestAsyncSupportsReconfigure:
