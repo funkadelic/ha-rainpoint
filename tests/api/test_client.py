@@ -700,12 +700,14 @@ class TestTokenManagement:
 
 
 class TestNotTokenInvalidation:
-    """A NOT_TOKEN (code 1001) response drops the cached token so the next
-    ensure_logged_in re-authenticates instead of resending a dead token."""
+    """A NOT_TOKEN (code 1001) response forces a re-login on the next call while
+    keeping the token (so _login treats it as a rotation and fires its
+    listeners), and never invalidates a token a concurrent request replaced."""
 
     @pytest.mark.asyncio
-    async def test_not_token_clears_cached_token(self):
-        """code 1001 clears a locally-valid-but-server-rejected token."""
+    async def test_not_token_forces_relogin_but_keeps_token(self):
+        """code 1001 expires the token (forcing re-login) but keeps it so the
+        subsequent _login is a rotation, not an initial login."""
         client = _make_client()
         client.ensure_logged_in = AsyncMock()
         client._token = "stale-token"
@@ -715,23 +717,44 @@ class TestNotTokenInvalidation:
         with pytest.raises(RainPointApiError, match="code 1001"):
             await client.get_devices_by_hid(182509)
 
-        assert client._token is None
+        assert client._token == "stale-token"  # kept -> is_relogin true, listeners fire
+        assert client._token_expires_at is None  # expired -> ensure_logged_in re-authenticates
+        assert client._token_valid() is False
+
+    def test_maybe_invalidate_expires_matching_token(self):
+        """The token used by the failed request is expired but retained."""
+        client = _make_client()
+        client._token = "T1"
+        client._token_expires_at = datetime.now(UTC) + timedelta(days=60)
+
+        client._maybe_invalidate_token(1001, "T1")
+
+        assert client._token == "T1"
         assert client._token_expires_at is None
 
-    @pytest.mark.asyncio
-    async def test_non_auth_error_keeps_token(self):
-        """A non-1001 failure leaves the token intact (only NOT_TOKEN invalidates)."""
+    def test_maybe_invalidate_ignores_superseded_token(self):
+        """A slow 1001 for a token already replaced by a relogin is ignored."""
         client = _make_client()
-        client.ensure_logged_in = AsyncMock()
-        client._token = "good-token"
-        client._token_expires_at = datetime.now(UTC) + timedelta(days=60)
-        client._session.get = MagicMock(return_value=_mock_response({"code": 1, "msg": "other"}))
+        client._token = "T2"
+        fresh_expiry = datetime.now(UTC) + timedelta(days=60)
+        client._token_expires_at = fresh_expiry
 
-        with pytest.raises(RainPointApiError, match="code 1"):
-            await client.get_devices_by_hid(182509)
+        client._maybe_invalidate_token(1001, "T1")  # request carried the old token
 
-        assert client._token == "good-token"
-        assert client._token_expires_at is not None
+        assert client._token == "T2"
+        assert client._token_expires_at == fresh_expiry  # fresh token untouched
+
+    def test_maybe_invalidate_noop_on_non_auth_code(self):
+        """A non-1001 code never touches the token."""
+        client = _make_client()
+        client._token = "T1"
+        expiry = datetime.now(UTC) + timedelta(days=60)
+        client._token_expires_at = expiry
+
+        client._maybe_invalidate_token(1, "T1")
+
+        assert client._token == "T1"
+        assert client._token_expires_at == expiry
 
 
 class TestAuthHeaders:
