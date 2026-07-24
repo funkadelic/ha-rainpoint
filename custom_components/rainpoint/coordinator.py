@@ -199,6 +199,17 @@ def _status_entry_time(status_entry: dict) -> datetime | None:
         return None
 
 
+def _valve_zone_poll_is_stale(poll_time: datetime | None, last_command_time: datetime, now: datetime) -> bool:
+    """Return True when a poll should be treated as older than the last command.
+
+    Prefers the device-reported poll timestamp; when it is unavailable, falls
+    back to a wall-clock guard window so a fresh command response isn't clobbered.
+    """
+    if poll_time is not None:
+        return poll_time < last_command_time
+    return now - last_command_time < STALE_VALVE_POLL_GUARD
+
+
 def _build_sensor_entry(
     hub: dict,
     sub: dict,
@@ -561,25 +572,24 @@ class RainPointCoordinator(DataUpdateCoordinator):
             return decoded
 
         poll_time = _status_entry_time(status_entry)
+        poll_time_iso = poll_time.isoformat() if poll_time else None
         now = datetime.now(UTC)
         zones = dict(decoded["zones"])
         changed = False
 
-        for zone_num in list(zones):
+        for zone_num in zones:
             last_command_time = self._last_valve_command_at.get((sensor_key, zone_num))
-            if last_command_time is None:
+            if last_command_time is None or zone_num not in current_zones:
                 continue
 
-            stale = poll_time < last_command_time if poll_time is not None else now - last_command_time < STALE_VALVE_POLL_GUARD
-
-            if not stale or zone_num not in current_zones:
+            if not _valve_zone_poll_is_stale(poll_time, last_command_time, now):
                 continue
 
             _LOGGER.debug(
                 "Ignoring stale RainPoint valve poll for key=%s zone=%s: poll_time=%s, last_command_time=%s",
                 sensor_key,
                 zone_num,
-                poll_time.isoformat() if poll_time else None,
+                poll_time_iso,
                 last_command_time.isoformat(),
             )
             zones[zone_num] = current_zones[zone_num]
