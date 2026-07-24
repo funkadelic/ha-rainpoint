@@ -824,6 +824,50 @@ class TestListHomes:
             await client.list_homes()
 
 
+class TestGetProductCatalog:
+    """Tests for get_product_catalog API method (maintainer refresh tooling only)."""
+
+    @pytest.mark.asyncio
+    async def test_get_product_catalog_success(self):
+        """get_product_catalog opens with ensure_logged_in and returns data on code 0."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {
+            "code": 0,
+            "data": [{"model": "HTV245FRF", "dp": [{"dpCode": 9, "identity": "STA_TEM"}]}],
+        }
+        client._session.get = MagicMock(return_value=_mock_response(json_body))
+
+        result = await client.get_product_catalog()
+
+        client.ensure_logged_in.assert_awaited_once()
+        assert result == json_body["data"]
+
+    @pytest.mark.asyncio
+    async def test_get_product_catalog_api_error_code(self):
+        """A non-zero API code raises RainPointApiError."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 1, "msg": "bad"}
+        client._session.get = MagicMock(return_value=_mock_response(json_body))
+
+        with pytest.raises(RainPointApiError, match="get_product_catalog failed: code 1"):
+            await client.get_product_catalog()
+
+    @pytest.mark.asyncio
+    async def test_get_product_catalog_http_error(self):
+        """A non-200 HTTP status raises RainPointApiError."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.get = MagicMock(return_value=_mock_response({}, status=500))
+
+        with pytest.raises(RainPointApiError, match="get_product_catalog HTTP 500"):
+            await client.get_product_catalog()
+
+
 class TestGetDevicesByHid:
     """Tests for get_devices_by_hid API method."""
 
