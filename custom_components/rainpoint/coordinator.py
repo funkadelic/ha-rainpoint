@@ -178,7 +178,7 @@ def _build_new_device_issue_url(model: str, raw_value: str | None) -> str:
         "model": model,
         "primary_payload": raw_value or "",
     }
-    auto_decoded = _format_generic_fields(decode_generic(raw_value)) if raw_value else ""
+    auto_decoded = _format_generic_fields(decode_generic(raw_value, model=model)) if raw_value else ""
     if auto_decoded:
         params["auto_decoded"] = auto_decoded
     return f"{ISSUE_URL}/new?{urlencode(params)}"
@@ -216,7 +216,7 @@ def _decode_subdevice_payload(model: str | None, raw_value: str) -> dict:
         "type": "unknown",
         "model": model,
         "raw_value": raw_value,
-        "generic": decode_generic(raw_value),
+        "generic": decode_generic(raw_value, model=model),
     }
 
 

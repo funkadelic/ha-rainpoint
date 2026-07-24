@@ -48,6 +48,7 @@ from .decoders import (
     decode_valve_hub,
 )
 from .generic_decoder import decode_generic
+from .product_catalog import get_catalog_entry
 from .utils import (
     _base_decoder_dict,
     _f10_to_c,
@@ -122,4 +123,5 @@ __all__ = [
     "decode_temphum",
     "decode_unknown",
     "decode_valve_hub",
+    "get_catalog_entry",
 ]
