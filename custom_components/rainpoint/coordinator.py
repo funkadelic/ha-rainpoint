@@ -160,7 +160,9 @@ def _format_generic_fields(generic: dict | None) -> str:
     lines = []
     for f in fields:
         suffix = f" (dp {f['dp_id']})" if dp_prefixed else ""
-        lines.append(f"{f['name']}: raw={f['raw']} value={f['value']}{suffix}")
+        catalog = f.get("catalog")
+        zone_suffix = f" [zone {catalog['dp_port']}]" if catalog and catalog.get("dp_port") is not None else ""
+        lines.append(f"{f['name']}: raw={f['raw']} value={f['value']}{suffix}{zone_suffix}")
     return "\n".join(lines)
 
 
@@ -178,7 +180,7 @@ def _build_new_device_issue_url(model: str, raw_value: str | None) -> str:
         "model": model,
         "primary_payload": raw_value or "",
     }
-    auto_decoded = _format_generic_fields(decode_generic(raw_value)) if raw_value else ""
+    auto_decoded = _format_generic_fields(decode_generic(raw_value, model=model)) if raw_value else ""
     if auto_decoded:
         params["auto_decoded"] = auto_decoded
     return f"{ISSUE_URL}/new?{urlencode(params)}"
@@ -216,7 +218,7 @@ def _decode_subdevice_payload(model: str | None, raw_value: str) -> dict:
         "type": "unknown",
         "model": model,
         "raw_value": raw_value,
-        "generic": decode_generic(raw_value),
+        "generic": decode_generic(raw_value, model=model),
     }
 
 
