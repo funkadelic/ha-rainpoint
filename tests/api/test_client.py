@@ -858,6 +858,55 @@ class TestGetProductCatalog:
         assert result == json_body["data"]
 
     @pytest.mark.asyncio
+    async def test_get_product_catalog_unwraps_the_models_envelope(self):
+        """The live endpoint wraps the model list in an object; the list is what callers want.
+
+        The real response is {"models": [...], "version": ..., "addGroups": [],
+        "replaceGroups": [], "codePushKeys": []}. Returning that object
+        unchanged makes trim_catalog iterate dict keys and fail on the first
+        entry, which is exactly what shipped before this test existed.
+        """
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        models = [{"model": "HTV245FRF", "dp": [{"dpCode": 9, "identity": "STA_TEM"}]}]
+        json_body = {
+            "code": 0,
+            "data": {
+                "models": models,
+                "version": 1784773919607,
+                "addGroups": [],
+                "replaceGroups": [],
+                "codePushKeys": [],
+            },
+        }
+        client._session.get = MagicMock(return_value=_mock_response(json_body))
+
+        assert await client.get_product_catalog() == models
+
+    @pytest.mark.asyncio
+    async def test_get_product_catalog_envelope_without_models_is_empty(self):
+        """An envelope carrying no models list yields [], not a raise."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": {"version": 1}}))
+
+        assert await client.get_product_catalog() == []
+
+    @pytest.mark.asyncio
+    async def test_get_product_catalog_unusable_data_shape_is_empty(self):
+        """A data payload that is neither list nor object degrades to [] rather than raising.
+
+        The refresh script already refuses to write an empty catalog, so an
+        empty return is a safe failure; a raise mid-pull is not.
+        """
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": "nonsense"}))
+
+        assert await client.get_product_catalog() == []
+
+    @pytest.mark.asyncio
     async def test_get_product_catalog_api_error_code(self):
         """A non-zero API code raises RainPointApiError."""
         client = _make_client()
@@ -895,17 +944,24 @@ class TestTrimCatalog:
         assert result == {}
 
     def test_keeps_only_the_five_dp_fields(self):
-        """A kept RainPoint model's dp entries keep exactly the five needed fields."""
+        """A kept RainPoint model's dp entries keep exactly the five needed fields.
+
+        portNumber is deliberately not among them: the vendor declares it once
+        per model, not per dp entry, so it lives on the variant record.
+        """
         raw = [
             {
                 "model": "HTV245FRF",
+                "portNumber": 1,
                 "dp": [
                     {
                         "dpCode": 9,
                         "identity": "STA_TEM",
                         "dpPort": 1,
-                        "dpDataType": "int16",
-                        "portNumber": 1,
+                        "dpDataType": "S16",
+                        "dpLen": 2,
+                        "dpId": 254,
+                        "endpoint": 7,
                         "name": "Temperature",
                         "mode": "ro",
                     }
@@ -915,9 +971,10 @@ class TestTrimCatalog:
 
         result = trim_catalog(raw)
 
-        assert result["HTV245FRF"]["*"] == [
-            {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}
-        ]
+        assert result["HTV245FRF"]["*"] == {
+            "portNumber": 1,
+            "dp": [{"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "S16", "dpLen": 2}],
+        }
 
     def test_returns_model_keyed_dict(self):
         """Output is keyed by model string, one entry per kept model."""
@@ -945,14 +1002,14 @@ class TestTrimCatalog:
         must sort by dpCode so --check/write output is stable and does not produce
         spurious drift on an otherwise-unchanged catalog.
         """
-        entry_a = {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}
-        entry_b = {"dpCode": 32, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1}
+        entry_a = {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "S16", "dpLen": 2}
+        entry_b = {"dpCode": 32, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "U8", "dpLen": 1}
 
         first_order = trim_catalog([{"model": "HTV245FRF", "dp": [entry_a, entry_b]}])
         second_order = trim_catalog([{"model": "HTV245FRF", "dp": [entry_b, entry_a]}])
 
         assert first_order == second_order
-        assert [dp["dpCode"] for dp in first_order["HTV245FRF"]["*"]] == [9, 32]
+        assert [dp["dpCode"] for dp in first_order["HTV245FRF"]["*"]["dp"]] == [9, 32]
 
     def test_dp_entries_missing_dpcode_sort_last(self):
         """A dp entry with no dpCode does not crash the sort and sorts after coded entries."""
@@ -960,15 +1017,15 @@ class TestTrimCatalog:
             {
                 "model": "HTV245FRF",
                 "dp": [
-                    {"dpCode": None, "identity": "STA_UNKNOWN", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1},
-                    {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1},
+                    {"dpCode": None, "identity": "STA_UNKNOWN", "dpPort": 1, "dpDataType": "U8", "dpLen": 1},
+                    {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "S16", "dpLen": 2},
                 ],
             }
         ]
 
         result = trim_catalog(raw)
 
-        assert [dp["dpCode"] for dp in result["HTV245FRF"]["*"]] == [9, None]
+        assert [dp["dpCode"] for dp in result["HTV245FRF"]["*"]["dp"]] == [9, None]
 
     def test_variants_sharing_a_model_string_are_kept_apart(self):
         """Two modelCodes under one model must both survive the trim.
@@ -981,20 +1038,74 @@ class TestTrimCatalog:
             {
                 "model": "HIC801W",
                 "modelCode": 278,
-                "dp": [{"dpCode": 1, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}],
+                "portNumber": 0,
+                "dp": [{"dpCode": 1, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "S16", "dpLen": 2}],
             },
             {
                 "model": "HIC801W",
                 "modelCode": 279,
-                "dp": [{"dpCode": 1, "identity": "STA_TEM", "dpPort": 2, "dpDataType": "int16", "portNumber": 2}],
+                "portNumber": 8,
+                "dp": [{"dpCode": 1, "identity": "STA_TEM", "dpPort": 2, "dpDataType": "S16", "dpLen": 2}],
             },
         ]
 
         result = trim_catalog(raw)
 
         assert set(result["HIC801W"]) == {"278", "279"}
-        assert result["HIC801W"]["278"][0]["portNumber"] == 1
-        assert result["HIC801W"]["279"][0]["portNumber"] == 2
+        assert result["HIC801W"]["278"]["portNumber"] == 0
+        assert result["HIC801W"]["279"]["portNumber"] == 8
+
+    def test_drops_non_status_and_non_control_identities(self):
+        """P_/C_/S_/ATTR_ provisioning metadata is not shipped to users.
+
+        Only STA_ (status, what the decoder sees) and CTL_ (control, what the
+        generic-control allowlist is built from) are kept.
+        """
+        raw = [
+            {
+                "model": "HTV245FRF",
+                "portNumber": 1,
+                "dp": [
+                    {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "S16", "dpLen": 2},
+                    {"dpCode": 40, "identity": "CTL_WATER", "dpPort": 1, "dpDataType": "U8", "dpLen": 1},
+                    {"dpCode": 60, "identity": "S_SMART_VOICE", "dpPort": 0, "dpDataType": "U8", "dpLen": 1},
+                    {"dpCode": 61, "identity": "P_TIME", "dpPort": 0, "dpDataType": "U32", "dpLen": 4},
+                    {"dpCode": 62, "identity": "C_RF_POWER", "dpPort": 0, "dpDataType": "U8", "dpLen": 1},
+                    {"dpCode": 63, "identity": None, "dpPort": 0, "dpDataType": "U8", "dpLen": 1},
+                ],
+            }
+        ]
+
+        result = trim_catalog(raw)
+
+        assert [dp["identity"] for dp in result["HTV245FRF"]["*"]["dp"]] == ["STA_TEM", "CTL_WATER"]
+
+    def test_model_with_no_kept_identities_still_records_its_port_count(self):
+        """A model whose dp entries are all filtered out keeps an empty dp list.
+
+        Dropping the model entirely would lose its declared port count and make
+        the variant look absent rather than empty.
+        """
+        raw = [
+            {
+                "model": "HIC801W",
+                "modelCode": 278,
+                "portNumber": 0,
+                "dp": [{"dpCode": 60, "identity": "S_SMART_VOICE", "dpDataType": "U8", "dpLen": 1}],
+            }
+        ]
+
+        result = trim_catalog(raw)
+
+        assert result["HIC801W"]["278"] == {"portNumber": 0, "dp": []}
+
+    def test_non_integer_port_number_degrades_to_none(self):
+        """A junk model-level portNumber is dropped rather than committed."""
+        raw = [{"model": "HCS021FRF", "portNumber": "four", "dp": [{"dpCode": 10, "identity": "STA_RH"}]}]
+
+        result = trim_catalog(raw)
+
+        assert result["HCS021FRF"]["*"]["portNumber"] is None
 
     def test_entry_without_a_model_code_lands_in_the_uncoded_bucket(self):
         """Most vendor entries carry no code; they become the model-level default."""
