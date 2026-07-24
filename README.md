@@ -118,7 +118,7 @@ To turn push back off, revisit the same **Configure** screen and uncheck **Enabl
 
 Enabling push adds two hub-level diagnostic entities: **`<hub> Push Connected`** (on when the MQTT client is connected) and **`<hub> Push Last Message`** (timestamp of the last message received). If the push connection drops and stays down while polling keeps devices updating, Home Assistant raises a **Settings → Repairs** issue so you know to look. (A channel that stays connected but quietly stops sending updates looks the same as an idle one, so that case is not flagged.)
 
-### Account implications
+### Notes on push
 
 Push is off by default for now while it proves out; you can turn it on at any time. If the connection ever drops, Home Assistant reconnects on its own, and the usual 120-second polling keeps your devices up to date in the meantime. In testing it ran alongside the RainPoint phone app without knocking either one offline.
 
