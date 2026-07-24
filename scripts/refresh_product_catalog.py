@@ -69,10 +69,17 @@ def trim_catalog(raw: list[dict]) -> dict:
 
 
 def _write_catalog(trimmed: dict, path: Path) -> None:
-    """Write the trimmed catalog with stable key ordering and a trailing newline."""
-    with path.open("w", encoding="utf-8") as handle:
+    """Write the trimmed catalog with stable key ordering and a trailing newline.
+
+    Writes to a temp file in the same directory first and atomically replaces
+    the destination, so an interrupted write (Ctrl-C, disk full, OOM kill)
+    cannot leave the previously-committed file truncated or corrupted.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
         json.dump(trimmed, handle, indent=2, sort_keys=True)
         handle.write("\n")
+    tmp.replace(path)
 
 
 def _load_committed_catalog(path: Path) -> dict:
