@@ -159,20 +159,25 @@ def _int_from_bytes(value_bytes: list[int], field: int) -> int | None:
     return int.from_bytes(bytes(value_bytes), order)
 
 
-_DATA_TYPE_WIDTH_RE = re.compile(r"(\d+)")
+_DATA_TYPE_WIDTH_RE = re.compile(r"^u?int(\d+)$")
 
 
 def _declared_byte_width(data_type) -> int | None:
     """Parse a declared byte width out of a catalog dpDataType string.
 
-    Expects strings shaped like "uint8" / "int16". Returns None when no width
-    can be determined (non-string, no digits, or a bit count that is not a
-    whole number of bytes), in which case the caller treats the field as
-    "cannot compare" rather than guessing at a mismatch.
+    Only matches strings shaped exactly like "uint8" / "int16" (an optional
+    "u" prefix, "int", then a digit run with nothing else). This is
+    deliberately anchored rather than a bare digit search: a catalog
+    dpDataType like "enum8" embeds a digit that means "8 possible states",
+    not "8 bits", and a loose search would silently misparse it as a byte
+    width. Returns None when no width can be determined (non-string,
+    non-matching shape, or a bit count that is not a whole number of bytes),
+    in which case the caller treats the field as "cannot compare" rather
+    than guessing at a mismatch.
     """
     if not isinstance(data_type, str):
         return None
-    match = _DATA_TYPE_WIDTH_RE.search(data_type)
+    match = _DATA_TYPE_WIDTH_RE.match(data_type)
     if not match:
         return None
     bits = int(match.group(1))

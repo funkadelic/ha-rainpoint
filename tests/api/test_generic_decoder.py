@@ -252,6 +252,24 @@ class TestDecodeGenericCatalogAnnotation:
 
         assert by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
 
+    def test_non_width_digit_in_data_type_never_flags_mismatch(self, monkeypatch):
+        """A dpDataType with a non-width digit (e.g. an enum cardinality) is never
+        misparsed as a byte width.
+
+        "enum16" embeds a digit that means "16 possible states", not "16
+        bits". A loose digit-search would misparse this as a 2-byte width
+        and (since STA_BAT decodes to 1 byte here) incorrectly flag a
+        mismatch. The tightened, anchored parse must treat "enum16" as
+        unparseable instead, so no mismatch is flagged.
+        """
+        odd_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "enum16", "portNumber": 1}]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: odd_catalog)
+
+        result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
+        by_name = {f["name"]: f for f in result["fields"]}
+
+        assert by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
+
     def test_annotation_failure_does_not_break_decode(self, monkeypatch):
         """A broken catalog lookup degrades to the unannotated shape, never raises."""
 
