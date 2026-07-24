@@ -30,6 +30,9 @@ def _load_catalog(path: Path) -> dict:
     _CATALOG_MAX_BYTES. Rejects any parsed value that is not a JSON object.
     Never raises: every failure mode (missing file, unreadable file, invalid
     JSON, oversized file, wrong top-level shape) returns an empty dict.
+
+    json.JSONDecodeError is a ValueError subclass, so the ValueError arm
+    below covers malformed JSON as well as a non-str/bytes payload.
     """
     try:
         if path.stat().st_size > _CATALOG_MAX_BYTES:
@@ -37,7 +40,7 @@ def _load_catalog(path: Path) -> dict:
             return {}
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         _LOGGER.debug("product_catalog.json missing or invalid, degrading to empty catalog: %s", exc)
         return {}
 
