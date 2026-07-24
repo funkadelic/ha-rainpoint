@@ -64,7 +64,13 @@ def trim_catalog(raw: list[dict]) -> dict:
         if not model or not str(model).startswith(_MODEL_PREFIXES):
             continue
         dp_entries = entry.get("dp") or []
-        trimmed[model] = [{field: dp.get(field) for field in _KEPT_DP_FIELDS} for dp in dp_entries]
+        # Sort by dpCode so re-running against an unchanged vendor catalog is
+        # deterministic, even if the vendor API does not guarantee a stable
+        # dp array order across calls. Entries missing dpCode sort last.
+        trimmed[model] = sorted(
+            ({field: dp.get(field) for field in _KEPT_DP_FIELDS} for dp in dp_entries),
+            key=lambda d: (d.get("dpCode") is None, d.get("dpCode")),
+        )
     return trimmed
 
 

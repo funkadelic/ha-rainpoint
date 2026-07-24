@@ -934,6 +934,38 @@ class TestTrimCatalog:
         assert set(result.keys()) == {"HTV245FRF", "HCS021FRF"}
         assert isinstance(result, dict)
 
+    def test_sorts_dp_entries_by_dpcode_regardless_of_vendor_order(self):
+        """Two runs with the same dp entries in a different order produce identical output.
+
+        The vendor API does not guarantee dp array order across calls; trim_catalog
+        must sort by dpCode so --check/write output is stable and does not produce
+        spurious drift on an otherwise-unchanged catalog.
+        """
+        entry_a = {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}
+        entry_b = {"dpCode": 32, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1}
+
+        first_order = trim_catalog([{"model": "HTV245FRF", "dp": [entry_a, entry_b]}])
+        second_order = trim_catalog([{"model": "HTV245FRF", "dp": [entry_b, entry_a]}])
+
+        assert first_order == second_order
+        assert [dp["dpCode"] for dp in first_order["HTV245FRF"]] == [9, 32]
+
+    def test_dp_entries_missing_dpcode_sort_last(self):
+        """A dp entry with no dpCode does not crash the sort and sorts after coded entries."""
+        raw = [
+            {
+                "model": "HTV245FRF",
+                "dp": [
+                    {"dpCode": None, "identity": "STA_UNKNOWN", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1},
+                    {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1},
+                ],
+            }
+        ]
+
+        result = trim_catalog(raw)
+
+        assert [dp["dpCode"] for dp in result["HTV245FRF"]] == [9, None]
+
 
 class TestGetDevicesByHid:
     """Tests for get_devices_by_hid API method."""
