@@ -304,6 +304,14 @@ class TestDecodeHtv113frf:
         assert zones[1]["state_raw"] == 0x00
         assert zones[1]["duration_seconds"] == 0
 
+    def test_hub_online_from_0x03_status(self):
+        """HTV113 reports 0xDC status 0x03. Bit 0 is the online flag, so the valve
+        entity must stay available (valve.py gates availability on hub_online)."""
+        result = decode_htv145frf(SAMPLE_HTV113_IDLE_PAYLOAD)
+
+        assert result["hub_state_raw"] == 0x03
+        assert result["hub_online"] is True
+
 
 class TestLittleEndianTripwire:
     """Regression test: 0xAD duration values MUST be decoded as little-endian.
