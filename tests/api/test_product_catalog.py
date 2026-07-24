@@ -12,6 +12,7 @@ class TestLoadCatalogValid:
     """_load_catalog against a well-formed fixture file."""
 
     def test_valid_fixture_returns_dict_keyed_by_model_and_code(self, tmp_path):
+        """A well-formed nested catalog survives the load unchanged."""
         catalog_path = tmp_path / "product_catalog.json"
         catalog_path.write_text(json.dumps({"SOME_MODEL": {"278": [{"dpCode": 1}]}}), encoding="utf-8")
 
@@ -62,9 +63,11 @@ class TestLoadCatalogValid:
         assert all("dpCode" in dp for dp in entry)
 
     def test_get_catalog_entry_unknown_model_returns_none(self):
+        """A model the catalog has never heard of is a plain miss."""
         assert get_catalog_entry("TOTALLY_UNKNOWN_MODEL") is None
 
     def test_get_catalog_entry_none_model_returns_none(self):
+        """Devices that report no model at all must not raise."""
         assert get_catalog_entry(None) is None
 
 
@@ -82,9 +85,11 @@ class TestVariantResolution:
     _UNCODED: ClassVar[list[dict]] = [{"dpCode": 1, "dpPort": 9}]
 
     def _install(self, monkeypatch, catalog):
+        """Swap in a purpose-built catalog for the duration of one test."""
         monkeypatch.setattr(product_catalog_module, "_CATALOG", catalog)
 
     def test_exact_model_code_wins(self, monkeypatch):
+        """A code listed in the catalog resolves to its own variant."""
         self._install(monkeypatch, {"HIC801W": {"278": self._CODED, "279": self._OTHER_CODED}})
 
         assert product_catalog_module.get_catalog_entry("HIC801W", 279) == self._OTHER_CODED
@@ -121,6 +126,7 @@ class TestVariantResolution:
         assert product_catalog_module.get_catalog_entry("HIC801W") is None
 
     def test_missing_model_code_uses_the_uncoded_bucket_when_present(self, monkeypatch):
+        """The model-level default beats refusing to answer."""
         self._install(
             monkeypatch,
             {"HIC801W": {"278": self._CODED, "279": self._OTHER_CODED, UNCODED_VARIANT: self._UNCODED}},
@@ -129,6 +135,7 @@ class TestVariantResolution:
         assert product_catalog_module.get_catalog_entry("HIC801W") == self._UNCODED
 
     def test_model_with_no_variants_returns_none(self, monkeypatch):
+        """An empty variant map carries nothing to annotate with."""
         self._install(monkeypatch, {"HIC801W": {}})
 
         assert product_catalog_module.get_catalog_entry("HIC801W", 278) is None
@@ -138,11 +145,13 @@ class TestLoadCatalogFailSoft:
     """_load_catalog must degrade to {} on every failure mode, never raise."""
 
     def test_missing_file_returns_empty_dict(self, tmp_path):
+        """No catalog shipped is not an error, just no enrichment."""
         missing_path = tmp_path / "does-not-exist.json"
 
         assert _load_catalog(missing_path) == {}
 
     def test_corrupt_json_returns_empty_dict(self, tmp_path):
+        """Unparseable JSON degrades instead of breaking component import."""
         corrupt_path = tmp_path / "corrupt.json"
         corrupt_path.write_text("{not valid json", encoding="utf-8")
 

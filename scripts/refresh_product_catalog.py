@@ -104,6 +104,13 @@ def _write_catalog(trimmed: dict, path: Path) -> None:
 
 
 def _load_committed_catalog(path: Path) -> dict:
+    """Return the committed snapshot, or {} when the file does not exist yet.
+
+    Unlike the component-side loader this one is deliberately strict: a
+    corrupt committed file should stop a maintainer run loudly rather than
+    silently compare a fresh pull against an empty catalog and report every
+    model as newly added.
+    """
     if not path.exists():
         return {}
     with path.open("r", encoding="utf-8") as handle:
@@ -133,6 +140,11 @@ def _print_drift(committed: dict, fresh: dict) -> bool:
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Build the CLI parser and parse argv (defaults to sys.argv).
+
+    Credentials default to their environment variables so the scheduled CI
+    job needs no arguments at all.
+    """
     parser = argparse.ArgumentParser(
         description="Regenerate the committed RainPoint product catalog from a live vendor pull.",
     )
@@ -171,6 +183,13 @@ def _resolve_password() -> str | None:
 
 
 async def _fetch_trimmed_catalog(email: str, password: str, area_code: str) -> dict:
+    """Log in, pull the vendor product catalog, and return it trimmed.
+
+    aiohttp and the component client are imported here rather than at module
+    scope: this is the only code path that needs them, and main() does not put
+    the component on sys.path until it is about to fetch. That keeps
+    trim_catalog importable on its own for tests.
+    """
     import aiohttp
 
     from custom_components.rainpoint.api.client import RainPointClient
@@ -182,6 +201,11 @@ async def _fetch_trimmed_catalog(email: str, password: str, area_code: str) -> d
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the refresh, returning a process exit code.
+
+    0 on a successful write or a clean --check, 1 on drift or a refused
+    write, 2 when credentials are missing.
+    """
     args = _parse_args(argv)
 
     password = _resolve_password()

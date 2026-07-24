@@ -997,6 +997,7 @@ class TestTrimCatalog:
         assert result["HIC801W"]["279"][0]["portNumber"] == 2
 
     def test_entry_without_a_model_code_lands_in_the_uncoded_bucket(self):
+        """Most vendor entries carry no code; they become the model-level default."""
         raw = [{"model": "HCS021FRF", "dp": [{"dpCode": 10, "identity": "STA_RH"}]}]
 
         result = trim_catalog(raw)
@@ -1044,6 +1045,7 @@ class TestRefreshScriptMain:
 
     @staticmethod
     def _stub_credentials(monkeypatch):
+        """Set the env vars main() requires before it will do any work."""
         monkeypatch.setenv("RAINPOINT_EMAIL", "user@example.com")
         monkeypatch.setenv("RAINPOINT_PASSWORD", "secret")
 

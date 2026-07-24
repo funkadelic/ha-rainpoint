@@ -13,20 +13,25 @@ class TestIsHandWrittenModel:
     """is_hand_written_model must recognize every trusted model and no others."""
 
     def test_true_for_every_decoder_registry_key(self):
+        """Every registered decoder marks its model as hand-written."""
         for model in DECODER_REGISTRY:
             assert is_hand_written_model(model) is True
 
     def test_true_for_display_hub(self):
+        """The display hub is decoded by hand despite not being in the registry."""
         assert is_hand_written_model(MODEL_DISPLAY_HUB) is True
 
     def test_true_for_every_valve_model(self):
+        """No valve model may ever reach the generic decode path."""
         for model in VALVE_MODELS:
             assert is_hand_written_model(model) is True
 
     def test_false_for_unsupported_model(self):
+        """An unsupported model is exactly what the generic path is for."""
         assert is_hand_written_model("SOME_UNSUPPORTED_MODEL") is False
 
     def test_false_for_none(self):
+        """A missing model string is not trusted by default."""
         assert is_hand_written_model(None) is False
 
 
@@ -34,6 +39,7 @@ class TestHandWrittenModelsDriftGuard:
     """HAND_WRITTEN_MODELS must stay in lockstep with DECODER_REGISTRY."""
 
     def test_matches_decoder_registry_plus_display_hub(self):
+        """Adding a decoder without updating the constant would open the boundary."""
         assert set(DECODER_REGISTRY) | {MODEL_DISPLAY_HUB} == HAND_WRITTEN_MODELS
 
 
