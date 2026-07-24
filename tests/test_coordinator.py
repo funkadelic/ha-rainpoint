@@ -245,6 +245,39 @@ class TestCoordinatorUpdate:
         assert mock_notify.call_args.kwargs["notification_id"] == "rainpoint_unsupported_UNKNOWN_CODED_279"
 
     @pytest.mark.asyncio
+    async def test_notification_includes_prefilled_report_link(self):
+        """The unsupported-model notification embeds a GitHub issue-form link with the
+        model and raw payload pre-filled, so the reporter does not hand-copy them."""
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            coord, client = _make_coord()
+            client.get_devices_by_hid.return_value = [_make_hub(model="UNKNOWN_LINK")]
+            client.get_multiple_device_status.return_value = _make_status()
+
+            await _run(coord)
+
+        body = mock_notify.call_args.args[1]
+        assert f"{_coord_module.ISSUE_URL}/new?" in body
+        assert "template=new_device.yml" in body
+        assert "model=UNKNOWN_LINK" in body
+        # The payload's '#' must be percent-encoded so the URL is not truncated.
+        assert "primary_payload=10%23E1C600" in body
+
+    def test_build_new_device_issue_url_encodes_fields(self):
+        """The builder targets the New device form and URL-encodes model/payload."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", "10#ABCD")
+        assert url.startswith(f"{_coord_module.ISSUE_URL}/new?")
+        assert "template=new_device.yml" in url
+        assert "title=Add+support+for+HTV999XYZ" in url
+        assert "model=HTV999XYZ" in url
+        assert "primary_payload=10%23ABCD" in url
+
+    def test_build_new_device_issue_url_handles_missing_payload(self):
+        """A None payload yields an empty primary_payload rather than crashing."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", None)
+        assert "primary_payload=" in url
+        assert "model=HTV999XYZ" in url
+
+    @pytest.mark.asyncio
     async def test_notification_id_unchanged_when_model_code_absent(self):
         """Without a modelCode the notification keeps its pre-existing id.
 

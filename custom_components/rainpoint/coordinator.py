@@ -1,5 +1,6 @@
 import logging
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode
 
 import aiohttp
 from homeassistant.components.persistent_notification import async_create
@@ -137,6 +138,29 @@ DECODER_REGISTRY = {
     MODEL_HCS888ARF_V1: decode_hcs888arf_v1,
     MODEL_HCS0600ARF: decode_hcs0600arf,
 }
+
+
+# Issue-form file that the pre-filled report link targets. GitHub issue forms
+# accept query params keyed by each field's `id`, so the reporter lands on this
+# form with the model and idle payload already populated.
+NEW_DEVICE_ISSUE_TEMPLATE = "new_device.yml"
+
+
+def _build_new_device_issue_url(model: str, raw_value: str | None) -> str:
+    """Return a GitHub New-device-support URL pre-filled with model + raw payload.
+
+    The reporter only has to add what the RainPoint app shows and submit, instead
+    of hand-copying the model and hex payload into a blank issue.
+    """
+    params = urlencode(
+        {
+            "template": NEW_DEVICE_ISSUE_TEMPLATE,
+            "title": f"Add support for {model}",
+            "model": model,
+            "primary_payload": raw_value or "",
+        }
+    )
+    return f"{ISSUE_URL}/new?{params}"
 
 
 def _resolve_addr_from_sid(sid: str) -> int | None:
@@ -493,12 +517,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # integration leaves the old notification in place and adds a
             # second one under "..._None" instead of replacing it.
             code_suffix = f"_{model_code}" if model_code is not None else ""
+            report_url = _build_new_device_issue_url(model, raw_value)
             async_create(
                 self.hass,
                 f"RainPoint detected an unsupported sensor model: **{model}**{code_line}\n\n"
-                f"To help add support for this sensor, please open an issue at:\n"
-                f"{ISSUE_URL}\n\n"
-                f"Include the following raw payload data:\n"
+                f"**[Report this device]({report_url})** to help add support. The link opens a "
+                f"New device support form with the model and payload already filled in; just add "
+                f"what the RainPoint app shows and submit.\n\n"
+                f"Prefer to file it by hand? Open {ISSUE_URL} and include this raw payload:\n"
                 f"```\n{raw_value}\n```\n\n"
                 f"You can also find this data in the sensor's attributes in Home Assistant.",
                 title="RainPoint: Unsupported Sensor Detected",
