@@ -862,6 +862,35 @@ class TestUnknownSensor:
         assert "report_url" in attrs
         assert "instructions" in attrs
 
+    def test_extra_state_attributes_surfaces_generic_decode(self):
+        """A generic structural decode is exposed as decoded_fields/_values."""
+        generic = {
+            "decoder": "generic-tlv",
+            "field_names": ["STA_BAT", "STA_WKSTATE"],
+            "fields": [
+                {"name": "STA_BAT", "index": 31, "dp_id": 24, "raw": "01", "value": 1},
+                {"name": "STA_WKSTATE", "index": 30, "dp_id": 25, "raw": "00", "value": 0},
+            ],
+        }
+        sensor = self._make(data={"type": "unknown", "model": "MODELX", "raw_value": "11#x", "generic": generic})
+        attrs = sensor.extra_state_attributes
+        assert attrs["decoded_fields"] == ["STA_BAT", "STA_WKSTATE"]
+        assert attrs["decoded_values"] == generic["fields"]
+
+    def test_extra_state_attributes_omits_generic_when_no_fields(self):
+        """An empty/failed generic decode adds no decoded_* attributes."""
+        sensor = self._make(
+            data={
+                "type": "unknown",
+                "model": "MODELX",
+                "raw_value": "10#ZZ",
+                "generic": {"decoder": "generic-tlv", "error": "bad"},
+            }
+        )
+        attrs = sensor.extra_state_attributes
+        assert "decoded_fields" not in attrs
+        assert "decoded_values" not in attrs
+
 
 class TestRawPayloadSensor:
     """Tests for RainPointRawPayloadSensor."""

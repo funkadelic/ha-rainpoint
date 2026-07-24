@@ -47,6 +47,7 @@ from .decoders import (
     decode_unknown,
     decode_valve_hub,
 )
+from .generic_decoder import decode_generic
 from .utils import (
     _base_decoder_dict,
     _f10_to_c,
@@ -84,6 +85,7 @@ __all__ = [
     "decode_display",
     "decode_flow_meter",
     "decode_flowmeter",  # Alias for backward compatibility
+    "decode_generic",
     "decode_hcs003frf",
     "decode_hcs005frf",
     "decode_hcs014arf",

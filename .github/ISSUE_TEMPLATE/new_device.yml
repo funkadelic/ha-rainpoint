@@ -66,6 +66,19 @@ body:
     validations:
       required: true
   - type: textarea
+    id: auto_decoded
+    attributes:
+      label: Auto-detected fields (unverified)
+      description: >
+        Pre-filled automatically from the payload above when you open this form from
+        the integration's "Report this device" link. These are the raw field names
+        and values a model-agnostic decode found - a starting point for triage only.
+        They are NOT verified and their scaling/units are unknown, so leave them as
+        they are; the app readings you enter below are what we actually rely on.
+      render: text
+    validations:
+      required: false
+  - type: textarea
     id: debug_log
     attributes:
       label: Debug log excerpt (preferred over hand-copied payloads)

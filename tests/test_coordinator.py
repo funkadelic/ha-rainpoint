@@ -276,6 +276,26 @@ class TestCoordinatorUpdate:
         url = _coord_module._build_new_device_issue_url("HTV999XYZ", None)
         assert "primary_payload=" in url
         assert "model=HTV999XYZ" in url
+        # No payload -> no auto-decode section to pre-fill.
+        assert "auto_decoded=" not in url
+
+    def test_build_new_device_issue_url_prefills_auto_decode(self):
+        """A decodable payload pre-fills the auto_decoded field with named values."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", SAMPLE_HTV245_TLV_PAYLOAD)
+        assert "auto_decoded=" in url
+        # Vendor field names from the generic decode land in the pre-fill.
+        assert "STA_DURATION" in url
+        assert "STA_WKSTATE" in url
+
+    def test_build_new_device_issue_url_omits_auto_decode_when_undecodable(self):
+        """A payload the generic decoder cannot parse adds no auto_decoded param."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", "garbage-no-hash")
+        assert "auto_decoded=" not in url
+
+    def test_format_generic_fields_empty_returns_blank(self):
+        """No decoded fields -> empty string so the caller can omit the section."""
+        assert _coord_module._format_generic_fields({"fields": []}) == ""
+        assert _coord_module._format_generic_fields(None) == ""
 
     @pytest.mark.asyncio
     async def test_notification_id_unchanged_when_model_code_absent(self):
@@ -917,7 +937,11 @@ class TestPureHelpers:
     def test_decode_subdevice_payload_unknown_model(self):
         """Unknown models return the {'type': 'unknown', ...} shape."""
         result = _coord_module._decode_subdevice_payload("UNKNOWN_XYZ", "10#DEAD")
-        assert result == {"type": "unknown", "model": "UNKNOWN_XYZ", "raw_value": "10#DEAD"}
+        assert result["type"] == "unknown"
+        assert result["model"] == "UNKNOWN_XYZ"
+        assert result["raw_value"] == "10#DEAD"
+        # Unknown payloads carry a best-effort structural decode for diagnostics.
+        assert result["generic"]["decoder"] == "generic-tlv"
 
     # _attach_device_timestamp
     def test_attach_device_timestamp_valid_ms(self):
