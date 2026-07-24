@@ -203,17 +203,20 @@ def _match_catalog_dp(dp_list: list, index: int, dp_id: int, dp_id_prefixed: boo
     return None
 
 
-def _annotate_fields_with_catalog(fields: list[dict], model: str, dp_id_prefixed: bool) -> None:
+def _annotate_fields_with_catalog(
+    fields: list[dict], model: str, dp_id_prefixed: bool, model_code: int | str | None = None
+) -> None:
     """Attach catalog zone/type annotation to fields in place.
 
-    Annotate-never-override: looks up model in the committed product catalog
-    and, for each field that maps to a catalog dp entry, attaches a "catalog"
-    sub-dict carrying the declared zone (dpPort), data type (dpDataType), port
-    number, and a width_mismatch flag. Fields with no catalog match are left
-    exactly as built by the caller - no "catalog" key is added. This never
-    modifies a field's existing "value" or "raw".
+    Annotate-never-override: looks up the (model, model_code) variant in the
+    committed product catalog and, for each field that maps to a catalog dp
+    entry, attaches a "catalog" sub-dict carrying the declared zone (dpPort),
+    data type (dpDataType), port number, and a width_mismatch flag. Fields
+    with no catalog match are left exactly as built by the caller - no
+    "catalog" key is added. This never modifies a field's existing "value" or
+    "raw".
     """
-    dp_list = get_catalog_entry(model)
+    dp_list = get_catalog_entry(model, model_code)
     if not dp_list:
         return
 
@@ -232,7 +235,7 @@ def _annotate_fields_with_catalog(fields: list[dict], model: str, dp_id_prefixed
         }
 
 
-def decode_generic(raw: str, model: str | None = None) -> dict:
+def decode_generic(raw: str, model: str | None = None, model_code: int | str | None = None) -> dict:
     """Best-effort, model-agnostic decode of a payload for diagnostics.
 
     Returns a dict shaped as::
@@ -258,6 +261,11 @@ def decode_generic(raw: str, model: str | None = None) -> dict:
     and "raw" are never modified by this step. A field with no catalog match,
     a model with no catalog entry, or a model of None all leave the field
     dict exactly as it is without ``model`` (no "catalog" key at all).
+
+    ``model_code`` disambiguates models the vendor maps to several codes whose
+    port counts differ. Passing it is what lets the lookup pick the right
+    variant; omitting it for such a model yields no annotation rather than a
+    coin-flip between variants.
     """
     result: dict = {"decoder": "generic-tlv"}
     try:
@@ -297,7 +305,7 @@ def decode_generic(raw: str, model: str | None = None) -> dict:
 
         if not is_hand_written_model(model):
             try:
-                _annotate_fields_with_catalog(fields, model, dp_id_prefixed)
+                _annotate_fields_with_catalog(fields, model, dp_id_prefixed, model_code)
             except Exception as exc:  # annotation must never break the diagnostic decode
                 _LOGGER.debug("Catalog annotation failed for model=%s: %s", model, exc)
 

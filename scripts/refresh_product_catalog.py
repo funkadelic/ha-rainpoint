@@ -48,27 +48,41 @@ _MODEL_PREFIXES = ("HTV", "HCS", "HWS", "HWG", "HIC")
 # UI/provisioning metadata the vendor catalog also carries.
 _KEPT_DP_FIELDS = ("dpCode", "identity", "dpPort", "dpDataType", "portNumber")
 
+# Bucket key for vendor entries carrying no modelCode. Duplicated from
+# custom_components/rainpoint/api/product_catalog.py rather than imported,
+# because this script is standalone and only puts the component on sys.path
+# once it is actually fetching. A test asserts the two stay in step.
+UNCODED_VARIANT = "*"
+
 
 def trim_catalog(raw: list[dict]) -> dict:
     """Trim a raw vendor productModel catalog to the committed snapshot shape.
 
     raw is the list returned by RainPointClient.get_product_catalog(): one
-    entry per vendor model, each carrying a "model" name and a "dp" list of
-    per-datapoint metadata dicts. Returns a flat object keyed by model
-    string, where RainPoint-prefixed models keep only their dp entries'
-    dpCode/identity/dpPort/dpDataType/portNumber fields and every other
-    model is dropped. Pure function: no I/O, no network.
+    entry per vendor model, each carrying a "model" name, an optional
+    "modelCode", and a "dp" list of per-datapoint metadata dicts. Returns an
+    object keyed by model string then by modelCode, where RainPoint-prefixed
+    models keep only their dp entries' dpCode/identity/dpPort/dpDataType/
+    portNumber fields and every other model is dropped.
+
+    The model string alone is not a unique key: the vendor maps some models to
+    several modelCodes whose port counts differ, so a flat model-keyed object
+    would silently keep whichever variant happened to come last. Entries with
+    no modelCode land in the UNCODED_VARIANT bucket. Pure function: no I/O, no
+    network.
     """
-    trimmed: dict[str, list[dict]] = {}
+    trimmed: dict[str, dict[str, list[dict]]] = {}
     for entry in raw:
         model = entry.get("model")
         if not model or not str(model).startswith(_MODEL_PREFIXES):
             continue
+        model_code = entry.get("modelCode")
+        variant = UNCODED_VARIANT if model_code is None else str(model_code)
         dp_entries = entry.get("dp") or []
         # Sort by dpCode so re-running against an unchanged vendor catalog is
         # deterministic, even if the vendor API does not guarantee a stable
         # dp array order across calls. Entries missing dpCode sort last.
-        trimmed[model] = sorted(
+        trimmed.setdefault(model, {})[variant] = sorted(
             ({field: dp.get(field) for field in _KEPT_DP_FIELDS} for dp in dp_entries),
             key=lambda d: (d.get("dpCode") is None, d.get("dpCode")),
         )

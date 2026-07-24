@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import custom_components.rainpoint.api.product_catalog as product_catalog
 from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointThrottledError
 from custom_components.rainpoint.api.client import _USER_AGENT, _redact_secret
 
@@ -914,10 +915,12 @@ class TestTrimCatalog:
 
         result = trim_catalog(raw)
 
-        assert result["HTV245FRF"] == [{"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}]
+        assert result["HTV245FRF"]["*"] == [
+            {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}
+        ]
 
-    def test_returns_flat_model_keyed_dict(self):
-        """Output is a flat object keyed by model string, one entry per kept model."""
+    def test_returns_model_keyed_dict(self):
+        """Output is keyed by model string, one entry per kept model."""
         raw = [
             {
                 "model": "HTV245FRF",
@@ -949,7 +952,7 @@ class TestTrimCatalog:
         second_order = trim_catalog([{"model": "HTV245FRF", "dp": [entry_b, entry_a]}])
 
         assert first_order == second_order
-        assert [dp["dpCode"] for dp in first_order["HTV245FRF"]] == [9, 32]
+        assert [dp["dpCode"] for dp in first_order["HTV245FRF"]["*"]] == [9, 32]
 
     def test_dp_entries_missing_dpcode_sort_last(self):
         """A dp entry with no dpCode does not crash the sort and sorts after coded entries."""
@@ -965,7 +968,44 @@ class TestTrimCatalog:
 
         result = trim_catalog(raw)
 
-        assert [dp["dpCode"] for dp in result["HTV245FRF"]] == [9, None]
+        assert [dp["dpCode"] for dp in result["HTV245FRF"]["*"]] == [9, None]
+
+    def test_variants_sharing_a_model_string_are_kept_apart(self):
+        """Two modelCodes under one model must both survive the trim.
+
+        A flat model-keyed snapshot silently kept whichever variant came last,
+        which is how one variant's port metadata could end up annotating the
+        other's payload.
+        """
+        raw = [
+            {
+                "model": "HIC801W",
+                "modelCode": 278,
+                "dp": [{"dpCode": 1, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}],
+            },
+            {
+                "model": "HIC801W",
+                "modelCode": 279,
+                "dp": [{"dpCode": 1, "identity": "STA_TEM", "dpPort": 2, "dpDataType": "int16", "portNumber": 2}],
+            },
+        ]
+
+        result = trim_catalog(raw)
+
+        assert set(result["HIC801W"]) == {"278", "279"}
+        assert result["HIC801W"]["278"][0]["portNumber"] == 1
+        assert result["HIC801W"]["279"][0]["portNumber"] == 2
+
+    def test_entry_without_a_model_code_lands_in_the_uncoded_bucket(self):
+        raw = [{"model": "HCS021FRF", "dp": [{"dpCode": 10, "identity": "STA_RH"}]}]
+
+        result = trim_catalog(raw)
+
+        assert set(result["HCS021FRF"]) == {"*"}
+
+    def test_uncoded_bucket_key_matches_the_component_loader(self):
+        """The script duplicates this constant; drift would break enrichment silently."""
+        assert refresh_product_catalog.UNCODED_VARIANT == product_catalog.UNCODED_VARIANT
 
 
 class TestRefreshScriptMain:

@@ -179,7 +179,7 @@ class TestDecodeGenericCatalogAnnotation:
     def test_tlv_framing_matches_by_per_entry_dp_id(self, monkeypatch):
         """11# framing matches catalog entries on the per-entry dp_id, not the structural index."""
         fake_catalog = [{"dpCode": 0x18, "identity": "STA_BAT", "dpPort": 2, "dpDataType": "uint8", "portNumber": 2}]
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: fake_catalog)
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: fake_catalog)
 
         result = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD, model="FAKE_TLV_MODEL")
         fields = result["fields"]
@@ -192,7 +192,7 @@ class TestDecodeGenericCatalogAnnotation:
 
     def test_empty_catalog_degrades_annotation(self, monkeypatch):
         """A model that resolves to no catalog entry (empty catalog) never annotates."""
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: None)
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: None)
 
         result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
         no_model = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD)
@@ -202,7 +202,7 @@ class TestDecodeGenericCatalogAnnotation:
     def test_width_mismatch_true_for_mismatched_field(self, monkeypatch):
         """A catalog-declared width that disagrees with the decoded byte count is flagged."""
         mismatched_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "uint16", "portNumber": 1}]
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: mismatched_catalog)
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: mismatched_catalog)
 
         result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
         by_name = {f["name"]: f for f in result["fields"]}
@@ -215,7 +215,7 @@ class TestDecodeGenericCatalogAnnotation:
     def test_width_mismatch_false_for_matched_field(self, monkeypatch):
         """A catalog-declared width that agrees with the decoded byte count is not flagged."""
         matching_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1}]
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: matching_catalog)
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: matching_catalog)
 
         result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
         by_name = {f["name"]: f for f in result["fields"]}
@@ -225,7 +225,7 @@ class TestDecodeGenericCatalogAnnotation:
     def test_unparseable_data_type_never_flags_mismatch(self, monkeypatch):
         """A dpDataType with no parseable width degrades to width_mismatch=False."""
         odd_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "enum", "portNumber": 1}]
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: odd_catalog)
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: odd_catalog)
 
         result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
         by_name = {f["name"]: f for f in result["fields"]}
@@ -235,7 +235,7 @@ class TestDecodeGenericCatalogAnnotation:
     def test_non_string_data_type_never_flags_mismatch(self, monkeypatch):
         """A non-string dpDataType (e.g. missing from the catalog entry) degrades cleanly."""
         odd_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": None, "portNumber": 1}]
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: odd_catalog)
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: odd_catalog)
 
         result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
         by_name = {f["name"]: f for f in result["fields"]}
@@ -245,7 +245,7 @@ class TestDecodeGenericCatalogAnnotation:
     def test_non_byte_aligned_data_type_never_flags_mismatch(self, monkeypatch):
         """A bit width that is not a whole number of bytes is treated as unparseable."""
         odd_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "int3", "portNumber": 1}]
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: odd_catalog)
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: odd_catalog)
 
         result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
         by_name = {f["name"]: f for f in result["fields"]}
@@ -263,7 +263,7 @@ class TestDecodeGenericCatalogAnnotation:
         unparseable instead, so no mismatch is flagged.
         """
         odd_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "enum16", "portNumber": 1}]
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: odd_catalog)
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: odd_catalog)
 
         result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
         by_name = {f["name"]: f for f in result["fields"]}

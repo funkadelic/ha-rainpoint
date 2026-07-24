@@ -368,6 +368,33 @@ class TestCoordinatorUpdate:
         assert coord._notified_unknown_models == {("UNKNOWN_VARIANT", 278), ("UNKNOWN_VARIANT", 279)}
 
     @pytest.mark.asyncio
+    async def test_model_code_reaches_the_catalog_lookup(self):
+        """The device's modelCode is threaded into generic decoding, not dropped.
+
+        Without it the catalog cannot tell two variants of one model string
+        apart, and enrichment would annotate a payload with the other
+        variant's port metadata.
+        """
+        seen = []
+
+        def _record(model, model_code=None):
+            seen.append((model, model_code))
+            return None
+
+        with (
+            patch.object(_coord_module, "async_create"),
+            patch("custom_components.rainpoint.api.generic_decoder.get_catalog_entry", _record),
+        ):
+            coord, client = _make_coord()
+            hub = _make_hub(model="UNKNOWN_VARIANT")
+            hub["subDevices"][0]["modelCode"] = 279
+            client.get_devices_by_hid.return_value = [hub]
+            client.get_multiple_device_status.return_value = _make_status()
+            await _run(coord)
+
+        assert ("UNKNOWN_VARIANT", 279) in seen
+
+    @pytest.mark.asyncio
     async def test_update_display_hub_model(self):
         """MODEL_DISPLAY_HUB routes to decode_hws019wrf_v2 (special-case path)."""
         coord, client = _make_coord()
