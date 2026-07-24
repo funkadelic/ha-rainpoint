@@ -82,23 +82,6 @@ class TestLoadCatalogValid:
 
         assert _load_catalog(catalog_path) == {}
 
-    def test_get_catalog_entry_returns_a_real_model_dp_list(self):
-        """The shipped catalog resolves a real model to a usable dp list."""
-        entry = get_catalog_entry(CATALOG_ANCHOR_MODEL)
-        assert isinstance(entry, list)
-        assert len(entry) > 0
-        assert all("dpCode" in dp for dp in entry)
-
-    def test_shipped_catalog_declares_only_status_and_control_identities(self):
-        """The trim drops the provisioning/config namespaces the integration never reads.
-
-        Shipping P_/C_/S_/ATTR_ entries would bloat a file that goes out to
-        every user with metadata no code path consumes.
-        """
-        entry = get_catalog_entry(CATALOG_ANCHOR_MODEL)
-
-        assert all(dp["identity"].startswith(("STA_", "CTL_")) for dp in entry)
-
     def test_get_catalog_entry_unknown_model_returns_none(self):
         """A model the catalog has never heard of is a plain miss."""
         assert get_catalog_entry("TOTALLY_UNKNOWN_MODEL") is None
@@ -225,10 +208,6 @@ class TestPortNumberResolution:
         assert get_catalog_port_number("M", 1) == 0
         assert get_catalog_port_number("M", 2) is None
 
-    def test_shipped_catalog_reports_a_real_port_count(self):
-        """End-to-end against the committed snapshot, not a fixture."""
-        assert get_catalog_port_number(CATALOG_ANCHOR_MODEL) == 1
-
 
 class TestNormalizeVariantRecord:
     """One malformed variant must degrade to a miss, never raise at import."""
@@ -250,6 +229,35 @@ class TestNormalizeVariantRecord:
         """Anything that is neither a record nor a bare dp list is a miss."""
         assert _normalize_variant_record("not a record") is None
         assert _normalize_variant_record(None) is None
+
+
+class TestShippedCatalog:
+    """Assertions against the committed snapshot itself, not a purpose-built fixture.
+
+    These are what catch a regeneration that silently changes shape or scope;
+    the fixture-driven tests above would keep passing through such a change.
+    """
+
+    def test_get_catalog_entry_returns_a_real_model_dp_list(self):
+        """The shipped catalog resolves a real model to a usable dp list."""
+        entry = get_catalog_entry(CATALOG_ANCHOR_MODEL)
+        assert isinstance(entry, list)
+        assert len(entry) > 0
+        assert all("dpCode" in dp for dp in entry)
+
+    def test_shipped_catalog_declares_only_status_and_control_identities(self):
+        """The trim drops the provisioning/config namespaces the integration never reads.
+
+        Shipping P_/C_/S_/ATTR_ entries would bloat a file that goes out to
+        every user with metadata no code path consumes.
+        """
+        entry = get_catalog_entry(CATALOG_ANCHOR_MODEL)
+
+        assert all(dp["identity"].startswith(("STA_", "CTL_")) for dp in entry)
+
+    def test_shipped_catalog_reports_a_real_port_count(self):
+        """End-to-end port-count resolution against the committed snapshot."""
+        assert get_catalog_port_number(CATALOG_ANCHOR_MODEL) == 1
 
 
 class TestLoadCatalogFailSoft:

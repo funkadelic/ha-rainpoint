@@ -1107,6 +1107,18 @@ class TestTrimCatalog:
 
         assert result["HCS021FRF"]["*"]["portNumber"] is None
 
+    def test_boolean_port_number_degrades_to_none(self):
+        """bool is an int subclass in Python; True must not be committed as 1 port.
+
+        The script duplicates this guard from product_catalog._normalize_variant_record
+        because it is standalone. Testing both copies is what stops them drifting:
+        line coverage cannot tell them apart, since the string case above already
+        executes the same branch.
+        """
+        raw = [{"model": "HCS021FRF", "portNumber": True, "dp": [{"dpCode": 10, "identity": "STA_RH"}]}]
+
+        assert trim_catalog(raw)["HCS021FRF"]["*"]["portNumber"] is None
+
     def test_entry_without_a_model_code_lands_in_the_uncoded_bucket(self):
         """Most vendor entries carry no code; they become the model-level default."""
         raw = [{"model": "HCS021FRF", "dp": [{"dpCode": 10, "identity": "STA_RH"}]}]

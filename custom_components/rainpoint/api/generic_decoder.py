@@ -166,6 +166,14 @@ def _int_from_bytes(value_bytes: list[int], field: int) -> int | None:
 _DATA_TYPE_RE = re.compile(r"^([US])(\d+)$")
 
 
+def _parse_data_type(dp_entry: dict) -> re.Match | None:
+    """Return a dp entry's parsed dpDataType, or None when it is absent or unparseable."""
+    data_type = dp_entry.get("dpDataType")
+    if not isinstance(data_type, str):
+        return None
+    return _DATA_TYPE_RE.match(data_type)
+
+
 def _declared_byte_width(dp_entry: dict) -> int | None:
     """Return a catalog dp entry's declared byte width, or None if it has none.
 
@@ -186,7 +194,7 @@ def _declared_byte_width(dp_entry: dict) -> int | None:
     if isinstance(dp_len, int) and not isinstance(dp_len, bool) and dp_len > 0:
         return dp_len
 
-    match = _DATA_TYPE_RE.match(dp_entry.get("dpDataType") or "") if isinstance(dp_entry.get("dpDataType"), str) else None
+    match = _parse_data_type(dp_entry)
     if not match:
         return None
     bits = int(match.group(2))
@@ -206,7 +214,7 @@ def _declared_signedness(dp_entry: dict) -> bool | None:
 
     dp_entry is always a dict, for the same reason as _declared_byte_width.
     """
-    match = _DATA_TYPE_RE.match(dp_entry.get("dpDataType") or "") if isinstance(dp_entry.get("dpDataType"), str) else None
+    match = _parse_data_type(dp_entry)
     if not match:
         return None
     return match.group(1) == "S"
