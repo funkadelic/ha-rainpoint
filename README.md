@@ -120,9 +120,9 @@ Enabling push adds two hub-level diagnostic entities: **`<hub> Push Connected`**
 
 ### Account implications
 
-> **Push is a convenience, not a safety-critical replacement for the RainPoint app.** It runs over an unofficial MQTT connection to RainPoint's cloud (Alibaba Cloud IoT) that was pieced together by reverse engineering, so it stays opt-in and off by default. In testing it ran alongside the RainPoint mobile app without pushing either one offline. The vendor hands out MQTT connection slots from a small shared pool, so once in a while push and the app can briefly collide and one of them drops; Home Assistant reconnects on its own, and the 120-second polling keeps devices current in the meantime.
+> **Push is a convenience, not a safety-critical replacement for the RainPoint app.** It uses an unofficial connection to RainPoint's cloud, so it stays opt-in and off by default. Now and then it can briefly drop; Home Assistant reconnects on its own, and the usual 120-second polling keeps your devices up to date in the meantime. In testing it ran alongside the RainPoint phone app without knocking either one offline.
 
-The push connection is a separate MQTT connection from the HTTP login session used for setup and polling, so the [one-active-session-per-account guidance above](#use-a-dedicated-home-assistant-account-recommended) and the existing session warning under **Configuration** still apply unchanged. The coexistence finding above is specific to the MQTT push channel, not the HTTP login.
+Turning push on doesn't change the [one-session-per-account note above](#use-a-dedicated-home-assistant-account-recommended): it's the sign-in used for setup that can bump your phone out of the app (and vice versa), whether or not push is enabled.
 
 ---
 
