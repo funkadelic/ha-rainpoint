@@ -31,6 +31,17 @@ All devices communicate via the RainPoint cloud backend. There is no local LAN p
 
 ---
 
+## My device isn't listed
+
+Unsupported models don't break anything: the integration keeps polling, marks the device as `unknown`, and adds a disabled-by-default **Raw Payload** diagnostic sensor holding its raw data. It also raises a Home Assistant notification with a one-click link that opens a **New device support** report pre-filled with the model and payload.
+
+To get your device added:
+
+1. Open a [New device support issue](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) (the notification link pre-fills the model and payload for you).
+2. Include raw payloads in a few known states (valve closed vs open, a sensor at a known reading). One capture shows the byte layout; different states reveal what each byte means. See [`DEBUG_VALVE_PAYLOAD.md`](DEBUG_VALVE_PAYLOAD.md) for how to capture.
+
+---
+
 ## Installation via HACS
 
 This integration is part of the default HACS store, so no custom repository is needed.
