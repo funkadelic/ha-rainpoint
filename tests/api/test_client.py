@@ -1,14 +1,27 @@
-"""Tests for RainPoint API client (COVR-06)."""
+"""Tests for the RainPoint API client."""
 
+import asyncio
 import hashlib
+import importlib.util
 import logging
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import custom_components.rainpoint.api.product_catalog as product_catalog
 from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointThrottledError
 from custom_components.rainpoint.api.client import _USER_AGENT, _redact_secret
+
+# scripts/ is not a package (it's a standalone maintainer-tool directory, not
+# shipped inside custom_components/), so it is loaded here via importlib
+# rather than a normal import.
+_REFRESH_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "refresh_product_catalog.py"
+_refresh_spec = importlib.util.spec_from_file_location("refresh_product_catalog", _REFRESH_SCRIPT_PATH)
+refresh_product_catalog = importlib.util.module_from_spec(_refresh_spec)
+_refresh_spec.loader.exec_module(refresh_product_catalog)
+trim_catalog = refresh_product_catalog.trim_catalog
 
 
 def _make_client() -> RainPointClient:
@@ -558,7 +571,7 @@ class TestReloginListeners:
     @pytest.mark.asyncio
     async def test_relogin_listener_exception_is_isolated(self, caplog):
         """A raising listener does not propagate out of _login() and does not
-        prevent later-registered listeners from firing (CR-03)."""
+        prevent later-registered listeners from firing."""
         client = _make_client()
         assert client._token is not None
 
@@ -824,6 +837,332 @@ class TestListHomes:
             await client.list_homes()
 
 
+class TestGetProductCatalog:
+    """Tests for get_product_catalog API method (maintainer refresh tooling only)."""
+
+    @pytest.mark.asyncio
+    async def test_get_product_catalog_success(self):
+        """get_product_catalog opens with ensure_logged_in and returns data on code 0."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {
+            "code": 0,
+            "data": [{"model": "HTV245FRF", "dp": [{"dpCode": 9, "identity": "STA_TEM"}]}],
+        }
+        client._session.get = MagicMock(return_value=_mock_response(json_body))
+
+        result = await client.get_product_catalog()
+
+        client.ensure_logged_in.assert_awaited_once()
+        assert result == json_body["data"]
+
+    @pytest.mark.asyncio
+    async def test_get_product_catalog_api_error_code(self):
+        """A non-zero API code raises RainPointApiError."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 1, "msg": "bad"}
+        client._session.get = MagicMock(return_value=_mock_response(json_body))
+
+        with pytest.raises(RainPointApiError, match="get_product_catalog failed: code 1"):
+            await client.get_product_catalog()
+
+    @pytest.mark.asyncio
+    async def test_get_product_catalog_http_error(self):
+        """A non-200 HTTP status raises RainPointApiError."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.get = MagicMock(return_value=_mock_response({}, status=500))
+
+        with pytest.raises(RainPointApiError, match="get_product_catalog HTTP 500"):
+            await client.get_product_catalog()
+
+
+class TestTrimCatalog:
+    """Tests for scripts/refresh_product_catalog.py::trim_catalog (pure transform, no network)."""
+
+    def test_drops_non_rainpoint_model(self):
+        """A model without one of the fork's prefixes is dropped entirely."""
+        raw = [
+            {"model": "SOMEOTHERBRAND", "dp": [{"dpCode": 1, "identity": "STA_TEM"}]},
+        ]
+
+        result = trim_catalog(raw)
+
+        assert result == {}
+
+    def test_keeps_only_the_five_dp_fields(self):
+        """A kept RainPoint model's dp entries keep exactly the five needed fields."""
+        raw = [
+            {
+                "model": "HTV245FRF",
+                "dp": [
+                    {
+                        "dpCode": 9,
+                        "identity": "STA_TEM",
+                        "dpPort": 1,
+                        "dpDataType": "int16",
+                        "portNumber": 1,
+                        "name": "Temperature",
+                        "mode": "ro",
+                    }
+                ],
+            }
+        ]
+
+        result = trim_catalog(raw)
+
+        assert result["HTV245FRF"]["*"] == [
+            {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}
+        ]
+
+    def test_returns_model_keyed_dict(self):
+        """Output is keyed by model string, one entry per kept model."""
+        raw = [
+            {
+                "model": "HTV245FRF",
+                "dp": [{"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}],
+            },
+            {
+                "model": "HCS021FRF",
+                "dp": [{"dpCode": 10, "identity": "STA_RH", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1}],
+            },
+            {"model": "NOTRAINPOINT", "dp": []},
+        ]
+
+        result = trim_catalog(raw)
+
+        assert set(result.keys()) == {"HTV245FRF", "HCS021FRF"}
+        assert isinstance(result, dict)
+
+    def test_sorts_dp_entries_by_dpcode_regardless_of_vendor_order(self):
+        """Two runs with the same dp entries in a different order produce identical output.
+
+        The vendor API does not guarantee dp array order across calls; trim_catalog
+        must sort by dpCode so --check/write output is stable and does not produce
+        spurious drift on an otherwise-unchanged catalog.
+        """
+        entry_a = {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}
+        entry_b = {"dpCode": 32, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1}
+
+        first_order = trim_catalog([{"model": "HTV245FRF", "dp": [entry_a, entry_b]}])
+        second_order = trim_catalog([{"model": "HTV245FRF", "dp": [entry_b, entry_a]}])
+
+        assert first_order == second_order
+        assert [dp["dpCode"] for dp in first_order["HTV245FRF"]["*"]] == [9, 32]
+
+    def test_dp_entries_missing_dpcode_sort_last(self):
+        """A dp entry with no dpCode does not crash the sort and sorts after coded entries."""
+        raw = [
+            {
+                "model": "HTV245FRF",
+                "dp": [
+                    {"dpCode": None, "identity": "STA_UNKNOWN", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1},
+                    {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1},
+                ],
+            }
+        ]
+
+        result = trim_catalog(raw)
+
+        assert [dp["dpCode"] for dp in result["HTV245FRF"]["*"]] == [9, None]
+
+    def test_variants_sharing_a_model_string_are_kept_apart(self):
+        """Two modelCodes under one model must both survive the trim.
+
+        A flat model-keyed snapshot silently kept whichever variant came last,
+        which is how one variant's port metadata could end up annotating the
+        other's payload.
+        """
+        raw = [
+            {
+                "model": "HIC801W",
+                "modelCode": 278,
+                "dp": [{"dpCode": 1, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}],
+            },
+            {
+                "model": "HIC801W",
+                "modelCode": 279,
+                "dp": [{"dpCode": 1, "identity": "STA_TEM", "dpPort": 2, "dpDataType": "int16", "portNumber": 2}],
+            },
+        ]
+
+        result = trim_catalog(raw)
+
+        assert set(result["HIC801W"]) == {"278", "279"}
+        assert result["HIC801W"]["278"][0]["portNumber"] == 1
+        assert result["HIC801W"]["279"][0]["portNumber"] == 2
+
+    def test_entry_without_a_model_code_lands_in_the_uncoded_bucket(self):
+        """Most vendor entries carry no code; they become the model-level default."""
+        raw = [{"model": "HCS021FRF", "dp": [{"dpCode": 10, "identity": "STA_RH"}]}]
+
+        result = trim_catalog(raw)
+
+        assert set(result["HCS021FRF"]) == {"*"}
+
+    def test_uncoded_bucket_key_matches_the_component_loader(self):
+        """The script duplicates this constant; drift would break enrichment silently."""
+        assert refresh_product_catalog.UNCODED_VARIANT == product_catalog.UNCODED_VARIANT
+
+
+class TestRefreshScriptMain:
+    """Tests for scripts/refresh_product_catalog.py::main safety guards.
+
+    These guards are the only thing standing between a bad vendor pull and a
+    corrupted committed catalog, so each refusal branch is exercised directly.
+    Every test stubs the network fetch; nothing here talks to the vendor.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_current_event_loop(self):
+        """Put the thread's current event loop back after main() runs.
+
+        main() drives its fetch through asyncio.run, which closes the loop it
+        created and leaves the thread with no current loop. The Home Assistant
+        test plugin's autouse fixtures call asyncio.get_event_loop() during
+        setup, so without this the very next test in the session errors out.
+        """
+        try:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+        except RuntimeError:
+            loop = None
+        yield
+        if loop is not None:
+            asyncio.set_event_loop(loop)
+
+    @staticmethod
+    def _stub_fetch(monkeypatch, trimmed):
+        """Replace the script's network fetch with one returning trimmed."""
+
+        async def _fake_fetch(email, password, area_code):
+            return trimmed
+
+        monkeypatch.setattr(refresh_product_catalog, "_fetch_trimmed_catalog", _fake_fetch)
+
+    @staticmethod
+    def _stub_credentials(monkeypatch):
+        """Set the env vars main() requires before it will do any work."""
+        monkeypatch.setenv("RAINPOINT_EMAIL", "user@example.com")
+        monkeypatch.setenv("RAINPOINT_PASSWORD", "secret")
+
+    @staticmethod
+    def _forbid_write(monkeypatch):
+        """Make any catalog write an outright test failure."""
+
+        def _explode(trimmed, path):
+            raise AssertionError("refused write path still called _write_catalog")
+
+        monkeypatch.setattr(refresh_product_catalog, "_write_catalog", _explode)
+
+    def test_write_refuses_empty_pull(self, monkeypatch, capsys):
+        """An empty live pull never overwrites the committed catalog."""
+        self._stub_credentials(monkeypatch)
+        self._stub_fetch(monkeypatch, {})
+        self._forbid_write(monkeypatch)
+        monkeypatch.setattr(refresh_product_catalog, "_load_committed_catalog", lambda path: {"HCS777ARF": []})
+
+        assert refresh_product_catalog.main([]) == 1
+        assert "Refusing to write an empty catalog" in capsys.readouterr().err
+
+    def test_write_refuses_drastic_model_drop(self, monkeypatch, capsys):
+        """A pull that loses more than half the committed models is refused."""
+        self._stub_credentials(monkeypatch)
+        self._stub_fetch(monkeypatch, {"HTV245FRF": []})
+        self._forbid_write(monkeypatch)
+        monkeypatch.setattr(
+            refresh_product_catalog,
+            "_load_committed_catalog",
+            lambda path: {"A1": [], "B2": [], "C3": [], "D4": []},
+        )
+
+        assert refresh_product_catalog.main([]) == 1
+        assert "model count dropped from 4 to 1" in capsys.readouterr().err
+
+    def test_write_persists_a_healthy_pull(self, monkeypatch, capsys):
+        """A pull that clears both guards is written and reported."""
+        self._stub_credentials(monkeypatch)
+        self._stub_fetch(monkeypatch, {"HTV245FRF": [], "HCS021FRF": []})
+        monkeypatch.setattr(refresh_product_catalog, "_load_committed_catalog", lambda path: {"HTV245FRF": []})
+        written = {}
+        monkeypatch.setattr(refresh_product_catalog, "_write_catalog", lambda trimmed, path: written.update(trimmed))
+
+        assert refresh_product_catalog.main([]) == 0
+        assert set(written) == {"HTV245FRF", "HCS021FRF"}
+        assert "Wrote 2 models" in capsys.readouterr().out
+
+    def test_check_treats_empty_pull_as_fetch_failure(self, monkeypatch, capsys):
+        """--check reports a fetch failure rather than "every model removed"."""
+        self._stub_credentials(monkeypatch)
+        self._stub_fetch(monkeypatch, {})
+
+        def _explode(committed, fresh):
+            raise AssertionError("empty pull still reached the drift report")
+
+        monkeypatch.setattr(refresh_product_catalog, "_print_drift", _explode)
+
+        assert refresh_product_catalog.main(["--check"]) == 1
+        assert "treating as a fetch failure, not drift" in capsys.readouterr().err
+
+    def test_check_reports_drift_on_a_non_empty_pull(self, monkeypatch):
+        """A non-empty pull still routes through the normal drift report."""
+        self._stub_credentials(monkeypatch)
+        self._stub_fetch(monkeypatch, {"HTV245FRF": []})
+        monkeypatch.setattr(refresh_product_catalog, "_load_committed_catalog", lambda path: {})
+
+        assert refresh_product_catalog.main(["--check"]) == 1
+
+    def test_missing_credentials_exit_code(self, monkeypatch):
+        """No credentials and no TTY is a usage error, not a crash or a prompt."""
+        monkeypatch.delenv("RAINPOINT_EMAIL", raising=False)
+        monkeypatch.delenv("RAINPOINT_PASSWORD", raising=False)
+        monkeypatch.setattr(refresh_product_catalog.sys.stdin, "isatty", lambda: False)
+
+        assert refresh_product_catalog.main([]) == 2
+
+    def test_password_comes_from_env_without_prompting(self, monkeypatch):
+        """RAINPOINT_PASSWORD is used directly, never routed through a prompt."""
+        monkeypatch.setenv("RAINPOINT_PASSWORD", "from-env")
+        monkeypatch.setattr(
+            refresh_product_catalog.getpass,
+            "getpass",
+            lambda prompt="": pytest.fail("prompted despite RAINPOINT_PASSWORD being set"),
+        )
+
+        assert refresh_product_catalog._resolve_password() == "from-env"
+
+    def test_password_prompts_interactively_when_env_is_unset(self, monkeypatch):
+        """An interactive run with no env var falls back to a hidden prompt."""
+        monkeypatch.delenv("RAINPOINT_PASSWORD", raising=False)
+        monkeypatch.setattr(refresh_product_catalog.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(refresh_product_catalog.getpass, "getpass", lambda prompt="": "typed-in")
+
+        assert refresh_product_catalog._resolve_password() == "typed-in"
+
+    def test_password_is_none_when_prompt_is_empty(self, monkeypatch):
+        """An empty prompt response is treated as no password, not as an empty one."""
+        monkeypatch.delenv("RAINPOINT_PASSWORD", raising=False)
+        monkeypatch.setattr(refresh_product_catalog.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(refresh_product_catalog.getpass, "getpass", lambda prompt="": "")
+
+        assert refresh_product_catalog._resolve_password() is None
+
+    def test_area_code_defaults_when_env_var_is_empty(self, monkeypatch):
+        """CI exports an unset optional secret as "", which must not beat the default."""
+        monkeypatch.setenv("RAINPOINT_AREA_CODE", "")
+
+        assert refresh_product_catalog._parse_args([]).area_code == "1"
+
+    def test_area_code_honours_a_configured_value(self, monkeypatch):
+        """A populated RAINPOINT_AREA_CODE is passed through untouched."""
+        monkeypatch.setenv("RAINPOINT_AREA_CODE", "44")
+
+        assert refresh_product_catalog._parse_args([]).area_code == "44"
+
+
 class TestGetDevicesByHid:
     """Tests for get_devices_by_hid API method."""
 
@@ -1018,7 +1357,7 @@ class TestSetDeviceState:
 
 
 class TestGetSubscribeStatus:
-    """get_subscribe_status() fetches fresh per-session MQTT credentials (CRED-01, CRED-03)."""
+    """get_subscribe_status() fetches fresh per-session MQTT credentials."""
 
     def _make_client(self) -> RainPointClient:
         """Make client helper."""
@@ -1099,7 +1438,7 @@ class TestGetSubscribeStatus:
 
     @pytest.mark.asyncio
     async def test_subscribe_status_never_logs_device_secret(self, caplog):
-        """deviceSecret never appears in any DEBUG log line (CRED-03/D-16)."""
+        """deviceSecret never appears in any DEBUG log line."""
         client = self._make_client()
         client.ensure_logged_in = AsyncMock()
         json_body = {

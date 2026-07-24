@@ -50,6 +50,8 @@ from tests.payload_samples import (  # noqa: E402
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
+    SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
+    SEEDED_CATALOG_MODEL,
 )
 
 # ---------------------------------------------------------------------------
@@ -297,6 +299,36 @@ class TestCoordinatorUpdate:
         assert _coord_module._format_generic_fields({"fields": []}) == ""
         assert _coord_module._format_generic_fields(None) == ""
 
+    def test_format_generic_fields_includes_catalog_zone_for_annotated_field(self):
+        """A field carrying catalog annotation renders with its zone, for bug-report triage."""
+        generic = {
+            "dp_id_prefixed": False,
+            "fields": [
+                {
+                    "name": "STA_BAT",
+                    "index": 31,
+                    "dp_id": 0,
+                    "raw": "64",
+                    "value": 100,
+                    "catalog": {"dp_port": 1, "data_type": "uint8", "port_number": 1, "width_mismatch": False},
+                },
+            ],
+        }
+
+        rendered = _coord_module._format_generic_fields(generic)
+
+        assert "STA_BAT" in rendered
+        assert "[zone 1]" in rendered
+
+    def test_format_generic_fields_unannotated_field_renders_unchanged(self):
+        """A field without catalog annotation renders exactly as before this plan."""
+        generic = {
+            "dp_id_prefixed": False,
+            "fields": [{"name": "STA_BAT", "index": 31, "dp_id": 0, "raw": "64", "value": 100}],
+        }
+
+        assert _coord_module._format_generic_fields(generic) == "STA_BAT: raw=64 value=100"
+
     @pytest.mark.asyncio
     async def test_notification_id_unchanged_when_model_code_absent(self):
         """Without a modelCode the notification keeps its pre-existing id.
@@ -336,6 +368,33 @@ class TestCoordinatorUpdate:
 
         assert mock_notify.call_count == 2
         assert coord._notified_unknown_models == {("UNKNOWN_VARIANT", 278), ("UNKNOWN_VARIANT", 279)}
+
+    @pytest.mark.asyncio
+    async def test_model_code_reaches_the_catalog_lookup(self):
+        """The device's modelCode is threaded into generic decoding, not dropped.
+
+        Without it the catalog cannot tell two variants of one model string
+        apart, and enrichment would annotate a payload with the other
+        variant's port metadata.
+        """
+        seen = []
+
+        def _record(model, model_code=None):
+            seen.append((model, model_code))
+            return None
+
+        with (
+            patch.object(_coord_module, "async_create"),
+            patch("custom_components.rainpoint.api.generic_decoder.get_catalog_entry", _record),
+        ):
+            coord, client = _make_coord()
+            hub = _make_hub(model="UNKNOWN_VARIANT")
+            hub["subDevices"][0]["modelCode"] = 279
+            client.get_devices_by_hid.return_value = [hub]
+            client.get_multiple_device_status.return_value = _make_status()
+            await _run(coord)
+
+        assert ("UNKNOWN_VARIANT", 279) in seen
 
     @pytest.mark.asyncio
     async def test_update_display_hub_model(self):
@@ -942,6 +1001,25 @@ class TestPureHelpers:
         assert result["raw_value"] == "10#DEAD"
         # Unknown payloads carry a best-effort structural decode for diagnostics.
         assert result["generic"]["decoder"] == "generic-tlv"
+
+    def test_decode_subdevice_payload_unknown_model_carries_catalog_annotation(self):
+        """A catalog-recognized unsupported model's unknown-branch decode is enriched."""
+        # STA_BAT entry from the seeded bootstrap catalog.
+        result = _coord_module._decode_subdevice_payload(SEEDED_CATALOG_MODEL, SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD)
+
+        assert result["type"] == "unknown"
+        fields_by_name = {f["name"]: f for f in result["generic"]["fields"]}
+        assert fields_by_name["STA_BAT"]["catalog"]["dp_port"] == 1
+        assert fields_by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
+
+    def test_decode_subdevice_payload_registered_model_never_reaches_generic_path(self):
+        """A DECODER_REGISTRY model always dispatches to its hand-written decoder,
+        never diverting into the generic/unknown branch, confirming the trust
+        boundary between hand-written and catalog-driven decoding holds."""
+        result = _coord_module._decode_subdevice_payload(MODEL_MOISTURE_SIMPLE, _MOISTURE_SIMPLE_PAYLOAD)
+
+        assert result["type"] != "unknown"
+        assert "generic" not in result
 
     # _attach_device_timestamp
     def test_attach_device_timestamp_valid_ms(self):

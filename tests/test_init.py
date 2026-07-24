@@ -121,7 +121,7 @@ class TestAsyncSetupEntry:
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_registers_reload_listener(self):
-        """An update listener is registered so an options change reloads the entry (OPTS-01/D-01)."""
+        """An update listener is registered so an options change reloads the entry."""
         hass = _make_hass()
         entry = _make_entry()
 
@@ -229,7 +229,7 @@ class TestAsyncSetupEntry:
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_push_enabled_broker_unreachable_still_returns_true(self):
-        """A broker-unreachable async_start failure never blocks/fails setup (PUSH-04/D-09)."""
+        """A broker-unreachable async_start failure never blocks/fails setup."""
         hass = _make_hass()
         entry = _make_entry()
         entry.options = {CONF_PUSH_ENABLED: True}

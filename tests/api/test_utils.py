@@ -1,4 +1,4 @@
-"""Tests for RainPoint API utility functions (COVR-03, COVR-04)."""
+"""Tests for the RainPoint API utility functions."""
 
 import pytest
 
@@ -12,7 +12,7 @@ from custom_components.rainpoint.api import (
 
 
 class TestParseRainpointPayload:
-    """Tests for _parse_rainpoint_payload (COVR-04)."""
+    """Tests for _parse_rainpoint_payload."""
 
     def test_10_prefix_flat_hex(self):
         """10# prefix returns decoded hex bytes."""
@@ -43,7 +43,7 @@ class TestParseRainpointPayload:
 
 
 class TestParseTlvPayload:
-    """Tests for _parse_tlv_payload (COVR-03)."""
+    """Tests for _parse_tlv_payload."""
 
     def test_tlv_known_type_widths(self):
         """All known type bytes decode with correct value widths."""

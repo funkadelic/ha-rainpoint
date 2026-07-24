@@ -1,4 +1,4 @@
-"""Tests for RainPointMqttClient (PUSH-04, CRED-01/03, CONN-01/02, D-03/D-04/D-05/D-08/D-14)."""
+"""Tests for RainPointMqttClient: connect lifecycle, credential redaction, reconnect supervision."""
 
 import asyncio
 import inspect
@@ -84,7 +84,7 @@ async def _instant_sleep(*_args, **_kwargs) -> None:
 
 
 class TestConstructorSeams:
-    """D-14: constructor accepts an injectable paho factory + time source."""
+    """The constructor accepts an injectable paho factory + time source."""
 
     def test_constructor_exposes_test_seams(self):
         """paho_client_factory and time_source are keyword-only constructor params."""
@@ -116,7 +116,7 @@ class TestConnectDoesNotSubscribe:
 
 
 class TestMessageReceiptLogging:
-    """D-03: log topic + byte-length + running count at DEBUG, never payload contents."""
+    """Logs topic + byte-length + running count at DEBUG, never payload contents."""
 
     @pytest.mark.asyncio
     async def test_on_message_logs_topic_len_and_count_not_payload(self, caplog):
@@ -202,7 +202,7 @@ class TestMessageReceiptLogging:
 
 
 class TestSecretRedaction:
-    """CRED-03/D-16: no log line emits deviceSecret, the derived password, or a full clientId."""
+    """No log line emits deviceSecret, the derived password, or a full clientId."""
 
     @pytest.mark.asyncio
     async def test_no_secret_leaks_across_full_lifecycle(self, caplog):
@@ -519,7 +519,7 @@ class TestAsyncDisconnect:
 
 
 class TestConnectCallbackHandling:
-    """on_connect/on_disconnect hop onto the HA loop before touching state (CONN-02/D-08)."""
+    """on_connect/on_disconnect hop onto the HA loop before touching state."""
 
     @pytest.mark.asyncio
     async def test_on_connect_marks_connected_via_loop(self):
@@ -540,7 +540,7 @@ class TestConnectCallbackHandling:
 
     @pytest.mark.asyncio
     async def test_on_connect_nonzero_reason_code_reports_not_connected(self, caplog):
-        """A non-zero reason_code (auth rejection) keeps connected False and warns (CR-02)."""
+        """A non-zero reason_code (auth rejection) keeps connected False and warns."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -579,7 +579,7 @@ class TestConnectCallbackHandling:
 
 
 def test_module_defines_to_redact_and_redact_helper():
-    """TO_REDACT + _redact() are established from the first credential-issuing commit (D-16)."""
+    """TO_REDACT + _redact() are established from the first credential-issuing commit."""
     assert "deviceSecret" in mqtt_module.TO_REDACT
     assert mqtt_module._redact("SEKRIT-value-9f3a") == "len=17 last4=9f3a"
     assert mqtt_module._redact(None) == "<empty>"
@@ -587,7 +587,7 @@ def test_module_defines_to_redact_and_redact_helper():
 
 
 class TestPahoAutoReconnectDisabled:
-    """CONN-01/D-05: paho's own auto-reconnect must never race the supervisor."""
+    """paho's own auto-reconnect must never race the supervisor."""
 
     @pytest.mark.asyncio
     async def test_connect_passes_reconnect_on_failure_false_to_factory(self):
@@ -617,7 +617,7 @@ class TestPahoAutoReconnectDisabled:
 
 
 class TestBackoffDelay:
-    """D-05/Pitfall 7: exponential backoff capped at a ceiling, with jitter."""
+    """Exponential backoff is capped at a ceiling, with jitter."""
 
     def _client(self):
         hass = MagicMock()
@@ -644,7 +644,7 @@ class TestBackoffDelay:
 
 
 class TestSupervisorUnboundedRetry:
-    """D-15a/CONN-01: 6+ consecutive connect failures still schedule a further retry."""
+    """Six or more consecutive connect failures still schedule a further retry."""
 
     @pytest.mark.asyncio
     async def test_supervisor_retries_after_six_plus_failures(self):
@@ -685,7 +685,7 @@ class TestSupervisorUnboundedRetry:
 
 
 def test_no_bounded_range_governs_reconnect():
-    """Pitfall 2 guard: no bounded attempt-count loop governs reconnect in the module source."""
+    """No bounded attempt-count loop governs reconnect in the module source."""
     import inspect as _inspect
 
     source = _inspect.getsource(mqtt_module.RainPointMqttClient._run_supervisor)
@@ -718,7 +718,7 @@ def _make_mqtt_client_with_distinct_paho_instances(hass, get_subscribe_status_mo
 
 
 class TestCredentialRenewal:
-    """CRED-02/D-06: clean disconnect-old/reconnect-new renewal cycle before ~570s expiry."""
+    """Clean disconnect-old/reconnect-new renewal cycle before ~570s expiry."""
 
     @pytest.mark.asyncio
     async def test_renewal_crosses_boundary_and_reconnects_with_fresh_creds(self):
@@ -749,7 +749,7 @@ class TestCredentialRenewal:
     @pytest.mark.asyncio
     async def test_on_http_relogin_forces_immediate_reconnect_without_waiting_deadline(self):
         """on_http_relogin() re-fetches credentials and reconnects immediately -- the
-        real (unpatched, ~510s) renewal delay is never actually waited out (D-07)."""
+        real (unpatched, ~510s) renewal delay is never actually waited out."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         client, rainpoint_client, instances = _make_mqtt_client_with_distinct_paho_instances(hass)
@@ -794,7 +794,7 @@ class TestCredentialRenewal:
 
 
 class TestRenewalDelayFormula:
-    """D-06: renew_in = max(120, expire - now - 60), jittered."""
+    """renew_in = max(120, expire - now - 60), jittered."""
 
     def _client(self):
         return _make_mqtt_client(MagicMock(), _make_fake_paho())
@@ -867,7 +867,7 @@ class TestRenewalDelayFormula:
 
 
 class TestProtocolTimestampUsesWallClock:
-    """WR-05: the clientId/HMAC timestamp is a wall-clock epoch value, not monotonic."""
+    """The clientId/HMAC timestamp is a wall-clock epoch value, not monotonic."""
 
     @pytest.mark.asyncio
     async def test_protocol_timestamp_uses_wall_clock_source_not_monotonic(self):
@@ -902,19 +902,19 @@ class TestProtocolTimestampUsesWallClock:
 
 
 def test_on_http_relogin_is_a_public_method():
-    """D-07: on_http_relogin() exists as the documented HTTP-re-login trigger."""
+    """on_http_relogin() exists as the documented HTTP-re-login trigger."""
     assert hasattr(RainPointMqttClient, "on_http_relogin")
     assert not inspect.iscoroutinefunction(RainPointMqttClient.on_http_relogin)
 
 
 class TestSupervisorTeardown:
-    """CONN-03/D-10, D-15c: async_disconnect cancels AND awaits the supervisor task,
+    """async_disconnect cancels AND awaits the supervisor task,
     leaving no dangling task/thread/timer, and schedules no further reconnect."""
 
     @pytest.mark.asyncio
     async def test_disconnect_cancels_and_awaits_task_before_returning(self):
         """The supervisor task is done() immediately after async_disconnect() returns
-        -- not merely cancel-requested -- so no dangling task remains (D-15c)."""
+        -- not merely cancel-requested -- so no dangling task remains."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -980,7 +980,7 @@ class TestSupervisorTeardown:
     @pytest.mark.asyncio
     async def test_no_task_leak_across_reload_cycles(self):
         """Repeated start/disconnect cycles (simulating unload-then-setup) leave no
-        growth in live asyncio tasks attributable to the client (D-10/D-15c)."""
+        growth in live asyncio tasks attributable to the client."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
 
@@ -1105,7 +1105,7 @@ class TestSupervisorTeardown:
     @pytest.mark.asyncio
     async def test_disconnect_swallows_paho_teardown_exception(self, caplog):
         """A paho loop_stop()/disconnect() raising during teardown is logged, not
-        propagated -- async_disconnect must never block unload (WR-03)."""
+        propagated -- async_disconnect must never block unload."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()

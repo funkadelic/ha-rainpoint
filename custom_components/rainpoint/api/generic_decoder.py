@@ -13,6 +13,9 @@ nothing in the entity or control path consumes them.
 """
 
 import logging
+import re
+
+from .product_catalog import get_catalog_entry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -156,7 +159,92 @@ def _int_from_bytes(value_bytes: list[int], field: int) -> int | None:
     return int.from_bytes(bytes(value_bytes), order)
 
 
-def decode_generic(raw: str) -> dict:
+_DATA_TYPE_WIDTH_RE = re.compile(r"^u?int(\d+)$")
+
+
+def _declared_byte_width(data_type) -> int | None:
+    """Parse a declared byte width out of a catalog dpDataType string.
+
+    Only matches strings shaped exactly like "uint8" / "int16" (an optional
+    "u" prefix, "int", then a digit run with nothing else). This is
+    deliberately anchored rather than a bare digit search: a catalog
+    dpDataType like "enum8" embeds a digit that means "8 possible states",
+    not "8 bits", and a loose search would silently misparse it as a byte
+    width. Returns None when no width can be determined (non-string,
+    non-matching shape, or a bit count that is not a whole number of bytes),
+    in which case the caller treats the field as "cannot compare" rather
+    than guessing at a mismatch.
+    """
+    if not isinstance(data_type, str):
+        return None
+    match = _DATA_TYPE_WIDTH_RE.match(data_type)
+    if not match:
+        return None
+    bits = int(match.group(1))
+    if bits <= 0 or bits % 8 != 0:
+        return None
+    return bits // 8
+
+
+def _match_catalog_dp(dp_list: list, index: int, dp_id: int, dp_id_prefixed: bool) -> dict | None:
+    """Return the catalog dp entry for a decoded field, or None on no match.
+
+    The ``11#`` (TLV) framing carries the vendor's real per-instance dp_id on
+    each entry, so it is matched first - this also disambiguates duplicate
+    structural indices, such as two STA_DURATION fields on different zones.
+    The ``10#`` (flat) framing has no per-entry dp_id, so it falls back to
+    matching on the structural field index, the same numbering the STA_*
+    names in _STATUS_FIELDS were originally harvested from.
+
+    Both framings key off the catalog's dpCode, which the vendor uses as a
+    per-instance identifier and is therefore expected to be unique within a
+    model. The catalog is regenerated from an external API though, so that is
+    an assumption rather than a guarantee: an ambiguous key (two or more
+    entries sharing it) yields None instead of whichever entry happened to
+    sort first, since a wrong zone number is worse than an absent one.
+    """
+    key = dp_id if dp_id_prefixed else index
+    matches = [dp for dp in dp_list if isinstance(dp, dict) and dp.get("dpCode") == key]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        _LOGGER.debug("Catalog has %d entries for dpCode %s; leaving the field unannotated", len(matches), key)
+    return None
+
+
+def _annotate_fields_with_catalog(
+    fields: list[dict], model: str, dp_id_prefixed: bool, model_code: int | str | None = None
+) -> None:
+    """Attach catalog zone/type annotation to fields in place.
+
+    Annotate-never-override: looks up the (model, model_code) variant in the
+    committed product catalog and, for each field that maps to a catalog dp
+    entry, attaches a "catalog" sub-dict carrying the declared zone (dpPort),
+    data type (dpDataType), port number, and a width_mismatch flag. Fields
+    with no catalog match are left exactly as built by the caller - no
+    "catalog" key is added. This never modifies a field's existing "value" or
+    "raw".
+    """
+    dp_list = get_catalog_entry(model, model_code)
+    if not dp_list:
+        return
+
+    for field in fields:
+        dp_entry = _match_catalog_dp(dp_list, field["index"], field["dp_id"], dp_id_prefixed)
+        if dp_entry is None:
+            continue
+        declared_width = _declared_byte_width(dp_entry.get("dpDataType"))
+        actual_width = len(field["raw"]) // 2
+        width_mismatch = declared_width is not None and declared_width != actual_width
+        field["catalog"] = {
+            "dp_port": dp_entry.get("dpPort"),
+            "data_type": dp_entry.get("dpDataType"),
+            "port_number": dp_entry.get("portNumber"),
+            "width_mismatch": width_mismatch,
+        }
+
+
+def decode_generic(raw: str, model: str | None = None, model_code: int | str | None = None) -> dict:
     """Best-effort, model-agnostic decode of a payload for diagnostics.
 
     Returns a dict shaped as::
@@ -174,6 +262,19 @@ def decode_generic(raw: str) -> dict:
 
     On any parse failure it returns ``{"decoder": "generic-tlv", "error": ...}``
     - it never raises, so the unknown-device path stays robust.
+
+    When ``model`` is given, each field whose position matches an entry in the
+    committed product catalog for that model additionally carries a "catalog"
+    sub-dict: ``{"dp_port": ..., "data_type": ..., "port_number": ...,
+    "width_mismatch": bool}``. The catalog only annotates - a field's "value"
+    and "raw" are never modified by this step. A field with no catalog match,
+    a model with no catalog entry, or a model of None all leave the field
+    dict exactly as it is without ``model`` (no "catalog" key at all).
+
+    ``model_code`` disambiguates models the vendor maps to several codes whose
+    port counts differ. Passing it is what lets the lookup pick the right
+    variant; omitting it for such a model yields no annotation rather than a
+    coin-flip between variants.
     """
     result: dict = {"decoder": "generic-tlv"}
     try:
@@ -201,6 +302,21 @@ def decode_generic(raw: str) -> dict:
                 "value": _int_from_bytes(value_bytes, index),
             }
         )
+
+    if model:
+        # Defense in depth: decode_generic is normally only reached for
+        # unregistered models (see coordinator._decode_subdevice_payload), but
+        # guard here too so a hand-written model can never receive catalog
+        # annotation even if this function is reached directly. Imported
+        # locally to avoid a circular import (trust.py imports from const,
+        # not from this module).
+        from .trust import is_hand_written_model
+
+        if not is_hand_written_model(model):
+            try:
+                _annotate_fields_with_catalog(fields, model, dp_id_prefixed, model_code)
+            except Exception as exc:  # annotation must never break the diagnostic decode
+                _LOGGER.debug("Catalog annotation failed for model=%s: %s", model, exc)
 
     result["dp_id_prefixed"] = dp_id_prefixed
     result["fields"] = fields

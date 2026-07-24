@@ -45,7 +45,7 @@ EXPECTED_KEYS = {"type", "zones", "rssi_dbm", "raw_bytes"}
 class TestDecodeHtv213frfValve:
     """Tests for decode_htv213frf_valve (shared by HTV213FRF and HTV245FRF)."""
 
-    # --- Seed tests (Phase 2) ---
+    # --- Seed tests ---
 
     def test_ascii_payload_returns_dict(self):
         """Smoke test: ASCII payload decodes to a dict with expected top-level keys."""
@@ -77,13 +77,13 @@ class TestDecodeHtv213frfValve:
         assert result["rssi_dbm"] == -84
 
     def test_rssi_non_negative_returns_none(self):
-        """Non-negative RSSI triggers WR-03 clamping and returns None."""
+        """Non-negative RSSI is rejected as out of range and returns None."""
         payload_positive_rssi = "1,10,1;0,149,0,0,0,0|0,6,0,0,0,0"
         result = decode_htv213frf_valve(payload_positive_rssi)
         assert result["rssi_dbm"] is None
 
     def test_rssi_zero_returns_none(self):
-        """Zero RSSI is non-negative and returns None per WR-03."""
+        """Zero RSSI is non-negative and returns None."""
         payload_zero_rssi = "1,0,1;0,149,0,0,0,0|0,6,0,0,0,0"
         result = decode_htv213frf_valve(payload_zero_rssi)
         assert result["rssi_dbm"] is None
@@ -96,7 +96,7 @@ class TestDecodeHtv213frfValve:
         for zone_key, zone_val in zones.items():
             assert isinstance(zone_val, dict), f"Zone {zone_key} should be a dict"
 
-    # --- ASCII full-field assertions (Phase 3, COVR-01) ---
+    # --- ASCII full-field assertions ---
 
     def test_ascii_payload_asserts_all_fields(self):
         """ASCII payload decodes every field the integration exposes."""
@@ -124,7 +124,7 @@ class TestDecodeHtv213frfValve:
         assert zone2["open"] is True
         assert zone2["duration_seconds"] == 0
 
-    # --- TLV/hex path assertions (Phase 3, COVR-01) ---
+    # --- TLV/hex path assertions ---
 
     def test_tlv_payload_returns_valve_hub_type(self):
         """TLV (11#) payload decodes to dict with type='valve_hub'."""
@@ -641,7 +641,7 @@ class TestDecodeUnknown:
 
 
 class TestHcsDelegation:
-    """Verify HCS stub decoders delegate to their real implementations (D-09)."""
+    """Verify HCS stub decoders delegate to their real implementations."""
 
     def test_hcs005frf_matches_moisture_simple(self):
         """decode_hcs005frf should produce the same output as decode_moisture_simple."""

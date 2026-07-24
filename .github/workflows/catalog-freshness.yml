@@ -1,0 +1,48 @@
+name: Catalog Freshness
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  freshness-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt aiohttp
+
+      - name: Check RainPoint credentials are present
+        id: creds
+        env:
+          RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
+          RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
+        run: |
+          if [ -z "$RAINPOINT_EMAIL" ] || [ -z "$RAINPOINT_PASSWORD" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run catalog freshness check
+        if: steps.creds.outputs.skip == 'false'
+        env:
+          RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
+          RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
+          RAINPOINT_AREA_CODE: ${{ secrets.RAINPOINT_AREA_CODE }}
+        run: python scripts/refresh_product_catalog.py --check

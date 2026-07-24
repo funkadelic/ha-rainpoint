@@ -1,0 +1,10 @@
+{
+  "HCS777ARF": {
+    "*": [
+      {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1},
+      {"dpCode": 10, "identity": "STA_RH", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1},
+      {"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1},
+      {"dpCode": 32, "identity": "STA_RSSI", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1}
+    ]
+  }
+}

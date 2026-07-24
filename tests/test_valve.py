@@ -142,9 +142,9 @@ class TestValveControl:
     async def test_async_open_valve_applies_response_state_end_to_end(self):
         """control_work_mode response is decoded and pushed to coordinator, bypassing the next poll.
 
-        This closes plan D-10: a single test where control_work_mode returns
-        a real ASCII payload and async_set_updated_data is asserted directly,
-        rather than exercising the decode + coordinator-push halves separately.
+        Covered end to end in one test: control_work_mode returns a real ASCII
+        payload and async_set_updated_data is asserted directly, rather than
+        exercising the decode and coordinator-push halves separately.
         """
         valve = _make_valve(model=MODEL_VALVE_245)
         valve.coordinator.async_set_updated_data = MagicMock()

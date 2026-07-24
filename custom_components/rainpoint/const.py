@@ -185,3 +185,53 @@ VALVE_MODELS = {
     MODEL_VALVE_345,
     MODEL_VALVE_405,
 }
+
+# Every model with a hand-written, fixture-validated decoder (mirrors the
+# coordinator's DECODER_REGISTRY keys) plus MODEL_DISPLAY_HUB, which is
+# dispatched as a special case rather than through the registry. This is the
+# authoritative membership set behind is_hand_written_model() in api/trust.py:
+# any model here is structurally excluded from the model-agnostic generic
+# decode path. Defined here (not read from DECODER_REGISTRY directly) so it
+# can be imported without pulling in coordinator.py and risking a circular
+# import; a drift test keeps it in sync with the registry.
+HAND_WRITTEN_MODELS: frozenset[str] = frozenset(
+    {
+        MODEL_MOISTURE_SIMPLE,
+        MODEL_MOISTURE_FULL,
+        MODEL_RAIN,
+        MODEL_TEMPHUM,
+        MODEL_FLOWMETER,
+        MODEL_CO2,
+        MODEL_POOL,
+        MODEL_POOL_PLUS,
+        MODEL_VALVE_HUB,
+        MODEL_VALVE_113,
+        MODEL_VALVE_145,
+        MODEL_VALVE_213,
+        MODEL_VALVE_245,
+        MODEL_VALVE_345,
+        MODEL_VALVE_405,
+        MODEL_HCS005FRF,
+        MODEL_HCS003FRF,
+        MODEL_HCS024FRF_V1,
+        MODEL_HCS015ARF,
+        MODEL_HCS0528ARF,
+        MODEL_HCS027ARF,
+        MODEL_HCS016ARF,
+        MODEL_HCS044FRF,
+        MODEL_HCS666FRF,
+        MODEL_HCS666RFR_P,
+        MODEL_HCS999FRF,
+        MODEL_HCS999FRF_P,
+        MODEL_HCS666FRF_X,
+        MODEL_HCS701B,
+        MODEL_HCS596WB,
+        MODEL_HCS596WB_V4,
+        MODEL_HCS706ARF,
+        MODEL_HCS802ARF,
+        MODEL_HCS048B,
+        MODEL_HCS888ARF_V1,
+        MODEL_HCS0600ARF,
+        MODEL_DISPLAY_HUB,
+    }
+)

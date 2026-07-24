@@ -160,11 +160,13 @@ def _format_generic_fields(generic: dict | None) -> str:
     lines = []
     for f in fields:
         suffix = f" (dp {f['dp_id']})" if dp_prefixed else ""
-        lines.append(f"{f['name']}: raw={f['raw']} value={f['value']}{suffix}")
+        catalog = f.get("catalog")
+        zone_suffix = f" [zone {catalog['dp_port']}]" if catalog and catalog.get("dp_port") is not None else ""
+        lines.append(f"{f['name']}: raw={f['raw']} value={f['value']}{suffix}{zone_suffix}")
     return "\n".join(lines)
 
 
-def _build_new_device_issue_url(model: str, raw_value: str | None) -> str:
+def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: int | None = None) -> str:
     """Return a GitHub New-device-support URL pre-filled with model + raw payload.
 
     The reporter only has to add what the RainPoint app shows and submit, instead
@@ -178,7 +180,7 @@ def _build_new_device_issue_url(model: str, raw_value: str | None) -> str:
         "model": model,
         "primary_payload": raw_value or "",
     }
-    auto_decoded = _format_generic_fields(decode_generic(raw_value)) if raw_value else ""
+    auto_decoded = _format_generic_fields(decode_generic(raw_value, model=model, model_code=model_code)) if raw_value else ""
     if auto_decoded:
         params["auto_decoded"] = auto_decoded
     return f"{ISSUE_URL}/new?{urlencode(params)}"
@@ -197,7 +199,7 @@ def _resolve_addr_from_sid(sid: str) -> int | None:
         return None
 
 
-def _decode_subdevice_payload(model: str | None, raw_value: str) -> dict:
+def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int | None = None) -> dict:
     """Dispatch raw_value through DECODER_REGISTRY or the MODEL_DISPLAY_HUB special case.
 
     Returns the decoded dict, or an {"type": "unknown", ...} shape if no decoder is
@@ -216,7 +218,7 @@ def _decode_subdevice_payload(model: str | None, raw_value: str) -> dict:
         "type": "unknown",
         "model": model,
         "raw_value": raw_value,
-        "generic": decode_generic(raw_value),
+        "generic": decode_generic(raw_value, model=model, model_code=model_code),
     }
 
 
@@ -542,7 +544,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # integration leaves the old notification in place and adds a
             # second one under "..._None" instead of replacing it.
             code_suffix = f"_{model_code}" if model_code is not None else ""
-            report_url = _build_new_device_issue_url(model, raw_value)
+            report_url = _build_new_device_issue_url(model, raw_value, model_code)
             async_create(
                 self.hass,
                 f"RainPoint detected an unsupported sensor model: **{model}**{code_line}\n\n"
@@ -582,9 +584,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
                     addr,
                     raw_value,
                 )
-                decoded = _decode_subdevice_payload(model, raw_value)
+                model_code = sub.get("modelCode")
+                decoded = _decode_subdevice_payload(model, raw_value, model_code)
                 if decoded.get("type") == "unknown":
-                    RainPointCoordinator._notify_unknown_model(self, model, mid, addr, raw_value, sub.get("modelCode"))
+                    RainPointCoordinator._notify_unknown_model(self, model, mid, addr, raw_value, model_code)
                 _LOGGER.debug(debug_with_version("Decoded data for mid=%s addr=%s: %s"), mid, addr, decoded)
             except Exception as ex:
                 _LOGGER.warning(

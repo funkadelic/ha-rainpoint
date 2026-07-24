@@ -298,6 +298,28 @@ class RainPointClient:
             raise RainPointApiError(f"list_homes failed: code {data.get('code')}")
         return data.get("data", [])
 
+    async def get_product_catalog(self) -> list[dict]:
+        """Fetch the vendor's full productModel catalog.
+
+        Used only by the maintainer refresh script (scripts/refresh_product_catalog.py)
+        to regenerate the committed, trimmed catalog snapshot -- the running
+        integration never calls this at runtime.
+        """
+        await self.ensure_logged_in()
+        url = f"{self._base_url}/app/common/core/productModel"
+        _LOGGER.debug("API call: get_product_catalog URL=%s", url)
+        request_token = self._token
+        async with self._session.get(url, headers=self._auth_headers()) as resp:
+            if resp.status != 200:
+                raise RainPointApiError(f"get_product_catalog HTTP {resp.status}")
+            data = await resp.json()
+        _LOGGER.debug("API response: get_product_catalog code=%s", data.get("code"))
+        if data.get("code") != 0:
+            self._maybe_invalidate_token(data.get("code"), request_token)
+            _LOGGER.debug("get_product_catalog failed response: %s", data)
+            raise RainPointApiError(f"get_product_catalog failed: code {data.get('code')}")
+        return data.get("data", [])
+
     async def get_devices_by_hid(self, hid: int) -> list[dict]:
         await self.ensure_logged_in()
         url = f"{self._base_url}/app/device/getDeviceByHid"
