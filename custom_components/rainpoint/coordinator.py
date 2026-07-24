@@ -147,21 +147,41 @@ DECODER_REGISTRY = {
 NEW_DEVICE_ISSUE_TEMPLATE = "new_device.yml"
 
 
+def _format_generic_fields(generic: dict | None) -> str:
+    """Render a best-effort generic decode as a text block for the issue form.
+
+    Returns "" when the decode found no fields, so the caller can omit the
+    pre-fill rather than seed the form with an empty section.
+    """
+    fields = (generic or {}).get("fields") or []
+    if not fields:
+        return ""
+    dp_prefixed = generic.get("dp_id_prefixed", False)
+    lines = []
+    for f in fields:
+        suffix = f" (dp {f['dp_id']})" if dp_prefixed else ""
+        lines.append(f"{f['name']}: raw={f['raw']} value={f['value']}{suffix}")
+    return "\n".join(lines)
+
+
 def _build_new_device_issue_url(model: str, raw_value: str | None) -> str:
     """Return a GitHub New-device-support URL pre-filled with model + raw payload.
 
     The reporter only has to add what the RainPoint app shows and submit, instead
-    of hand-copying the model and hex payload into a blank issue.
+    of hand-copying the model and hex payload into a blank issue. When the payload
+    yields any named fields, an unverified auto-decode is pre-filled too, to give
+    triage a head start.
     """
-    params = urlencode(
-        {
-            "template": NEW_DEVICE_ISSUE_TEMPLATE,
-            "title": f"Add support for {model}",
-            "model": model,
-            "primary_payload": raw_value or "",
-        }
-    )
-    return f"{ISSUE_URL}/new?{params}"
+    params = {
+        "template": NEW_DEVICE_ISSUE_TEMPLATE,
+        "title": f"Add support for {model}",
+        "model": model,
+        "primary_payload": raw_value or "",
+    }
+    auto_decoded = _format_generic_fields(decode_generic(raw_value)) if raw_value else ""
+    if auto_decoded:
+        params["auto_decoded"] = auto_decoded
+    return f"{ISSUE_URL}/new?{urlencode(params)}"
 
 
 def _resolve_addr_from_sid(sid: str) -> int | None:
