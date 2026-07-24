@@ -983,6 +983,15 @@ class TestPureHelpers:
         assert fields_by_name["STA_BAT"]["catalog"]["dp_port"] == 1
         assert fields_by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
 
+    def test_decode_subdevice_payload_registered_model_never_reaches_generic_path(self):
+        """A DECODER_REGISTRY model always dispatches to its hand-written decoder,
+        never diverting into the generic/unknown branch, confirming the trust
+        boundary between hand-written and catalog-driven decoding holds."""
+        result = _coord_module._decode_subdevice_payload(MODEL_MOISTURE_SIMPLE, _MOISTURE_SIMPLE_PAYLOAD)
+
+        assert result["type"] != "unknown"
+        assert "generic" not in result
+
     # _attach_device_timestamp
     def test_attach_device_timestamp_valid_ms(self):
         """A valid epoch-ms 'time' adds device_timestamp + timestamp_source."""
