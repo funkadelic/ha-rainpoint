@@ -120,7 +120,7 @@ Enabling push adds two hub-level diagnostic entities: **`<hub> Push Connected`**
 
 ### Account implications
 
-> **Push is a convenience, not a safety-critical replacement for the RainPoint app.** It uses an unofficial connection to RainPoint's cloud, so it stays opt-in and off by default. Now and then it can briefly drop; Home Assistant reconnects on its own, and the usual 120-second polling keeps your devices up to date in the meantime. In testing it ran alongside the RainPoint phone app without knocking either one offline.
+> **Push is a convenience, not a safety-critical replacement for the RainPoint app.** It's a best-effort channel, so it stays opt-in and off by default. Now and then it can briefly drop; Home Assistant reconnects on its own, and the usual 120-second polling keeps your devices up to date in the meantime. In testing it ran alongside the RainPoint phone app without knocking either one offline.
 
 Turning push on doesn't change the [one-session-per-account note above](#use-a-dedicated-home-assistant-account-recommended): it's the sign-in used for setup that can bump your phone out of the app (and vice versa), whether or not push is enabled.
 
