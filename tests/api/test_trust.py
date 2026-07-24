@@ -52,7 +52,11 @@ class TestDecodeGenericSkipsHandWrittenModels:
         import custom_components.rainpoint.api.generic_decoder as generic_decoder_module
 
         fake_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1}]
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: fake_catalog)
+        # The stub must mirror get_catalog_entry's real (model, model_code)
+        # signature. A single-argument stub raises TypeError inside the
+        # annotation step, which decode_generic swallows by design, so the
+        # assertion below would hold even with the trust guard removed.
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: fake_catalog)
 
         hand_written_model = next(iter(DECODER_REGISTRY))
         result = decode_generic("10#DC", model=hand_written_model)
