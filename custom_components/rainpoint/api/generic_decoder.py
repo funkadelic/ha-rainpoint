@@ -282,10 +282,19 @@ def decode_generic(raw: str, model: str | None = None) -> dict:
         )
 
     if model:
-        try:
-            _annotate_fields_with_catalog(fields, model, dp_id_prefixed)
-        except Exception as exc:  # annotation must never break the diagnostic decode
-            _LOGGER.debug("Catalog annotation failed for model=%s: %s", model, exc)
+        # Defense in depth: decode_generic is normally only reached for
+        # unregistered models (see coordinator._decode_subdevice_payload), but
+        # guard here too so a hand-written model can never receive catalog
+        # annotation even if this function is reached directly. Imported
+        # locally to avoid a circular import (trust.py imports from const,
+        # not from this module).
+        from .trust import is_hand_written_model
+
+        if not is_hand_written_model(model):
+            try:
+                _annotate_fields_with_catalog(fields, model, dp_id_prefixed)
+            except Exception as exc:  # annotation must never break the diagnostic decode
+                _LOGGER.debug("Catalog annotation failed for model=%s: %s", model, exc)
 
     result["dp_id_prefixed"] = dp_id_prefixed
     result["fields"] = fields
