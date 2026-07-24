@@ -2,6 +2,7 @@
 
 import json
 
+import custom_components.rainpoint.api.product_catalog as product_catalog_module
 from custom_components.rainpoint.api import get_catalog_entry
 from custom_components.rainpoint.api.product_catalog import _load_catalog
 
@@ -29,3 +30,33 @@ class TestLoadCatalogValid:
 
     def test_get_catalog_entry_none_model_returns_none(self):
         assert get_catalog_entry(None) is None
+
+
+class TestLoadCatalogFailSoft:
+    """_load_catalog must degrade to {} on every failure mode, never raise."""
+
+    def test_missing_file_returns_empty_dict(self, tmp_path):
+        missing_path = tmp_path / "does-not-exist.json"
+
+        assert _load_catalog(missing_path) == {}
+
+    def test_corrupt_json_returns_empty_dict(self, tmp_path):
+        corrupt_path = tmp_path / "corrupt.json"
+        corrupt_path.write_text("{not valid json", encoding="utf-8")
+
+        assert _load_catalog(corrupt_path) == {}
+
+    def test_non_dict_json_returns_empty_dict(self, tmp_path):
+        """A syntactically valid JSON array is rejected - the catalog must be an object."""
+        non_dict_path = tmp_path / "list.json"
+        non_dict_path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+
+        assert _load_catalog(non_dict_path) == {}
+
+    def test_oversized_file_returns_empty_dict_without_parsing(self, tmp_path, monkeypatch):
+        """A file over the size cap is rejected by its size, before any JSON parse."""
+        monkeypatch.setattr(product_catalog_module, "_CATALOG_MAX_BYTES", 10)
+        oversized_path = tmp_path / "oversized.json"
+        oversized_path.write_text(json.dumps({"MODEL": [{"dpCode": 1}]}), encoding="utf-8")
+
+        assert _load_catalog(oversized_path) == {}

@@ -160,7 +160,9 @@ def _format_generic_fields(generic: dict | None) -> str:
     lines = []
     for f in fields:
         suffix = f" (dp {f['dp_id']})" if dp_prefixed else ""
-        lines.append(f"{f['name']}: raw={f['raw']} value={f['value']}{suffix}")
+        catalog = f.get("catalog")
+        zone_suffix = f" [zone {catalog['dp_port']}]" if catalog and catalog.get("dp_port") is not None else ""
+        lines.append(f"{f['name']}: raw={f['raw']} value={f['value']}{suffix}{zone_suffix}")
     return "\n".join(lines)
 
 

@@ -297,6 +297,36 @@ class TestCoordinatorUpdate:
         assert _coord_module._format_generic_fields({"fields": []}) == ""
         assert _coord_module._format_generic_fields(None) == ""
 
+    def test_format_generic_fields_includes_catalog_zone_for_annotated_field(self):
+        """A field carrying catalog annotation renders with its zone, for bug-report triage."""
+        generic = {
+            "dp_id_prefixed": False,
+            "fields": [
+                {
+                    "name": "STA_BAT",
+                    "index": 31,
+                    "dp_id": 0,
+                    "raw": "64",
+                    "value": 100,
+                    "catalog": {"dp_port": 1, "data_type": "uint8", "port_number": 1, "width_mismatch": False},
+                },
+            ],
+        }
+
+        rendered = _coord_module._format_generic_fields(generic)
+
+        assert "STA_BAT" in rendered
+        assert "[zone 1]" in rendered
+
+    def test_format_generic_fields_unannotated_field_renders_unchanged(self):
+        """A field without catalog annotation renders exactly as before this plan."""
+        generic = {
+            "dp_id_prefixed": False,
+            "fields": [{"name": "STA_BAT", "index": 31, "dp_id": 0, "raw": "64", "value": 100}],
+        }
+
+        assert _coord_module._format_generic_fields(generic) == "STA_BAT: raw=64 value=100"
+
     @pytest.mark.asyncio
     async def test_notification_id_unchanged_when_model_code_absent(self):
         """Without a modelCode the notification keeps its pre-existing id.

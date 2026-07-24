@@ -189,3 +189,79 @@ class TestDecodeGenericCatalogAnnotation:
         assert fields[0]["catalog"]["dp_port"] == 2
         for other in fields[1:]:
             assert "catalog" not in other
+
+    def test_empty_catalog_degrades_annotation(self, monkeypatch):
+        """A model that resolves to no catalog entry (empty catalog) never annotates."""
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: None)
+
+        result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
+        no_model = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD)
+
+        assert result == no_model
+
+    def test_width_mismatch_true_for_mismatched_field(self, monkeypatch):
+        """A catalog-declared width that disagrees with the decoded byte count is flagged."""
+        mismatched_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "uint16", "portNumber": 1}]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: mismatched_catalog)
+
+        result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
+        by_name = {f["name"]: f for f in result["fields"]}
+
+        assert by_name["STA_BAT"]["catalog"]["width_mismatch"] is True
+        # value/raw stay authoritative even when the catalog disagrees on width.
+        assert by_name["STA_BAT"]["value"] == 0x64
+        assert by_name["STA_BAT"]["raw"] == "64"
+
+    def test_width_mismatch_false_for_matched_field(self, monkeypatch):
+        """A catalog-declared width that agrees with the decoded byte count is not flagged."""
+        matching_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1}]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: matching_catalog)
+
+        result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
+        by_name = {f["name"]: f for f in result["fields"]}
+
+        assert by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
+
+    def test_unparseable_data_type_never_flags_mismatch(self, monkeypatch):
+        """A dpDataType with no parseable width degrades to width_mismatch=False."""
+        odd_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "enum", "portNumber": 1}]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: odd_catalog)
+
+        result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
+        by_name = {f["name"]: f for f in result["fields"]}
+
+        assert by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
+
+    def test_non_string_data_type_never_flags_mismatch(self, monkeypatch):
+        """A non-string dpDataType (e.g. missing from the catalog entry) degrades cleanly."""
+        odd_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": None, "portNumber": 1}]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: odd_catalog)
+
+        result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
+        by_name = {f["name"]: f for f in result["fields"]}
+
+        assert by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
+
+    def test_non_byte_aligned_data_type_never_flags_mismatch(self, monkeypatch):
+        """A bit width that is not a whole number of bytes is treated as unparseable."""
+        odd_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "int3", "portNumber": 1}]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model: odd_catalog)
+
+        result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
+        by_name = {f["name"]: f for f in result["fields"]}
+
+        assert by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
+
+    def test_annotation_failure_does_not_break_decode(self, monkeypatch):
+        """A broken catalog lookup degrades to the unannotated shape, never raises."""
+
+        def _boom(model):
+            raise RuntimeError("catalog explosion")
+
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", _boom)
+
+        result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
+
+        assert "error" not in result
+        for field in result["fields"]:
+            assert "catalog" not in field
