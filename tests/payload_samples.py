@@ -1,4 +1,4 @@
-"""Shared test payload constants for RainPoint device tests (Phase 3)."""
+"""Shared test payload constants for RainPoint device tests."""
 
 # Real ASCII payload from maintainer's HTV245FRF device.
 # Format: [flags],[rssi],[flags];[zone1_data]|[zone2_data]
@@ -36,7 +36,7 @@ SAMPLE_HTV145_OPEN_PAYLOAD = "10#E1C200DC01D82120B7AE44E319ADB0049FA8020000FF0FA
 #   Idle sample: zone 1 closed (0x00), duration 0s, RSSI -63 dBm, battery field 0xFF0F.
 SAMPLE_HTV113_IDLE_PAYLOAD = "10#E1C100DC03D80020B700000000AD00009F00000000FF0F9B40D319"
 
-# --- Phase 5 Plan 01: Additional decoder payload constants ---
+# --- Additional decoder payload constants ---
 
 # HCS021FRF (moisture_full) hex payload from docstring.
 # E1 A2 00 DC 01 85 AB 02 88 1F C6 60 06 00 FF 0F FA 28 F7 18

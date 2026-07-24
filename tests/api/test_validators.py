@@ -1,4 +1,4 @@
-"""Tests for RainPoint API validation functions (COVR-05)."""
+"""Tests for the RainPoint API validation functions."""
 
 import pytest
 
@@ -12,7 +12,7 @@ from custom_components.rainpoint.api import (
 
 
 class TestValidatePayload:
-    """Tests for _validate_payload (COVR-05)."""
+    """Tests for _validate_payload."""
 
     def test_length_match(self):
         """Exact length match returns parsed bytes."""
@@ -49,7 +49,7 @@ class TestValidatePayload:
 
 
 class TestExtractRssi:
-    """Tests for _extract_rssi (COVR-05)."""
+    """Tests for _extract_rssi."""
 
     def test_negative_rssi(self):
         """High byte (>=128) produces negative signed value."""
@@ -79,7 +79,7 @@ class TestExtractRssi:
 
 
 class TestBatteryStatusToPercent:
-    """Tests for _battery_status_to_percent (COVR-05)."""
+    """Tests for _battery_status_to_percent."""
 
     def test_full_battery(self):
         """Full battery."""
@@ -116,7 +116,7 @@ class TestBatteryStatusToPercent:
 
 
 class TestValidateTag:
-    """Tests for _validate_tag (COVR-05)."""
+    """Tests for _validate_tag."""
 
     def test_matching_tag_passes(self):
         """No exception when tag matches expected value."""
@@ -131,7 +131,7 @@ class TestValidateTag:
 
 
 class TestExtractStatusCode:
-    """Tests for _extract_status_code (COVR-05)."""
+    """Tests for _extract_status_code."""
 
     def test_simple_value(self):
         """Low byte only."""

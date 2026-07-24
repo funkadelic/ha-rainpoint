@@ -1,4 +1,4 @@
-"""Tests for RainPoint API client (COVR-06)."""
+"""Tests for the RainPoint API client."""
 
 import asyncio
 import hashlib
@@ -570,7 +570,7 @@ class TestReloginListeners:
     @pytest.mark.asyncio
     async def test_relogin_listener_exception_is_isolated(self, caplog):
         """A raising listener does not propagate out of _login() and does not
-        prevent later-registered listeners from firing (CR-03)."""
+        prevent later-registered listeners from firing."""
         client = _make_client()
         assert client._token is not None
 
@@ -1315,7 +1315,7 @@ class TestSetDeviceState:
 
 
 class TestGetSubscribeStatus:
-    """get_subscribe_status() fetches fresh per-session MQTT credentials (CRED-01, CRED-03)."""
+    """get_subscribe_status() fetches fresh per-session MQTT credentials."""
 
     def _make_client(self) -> RainPointClient:
         """Make client helper."""
@@ -1396,7 +1396,7 @@ class TestGetSubscribeStatus:
 
     @pytest.mark.asyncio
     async def test_subscribe_status_never_logs_device_secret(self, caplog):
-        """deviceSecret never appears in any DEBUG log line (CRED-03/D-16)."""
+        """deviceSecret never appears in any DEBUG log line."""
         client = self._make_client()
         client.ensure_logged_in = AsyncMock()
         json_body = {
