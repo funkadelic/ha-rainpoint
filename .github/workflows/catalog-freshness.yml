@@ -27,8 +27,11 @@ jobs:
 
       - name: Check RainPoint credentials are present
         id: creds
+        env:
+          RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
+          RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
         run: |
-          if [ -z "${{ secrets.RAINPOINT_EMAIL }}" ] || [ -z "${{ secrets.RAINPOINT_PASSWORD }}" ]; then
+          if [ -z "$RAINPOINT_EMAIL" ] || [ -z "$RAINPOINT_PASSWORD" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
