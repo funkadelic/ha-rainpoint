@@ -56,7 +56,7 @@
         "step": {
             "init": {
                 "title": "RainPoint Push Channel",
-                "description": "Enable real-time push updates over an unofficial MQTT connection, off by default. Polling is always retained as a fallback.",
+                "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback.",
                 "data": {
                     "push_enabled": "Enable push updates"
                 }
