@@ -31,6 +31,17 @@ All devices communicate via the RainPoint cloud backend. There is no local LAN p
 
 ---
 
+## My device isn't listed
+
+Unsupported models don't break anything: the integration keeps polling, marks the device as `unknown`, and adds a disabled-by-default **Raw Payload** diagnostic sensor holding its raw data. It also raises a Home Assistant notification with a one-click link that opens a **New device support** report pre-filled with the model and payload.
+
+To get your device added:
+
+1. Open a [New device support issue](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) (the notification link pre-fills the model and payload for you).
+2. Include raw payloads in a few known states (valve closed vs open, a sensor at a known reading). One capture shows the byte layout; different states reveal what each byte means. See [`DEBUG_VALVE_PAYLOAD.md`](DEBUG_VALVE_PAYLOAD.md) for how to capture.
+
+---
+
 ## Installation via HACS
 
 This integration is part of the default HACS store, so no custom repository is needed.
@@ -49,7 +60,7 @@ This integration is part of the default HACS store, so no custom repository is n
 
 The config flow asks for three fields:
 
-1. **Country**: select the country for the phone number on your RainPoint account from the dropdown. The integration derives the dial code automatically (e.g. selecting **United States (+1)** stores `+1`).
+1. **Country**: select the country for your RainPoint account from the dropdown.
 2. **Email**: your RainPoint app account email.
 3. **Password**: your RainPoint app account password.
 
@@ -107,11 +118,11 @@ To turn push back off, revisit the same **Configure** screen and uncheck **Enabl
 
 Enabling push adds two hub-level diagnostic entities: **`<hub> Push Connected`** (on when the MQTT client is connected) and **`<hub> Push Last Message`** (timestamp of the last message received). If the push connection drops and stays down while polling keeps devices updating, Home Assistant raises a **Settings → Repairs** issue so you know to look. (A channel that stays connected but quietly stops sending updates looks the same as an idle one, so that case is not flagged.)
 
-### Account implications
+### Notes on push
 
-> **Push is a convenience, not a safety-critical replacement for the RainPoint app.** It runs over an unofficial MQTT connection to RainPoint's cloud (Alibaba Cloud IoT) that was pieced together by reverse engineering, so it stays opt-in and off by default. In testing it ran alongside the RainPoint mobile app without pushing either one offline. The vendor hands out MQTT connection slots from a small shared pool, so once in a while push and the app can briefly collide and one of them drops; Home Assistant reconnects on its own, and the 120-second polling keeps devices current in the meantime.
+Push is off by default for now while it proves out; you can turn it on at any time. If the connection ever drops, Home Assistant reconnects on its own, and the usual 120-second polling keeps your devices up to date in the meantime. In testing it ran alongside the RainPoint phone app without knocking either one offline.
 
-The push connection is a separate MQTT connection from the HTTP login session used for setup and polling, so the [one-active-session-per-account guidance above](#use-a-dedicated-home-assistant-account-recommended) and the existing session warning under **Configuration** still apply unchanged. The coexistence finding above is specific to the MQTT push channel, not the HTTP login.
+Turning push on doesn't change the [one-session-per-account note above](#use-a-dedicated-home-assistant-account-recommended): it's the sign-in used for setup that can bump your phone out of the app (and vice versa), whether or not push is enabled.
 
 ---
 

@@ -38,7 +38,7 @@ CI runs the same `pytest` invocation plus `hassfest` and HACS validation on ever
 
 ## Adding a new device model
 
-See the "Adding support for a new device model" section in `CLAUDE.md` (if present) or follow the pattern in `custom_components/rainpoint/api/decoders.py`:
+Follow the pattern in `custom_components/rainpoint/api/decoders.py`:
 
 1. Capture a raw payload. The disabled-by-default "Raw Payload" diagnostic sensor exposes it; see `DEBUG_VALVE_PAYLOAD.md` for the full capture procedure.
 2. Add `MODEL_XXX` to `const.py`.
