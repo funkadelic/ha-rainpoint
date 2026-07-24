@@ -1,5 +1,6 @@
 """Tests for RainPoint API client (COVR-06)."""
 
+import asyncio
 import hashlib
 import importlib.util
 import logging
@@ -965,6 +966,159 @@ class TestTrimCatalog:
         result = trim_catalog(raw)
 
         assert [dp["dpCode"] for dp in result["HTV245FRF"]] == [9, None]
+
+
+class TestRefreshScriptMain:
+    """Tests for scripts/refresh_product_catalog.py::main safety guards.
+
+    These guards are the only thing standing between a bad vendor pull and a
+    corrupted committed catalog, so each refusal branch is exercised directly.
+    Every test stubs the network fetch; nothing here talks to the vendor.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_current_event_loop(self):
+        """Put the thread's current event loop back after main() runs.
+
+        main() drives its fetch through asyncio.run, which closes the loop it
+        created and leaves the thread with no current loop. The Home Assistant
+        test plugin's autouse fixtures call asyncio.get_event_loop() during
+        setup, so without this the very next test in the session errors out.
+        """
+        try:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+        except RuntimeError:
+            loop = None
+        yield
+        if loop is not None:
+            asyncio.set_event_loop(loop)
+
+    @staticmethod
+    def _stub_fetch(monkeypatch, trimmed):
+        """Replace the script's network fetch with one returning trimmed."""
+
+        async def _fake_fetch(email, password, area_code):
+            return trimmed
+
+        monkeypatch.setattr(refresh_product_catalog, "_fetch_trimmed_catalog", _fake_fetch)
+
+    @staticmethod
+    def _stub_credentials(monkeypatch):
+        monkeypatch.setenv("RAINPOINT_EMAIL", "user@example.com")
+        monkeypatch.setenv("RAINPOINT_PASSWORD", "secret")
+
+    @staticmethod
+    def _forbid_write(monkeypatch):
+        """Make any catalog write an outright test failure."""
+
+        def _explode(trimmed, path):
+            raise AssertionError("refused write path still called _write_catalog")
+
+        monkeypatch.setattr(refresh_product_catalog, "_write_catalog", _explode)
+
+    def test_write_refuses_empty_pull(self, monkeypatch, capsys):
+        """An empty live pull never overwrites the committed catalog."""
+        self._stub_credentials(monkeypatch)
+        self._stub_fetch(monkeypatch, {})
+        self._forbid_write(monkeypatch)
+        monkeypatch.setattr(refresh_product_catalog, "_load_committed_catalog", lambda path: {"HCS777ARF": []})
+
+        assert refresh_product_catalog.main([]) == 1
+        assert "Refusing to write an empty catalog" in capsys.readouterr().err
+
+    def test_write_refuses_drastic_model_drop(self, monkeypatch, capsys):
+        """A pull that loses more than half the committed models is refused."""
+        self._stub_credentials(monkeypatch)
+        self._stub_fetch(monkeypatch, {"HTV245FRF": []})
+        self._forbid_write(monkeypatch)
+        monkeypatch.setattr(
+            refresh_product_catalog,
+            "_load_committed_catalog",
+            lambda path: {"A1": [], "B2": [], "C3": [], "D4": []},
+        )
+
+        assert refresh_product_catalog.main([]) == 1
+        assert "model count dropped from 4 to 1" in capsys.readouterr().err
+
+    def test_write_persists_a_healthy_pull(self, monkeypatch, capsys):
+        """A pull that clears both guards is written and reported."""
+        self._stub_credentials(monkeypatch)
+        self._stub_fetch(monkeypatch, {"HTV245FRF": [], "HCS021FRF": []})
+        monkeypatch.setattr(refresh_product_catalog, "_load_committed_catalog", lambda path: {"HTV245FRF": []})
+        written = {}
+        monkeypatch.setattr(refresh_product_catalog, "_write_catalog", lambda trimmed, path: written.update(trimmed))
+
+        assert refresh_product_catalog.main([]) == 0
+        assert set(written) == {"HTV245FRF", "HCS021FRF"}
+        assert "Wrote 2 models" in capsys.readouterr().out
+
+    def test_check_treats_empty_pull_as_fetch_failure(self, monkeypatch, capsys):
+        """--check reports a fetch failure rather than "every model removed"."""
+        self._stub_credentials(monkeypatch)
+        self._stub_fetch(monkeypatch, {})
+
+        def _explode(committed, fresh):
+            raise AssertionError("empty pull still reached the drift report")
+
+        monkeypatch.setattr(refresh_product_catalog, "_print_drift", _explode)
+
+        assert refresh_product_catalog.main(["--check"]) == 1
+        assert "treating as a fetch failure, not drift" in capsys.readouterr().err
+
+    def test_check_reports_drift_on_a_non_empty_pull(self, monkeypatch):
+        """A non-empty pull still routes through the normal drift report."""
+        self._stub_credentials(monkeypatch)
+        self._stub_fetch(monkeypatch, {"HTV245FRF": []})
+        monkeypatch.setattr(refresh_product_catalog, "_load_committed_catalog", lambda path: {})
+
+        assert refresh_product_catalog.main(["--check"]) == 1
+
+    def test_missing_credentials_exit_code(self, monkeypatch):
+        """No credentials and no TTY is a usage error, not a crash or a prompt."""
+        monkeypatch.delenv("RAINPOINT_EMAIL", raising=False)
+        monkeypatch.delenv("RAINPOINT_PASSWORD", raising=False)
+        monkeypatch.setattr(refresh_product_catalog.sys.stdin, "isatty", lambda: False)
+
+        assert refresh_product_catalog.main([]) == 2
+
+    def test_password_comes_from_env_without_prompting(self, monkeypatch):
+        """RAINPOINT_PASSWORD is used directly, never routed through a prompt."""
+        monkeypatch.setenv("RAINPOINT_PASSWORD", "from-env")
+        monkeypatch.setattr(
+            refresh_product_catalog.getpass,
+            "getpass",
+            lambda prompt="": pytest.fail("prompted despite RAINPOINT_PASSWORD being set"),
+        )
+
+        assert refresh_product_catalog._resolve_password() == "from-env"
+
+    def test_password_prompts_interactively_when_env_is_unset(self, monkeypatch):
+        """An interactive run with no env var falls back to a hidden prompt."""
+        monkeypatch.delenv("RAINPOINT_PASSWORD", raising=False)
+        monkeypatch.setattr(refresh_product_catalog.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(refresh_product_catalog.getpass, "getpass", lambda prompt="": "typed-in")
+
+        assert refresh_product_catalog._resolve_password() == "typed-in"
+
+    def test_password_is_none_when_prompt_is_empty(self, monkeypatch):
+        """An empty prompt response is treated as no password, not as an empty one."""
+        monkeypatch.delenv("RAINPOINT_PASSWORD", raising=False)
+        monkeypatch.setattr(refresh_product_catalog.sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(refresh_product_catalog.getpass, "getpass", lambda prompt="": "")
+
+        assert refresh_product_catalog._resolve_password() is None
+
+    def test_area_code_defaults_when_env_var_is_empty(self, monkeypatch):
+        """CI exports an unset optional secret as "", which must not beat the default."""
+        monkeypatch.setenv("RAINPOINT_AREA_CODE", "")
+
+        assert refresh_product_catalog._parse_args([]).area_code == "1"
+
+    def test_area_code_honours_a_configured_value(self, monkeypatch):
+        """A populated RAINPOINT_AREA_CODE is passed through untouched."""
+        monkeypatch.setenv("RAINPOINT_AREA_CODE", "44")
+
+        assert refresh_product_catalog._parse_args([]).area_code == "44"
 
 
 class TestGetDevicesByHid:

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import os
 import sys
@@ -127,15 +128,32 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Diff the committed catalog against a fresh live pull and exit nonzero on drift, without writing.",
     )
     parser.add_argument("--email", default=os.environ.get("RAINPOINT_EMAIL"), help="RainPoint account email (or RAINPOINT_EMAIL)")
-    parser.add_argument(
-        "--password", default=os.environ.get("RAINPOINT_PASSWORD"), help="RainPoint account password (or RAINPOINT_PASSWORD)"
-    )
+    # There is deliberately no --password flag: a password passed on the command
+    # line lands in argv, shell history, and CI process listings. The password
+    # comes from RAINPOINT_PASSWORD for automation, or an interactive prompt.
     parser.add_argument(
         "--area-code",
-        default=os.environ.get("RAINPOINT_AREA_CODE", "1"),
+        # "or" rather than a get() default: CI exports an unset optional secret
+        # as an empty string, which would otherwise beat the default.
+        default=os.environ.get("RAINPOINT_AREA_CODE") or "1",
         help="Phone-dial-style area code the RainPoint login expects, e.g. 1 for US (or RAINPOINT_AREA_CODE)",
     )
     return parser.parse_args(argv)
+
+
+def _resolve_password() -> str | None:
+    """Return the password from RAINPOINT_PASSWORD, else prompt interactively.
+
+    Returns None when the env var is unset and stdin is not a TTY, which is the
+    non-interactive CI case: the caller reports a missing credential instead of
+    blocking forever on a prompt nobody can answer.
+    """
+    password = os.environ.get("RAINPOINT_PASSWORD")
+    if password:
+        return password
+    if not sys.stdin.isatty():
+        return None
+    return getpass.getpass("RainPoint account password: ") or None
 
 
 async def _fetch_trimmed_catalog(email: str, password: str, area_code: str) -> dict:
@@ -152,14 +170,24 @@ async def _fetch_trimmed_catalog(email: str, password: str, area_code: str) -> d
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
-    if not args.email or not args.password:
-        print("RAINPOINT_EMAIL and RAINPOINT_PASSWORD (env vars or --email/--password) are required.", file=sys.stderr)
+    password = _resolve_password()
+    if not args.email or not password:
+        print("RAINPOINT_EMAIL (env var or --email) and RAINPOINT_PASSWORD (env var) are required.", file=sys.stderr)
         return 2
 
     sys.path.insert(0, str(_REPO_ROOT))
-    trimmed = asyncio.run(_fetch_trimmed_catalog(args.email, args.password, args.area_code))
+    trimmed = asyncio.run(_fetch_trimmed_catalog(args.email, password, args.area_code))
 
     if args.check:
+        # An empty pull means the fetch failed, not that the vendor dropped
+        # every model. Without this guard the drift report would list the whole
+        # committed catalog as "removed upstream" and bury the real cause.
+        if not trimmed:
+            print(
+                "Live pull produced 0 kept models; treating as a fetch failure, not drift.",
+                file=sys.stderr,
+            )
+            return 1
         committed = _load_committed_catalog(_CATALOG_PATH)
         drifted = _print_drift(committed, trimmed)
         return 1 if drifted else 0
