@@ -5,6 +5,19 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.9.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.8.0...v1.9.0) (2026-07-24)
 
 
+### What's new
+
+- **Two more water timers supported.** The **HTV113FRF** and **HTV145FRF** single-outlet water timers now work in Home Assistant, with open/close control and per-zone run duration, the same as the other RainPoint valves. Both were added from payloads shared by owners of the hardware.
+- **Every country in the setup dropdown.** The country picker during setup now lists every country instead of a subset, so more people can sign in without a workaround.
+- **One-click reporting for unsupported devices.** When the integration sees a device it doesn't recognize yet, the notification now includes a link that opens a report with the model and raw data already filled in, so helping add support for new hardware takes far less effort.
+- **Reminder: real-time updates are available.** Since [1.8.0](https://github.com/funkadelic/ha-rainpoint/releases/tag/v1.8.0) you can optionally get near-instant device updates instead of waiting for the usual two-minute refresh. It's off by default; turn it on under **Settings → Devices & Services → RainPoint Cloud → Configure**. Worth a try if you haven't already.
+
+
+### Thanks
+
+Thanks to **@blauwaerts** and **@torbertkf** for the HTV145FRF sample payloads, and **@vincentbellizzi-coder** for the HTV113FRF payload, which made this release's new device support possible.
+
+
 ### Added
 
 * add a pre-filled report link to the unsupported-device notification ([#99](https://github.com/funkadelic/ha-rainpoint/issues/99)) ([bb9b8b8](https://github.com/funkadelic/ha-rainpoint/commit/bb9b8b885fa1edd7f153813ea1b82bdebf396522))
