@@ -2,6 +2,27 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.9.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.8.0...v1.9.0) (2026-07-24)
+
+
+### Added
+
+* add a pre-filled report link to the unsupported-device notification ([#99](https://github.com/funkadelic/ha-rainpoint/issues/99)) ([bb9b8b8](https://github.com/funkadelic/ha-rainpoint/commit/bb9b8b885fa1edd7f153813ea1b82bdebf396522))
+* add HTV113FRF single-outlet water timer support ([#98](https://github.com/funkadelic/ha-rainpoint/issues/98)) ([9a724c9](https://github.com/funkadelic/ha-rainpoint/commit/9a724c944beca58d91f6efa54b56adddc8b92805))
+* add HTV145FRF single-outlet water timer support ([#74](https://github.com/funkadelic/ha-rainpoint/issues/74)) ([567ee91](https://github.com/funkadelic/ha-rainpoint/commit/567ee91a20801081d4ea66f658c578947b45ab40))
+* **config-flow:** cover all countries in the login country picker ([#94](https://github.com/funkadelic/ha-rainpoint/issues/94)) ([682e95c](https://github.com/funkadelic/ha-rainpoint/commit/682e95c3dfe028f3d2f15c7153da94fd8ddad29e))
+
+
+### Fixed
+
+* use logging.exception on decoder and debug error paths ([#96](https://github.com/funkadelic/ha-rainpoint/issues/96)) ([e2f1573](https://github.com/funkadelic/ha-rainpoint/commit/e2f1573c39a3207137de000fd182bfb0e1295f7c))
+
+
+### Other Changes
+
+* exclude binary brand assets from Sonar analysis ([#97](https://github.com/funkadelic/ha-rainpoint/issues/97)) ([34d2828](https://github.com/funkadelic/ha-rainpoint/commit/34d2828b5aba3fdafc5a5e16f557e11ba91946c8))
+* update README setup steps and contributor guide ([#100](https://github.com/funkadelic/ha-rainpoint/issues/100)) ([121d4d9](https://github.com/funkadelic/ha-rainpoint/commit/121d4d94582e03d11a618bdb38d72c6847023494))
+
 ## [1.8.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.7.1...v1.8.0) (2026-07-23)
 
 
