@@ -2,6 +2,40 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.9.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.8.0...v1.9.0) (2026-07-24)
+
+
+### What's new
+
+- **Two more water timers supported.** The **HTV113FRF** and **HTV145FRF** single-outlet water timers now work in Home Assistant, with open/close control and per-zone run duration, the same as the other RainPoint valves. Both were added from payloads shared by owners of the hardware.
+- **Every country in the setup dropdown.** The country picker during setup now lists every country instead of a subset, so more people can sign in without a workaround.
+- **One-click reporting for unsupported devices.** When the integration sees a device it doesn't recognize yet, the notification now includes a link that opens a report with the model and raw data already filled in, so helping add support for new hardware takes far less effort.
+- **Reminder: real-time updates are available.** Since [1.8.0](https://github.com/funkadelic/ha-rainpoint/releases/tag/v1.8.0) you can optionally get near-instant device updates instead of waiting for the usual two-minute refresh. It's off by default; turn it on under **Settings → Devices & Services → RainPoint Cloud → Configure**. Worth a try if you haven't already.
+
+
+### Thanks
+
+Thanks to **@blauwaerts** and **@torbertkf** for the HTV145FRF sample payloads, and **@vincentbellizzi-coder** for the HTV113FRF payload, which made this release's new device support possible.
+
+
+### Added
+
+* add a pre-filled report link to the unsupported-device notification ([#99](https://github.com/funkadelic/ha-rainpoint/issues/99)) ([bb9b8b8](https://github.com/funkadelic/ha-rainpoint/commit/bb9b8b885fa1edd7f153813ea1b82bdebf396522))
+* add HTV113FRF single-outlet water timer support ([#98](https://github.com/funkadelic/ha-rainpoint/issues/98)) ([9a724c9](https://github.com/funkadelic/ha-rainpoint/commit/9a724c944beca58d91f6efa54b56adddc8b92805))
+* add HTV145FRF single-outlet water timer support ([#74](https://github.com/funkadelic/ha-rainpoint/issues/74)) ([567ee91](https://github.com/funkadelic/ha-rainpoint/commit/567ee91a20801081d4ea66f658c578947b45ab40))
+* **config-flow:** cover all countries in the login country picker ([#94](https://github.com/funkadelic/ha-rainpoint/issues/94)) ([682e95c](https://github.com/funkadelic/ha-rainpoint/commit/682e95c3dfe028f3d2f15c7153da94fd8ddad29e))
+
+
+### Fixed
+
+* use logging.exception on decoder and debug error paths ([#96](https://github.com/funkadelic/ha-rainpoint/issues/96)) ([e2f1573](https://github.com/funkadelic/ha-rainpoint/commit/e2f1573c39a3207137de000fd182bfb0e1295f7c))
+
+
+### Other Changes
+
+* exclude binary brand assets from Sonar analysis ([#97](https://github.com/funkadelic/ha-rainpoint/issues/97)) ([34d2828](https://github.com/funkadelic/ha-rainpoint/commit/34d2828b5aba3fdafc5a5e16f557e11ba91946c8))
+* update README setup steps and contributor guide ([#100](https://github.com/funkadelic/ha-rainpoint/issues/100)) ([121d4d9](https://github.com/funkadelic/ha-rainpoint/commit/121d4d94582e03d11a618bdb38d72c6847023494))
+
 ## [1.8.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.7.1...v1.8.0) (2026-07-23)
 
 
