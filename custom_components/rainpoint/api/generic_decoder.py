@@ -195,11 +195,20 @@ def _match_catalog_dp(dp_list: list, index: int, dp_id: int, dp_id_prefixed: boo
     The ``10#`` (flat) framing has no per-entry dp_id, so it falls back to
     matching on the structural field index, the same numbering the STA_*
     names in _STATUS_FIELDS were originally harvested from.
+
+    Both framings key off the catalog's dpCode, which the vendor uses as a
+    per-instance identifier and is therefore expected to be unique within a
+    model. The catalog is regenerated from an external API though, so that is
+    an assumption rather than a guarantee: an ambiguous key (two or more
+    entries sharing it) yields None instead of whichever entry happened to
+    sort first, since a wrong zone number is worse than an absent one.
     """
     key = dp_id if dp_id_prefixed else index
-    for dp in dp_list:
-        if isinstance(dp, dict) and dp.get("dpCode") == key:
-            return dp
+    matches = [dp for dp in dp_list if isinstance(dp, dict) and dp.get("dpCode") == key]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        _LOGGER.debug("Catalog has %d entries for dpCode %s; leaving the field unannotated", len(matches), key)
     return None
 
 

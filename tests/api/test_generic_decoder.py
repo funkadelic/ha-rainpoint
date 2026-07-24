@@ -190,6 +190,38 @@ class TestDecodeGenericCatalogAnnotation:
         for other in fields[1:]:
             assert "catalog" not in other
 
+    def test_ambiguous_dp_code_leaves_the_field_unannotated(self, monkeypatch):
+        """Two catalog entries sharing a dpCode annotate nothing, rather than picking one.
+
+        dpCode is the vendor's per-instance identifier and should be unique
+        within a model, but the catalog is regenerated from an external API,
+        so a duplicate must not silently resolve to whichever entry sorted
+        first: that is how one zone's port metadata ends up on another zone's
+        field.
+        """
+        duplicate_catalog = [
+            {"dpCode": 0x18, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1},
+            {"dpCode": 0x18, "identity": "STA_BAT", "dpPort": 2, "dpDataType": "uint8", "portNumber": 2},
+        ]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: duplicate_catalog)
+
+        result = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD, model="FAKE_TLV_MODEL")
+
+        assert all("catalog" not in field for field in result["fields"])
+
+    def test_ambiguous_dp_code_also_guards_the_flat_framing(self, monkeypatch):
+        """The 10# path keys off the same dpCode field, so it needs the same guard."""
+        first_index = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD)["fields"][0]["index"]
+        duplicate_catalog = [
+            {"dpCode": first_index, "identity": "STA_X", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1},
+            {"dpCode": first_index, "identity": "STA_X", "dpPort": 2, "dpDataType": "uint8", "portNumber": 2},
+        ]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: duplicate_catalog)
+
+        result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=SEEDED_CATALOG_MODEL)
+
+        assert all("catalog" not in field for field in result["fields"])
+
     def test_empty_catalog_degrades_annotation(self, monkeypatch):
         """A model that resolves to no catalog entry (empty catalog) never annotates."""
         monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: None)
