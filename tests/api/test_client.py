@@ -1,14 +1,25 @@
 """Tests for RainPoint API client (COVR-06)."""
 
 import hashlib
+import importlib.util
 import logging
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointThrottledError
 from custom_components.rainpoint.api.client import _USER_AGENT, _redact_secret
+
+# scripts/ is not a package (it's a standalone maintainer-tool directory, not
+# shipped inside custom_components/), so it is loaded here via importlib
+# rather than a normal import.
+_REFRESH_SCRIPT_PATH = Path(__file__).resolve().parent.parent.parent / "scripts" / "refresh_product_catalog.py"
+_refresh_spec = importlib.util.spec_from_file_location("refresh_product_catalog", _REFRESH_SCRIPT_PATH)
+refresh_product_catalog = importlib.util.module_from_spec(_refresh_spec)
+_refresh_spec.loader.exec_module(refresh_product_catalog)
+trim_catalog = refresh_product_catalog.trim_catalog
 
 
 def _make_client() -> RainPointClient:
@@ -866,6 +877,62 @@ class TestGetProductCatalog:
 
         with pytest.raises(RainPointApiError, match="get_product_catalog HTTP 500"):
             await client.get_product_catalog()
+
+
+class TestTrimCatalog:
+    """Tests for scripts/refresh_product_catalog.py::trim_catalog (pure transform, no network)."""
+
+    def test_drops_non_rainpoint_model(self):
+        """A model without one of the fork's prefixes is dropped entirely."""
+        raw = [
+            {"model": "SOMEOTHERBRAND", "dp": [{"dpCode": 1, "identity": "STA_TEM"}]},
+        ]
+
+        result = trim_catalog(raw)
+
+        assert result == {}
+
+    def test_keeps_only_the_five_dp_fields(self):
+        """A kept RainPoint model's dp entries keep exactly the five needed fields."""
+        raw = [
+            {
+                "model": "HTV245FRF",
+                "dp": [
+                    {
+                        "dpCode": 9,
+                        "identity": "STA_TEM",
+                        "dpPort": 1,
+                        "dpDataType": "int16",
+                        "portNumber": 1,
+                        "name": "Temperature",
+                        "mode": "ro",
+                    }
+                ],
+            }
+        ]
+
+        result = trim_catalog(raw)
+
+        assert result["HTV245FRF"] == [{"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}]
+
+    def test_returns_flat_model_keyed_dict(self):
+        """Output is a flat object keyed by model string, one entry per kept model."""
+        raw = [
+            {
+                "model": "HTV245FRF",
+                "dp": [{"dpCode": 9, "identity": "STA_TEM", "dpPort": 1, "dpDataType": "int16", "portNumber": 1}],
+            },
+            {
+                "model": "HCS021FRF",
+                "dp": [{"dpCode": 10, "identity": "STA_RH", "dpPort": 1, "dpDataType": "uint8", "portNumber": 1}],
+            },
+            {"model": "NOTRAINPOINT", "dp": []},
+        ]
+
+        result = trim_catalog(raw)
+
+        assert set(result.keys()) == {"HTV245FRF", "HCS021FRF"}
+        assert isinstance(result, dict)
 
 
 class TestGetDevicesByHid:
