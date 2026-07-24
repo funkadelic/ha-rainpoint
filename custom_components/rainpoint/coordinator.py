@@ -15,6 +15,7 @@ from .api import (
     RainPointClient,
     decode_co2,
     decode_flowmeter,
+    decode_generic,
     decode_hcs003frf,
     # New HCS decoder functions
     decode_hcs005frf,
@@ -188,10 +189,14 @@ def _decode_subdevice_payload(model: str | None, raw_value: str) -> dict:
     decoder_func = DECODER_REGISTRY.get(model)
     if decoder_func:
         return decoder_func(raw_value)
+    # No per-model decoder: fall back to a model-agnostic structural decode so
+    # the diagnostic sensor and bug report show named fields instead of raw hex.
+    # This is best-effort and unverified - it never feeds entities or control.
     return {
         "type": "unknown",
         "model": model,
         "raw_value": raw_value,
+        "generic": decode_generic(raw_value),
     }
 
 

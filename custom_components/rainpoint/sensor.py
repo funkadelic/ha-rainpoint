@@ -1098,6 +1098,16 @@ class RainPointUnknownSensor(RainPointSensorBase):
 
         attrs["model"] = data.get("model")
         attrs["raw_payload"] = data.get("raw_value")
+
+        # Best-effort structural decode of the unsupported payload. These field
+        # names/values are unverified (no per-model decoder exists yet); they
+        # exist to speed up adding support, not to be relied on.
+        generic = data.get("generic") or {}
+        field_names = generic.get("field_names")
+        if field_names:
+            attrs["decoded_fields"] = field_names
+            attrs["decoded_values"] = generic.get("fields")
+
         attrs["report_url"] = "https://github.com/funkadelic/ha-rainpoint/issues"
         attrs["instructions"] = (
             "This sensor model is not yet supported. Please open a GitHub issue with the model and raw_payload values above."

@@ -917,7 +917,11 @@ class TestPureHelpers:
     def test_decode_subdevice_payload_unknown_model(self):
         """Unknown models return the {'type': 'unknown', ...} shape."""
         result = _coord_module._decode_subdevice_payload("UNKNOWN_XYZ", "10#DEAD")
-        assert result == {"type": "unknown", "model": "UNKNOWN_XYZ", "raw_value": "10#DEAD"}
+        assert result["type"] == "unknown"
+        assert result["model"] == "UNKNOWN_XYZ"
+        assert result["raw_value"] == "10#DEAD"
+        # Unknown payloads carry a best-effort structural decode for diagnostics.
+        assert result["generic"]["decoder"] == "generic-tlv"
 
     # _attach_device_timestamp
     def test_attach_device_timestamp_valid_ms(self):
