@@ -367,7 +367,8 @@ def decode_htv145frf(raw: str) -> dict:
 
     The payload is a flat [type_byte][value...] marker stream (not the HTV213FRF
     dp_id/type/value layout), so it needs its own scan. Known markers:
-      0xDC (1 byte)  → hub online state (value 0x01 = online)
+      0xDC (1 byte)  → hub online state (bit 0 set = online; HTV145 reports 0x01,
+                       HTV113 reports 0x03, both online)
       0xD8 (1 byte)  → zone open state  (bit 0 set = open; device uses 0x21/0x20)
       0xAD (2 bytes) → zone run duration in seconds (little-endian)
       0x20 (5 bytes) → schedule/timestamp compound (captured but not interpreted)
@@ -389,7 +390,10 @@ def decode_htv145frf(raw: str) -> dict:
         markers = _scan_htv145_markers(b)
 
         hub_state_raw = markers.get(0xDC)
-        hub_online = hub_state_raw == 0x01
+        # Bit 0 is the online flag. HTV145 reports 0x01 and HTV113 reports 0x03;
+        # both are online, so an exact 0x01 match would wrongly mark the HTV113
+        # valve entity unavailable (valve.py gates availability on hub_online).
+        hub_online = hub_state_raw is not None and bool(hub_state_raw & 0x01)
 
         zones: dict[int, dict] = {}
         if 0xD8 in markers:

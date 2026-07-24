@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .api import decode_htv145frf, decode_htv213frf_valve, decode_valve_hub
 from .const import (
     DOMAIN,
+    MODEL_VALVE_113,
     MODEL_VALVE_145,
     MODEL_VALVE_213,
     MODEL_VALVE_245,
@@ -215,7 +216,7 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
         if not raw_state:
             return
         model = self._sensor_info.get("model", "")
-        if model == MODEL_VALVE_145:
+        if model in (MODEL_VALVE_113, MODEL_VALVE_145):
             decoded = decode_htv145frf(raw_state)
         elif model in (MODEL_VALVE_213, MODEL_VALVE_245, MODEL_VALVE_345, MODEL_VALVE_405):
             decoded = decode_htv213frf_valve(raw_state)

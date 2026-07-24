@@ -30,7 +30,7 @@ _async_update_data_fn = _coord_module.RainPointCoordinator.__dict__["_async_upda
 
 DECODER_REGISTRY = _coord_module.DECODER_REGISTRY
 
-from custom_components.rainpoint.api import RainPointApiError  # noqa: E402
+from custom_components.rainpoint.api import RainPointApiError, decode_htv145frf  # noqa: E402
 from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_CO2,
     MODEL_DISPLAY_HUB,
@@ -39,13 +39,18 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_MOISTURE_SIMPLE,
     MODEL_RAIN,
     MODEL_TEMPHUM,
+    MODEL_VALVE_113,
     MODEL_VALVE_213,
     MODEL_VALVE_245,
     MODEL_VALVE_345,
     MODEL_VALVE_405,
     MODEL_VALVE_HUB,
 )
-from tests.payload_samples import SAMPLE_HTV245_TLV_PAYLOAD, SAMPLE_HTV405_TLV_PAYLOAD  # noqa: E402
+from tests.payload_samples import (  # noqa: E402
+    SAMPLE_HTV113_IDLE_PAYLOAD,
+    SAMPLE_HTV245_TLV_PAYLOAD,
+    SAMPLE_HTV405_TLV_PAYLOAD,
+)
 
 # ---------------------------------------------------------------------------
 # Sample raw payloads
@@ -764,6 +769,19 @@ class TestDecoderRegistry:
         }
         missing = required - DECODER_REGISTRY.keys()
         assert not missing, f"DECODER_REGISTRY missing required models: {missing}"
+
+    def test_valve_113_dispatches_through_registry_to_htv145_decoder(self):
+        """HTV113FRF is decoded by reusing the HTV145FRF decoder. Assert the wiring
+        via the registry/dispatch path, not by calling decode_htv145frf directly, so
+        a broken or removed MODEL_VALVE_113 registry entry is caught."""
+        assert DECODER_REGISTRY[MODEL_VALVE_113] is decode_htv145frf
+
+        dispatched = _coord_module._decode_subdevice_payload(MODEL_VALVE_113, SAMPLE_HTV113_IDLE_PAYLOAD)
+
+        # Registry dispatch must preserve the decoder's own result exactly.
+        assert dispatched == decode_htv145frf(SAMPLE_HTV113_IDLE_PAYLOAD)
+        assert dispatched["decoder"] == "htv145frf_hex"
+        assert dispatched["hub_online"] is True
 
     def test_registry_contains_moisture_simple(self):
         """Registry contains moisture simple."""
