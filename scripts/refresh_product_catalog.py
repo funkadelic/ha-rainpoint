@@ -151,6 +151,21 @@ def main(argv: list[str] | None = None) -> int:
         drifted = _print_drift(committed, trimmed)
         return 1 if drifted else 0
 
+    committed = _load_committed_catalog(_CATALOG_PATH)
+    if not trimmed:
+        print(
+            "Refusing to write an empty catalog (live pull produced 0 kept models); check the vendor response before retrying.",
+            file=sys.stderr,
+        )
+        return 1
+    if committed and len(trimmed) < len(committed) // 2:
+        print(
+            f"Refusing to write: model count dropped from {len(committed)} to {len(trimmed)}; "
+            "investigate before overwriting the committed catalog.",
+            file=sys.stderr,
+        )
+        return 1
+
     _write_catalog(trimmed, _CATALOG_PATH)
     print(f"Wrote {len(trimmed)} models to {_CATALOG_PATH}")
     return 0
