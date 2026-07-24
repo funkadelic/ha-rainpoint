@@ -305,7 +305,7 @@ class TestDecodeGenericCatalogAnnotation:
     def test_annotation_failure_does_not_break_decode(self, monkeypatch):
         """A broken catalog lookup degrades to the unannotated shape, never raises."""
 
-        def _boom(model):
+        def _boom(model, model_code=None):
             raise RuntimeError("catalog explosion")
 
         monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", _boom)
