@@ -5,15 +5,9 @@ from custom_components.rainpoint.api import decode_generic
 from tests.payload_samples import (
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
+    SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
+    SEEDED_CATALOG_MODEL,
 )
-
-# A synthetic 10# (flat) payload built for these tests: a compact-form
-# STA_ALARM entry the seeded catalog does not know about, followed by four
-# wide-form entries (STA_TEM, STA_RH, STA_BAT, STA_RSSI) whose structural
-# indices match the "HCS777ARF" bootstrap seed committed in
-# api/data/product_catalog.json.
-SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD = "10#208500968832DC64E0C5"
-SEEDED_CATALOG_MODEL = "HCS777ARF"
 
 
 class TestDecodeGenericTLV:

@@ -50,6 +50,8 @@ from tests.payload_samples import (  # noqa: E402
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
+    SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
+    SEEDED_CATALOG_MODEL,
 )
 
 # ---------------------------------------------------------------------------
@@ -1002,8 +1004,8 @@ class TestPureHelpers:
 
     def test_decode_subdevice_payload_unknown_model_carries_catalog_annotation(self):
         """A catalog-recognized unsupported model's unknown-branch decode is enriched."""
-        # STA_BAT entry from the seeded "HCS777ARF" bootstrap catalog.
-        result = _coord_module._decode_subdevice_payload("HCS777ARF", "10#208500968832DC64E0C5")
+        # STA_BAT entry from the seeded bootstrap catalog.
+        result = _coord_module._decode_subdevice_payload(SEEDED_CATALOG_MODEL, SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD)
 
         assert result["type"] == "unknown"
         fields_by_name = {f["name"]: f for f in result["generic"]["fields"]}

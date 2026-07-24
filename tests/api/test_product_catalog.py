@@ -5,7 +5,11 @@ from typing import ClassVar
 
 import custom_components.rainpoint.api.product_catalog as product_catalog_module
 from custom_components.rainpoint.api import get_catalog_entry
-from custom_components.rainpoint.api.product_catalog import UNCODED_VARIANT, _load_catalog
+from custom_components.rainpoint.api.product_catalog import (
+    UNCODED_VARIANT,
+    _load_catalog,
+    _normalize_model_variants,
+)
 
 
 class TestLoadCatalogValid:
@@ -29,12 +33,14 @@ class TestLoadCatalogValid:
 
         assert loaded == {"SOME_MODEL": {UNCODED_VARIANT: [{"dpCode": 1}]}}
 
-    def test_numeric_model_codes_are_normalized_to_strings(self, tmp_path):
-        """JSON keys are always strings, but a hand-edited file may not be."""
-        catalog_path = tmp_path / "product_catalog.json"
-        catalog_path.write_text('{"SOME_MODEL": {"278": [{"dpCode": 1}]}}', encoding="utf-8")
+    def test_numeric_model_codes_are_normalized_to_strings(self):
+        """Variant keys are coerced to str, so an int-keyed mapping still resolves.
 
-        assert set(_load_catalog(catalog_path)["SOME_MODEL"]) == {"278"}
+        Driven through the normalizer rather than a file, because JSON object
+        keys are always strings: a round trip through _load_catalog could never
+        hand the coercion a non-string key to work on.
+        """
+        assert _normalize_model_variants({278: [{"dpCode": 1}]}) == {"278": [{"dpCode": 1}]}
 
     def test_unusable_model_entry_is_skipped_not_fatal(self, tmp_path):
         """One malformed model does not cost the whole catalog."""

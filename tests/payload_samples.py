@@ -199,3 +199,11 @@ SYNTHETIC_POOL_PLUS_DATA = {
     "battery_percent": 76,
     "rssi_dbm": -69,
 }
+
+# A synthetic 10# (flat) payload built for the generic-decoder and catalog
+# tests: a compact-form STA_ALARM entry the seeded catalog does not know
+# about, followed by four wide-form entries (STA_TEM, STA_RH, STA_BAT,
+# STA_RSSI) whose structural indices match the "HCS777ARF" bootstrap seed
+# committed in api/data/product_catalog.json.
+SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD = "10#208500968832DC64E0C5"
+SEEDED_CATALOG_MODEL = "HCS777ARF"
