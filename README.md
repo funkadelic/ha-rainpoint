@@ -49,7 +49,7 @@ This integration is part of the default HACS store, so no custom repository is n
 
 The config flow asks for three fields:
 
-1. **Country**: select the country for the phone number on your RainPoint account from the dropdown. The integration derives the dial code automatically (e.g. selecting **United States (+1)** stores `+1`).
+1. **Country**: select the country for your RainPoint account from the dropdown. This is Home Assistant's standard localized country picker and now lists every country. The integration looks up the matching phone dial code from your selection automatically, so there is no separate dial-code field to fill in.
 2. **Email**: your RainPoint app account email.
 3. **Password**: your RainPoint app account password.
 
