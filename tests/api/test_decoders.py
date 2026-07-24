@@ -29,6 +29,7 @@ from tests.payload_samples import (
     MOISTURE_FULL_HEX_PAYLOAD,
     MOISTURE_SIMPLE_HEX_PAYLOAD,
     RAIN_HEX_PAYLOAD,
+    SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
@@ -283,6 +284,25 @@ class TestDecodeHtv145frf:
         assert result["decoder"] == "htv145frf_error"
         assert result["zones"] == {}
         assert result.get("hub_online") is not True
+
+
+class TestDecodeHtv113frf:
+    """HTV113FRF (issue #64) shares the HTV145FRF single-outlet 10# marker format,
+    so it is decoded by the same decode_htv145frf function."""
+
+    def test_idle_payload_zone_closed(self):
+        """Real idle payload: zone 1 closed (0x00), duration 0s, RSSI -63 dBm."""
+        result = decode_htv145frf(SAMPLE_HTV113_IDLE_PAYLOAD)
+
+        assert result["type"] == "valve_hub"
+        assert result["decoder"] == "htv145frf_hex"
+        assert result["rssi_dbm"] == -63
+
+        zones = result["zones"]
+        assert set(zones) == {1}
+        assert zones[1]["open"] is False
+        assert zones[1]["state_raw"] == 0x00
+        assert zones[1]["duration_seconds"] == 0
 
 
 class TestLittleEndianTripwire:
