@@ -124,8 +124,8 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
     there is nothing to await and no suspension point at which a reload
     could interleave with a partially completed removal set. Never raises:
     the registry lookup, the read of the coordinator's current sensors, and
-    each single-row removal are guarded independently, so none of them can
-    propagate out of config-entry setup.
+    each row's keep-or-remove decision and removal are guarded independently,
+    so none of them can propagate out of config-entry setup.
     """
     generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
 
@@ -148,7 +148,15 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
         sensors = {}
 
     for row in rows:
-        reason = _generic_row_removal_reason(getattr(row, "unique_id", None), generic_enabled, sensors)
+        # The reason lookup reads the coordinator's sensor records, which come
+        # from the vendor payload and are only assumed to be dicts. A row whose
+        # record is malformed is skipped like any other unremovable row rather
+        # than abandoning the rest of the sweep.
+        try:
+            reason = _generic_row_removal_reason(getattr(row, "unique_id", None), generic_enabled, sensors)
+        except Exception as exc:
+            _LOGGER.debug("Could not decide on generic entity row %s: %s", getattr(row, "entity_id", None), exc)
+            continue
         if reason is None:
             continue
         try:
@@ -156,7 +164,6 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
             _LOGGER.debug("Removed stale generic entity %s: %s", row.entity_id, reason)
         except Exception as exc:
             _LOGGER.debug("Failed to remove stale generic entity %s: %s", row.entity_id, exc)
-            continue
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

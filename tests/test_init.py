@@ -1256,3 +1256,42 @@ class TestSweepSurvivesUnreadableCoordinatorData(_GenericSweepFixtures):
             _remove_stale_generic_entities(MagicMock(), entry, self._make_coordinator_with_raising_data())
 
         assert removed == []
+
+
+class TestSweepSurvivesMalformedSensorRecords(_GenericSweepFixtures):
+    """A sensor record that is not a dict must not abort the sweep or escape setup.
+
+    Records come from the vendor payload, so their shape is an assumption
+    rather than a guarantee. Reading a model out of one is the last step in
+    this function that can raise, and it runs once per row: without a guard,
+    a single malformed record would abandon every row after it.
+    """
+
+    def test_a_row_whose_record_is_not_a_dict_is_skipped_and_the_rest_still_sweep(self):
+        """The graduated row is still removed even though the row before it could not be judged."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True},
+            {self.SLUG_A: "a string where a record should be", self.SLUG_B: {"model": MODEL_HCS026FRF}},
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert removed == [self.GENERIC_B.entity_id]
+
+    def test_a_sensors_mapping_that_is_not_a_dict_leaves_every_row_alone(self):
+        """Every per-row lookup raises, so no row is judged and none is removed."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator({CONF_GENERIC_ENTITIES_ENABLED: True}, "not a mapping")
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert removed == []
