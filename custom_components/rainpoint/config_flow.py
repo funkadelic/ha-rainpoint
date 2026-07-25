@@ -323,4 +323,31 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
                 ): bool,
             }
         )
-        return self.async_show_form(step_id="init", data_schema=data_schema)
+        eligible, unsupported = self._generic_eligibility()
+        return self.async_show_form(
+            step_id="init",
+            data_schema=data_schema,
+            description_placeholders={
+                "generic_eligible": str(eligible),
+                "generic_unsupported": str(unsupported),
+            },
+        )
+
+    def _generic_eligibility(self) -> tuple[int, int]:
+        """Return (eligible, unsupported_total) for this entry's devices.
+
+        Reported on the form so the generic-sensor toggle states its real
+        effect: the curated identity table is deliberately narrow, so a user
+        can otherwise enable it, see nothing appear, and reasonably conclude
+        the integration is broken.
+
+        Imported inside the function for the same reason sensor.py does:
+        generic_entities imports sensor at module load, so a top-level import
+        here would close an import cycle. Degrades to (0, 0) when the entry
+        is not loaded, which reads as "this adds nothing".
+        """
+        from .generic_entities import count_generic_eligible_devices
+
+        entry_store = (self.hass.data.get(DOMAIN) or {}).get(self.config_entry.entry_id) or {}
+        coordinator = entry_store.get("coordinator")
+        return count_generic_eligible_devices(getattr(coordinator, "data", None))

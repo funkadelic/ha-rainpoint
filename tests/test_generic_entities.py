@@ -26,6 +26,7 @@ from custom_components.rainpoint.generic_entities import (
     _filter_status_entries,
     _matching_field,
     build_generic_entities,
+    count_generic_eligible_devices,
     describe_generic_gate,
     evaluate_generic_gate,
 )
@@ -969,3 +970,48 @@ class TestGenericSensorDispatchEndToEnd:
         await async_setup_entry(hass, entry, async_add_entities)
 
         assert all(GENERIC_UNIQUE_ID_MARKER not in getattr(e, "_attr_unique_id", "") for e in captured)
+
+
+class TestCountGenericEligibleDevices:
+    """count_generic_eligible_devices reports what the options toggle would actually do.
+
+    The options form states these numbers, so a user can see up front that
+    enabling the toggle may add nothing rather than enabling it, seeing no new
+    entities, and concluding the integration is broken.
+    """
+
+    @staticmethod
+    def _entry(model: str, decoded_type: str = "unknown") -> dict:
+        return {"model": model, "data": {"type": decoded_type, "model": model}}
+
+    def test_no_data_reports_zero_of_zero(self):
+        """Absent coordinator data reports zero without raising."""
+        assert count_generic_eligible_devices(None) == (0, 0)
+
+    def test_devices_with_a_working_decoder_are_not_counted_as_unsupported(self):
+        """A decoded device is outside the generic path, so it is not in the denominator."""
+        data = {"sensors": {"a": self._entry("HTV245FRF", decoded_type="valve")}}
+
+        assert count_generic_eligible_devices(data) == (0, 0)
+
+    def test_unsupported_but_ungated_device_counts_only_in_the_denominator(self, monkeypatch):
+        """An unsupported device the gate rejects raises the total but not the eligible count."""
+        monkeypatch.setattr(generic_entities_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: None)
+        data = {"sensors": {"a": self._entry(FAKE_MODEL)}}
+
+        assert count_generic_eligible_devices(data) == (0, 1)
+
+    def test_unsupported_and_fully_curated_device_counts_as_eligible(self, monkeypatch):
+        """A device whose every declared reading is curated is reported as eligible."""
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_RSSI", dp_port=1, dp_code=10)]
+        monkeypatch.setattr(generic_entities_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
+        data = {"sensors": {"a": self._entry(FAKE_MODEL), "b": self._entry(FAKE_MODEL, decoded_type="valve")}}
+
+        assert count_generic_eligible_devices(data) == (1, 1)
+
+    def test_malformed_coordinator_data_degrades_to_zero_rather_than_raising(self):
+        """A sensors value that is not a mapping degrades to zero instead of breaking the options form."""
+        assert count_generic_eligible_devices({"sensors": 5}) == (0, 0)

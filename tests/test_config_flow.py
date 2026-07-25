@@ -6,6 +6,8 @@ any test collection happens, so that subclassing and `except` clauses work
 regardless of test collection order.
 """
 
+import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,6 +22,7 @@ from custom_components.rainpoint.const import (
     CONF_HIDS,
     CONF_PASSWORD,
     CONF_PUSH_ENABLED,
+    DOMAIN,
 )
 
 # ---------------------------------------------------------------------------
@@ -549,14 +552,28 @@ class TestConfigFlowSelectHomesReconfigure:
 def _make_options_flow(
     current_push_enabled: bool = False,
     current_generic_enabled: bool = False,
+    sensors: dict | None = None,
+    entry_loaded: bool = True,
 ) -> RainPointOptionsFlow:
-    """Create a RainPointOptionsFlow with a fake config_entry and HA stub methods wired up."""
+    """Create a RainPointOptionsFlow with a fake config_entry and HA stub methods wired up.
+
+    ``sensors`` seeds the coordinator data the eligibility count reads; ``entry_loaded``
+    False models the entry being absent from hass.data when the form is opened.
+    """
     flow = RainPointOptionsFlow()
     flow.config_entry = MagicMock()
+    flow.config_entry.entry_id = "test_entry"
     flow.config_entry.options = {
         CONF_PUSH_ENABLED: current_push_enabled,
         CONF_GENERIC_ENTITIES_ENABLED: current_generic_enabled,
     }
+    flow.hass = MagicMock()
+    if entry_loaded:
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": sensors or {}}
+        flow.hass.data = {DOMAIN: {"test_entry": {"coordinator": coordinator}}}
+    else:
+        flow.hass.data = {}
     flow.async_show_form = MagicMock(return_value={"type": "form"})
     flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
     return flow
@@ -660,3 +677,69 @@ class TestOptionsFlowInitStep:
 
         flow.async_create_entry.assert_called_once_with(title="", data=payload)
         assert result == {"type": "create_entry"}
+
+
+class TestOptionsFlowGenericEligibilityCopy:
+    """The form reports how many of this account's devices the generic toggle would actually affect.
+
+    The curated identity table is deliberately narrow, so a user can enable the
+    toggle, see nothing appear, and reasonably conclude the integration is
+    broken. The form states the real effect up front instead.
+    """
+
+    @staticmethod
+    def _unsupported(model: str) -> dict:
+        return {"model": model, "data": {"type": "unknown", "model": model}}
+
+    @staticmethod
+    def _supported(model: str) -> dict:
+        return {"model": model, "data": {"type": "valve", "model": model}}
+
+    @pytest.mark.asyncio
+    async def test_placeholders_report_zero_eligible_of_the_unsupported_devices(self):
+        """Unsupported devices that no curated row covers are counted, but none are eligible."""
+        flow = _make_options_flow(
+            sensors={
+                "a": self._unsupported("HTV245FRF"),
+                "b": self._unsupported("HCS003ARF-V1"),
+            }
+        )
+
+        await flow.async_step_init(None)
+
+        placeholders = flow.async_show_form.call_args.kwargs["description_placeholders"]
+        assert placeholders == {"generic_eligible": "0", "generic_unsupported": "2"}
+
+    @pytest.mark.asyncio
+    async def test_devices_with_a_hand_written_decoder_are_not_counted(self):
+        """A decoded device is not an unsupported device, so it never appears in the denominator."""
+        flow = _make_options_flow(
+            sensors={
+                "a": self._supported("HTV245FRF"),
+                "b": self._unsupported("HCS003ARF-V1"),
+            }
+        )
+
+        await flow.async_step_init(None)
+
+        placeholders = flow.async_show_form.call_args.kwargs["description_placeholders"]
+        assert placeholders["generic_unsupported"] == "1"
+
+    @pytest.mark.asyncio
+    async def test_unloaded_entry_degrades_to_zero_rather_than_raising(self):
+        """Opening the form while the entry is absent from hass.data reports zero, not a traceback."""
+        flow = _make_options_flow(entry_loaded=False)
+
+        await flow.async_step_init(None)
+
+        placeholders = flow.async_show_form.call_args.kwargs["description_placeholders"]
+        assert placeholders == {"generic_eligible": "0", "generic_unsupported": "0"}
+
+    @pytest.mark.asyncio
+    async def test_english_description_consumes_both_placeholders(self):
+        """The shipped copy references both placeholder names, so neither silently goes unused."""
+        translations = json.loads((Path(__file__).parent.parent / "custom_components/rainpoint/translations/en.json").read_text())
+        description = translations["options"]["step"]["init"]["description"]
+
+        assert "{generic_eligible}" in description
+        assert "{generic_unsupported}" in description

@@ -343,6 +343,36 @@ def evaluate_generic_gate(model: str | None, model_code: int | str | None = None
         )
 
 
+def count_generic_eligible_devices(coordinator_data: dict | None) -> tuple[int, int]:
+    """Return (eligible, unsupported_total) across the devices in coordinator data.
+
+    Only devices the trusted decoders could not decode are counted, since
+    those are the only ones the generic path ever considers. ``eligible`` is
+    how many of them would actually produce entities if the option were
+    turned on, so the options form can state the real effect of the toggle
+    instead of implying every unsupported device benefits.
+
+    Never raises: malformed or absent coordinator data degrades to (0, 0),
+    which reads on the form as "this adds nothing", the same conservative
+    answer the gate itself gives when it cannot tell.
+    """
+    eligible = 0
+    unsupported = 0
+    try:
+        sensors = (coordinator_data or {}).get("sensors") or {}
+        for info in sensors.values():
+            data = (info or {}).get("data") or {}
+            if data.get("type") != "unknown":
+                continue
+            unsupported += 1
+            if evaluate_generic_gate(info.get("model"), info.get("model_code")).passed:
+                eligible += 1
+    except Exception as exc:
+        _LOGGER.debug("count_generic_eligible_devices failed: %s", exc)
+        return (0, 0)
+    return (eligible, unsupported)
+
+
 def describe_generic_gate(model: str | None, model_code: int | str | None = None) -> dict:
     """Project evaluate_generic_gate's result to the two keys a diagnostic sensor needs.
 
