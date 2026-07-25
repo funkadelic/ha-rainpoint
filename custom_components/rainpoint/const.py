@@ -39,6 +39,13 @@ DEBUG_SUBMISSION_INTERVAL = 86400  # 24 hours in seconds
 
 # === Push channel (MQTT) ===
 CONF_PUSH_ENABLED = "push_enabled"
+
+# === Generic (catalog-driven) sensor entity factory ===
+CONF_GENERIC_ENTITIES_ENABLED = "generic_entities_enabled"
+# Shared by the generic factory and its entity-registry cleanup sweep, so both
+# name the same unique_id vocabulary.
+UNIQUE_ID_PREFIX = "rainpoint_"
+GENERIC_UNIQUE_ID_MARKER = "_generic_"
 # No subscribe topics: the observer's productKey policy forbids client
 # subscriptions (any SUBSCRIBE force-closes the connection), and the broker
 # auto-delivers the hub's thing/service/property/set downlink messages to the

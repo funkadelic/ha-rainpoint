@@ -125,6 +125,10 @@ def _make_hass(coordinator):
     hass = MagicMock()
     entry = MagicMock()
     entry.entry_id = "test_entry"
+    # Without this, entry.options.get(...) on a bare MagicMock returns a
+    # truthy mock, silently running every dispatch test with the generic
+    # sensor path enabled.
+    entry.options = {}
     hass.data = {DOMAIN: {"test_entry": {"coordinator": coordinator}}}
     return hass, entry
 

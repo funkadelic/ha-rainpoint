@@ -18,6 +18,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
     MODEL_CO2,
     MODEL_DISPLAY_HUB,
@@ -253,10 +254,14 @@ def _create_hub_entities(coordinator, hubs_cfg):
     return entities
 
 
-def _create_sensor_entities(coordinator, key, info):
+def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = False):
     """Resolve a sub-device's canonical model and produce its entity list.
 
-    Always appends a per-device raw-payload diagnostic entity at the end.
+    A model with a hand-written factory always wins by lookup order; a model
+    with none falls back to the always-on Unsupported diagnostic and, only
+    when generic_enabled is true, is additionally offered to the opt-in
+    generic sensor factory. Always appends a per-device raw-payload
+    diagnostic entity at the end.
     """
     raw_model = info.get("model")
     model = _SENSOR_MODEL_ALIASES.get(raw_model, raw_model)
@@ -273,8 +278,18 @@ def _create_sensor_entities(coordinator, key, info):
         base_slug,
     )
 
-    factory = _MODEL_FACTORIES.get(model, _make_unknown_entities)
-    entities = list(factory(coordinator, key, info, base_slug))
+    factory = _MODEL_FACTORIES.get(model)
+    if factory is not None:
+        entities = list(factory(coordinator, key, info, base_slug))
+    else:
+        entities = list(_make_unknown_entities(coordinator, key, info, base_slug))
+        if generic_enabled:
+            # Imported locally to avoid a circular import: generic_entities
+            # subclasses RainPointSensorBase, which is defined later in this
+            # module than this function.
+            from .generic_entities import build_generic_entities
+
+            entities.extend(build_generic_entities(coordinator, key, info, base_slug))
     entities.append(RainPointRawPayloadSensor(coordinator, key, info, base_slug))
     return entities
 
@@ -289,11 +304,12 @@ async def async_setup_entry(
 
     sensors_cfg = coordinator.data.get("sensors", {})
     hubs_cfg = coordinator.data.get("hubs", [])
+    generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
 
     entities: list[RainPointSensorBase] = []
     entities.extend(_create_hub_entities(coordinator, hubs_cfg))
     for key, info in sensors_cfg.items():
-        entities.extend(_create_sensor_entities(coordinator, key, info))
+        entities.extend(_create_sensor_entities(coordinator, key, info, generic_enabled))
 
     # The push last-message age entity only exists when push is enabled (it reads
     # the MQTT client's liveness clock, not coordinator.data).
