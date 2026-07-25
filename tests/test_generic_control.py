@@ -9,6 +9,7 @@ import pytest
 
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint.api import get_catalog_variant_codes
+from custom_components.rainpoint.api import product_catalog as product_catalog_module
 from custom_components.rainpoint.api.product_catalog import UNCODED_VARIANT
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ENABLED,
@@ -20,6 +21,7 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_245,
 )
 from custom_components.rainpoint.generic_control import (
+    CONTROL_IDENTITY_ALLOWLIST,
     DEFAULT_CONTROL_DURATION_SECONDS,
     RUN_STATE_IDENTITY,
     ControlDatapoint,
@@ -27,6 +29,7 @@ from custom_components.rainpoint.generic_control import (
     RainPointGenericValve,
     build_generic_control_entities,
     count_generic_control_eligible_devices,
+    describe_control_gate,
     evaluate_control_gate,
     resolve_control_port,
 )
@@ -248,6 +251,25 @@ class TestEvaluateControlGateRealCatalog:
 
         assert result.passed is True
 
+    def test_port_pairing_invariant_holds_across_the_full_committed_catalog(self):
+        """For every one of the 34 allowlist-touching variants, the set of ports on its
+        allowlisted control datapoints equals the set on its STA_WKSTATE datapoints --
+        this is what makes port pairing exact rather than heuristic (D-05).
+        """
+        checked = 0
+        for variants in product_catalog_module._CATALOG.values():
+            for record in variants.values():
+                dp_list = record["dp"]
+                ctl_ports = {
+                    e.get("dpPort") for e in dp_list if isinstance(e, dict) and e.get("identity") in CONTROL_IDENTITY_ALLOWLIST
+                }
+                if not ctl_ports:
+                    continue
+                checked += 1
+                wk_ports = {e.get("dpPort") for e in dp_list if isinstance(e, dict) and e.get("identity") == RUN_STATE_IDENTITY}
+                assert ctl_ports == wk_ports
+        assert checked == 34
+
 
 # ---------------------------------------------------------------------------
 # evaluate_control_gate: synthetic edge shapes
@@ -304,7 +326,11 @@ class TestEvaluateControlGateSynthetic:
         assert len(result.blocked_by) == 2
 
     def test_non_dict_entries_in_dp_list_are_skipped(self, monkeypatch):
-        dp_entries = ["not-a-dict", {"dpCode": 1, "identity": "CTL_WATER", "dpPort": 1}]
+        dp_entries = [
+            "not-a-dict",
+            {"dpCode": 1, "identity": "CTL_WATER", "dpPort": 1},
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": 1},
+        ]
         monkeypatch.setattr(generic_control_module, "is_hand_written_model", lambda model: False)
         monkeypatch.setattr(generic_control_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_control_module, "get_catalog_port_number", lambda model, model_code=None: 1)
@@ -328,6 +354,39 @@ class TestEvaluateControlGateSynthetic:
 
         assert result.passed is False
         assert result.blocked_by
+
+    def test_control_datapoint_with_no_paired_run_state_datapoint_is_refused(self, monkeypatch):
+        """A control dp whose port resolves fine but has no run-state datapoint declared
+        at all on that port is still refused: a resolvable port is not enough on its
+        own -- GCTL-04's confirm-by-re-poll needs a readable state to confirm against.
+        """
+        dp_entries = [{"dpCode": 1, "identity": "CTL_WATER", "dpPort": 1}]  # no STA_WKSTATE anywhere
+        monkeypatch.setattr(generic_control_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(generic_control_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        monkeypatch.setattr(generic_control_module, "get_catalog_port_number", lambda model, model_code=None: 1)
+
+        result = evaluate_control_gate("FAKE_MODEL", None)
+
+        assert result.passed is False
+        assert "0 matching run-state readings" in result.blocked_by[0]
+
+    def test_control_datapoint_with_two_ambiguous_run_state_matches_is_refused(self, monkeypatch):
+        """Two run-state datapoints sharing one port make the state to confirm against
+        ambiguous, so the control datapoint is refused rather than guessing which one.
+        """
+        dp_entries = [
+            {"dpCode": 1, "identity": "CTL_WATER", "dpPort": 1},
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": 1},
+            {"dpCode": 31, "identity": "STA_WKSTATE", "dpPort": 1},
+        ]
+        monkeypatch.setattr(generic_control_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(generic_control_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        monkeypatch.setattr(generic_control_module, "get_catalog_port_number", lambda model, model_code=None: 1)
+
+        result = evaluate_control_gate("FAKE_MODEL", None)
+
+        assert result.passed is False
+        assert "2 matching run-state readings" in result.blocked_by[0]
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +451,43 @@ class TestOverrideRule:
         result = evaluate_control_gate("FAKE_MODEL", 1)
 
         assert result.passed is False
+
+
+# ---------------------------------------------------------------------------
+# describe_control_gate
+# ---------------------------------------------------------------------------
+
+
+class TestDescribeControlGate:
+    def test_returns_exactly_one_key(self, monkeypatch):
+        monkeypatch.setattr(generic_control_module, "get_catalog_entry", lambda model, model_code=None: None)
+
+        described = describe_control_gate("FAKE_MODEL", None)
+
+        assert set(described.keys()) == {"generic_control_blocked_by"}
+
+    def test_value_is_always_a_list_never_none(self):
+        described = describe_control_gate("HTV214FRF", 288)
+
+        assert described["generic_control_blocked_by"] == []
+
+    def test_never_raises(self, monkeypatch):
+        def _boom(model, model_code=None):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(generic_control_module, "get_catalog_entry", _boom)
+
+        described = describe_control_gate("FAKE_MODEL", None)
+
+        assert described["generic_control_blocked_by"]
+
+    def test_holds_no_logic_of_its_own(self):
+        """describe_control_gate is a pure projection: it must agree with evaluate_control_gate."""
+        result = evaluate_control_gate("HIC406B", 40)
+
+        described = describe_control_gate("HIC406B", 40)
+
+        assert described["generic_control_blocked_by"] == list(result.blocked_by)
 
 
 # ---------------------------------------------------------------------------

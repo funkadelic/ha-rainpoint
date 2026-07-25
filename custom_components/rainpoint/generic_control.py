@@ -136,15 +136,27 @@ def _override_reason(model: str | None, model_code: int | str | None) -> str | N
     return None
 
 
-def _resolve_datapoint(entry: dict, port_number: Any) -> ControlDatapoint | str:
+def _resolve_datapoint(entry: dict, run_state_entries: list[dict], port_number: Any) -> ControlDatapoint | str:
     """Resolve one control dp entry to a ControlDatapoint, or a reason it is refused.
 
-    Task 1's minimum viable rule: refuse a datapoint whose command port does
-    not resolve. Widened in a later revision to also require an unambiguous
-    paired run-state datapoint on the same port.
+    Two independent conditions, checked in order, each with its own reason:
+    the datapoint must pair to exactly one run-state datapoint declaring the
+    same port (checked first -- across all 34 committed allowlist variants
+    the set of control ports is exactly the set of run-state ports, so this
+    is safe and load-bearing, not a heuristic), and its command port must
+    resolve. Refusing on an ambiguous or absent pairing before ever looking
+    at the port is what stops a plausible-looking but unconfirmable port
+    from ever reaching the client -- GCTL-04's confirm-by-re-poll is
+    meaningless for a datapoint whose state can never be read back.
     """
     identity = entry.get("identity")
     dp_port = entry.get("dpPort")
+    matches = [rs for rs in run_state_entries if rs.get("dpPort") == dp_port]
+    if len(matches) != 1:
+        return (
+            f"{identity} on port {dp_port!r} has {len(matches)} matching run-state readings "
+            "instead of exactly one, so its state can never be confirmed"
+        )
     command_port = resolve_control_port(dp_port, port_number)
     if command_port is None:
         return f"{identity} on port {dp_port!r} has no resolvable command port, so that zone is refused"
@@ -212,10 +224,19 @@ def _evaluate_control_gate(model: str | None, model_code: int | str | None) -> C
             port_number=port_number,
         )
 
+    # Deliberately NOT the sensor gate's dpCode-uniqueness rule: that rule
+    # exists because the sensor path resolves an entity to a port through an
+    # ambiguous dpCode alone. This path resolves ports by pairing against the
+    # run-state datapoints (below), and a real multi-zone valve hub commonly
+    # reuses one dpCode for the same identity across its zones (see
+    # HTV214FRF). Carrying the sensor rule over would refuse every multi-zone
+    # valve hub, which is the hardware this phase exists for.
+    run_state_entries = [entry for entry in raw_entry if isinstance(entry, dict) and entry.get("identity") == RUN_STATE_IDENTITY]
+
     datapoints: list[ControlDatapoint] = []
     reasons: list[str] = []
     for entry in control_entries:
-        resolved = _resolve_datapoint(entry, port_number)
+        resolved = _resolve_datapoint(entry, run_state_entries, port_number)
         if isinstance(resolved, ControlDatapoint):
             datapoints.append(resolved)
         else:
@@ -242,6 +263,17 @@ def evaluate_control_gate(model: str | None, model_code: int | str | None = None
             blocked_by=("the product catalog could not be read",),
             port_number=None,
         )
+
+
+def describe_control_gate(model: str | None, model_code: int | str | None = None) -> dict:
+    """Project evaluate_control_gate's result to the one key a control entity attribute needs.
+
+    Holds no logic of its own and never raises. Named identically to the
+    entity attribute a later plan surfaces it under, so that plan adopts it
+    with a plain dict update and no remap step.
+    """
+    result = evaluate_control_gate(model, model_code)
+    return {"generic_control_blocked_by": list(result.blocked_by)}
 
 
 def count_generic_control_eligible_devices(coordinator_data: dict | None) -> tuple[int, int]:
