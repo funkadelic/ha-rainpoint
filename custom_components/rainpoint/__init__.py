@@ -5,11 +5,19 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import RainPointClient
+from .api import RainPointClient, is_hand_written_model
 from .api.mqtt import RainPointMqttClient
-from .const import CONF_PUSH_ENABLED, CONF_TOKEN, DOMAIN
+from .const import (
+    CONF_GENERIC_ENTITIES_ENABLED,
+    CONF_PUSH_ENABLED,
+    CONF_TOKEN,
+    DOMAIN,
+    GENERIC_UNIQUE_ID_MARKER,
+    UNIQUE_ID_PREFIX,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +79,93 @@ def _persist_tokens(hass: HomeAssistant, entry: ConfigEntry, client: RainPointCl
     hass.config_entries.async_update_entry(entry, data={**entry.data, **token_data})
 
 
+def _generic_row_removal_reason(unique_id, generic_enabled: bool, sensors: dict) -> str | None:
+    """Return why this registry row should be removed, or None to keep it.
+
+    The prefix-and-marker match is the second of the sweep's two independent
+    scoping guards, so a row belonging to another integration is rejected
+    here even if the config-entry-scoped lookup that produced it ever
+    regressed.
+    """
+    if not isinstance(unique_id, str):
+        return None
+    if not unique_id.startswith(UNIQUE_ID_PREFIX) or GENERIC_UNIQUE_ID_MARKER not in unique_id:
+        return None
+    if not generic_enabled:
+        return "generic entities are disabled"
+
+    base_slug = unique_id[len(UNIQUE_ID_PREFIX) :].split(GENERIC_UNIQUE_ID_MARKER, 1)[0]
+    model = (sensors.get(base_slug) or {}).get("model")
+    # A base slug absent from the current sensor data resolves to no model,
+    # which is not evidence that the model graduated. This falls out of
+    # is_hand_written_model(None) being False on its own, but is stated here
+    # so a later reader does not "fix" it into a removal.
+    if not is_hand_written_model(model):
+        return None
+    return "the model now has a hand-written decoder"
+
+
+def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Remove generic-namespace registry rows that should no longer exist.
+
+    Runs on every config-entry setup, not only on a toggle transition, so a
+    row orphaned by a crash mid-toggle-off is cleaned on the next start. When
+    the toggle is off, every generic row for this entry is removed; when it
+    is on, only rows whose model has since gained a hand-written decoder are
+    removed, so a graduated model can never keep a stale unverified entity
+    beside its new trusted one.
+
+    Scoped by two independent guards -- the config-entry-scoped registry
+    lookup and a unique_id prefix-and-marker match -- so the sweep can never
+    reach another config entry or another integration even if the prefix
+    logic itself has a bug. There is no whole-registry scan.
+
+    Synchronous on purpose: both registry helpers it uses are callbacks, so
+    there is nothing to await and no suspension point at which a reload
+    could interleave with a partially completed removal set. Never raises:
+    the registry lookup, the read of the coordinator's current sensors, and
+    each row's keep-or-remove decision and removal are guarded independently,
+    so none of them can propagate out of config-entry setup.
+    """
+    generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
+
+    try:
+        registry = er.async_get(hass)
+        rows = list(er.async_entries_for_config_entry(registry, entry.entry_id))
+    except Exception as exc:
+        _LOGGER.debug("Entity registry lookup failed; skipping generic entity sweep: %s", exc)
+        return
+
+    # Degrades to no sensors rather than aborting the sweep. This data only
+    # feeds the graduation check on the toggle-on path, where an unresolvable
+    # model already means "leave the row alone"; aborting instead would also
+    # abandon the toggle-off path, which must remove every generic row and
+    # needs none of this data to do it.
+    try:
+        sensors = (coordinator.data or {}).get("sensors", {}) if coordinator is not None else {}
+    except Exception as exc:
+        _LOGGER.debug("Coordinator data unreadable; sweeping without graduation data: %s", exc)
+        sensors = {}
+
+    for row in rows:
+        # The reason lookup reads the coordinator's sensor records, which come
+        # from the vendor payload and are only assumed to be dicts. A row whose
+        # record is malformed is skipped like any other unremovable row rather
+        # than abandoning the rest of the sweep.
+        try:
+            reason = _generic_row_removal_reason(getattr(row, "unique_id", None), generic_enabled, sensors)
+        except Exception as exc:
+            _LOGGER.debug("Could not decide on generic entity row %s: %s", getattr(row, "entity_id", None), exc)
+            continue
+        if reason is None:
+            continue
+        try:
+            registry.async_remove(row.entity_id)
+            _LOGGER.debug("Removed stale generic entity %s: %s", row.entity_id, reason)
+        except Exception as exc:
+            _LOGGER.debug("Failed to remove stale generic entity %s: %s", row.entity_id, exc)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up RainPoint from a config entry."""
     session = async_get_clientsession(hass)
@@ -113,6 +208,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _persist_tokens(hass, entry, client)
 
     entry_store["coordinator"] = coordinator
+
+    # Sweep before any platform is forwarded, so no platform is adding
+    # entities while a removal runs, and after the coordinator's first
+    # refresh, so the sensor records the graduation branch reads are
+    # already populated.
+    _remove_stale_generic_entities(hass, entry, coordinator)
 
     # An options change (e.g. toggling push) reloads through the existing
     # unload->setup path, no bespoke start/stop code path needed.

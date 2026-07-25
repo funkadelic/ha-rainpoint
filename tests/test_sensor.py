@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.const import (
     DOMAIN,
     MODEL_DISPLAY_HUB,
@@ -125,6 +126,10 @@ def _make_hass(coordinator):
     hass = MagicMock()
     entry = MagicMock()
     entry.entry_id = "test_entry"
+    # Without this, entry.options.get(...) on a bare MagicMock returns a
+    # truthy mock, silently running every dispatch test with the generic
+    # sensor path enabled.
+    entry.options = {}
     hass.data = {DOMAIN: {"test_entry": {"coordinator": coordinator}}}
     return hass, entry
 
@@ -824,21 +829,25 @@ def test_native_value_none_when_data_missing(cls, data_key, uid_suffix, _value):
 _UNK_SENTINEL = object()
 
 
+def _make_unknown_sensor(data=_UNK_SENTINEL, model="MYSTERY"):
+    """Build a RainPointUnknownSensor, shared by the classes that exercise it."""
+    if data is _UNK_SENTINEL:
+        data = {"type": "unknown", "model": model, "raw_value": "10#ABC"}
+    sensor = _make_sensor_base(
+        RainPointUnknownSensor,
+        "100_200_1",
+        data,
+        sensor_info_overrides={"model": model, "sub_name": "Mystery"},
+    )
+    sensor._attr_unique_id = f"rainpoint_100_200_1_unknown_{model}"
+    sensor._attr_name = f"Mystery Unsupported ({model})"
+    return sensor
+
+
 class TestUnknownSensor:
     """Tests for RainPointUnknownSensor."""
 
-    def _make(self, data=_UNK_SENTINEL, model="MYSTERY"):
-        if data is _UNK_SENTINEL:
-            data = {"type": "unknown", "model": model, "raw_value": "10#ABC"}
-        sensor = _make_sensor_base(
-            RainPointUnknownSensor,
-            "100_200_1",
-            data,
-            sensor_info_overrides={"model": model, "sub_name": "Mystery"},
-        )
-        sensor._attr_unique_id = f"rainpoint_100_200_1_unknown_{model}"
-        sensor._attr_name = f"Mystery Unsupported ({model})"
-        return sensor
+    _make = staticmethod(_make_unknown_sensor)
 
     def test_native_value_reports_model_when_data_present(self):
         # native_value reads data["model"], not sensor_info["model"], so pass
@@ -861,6 +870,29 @@ class TestUnknownSensor:
         assert attrs["raw_payload"] == "10#ZZ"
         assert "report_url" in attrs
         assert "instructions" in attrs
+
+    def test_report_url_is_the_prefilled_form_not_the_bare_issue_list(self):
+        """The durable surface gets the good link.
+
+        The unsupported-model notification fires once per variant and can be
+        dismissed, so a user returning to the device later finds only this
+        attribute. Pointing it at the bare issue list would leave the lasting
+        path worse than the transient one.
+        """
+        sensor = self._make(model="MODELX", data={"type": "unknown", "model": "MODELX", "raw_value": "10#ZZ"})
+
+        report_url = sensor.extra_state_attributes["report_url"]
+
+        assert "/issues/new?" in report_url
+        assert "template=new_device.yml" in report_url
+        assert "model=MODELX" in report_url
+        assert "primary_payload=10%23ZZ" in report_url
+
+    def test_report_url_survives_a_missing_model(self):
+        """A payload with no model name still yields a usable link rather than raising."""
+        sensor = self._make(model=None, data={"type": "unknown", "raw_value": "10#ZZ"})
+
+        assert "/issues/new?" in sensor.extra_state_attributes["report_url"]
 
     def test_extra_state_attributes_surfaces_generic_decode(self):
         """A generic structural decode is exposed as decoded_fields/_values."""
@@ -890,6 +922,157 @@ class TestUnknownSensor:
         attrs = sensor.extra_state_attributes
         assert "decoded_fields" not in attrs
         assert "decoded_values" not in attrs
+
+    def test_unmapped_identity_attributes_present_regardless_of_toggle_state(self, monkeypatch):
+        """The two new attributes never depend on the generic-entities options toggle."""
+        dp_entries = [{"identity": "STA_TEM", "dpPort": 0}]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        sensor = self._make(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert "unmapped_generic_identities" in attrs
+        assert "generic_gate_blocked_by" in attrs
+        # No toggle is ever read here - the value is identical whether or not
+        # an options entry even exists for this sensor.
+        assert attrs["unmapped_generic_identities"] == []
+        assert attrs["generic_gate_blocked_by"] == []
+
+    def test_unmapped_list_contains_exactly_the_uncurated_identity(self, monkeypatch):
+        dp_entries = [{"identity": "STA_TEM", "dpPort": 0}, {"identity": "STA_BAT", "dpPort": 0, "dpCode": 2}]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        sensor = self._make(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["unmapped_generic_identities"] == ["STA_BAT"]
+        assert len(attrs["generic_gate_blocked_by"]) == 1
+        assert "1 of this device's 2 status readings" in attrs["generic_gate_blocked_by"][0]
+
+    def test_fully_curated_variant_reports_no_unmapped_identities_and_no_reason(self, monkeypatch):
+        dp_entries = [{"identity": "STA_TEM", "dpPort": 0}]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
+        sensor = self._make(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["unmapped_generic_identities"] == []
+        assert attrs["generic_gate_blocked_by"] == []
+
+    def test_model_absent_from_catalog_reports_a_blocked_reason(self, monkeypatch):
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: None)
+        sensor = self._make(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["unmapped_generic_identities"] == []
+        assert attrs["generic_gate_blocked_by"]
+
+    def test_duplicate_identity_and_port_names_the_identity_in_the_reason(self, monkeypatch):
+        dp_entries = [
+            {"identity": "STA_RH", "dpPort": 0, "dpCode": 1},
+            {"identity": "STA_RH", "dpPort": 0, "dpCode": 2},
+        ]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        sensor = self._make(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["generic_gate_blocked_by"]
+        assert any("STA_RH" in reason for reason in attrs["generic_gate_blocked_by"])
+
+    def test_preexisting_attributes_are_unchanged_alongside_the_new_keys(self, monkeypatch):
+        dp_entries = [{"identity": "STA_RH", "dpPort": 0}]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        sensor = self._make(model="MODELX", data={"type": "unknown", "model": "MODELX", "raw_value": "10#ZZ"})
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["model"] == "MODELX"
+        assert attrs["raw_payload"] == "10#ZZ"
+        assert "report_url" in attrs
+        assert "instructions" in attrs
+        assert "unmapped_generic_identities" in attrs
+        assert "generic_gate_blocked_by" in attrs
+
+    def test_no_generic_sub_dict_does_not_raise(self):
+        """No decoded payload at all still yields the two always-on keys, never an exception."""
+        sensor = self._make(data=None)
+
+        attrs = sensor.extra_state_attributes
+
+        assert "unmapped_generic_identities" in attrs
+        assert "generic_gate_blocked_by" in attrs
+
+
+class TestUnknownSensorAttributeCost:
+    """extra_state_attributes is read on every state write and every template render.
+
+    Two of the values it returns are expensive: a full catalog gate
+    evaluation, and a report link that restructures the payload. Neither
+    input changes between most reads, so both are memoised. These cases fix
+    what the memo is keyed on, so a later change cannot make it stale.
+    """
+
+    def test_re_reading_attributes_evaluates_the_catalog_gate_no_further_times(self, monkeypatch):
+        """Both memoised values are gate-backed, so a repeat read must cost nothing.
+
+        The report link builds its own catalog summary, so the first read
+        evaluates the gate more than once. What matters is that the second
+        read adds none.
+        """
+        calls = []
+
+        def _counting(model, model_code=None):
+            calls.append((model, model_code))
+            return {"unmapped_generic_identities": ["STA_X"], "generic_gate_blocked_by": ["nope"]}
+
+        monkeypatch.setattr(generic_entities_module, "describe_generic_gate", _counting)
+        sensor = _make_unknown_sensor(model="MODELX")
+
+        first = sensor.extra_state_attributes
+        after_first_read = len(calls)
+        second = sensor.extra_state_attributes
+
+        assert after_first_read >= 1
+        assert len(calls) == after_first_read
+        assert first["unmapped_generic_identities"] == ["STA_X"]
+        assert second["generic_gate_blocked_by"] == ["nope"]
+
+    def test_editing_the_returned_lists_cannot_reach_the_memo(self, monkeypatch):
+        """The attributes dict is handed out; the cached lists behind it stay intact."""
+        monkeypatch.setattr(
+            generic_entities_module,
+            "describe_generic_gate",
+            lambda model, model_code=None: {"unmapped_generic_identities": ["STA_X"], "generic_gate_blocked_by": []},
+        )
+        sensor = _make_unknown_sensor(model="MODELX")
+
+        sensor.extra_state_attributes["unmapped_generic_identities"].append("STA_INJECTED")
+
+        assert sensor.extra_state_attributes["unmapped_generic_identities"] == ["STA_X"]
+
+    def test_the_report_link_is_rebuilt_only_when_the_payload_changes(self, monkeypatch):
+        import custom_components.rainpoint.sensor as sensor_module
+
+        calls = []
+
+        def _counting(model, raw_value, model_code=None):
+            calls.append(raw_value)
+            return f"https://example.invalid/{raw_value}"
+
+        monkeypatch.setattr(sensor_module, "_build_new_device_issue_url", _counting)
+        sensor = _make_unknown_sensor(model="MODELX", data={"type": "unknown", "model": "MODELX", "raw_value": "10#AA"})
+
+        assert sensor.extra_state_attributes["report_url"].endswith("10#AA")
+        assert sensor.extra_state_attributes["report_url"].endswith("10#AA")
+        assert calls == ["10#AA"]
+
+        sensor.coordinator.data["sensors"]["100_200_1"]["data"]["raw_value"] = "10#BB"
+
+        assert sensor.extra_state_attributes["report_url"].endswith("10#BB")
+        assert calls == ["10#AA", "10#BB"]
 
 
 class TestRawPayloadSensor:

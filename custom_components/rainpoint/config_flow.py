@@ -20,6 +20,7 @@ from .const import (
     CONF_AREA_CODE,
     CONF_COUNTRY,
     CONF_EMAIL,
+    CONF_GENERIC_ENTITIES_ENABLED,
     CONF_HIDS,
     CONF_PASSWORD,
     CONF_PUSH_ENABLED,
@@ -303,10 +304,10 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class RainPointOptionsFlow(config_entries.OptionsFlow):
-    """Handle the RainPoint options flow -- push toggle."""
+    """Handle the RainPoint options flow -- push and generic-sensor toggles."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Show/handle the single push-toggle form."""
+        """Show/handle the single form carrying both toggles."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
@@ -316,6 +317,39 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
                     CONF_PUSH_ENABLED,
                     default=self.config_entry.options.get(CONF_PUSH_ENABLED, False),
                 ): bool,
+                vol.Required(
+                    CONF_GENERIC_ENTITIES_ENABLED,
+                    default=self.config_entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False),
+                ): bool,
             }
         )
-        return self.async_show_form(step_id="init", data_schema=data_schema)
+        eligible, unsupported = self._generic_eligibility()
+        return self.async_show_form(
+            step_id="init",
+            data_schema=data_schema,
+            description_placeholders={
+                "generic_eligible": str(eligible),
+                "generic_unsupported": str(unsupported),
+            },
+        )
+
+    def _generic_eligibility(self) -> tuple[int, int]:
+        """Return (eligible, unsupported_total) for this entry's devices.
+
+        Reported on the form so the generic-sensor toggle states its real
+        effect: the curated identity table is deliberately narrow, so a user
+        can otherwise enable it, see nothing appear, and reasonably conclude
+        the integration is broken.
+
+        Imported inside the function to keep the whole sensor platform out of
+        this module's import, since generic_entities pulls in sensor at load
+        time and nothing else here needs it. Note this is not the cycle-breaking
+        case sensor.py has: nothing imports config_flow, so a top-level import
+        would resolve fine. Degrades to (0, 0) when the entry is not loaded,
+        which reads as "this adds nothing".
+        """
+        from .generic_entities import count_generic_eligible_devices
+
+        entry_store = (self.hass.data.get(DOMAIN) or {}).get(self.config_entry.entry_id) or {}
+        coordinator = entry_store.get("coordinator")
+        return count_generic_eligible_devices(getattr(coordinator, "data", None))

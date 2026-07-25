@@ -167,6 +167,21 @@ def get_catalog_entry(model: str | None, model_code: int | str | None = None) ->
     return record["dp"]
 
 
+def get_catalog_variant_codes(model: str | None) -> tuple[str, ...]:
+    """Return the modelCodes the catalog lists for a model, sorted; empty when unknown.
+
+    Lets a caller tell "this model is absent from the catalog" apart from
+    "this model is present but the device did not say which variant it is",
+    which are different problems with different fixes and would otherwise both
+    surface as a plain lookup miss. The uncoded bucket is reported under its
+    own sentinel rather than omitted, so a caller never sees an empty tuple
+    for a model the catalog does carry.
+    """
+    if model is None:
+        return ()
+    return tuple(sorted(_CATALOG.get(model) or {}))
+
+
 def get_catalog_port_number(model: str | None, model_code: int | str | None = None) -> int | None:
     """Return the declared port (zone) count for a model variant, or None on a miss.
 

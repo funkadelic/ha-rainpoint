@@ -18,6 +18,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
     MODEL_CO2,
     MODEL_DISPLAY_HUB,
@@ -50,7 +51,7 @@ from .const import (
     MODEL_RAIN,
     MODEL_TEMPHUM,
 )
-from .coordinator import RainPointCoordinator
+from .coordinator import RainPointCoordinator, _build_new_device_issue_url
 from .diagnostic_sensors import (
     RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
@@ -253,10 +254,14 @@ def _create_hub_entities(coordinator, hubs_cfg):
     return entities
 
 
-def _create_sensor_entities(coordinator, key, info):
+def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = False):
     """Resolve a sub-device's canonical model and produce its entity list.
 
-    Always appends a per-device raw-payload diagnostic entity at the end.
+    A model with a hand-written factory always wins by lookup order; a model
+    with none falls back to the always-on Unsupported diagnostic and, only
+    when generic_enabled is true, is additionally offered to the opt-in
+    generic sensor factory. Always appends a per-device raw-payload
+    diagnostic entity at the end.
     """
     raw_model = info.get("model")
     model = _SENSOR_MODEL_ALIASES.get(raw_model, raw_model)
@@ -273,8 +278,18 @@ def _create_sensor_entities(coordinator, key, info):
         base_slug,
     )
 
-    factory = _MODEL_FACTORIES.get(model, _make_unknown_entities)
-    entities = list(factory(coordinator, key, info, base_slug))
+    factory = _MODEL_FACTORIES.get(model)
+    if factory is not None:
+        entities = list(factory(coordinator, key, info, base_slug))
+    else:
+        entities = list(_make_unknown_entities(coordinator, key, info, base_slug))
+        if generic_enabled:
+            # Imported locally to avoid a circular import: generic_entities
+            # subclasses RainPointSensorBase, which is defined later in this
+            # module than this function.
+            from .generic_entities import build_generic_entities
+
+            entities.extend(build_generic_entities(coordinator, key, info, base_slug))
     entities.append(RainPointRawPayloadSensor(coordinator, key, info, base_slug))
     return entities
 
@@ -289,11 +304,12 @@ async def async_setup_entry(
 
     sensors_cfg = coordinator.data.get("sensors", {})
     hubs_cfg = coordinator.data.get("hubs", [])
+    generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
 
     entities: list[RainPointSensorBase] = []
     entities.extend(_create_hub_entities(coordinator, hubs_cfg))
     for key, info in sensors_cfg.items():
-        entities.extend(_create_sensor_entities(coordinator, key, info))
+        entities.extend(_create_sensor_entities(coordinator, key, info, generic_enabled))
 
     # The push last-message age entity only exists when push is enabled (it reads
     # the MQTT client's liveness clock, not coordinator.data).
@@ -1075,6 +1091,16 @@ class RainPointUnknownSensor(RainPointSensorBase):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:help-circle-outline"
 
+    # extra_state_attributes is read on every state write and every template
+    # render, and two of the values it returns cost a full catalog gate
+    # evaluation (plus, for the link, a structural decode of the payload).
+    # The gate answer depends only on this entity's fixed model and modelCode,
+    # and the link only on those and the current payload, so both are computed
+    # once and reused until their inputs change. Declared on the class so an
+    # instance built without __init__ still starts from an empty memo.
+    _gate_description: dict | None = None
+    _report_url_for_payload: tuple[str | None, str] | None = None
+
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         model = sensor_info.get("model", "unknown")
@@ -1108,9 +1134,34 @@ class RainPointUnknownSensor(RainPointSensorBase):
             attrs["decoded_fields"] = field_names
             attrs["decoded_values"] = generic.get("fields")
 
-        attrs["report_url"] = "https://github.com/funkadelic/ha-rainpoint/issues"
+        model = self._sensor_info.get("model")
+        model_code = self._sensor_info.get("model_code")
+        if self._gate_description is None:
+            # Imported locally to avoid a circular import: generic_entities
+            # subclasses RainPointSensorBase, which is defined later in this
+            # module than this class.
+            from .generic_entities import describe_generic_gate
+
+            self._gate_description = describe_generic_gate(model, model_code)
+        # Always present, regardless of the generic entities options toggle:
+        # computed from the catalog and the curated table alone, involves no
+        # entity creation, and is most valuable to a user who has not opted
+        # in. Copied out so a consumer editing the attributes cannot reach
+        # back into the cached lists.
+        attrs.update({key: list(value) for key, value in self._gate_description.items()})
+
+        # The same pre-filled report link the unsupported-model notification
+        # uses. This attribute is the durable surface: the notification fires
+        # once per variant and can be dismissed, so a user who comes back to
+        # the device later finds only this. Pointing it at the bare issue list
+        # would make the lasting path the worse one.
+        raw_value = data.get("raw_value")
+        if self._report_url_for_payload is None or self._report_url_for_payload[0] != raw_value:
+            self._report_url_for_payload = (raw_value, _build_new_device_issue_url(model or "unknown", raw_value, model_code))
+        attrs["report_url"] = self._report_url_for_payload[1]
         attrs["instructions"] = (
-            "This sensor model is not yet supported. Please open a GitHub issue with the model and raw_payload values above."
+            "This sensor model is not yet supported. Open report_url to file a pre-filled support request, "
+            "then add what the RainPoint app shows for this device."
         )
 
         return attrs

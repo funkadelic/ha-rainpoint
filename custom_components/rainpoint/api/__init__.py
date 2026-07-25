@@ -48,7 +48,7 @@ from .decoders import (
     decode_valve_hub,
 )
 from .generic_decoder import decode_generic
-from .product_catalog import get_catalog_entry
+from .product_catalog import get_catalog_entry, get_catalog_port_number, get_catalog_variant_codes
 from .trust import is_hand_written_model
 from .utils import (
     _base_decoder_dict,
@@ -125,5 +125,7 @@ __all__ = [
     "decode_unknown",
     "decode_valve_hub",
     "get_catalog_entry",
+    "get_catalog_port_number",
+    "get_catalog_variant_codes",
     "is_hand_written_model",
 ]

@@ -1,66 +1,67 @@
 {
-    "issues": {
-        "push_channel_down": {
-            "title": "Real-time push updates are not being received",
-            "description": "The real-time push connection to RainPoint has been down for a while, so changes from your devices may be delayed. Your devices keep updating because polling every couple of minutes is still running as a fallback. If this keeps happening, try reloading the integration, or turn push updates off and back on in the integration options."
-        }
-    },
-    "config": {
-        "step": {
-            "user": {
-                "title": "RainPoint Cloud",
-                "description": "Log in with your RainPoint account.",
-                "data": {
-                    "country": "Country",
-                    "email": "Email",
-                    "password": "Password"
-                }
-            },
-            "select_homes": {
-                "title": "Select Home",
-                "description": "Choose which Home to add to Home Assistant.",
-                "data": {
-                    "hids": "Home"
-                }
-            },
-            "reconfigure": {
-                "title": "Reconfigure RainPoint",
-                "description": "Update your RainPoint credentials.",
-                "data": {
-                    "country": "Country",
-                    "email": "Email",
-                    "password": "Password"
-                }
-            },
-            "select_homes_reconfigure": {
-                "title": "Select Home",
-                "description": "Choose which Home to use with this integration.",
-                "data": {
-                    "hids": "Home"
-                }
-            }
-        },
-        "error": {
-            "auth_failed": "Authentication failed. Please check your credentials.",
-            "cannot_connect": "Unable to connect to RainPoint. Please try again.",
-            "rate_limited": "RainPoint is temporarily rate-limiting sign-ins. Please wait a couple of minutes and try again.",
-            "no_homes": "No homes were found for this account.",
-            "select_at_least_one": "Please select a home."
-        },
-        "abort": {
-            "already_configured": "This account is already configured.",
-            "reconfigure_successful": "RainPoint integration has been successfully reconfigured."
-        }
-    },
-    "options": {
-        "step": {
-            "init": {
-                "title": "RainPoint Push Channel",
-                "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback.",
-                "data": {
-                    "push_enabled": "Enable push updates"
-                }
-            }
-        }
+  "issues": {
+    "push_channel_down": {
+      "title": "Real-time push updates are not being received",
+      "description": "The real-time push connection to RainPoint has been down for a while, so changes from your devices may be delayed. Your devices keep updating because polling every couple of minutes is still running as a fallback. If this keeps happening, try reloading the integration, or turn push updates off and back on in the integration options."
     }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "RainPoint Cloud",
+        "description": "Log in with your RainPoint account.",
+        "data": {
+          "country": "Country",
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "select_homes": {
+        "title": "Select Home",
+        "description": "Choose which Home to add to Home Assistant.",
+        "data": {
+          "hids": "Home"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure RainPoint",
+        "description": "Update your RainPoint credentials.",
+        "data": {
+          "country": "Country",
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "select_homes_reconfigure": {
+        "title": "Select Home",
+        "description": "Choose which Home to use with this integration.",
+        "data": {
+          "hids": "Home"
+        }
+      }
+    },
+    "error": {
+      "auth_failed": "Authentication failed. Please check your credentials.",
+      "cannot_connect": "Unable to connect to RainPoint. Please try again.",
+      "rate_limited": "RainPoint is temporarily rate-limiting sign-ins. Please wait a couple of minutes and try again.",
+      "no_homes": "No homes were found for this account.",
+      "select_at_least_one": "Please select a home."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reconfigure_successful": "RainPoint integration has been successfully reconfigured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "RainPoint Options",
+        "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback. Enable unverified generic sensors, off by default, to get provisional sensors for devices this integration does not support yet; these readings are derived from an unverified vendor catalog, may be wrong, are always labeled unverified in their names, and should not be relied on for automations. Generic sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices.",
+        "data": {
+          "push_enabled": "Enable push updates",
+          "generic_entities_enabled": "Enable unverified generic sensors"
+        }
+      }
+    }
+  }
 }

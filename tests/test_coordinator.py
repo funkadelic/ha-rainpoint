@@ -294,6 +294,59 @@ class TestCoordinatorUpdate:
         url = _coord_module._build_new_device_issue_url("HTV999XYZ", "garbage-no-hash")
         assert "auto_decoded=" not in url
 
+    def test_build_new_device_issue_url_carries_model_code_when_known(self):
+        """modelCode reaches the form: one model string can cover variants differing in port count."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", "10#ABCD", 303)
+
+        assert "model_code=303" in url
+
+    def test_build_new_device_issue_url_omits_model_code_when_unknown(self):
+        """No reported modelCode leaves the field empty rather than seeding a guess."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", "10#ABCD")
+
+        assert "model_code=" not in url
+
+    def test_build_new_device_issue_url_prefills_gate_diagnostics(self):
+        """What the catalog already explains reaches the form, so triage does not rederive it."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", "10#ABCD")
+
+        assert "gate_diagnostics=" in url
+        assert "not+in+the+product+catalog" in url
+
+    def test_format_gate_diagnostics_lists_unmapped_readings_and_every_reason(self, monkeypatch):
+        """Both the uncurated-reading list and all block reasons are rendered, not just one."""
+        import custom_components.rainpoint.generic_entities as generic_entities_module
+
+        monkeypatch.setattr(generic_entities_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(
+            generic_entities_module,
+            "get_catalog_entry",
+            lambda model, model_code=None: [
+                {"dpCode": 9, "identity": "STA_ALARM", "dpPort": 1},
+                {"dpCode": 9, "identity": "STA_BAT", "dpPort": 2},
+            ],
+        )
+        monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 2)
+
+        text = _coord_module._format_gate_diagnostics("FAKE_MODEL", None)
+
+        assert "Readings with no verified definition yet: STA_ALARM, STA_BAT" in text
+        assert len([line for line in text.splitlines() if line.startswith("Blocked: ")]) >= 1
+
+    def test_format_gate_diagnostics_blank_when_nothing_to_say(self, monkeypatch):
+        """A model the gate passes contributes no section rather than an empty one."""
+        import custom_components.rainpoint.generic_entities as generic_entities_module
+
+        monkeypatch.setattr(generic_entities_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(
+            generic_entities_module,
+            "get_catalog_entry",
+            lambda model, model_code=None: [{"dpCode": 9, "identity": "STA_TEM", "dpPort": 1}],
+        )
+        monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
+
+        assert _coord_module._format_gate_diagnostics("FAKE_MODEL", None) == ""
+
     def test_format_generic_fields_empty_returns_blank(self):
         """No decoded fields -> empty string so the caller can omit the section."""
         assert _coord_module._format_generic_fields({"fields": []}) == ""
@@ -1349,3 +1402,95 @@ class TestApplyPushUpdate:
         zone1 = coord.data["sensors"]["100_200_1"]["data"]["zones"][1]
         assert zone1["open"] is True
         assert zone1["state_raw"] == 1
+
+
+class TestIssueUrlLengthBudget:
+    """The pre-filled report link is capped so GitHub cannot answer it with 414 URI Too Long.
+
+    Three growable fields feed this URL. The raw payload is preferred over
+    the other two: it is the only one that cannot be regenerated later. The
+    auto-decode is recomputable from that payload and the catalog summary
+    from the model and modelCode, so both are cut first. A payload that blows
+    the budget on its own is the exception, since a link too long to open
+    carries nothing at all.
+    """
+
+    _PAYLOAD = "11#" + ("0100AD3C00" * 20)
+
+    def _url(self, budget=None):
+        import custom_components.rainpoint.coordinator as coord
+
+        if budget is None:
+            return coord._build_new_device_issue_url("HTV445FRF", self._PAYLOAD, 360)
+        with patch.object(coord, "ISSUE_URL_MAX_LENGTH", budget):
+            return coord._build_new_device_issue_url("HTV445FRF", self._PAYLOAD, 360)
+
+    @staticmethod
+    def _fields(url):
+        from urllib.parse import parse_qs, urlparse
+
+        return parse_qs(urlparse(url).query)
+
+    def test_realistic_worst_case_needs_no_truncation(self):
+        """The largest committed catalog variant with a long payload still fits comfortably."""
+        url = self._url()
+
+        assert len(url) < _coord_module.ISSUE_URL_MAX_LENGTH
+        assert "truncated to keep" not in url
+
+    def test_gate_diagnostics_is_sacrificed_before_the_auto_decode(self):
+        """Lowest-value field first: the catalog summary is fully derivable from model plus modelCode."""
+        url = self._url(budget=700)
+        fields = self._fields(url)
+
+        assert len(url) <= 700
+        assert "gate_diagnostics" not in fields
+        assert "auto_decoded" in fields
+
+    def test_the_raw_payload_outlives_both_optional_fields(self):
+        """At a budget only the payload fits, it survives intact and the optional fields go."""
+        url = self._url(budget=400)
+        fields = self._fields(url)
+
+        assert fields["primary_payload"][0] == self._PAYLOAD
+        assert "auto_decoded" not in fields
+        assert "gate_diagnostics" not in fields
+
+    def test_a_payload_that_blows_the_budget_alone_is_replaced_by_an_instruction(self):
+        """A link GitHub refuses to open would carry the payload nowhere, so the link wins.
+
+        The payload is not lost with it: the device's raw payload sensor is
+        named in the field the payload would have filled, so the reporter is
+        told where to copy it from.
+        """
+        url = self._url(budget=300)
+        fields = self._fields(url)
+
+        assert len(url) <= 300
+        assert fields["primary_payload"][0] == _coord_module._ISSUE_PAYLOAD_TOO_LONG_NOTE
+        assert self._PAYLOAD not in url
+        assert "auto_decoded" not in fields
+        assert "gate_diagnostics" not in fields
+
+    def test_a_field_that_fits_only_partially_is_truncated_with_a_marker(self):
+        """A budget leaving room for some of the text keeps that text and says it was cut."""
+        params = {"template": "new_device.yml", "model": "X"}
+        long_value = "D" * 4000
+
+        with patch.object(_coord_module, "ISSUE_URL_MAX_LENGTH", 500):
+            fitted = _coord_module._fit_param(params, "gate_diagnostics", long_value)
+
+        assert "gate_diagnostics" in fitted
+        assert fitted["gate_diagnostics"].startswith("DDDD")
+        assert len(fitted["gate_diagnostics"]) < len(long_value)
+        assert "truncated to keep" in fitted["gate_diagnostics"]
+        assert len(_coord_module._url_for_params(fitted)) <= 500
+
+    def test_a_field_with_no_room_at_all_is_omitted_not_left_as_a_bare_marker(self):
+        """A lone truncation marker would be noise; the field is dropped instead."""
+        params = {"template": "new_device.yml", "model": "X"}
+
+        with patch.object(_coord_module, "ISSUE_URL_MAX_LENGTH", 60):
+            fitted = _coord_module._fit_param(params, "gate_diagnostics", "D" * 4000)
+
+        assert "gate_diagnostics" not in fitted

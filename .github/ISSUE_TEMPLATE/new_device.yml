@@ -23,6 +23,19 @@ body:
       placeholder: HTV145FRF
     validations:
       required: true
+  - type: input
+    id: model_code
+    attributes:
+      label: Model code
+      description: >
+        Pre-filled automatically when you open this form from the integration's
+        "Report this device" link. One model number can cover more than one hardware
+        variant, and the variants can differ in how many zones they report, so this
+        is what tells us exactly which one you have. If it is blank, the integration
+        did not report one; leave it empty rather than guessing.
+      placeholder: "303"
+    validations:
+      required: false
   - type: dropdown
     id: category
     attributes:
@@ -72,9 +85,22 @@ body:
       description: >
         Pre-filled automatically from the payload above when you open this form from
         the integration's "Report this device" link. These are the raw field names
-        and values a model-agnostic decode found - a starting point for triage only.
-        They are NOT verified and their scaling/units are unknown, so leave them as
-        they are; the app readings you enter below are what we actually rely on.
+        and values a model-agnostic decode found, with any "[zone N]" labels coming
+        from the bundled product catalog - a starting point for triage only. They are
+        NOT verified and their scaling/units are unknown, so leave them as they are;
+        the app readings you enter below are what we actually rely on.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: gate_diagnostics
+    attributes:
+      label: What the integration already knows about this model
+      description: >
+        Pre-filled automatically from the bundled product catalog when you open this
+        form from the integration's "Report this device" link. It lists which of the
+        device's readings already have a verified definition and which do not, so we
+        can see what is actually missing without re-deriving it. Leave it as it is.
       render: text
     validations:
       required: false
@@ -103,10 +129,16 @@ body:
         This is the most useful part. Capture the payload again after changing the
         device to a known state, and label each one with what the device was doing.
 
-        For multi-zone valves/controllers, capture one zone at a time: open ONLY
-        zone 1 and capture, then close it and open ONLY zone 2, and so on. Isolating
-        one zone per capture is what tells us which bytes belong to which zone - an
-        all-closed payload alone cannot.
+        The bundled product catalog usually already tells us which reading belongs to
+        which zone, and the auto-detected fields above show that as "[zone N]". What
+        it does NOT tell us is the scale: whether a raw 725 means 72.5 or 725, and in
+        which unit. That is what these captures settle, and it is why we cannot ship
+        support from the catalog alone.
+
+        For multi-zone valves/controllers, still capture one zone at a time: open ONLY
+        zone 1 and capture, then close it and open ONLY zone 2, and so on. That both
+        confirms the catalog's zone mapping is right for your hardware and shows which
+        bytes move when only one zone changes.
 
         For sensors, note the app-shown value at capture time. One payload per line,
         each with a short label.

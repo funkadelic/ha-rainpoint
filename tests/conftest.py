@@ -75,6 +75,7 @@ _HA_STUBS = [
     "homeassistant.data_entry_flow",
     "homeassistant.exceptions",
     "homeassistant.helpers.device_registry",
+    "homeassistant.helpers.entity_registry",
     "homeassistant.helpers.restore_state",
     "homeassistant.helpers.issue_registry",
     "homeassistant.helpers.event",

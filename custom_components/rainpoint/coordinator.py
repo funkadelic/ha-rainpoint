@@ -166,13 +166,90 @@ def _format_generic_fields(generic: dict | None) -> str:
     return "\n".join(lines)
 
 
-def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: int | None = None) -> str:
-    """Return a GitHub New-device-support URL pre-filled with model + raw payload.
+def _format_gate_diagnostics(model: str | None, model_code: int | str | None) -> str:
+    """Render what the catalog already explains about this model, for the issue form.
+
+    Names the readings that have no verified definition yet and every reason
+    the generic sensor factory produced nothing, so triage starts from what is
+    already known rather than rediscovering it from the payload.
+
+    Returns "" when there is nothing to say, so the caller can omit the
+    pre-fill rather than seed the form with an empty section.
+    """
+    # Imported locally: generic_entities imports sensor, which imports this
+    # module, so a top-level import here would close that cycle.
+    from .generic_entities import describe_generic_gate
+
+    described = describe_generic_gate(model, model_code)
+    lines = []
+    unmapped = described.get("unmapped_generic_identities") or []
+    if unmapped:
+        lines.append("Readings with no verified definition yet: " + ", ".join(unmapped))
+    lines.extend(f"Blocked: {reason}" for reason in described.get("generic_gate_blocked_by") or [])
+    return "\n".join(lines)
+
+
+# GitHub answers a request line past roughly 8 KB with 414 URI Too Long, and
+# a report link that silently fails is worse than one carrying less detail.
+ISSUE_URL_MAX_LENGTH = 8000
+
+_ISSUE_FIELD_TRUNCATION_NOTE = "\n... truncated to keep this link usable; the device's diagnostic entity carries the full text"
+
+_ISSUE_PAYLOAD_TOO_LONG_NOTE = "too long for this link; please paste it from the device's Raw Payload sensor"
+
+
+def _url_for_params(params: dict) -> str:
+    """Render the issue URL for a parameter set."""
+    return f"{ISSUE_URL}/new?{urlencode(params)}"
+
+
+def _fit_param(params: dict, key: str, value: str) -> dict:
+    """Return params with as much of value under key as the length budget allows.
+
+    Percent-encoding expands the value by an amount that depends on its
+    content, so the fit is measured against the rendered URL rather than
+    estimated from the raw text. A value that cannot fit even partially is
+    omitted rather than added empty, so the reporter sees a blank form field
+    instead of a lone truncation marker.
+    """
+    if len(_url_for_params({**params, key: value})) <= ISSUE_URL_MAX_LENGTH:
+        return {**params, key: value}
+    low, high = 0, len(value)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if len(_url_for_params({**params, key: value[:mid] + _ISSUE_FIELD_TRUNCATION_NOTE})) <= ISSUE_URL_MAX_LENGTH:
+            low = mid
+        else:
+            high = mid - 1
+    if low == 0:
+        return params
+    return {**params, key: value[:low] + _ISSUE_FIELD_TRUNCATION_NOTE}
+
+
+def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: int | str | None = None) -> str:
+    """Return a GitHub New-device-support URL pre-filled with what the integration already knows.
 
     The reporter only has to add what the RainPoint app shows and submit, instead
     of hand-copying the model and hex payload into a blank issue. When the payload
     yields any named fields, an unverified auto-decode is pre-filled too, to give
     triage a head start.
+
+    modelCode is carried whenever it is known because a model string can map to
+    more than one modelCode and the variants can differ in port count, so a
+    report naming only the model string can be ambiguous about which hardware it
+    describes.
+
+    The two growable fields are fitted to a total length budget, lowest value
+    first. The raw payload is preferred over both: it is the one thing here
+    that cannot be regenerated later. The auto-decode can be recomputed from
+    that payload, and the catalog summary from the model and modelCode, so
+    both are recoverable if they are cut.
+
+    A payload large enough to blow the budget on its own is the one case where
+    that preference is dropped, since a link too long to open carries nothing
+    at all. The payload is left out and named in the form instead, so the
+    reporter is told to paste it from the device's raw payload sensor rather
+    than being handed a link GitHub refuses.
     """
     params = {
         "template": NEW_DEVICE_ISSUE_TEMPLATE,
@@ -180,10 +257,17 @@ def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: i
         "model": model,
         "primary_payload": raw_value or "",
     }
+    if model_code is not None:
+        params["model_code"] = str(model_code)
+    if len(_url_for_params(params)) > ISSUE_URL_MAX_LENGTH:
+        return _url_for_params({**params, "primary_payload": _ISSUE_PAYLOAD_TOO_LONG_NOTE})
     auto_decoded = _format_generic_fields(decode_generic(raw_value, model=model, model_code=model_code)) if raw_value else ""
     if auto_decoded:
-        params["auto_decoded"] = auto_decoded
-    return f"{ISSUE_URL}/new?{urlencode(params)}"
+        params = _fit_param(params, "auto_decoded", auto_decoded)
+    gate_diagnostics = _format_gate_diagnostics(model, model_code)
+    if gate_diagnostics:
+        params = _fit_param(params, "gate_diagnostics", gate_diagnostics)
+    return _url_for_params(params)
 
 
 def _resolve_addr_from_sid(sid: str) -> int | None:
@@ -199,7 +283,7 @@ def _resolve_addr_from_sid(sid: str) -> int | None:
         return None
 
 
-def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int | None = None) -> dict:
+def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int | str | None = None) -> dict:
     """Dispatch raw_value through DECODER_REGISTRY or the MODEL_DISPLAY_HUB special case.
 
     Returns the decoded dict, or an {"type": "unknown", ...} shape if no decoder is
@@ -503,7 +587,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         return status_by_mid
 
     def _notify_unknown_model(
-        self, model: str | None, mid: int, addr: int, raw_value: str, model_code: int | None = None
+        self, model: str | None, mid: int, addr: int, raw_value: str, model_code: int | str | None = None
     ) -> None:
         """Log the unsupported-sensor warning and fire a once-per-variant persistent notification.
 

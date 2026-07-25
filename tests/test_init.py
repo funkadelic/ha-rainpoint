@@ -2,18 +2,20 @@
 
 import asyncio
 import contextlib
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from custom_components.rainpoint import (
     DOMAIN,
+    _remove_stale_generic_entities,
     async_reload_integration,
     async_setup,
     async_setup_entry,
     async_unload_entry,
 )
-from custom_components.rainpoint.const import CONF_PUSH_ENABLED
+from custom_components.rainpoint.const import CONF_GENERIC_ENTITIES_ENABLED, CONF_PUSH_ENABLED, MODEL_HCS026FRF
 
 
 def _make_entry(entry_id="test_entry_id"):
@@ -882,3 +884,414 @@ class TestReloadService:
         assert schema({"entry_id": "abc"}) == {"entry_id": "abc"}
         with pytest.raises(vol.Invalid):
             schema({"entry_id": ""})
+
+
+class _GenericSweepFixtures:
+    """Seeded fake-registry fixtures shared by the sweep test classes.
+
+    Held in a plain mixin rather than a base test class so a second class can
+    reuse the fixtures without also inheriting and re-running every case.
+    """
+
+    ENTRY_ID = "this_entry"
+    OTHER_ENTRY_ID = "other_entry"
+
+    # Realistic {hid}_{mid}_{addr} base slugs, matching the coordinator's own
+    # sensor-record keying.
+    SLUG_A = "42_100_1"  # never gains a hand-written decoder in these tests
+    SLUG_B = "42_100_2"  # the graduation case
+
+    GENERIC_A = SimpleNamespace(
+        entity_id="sensor.rainpoint_42_100_1_generic_sta_rh_p0",
+        unique_id="rainpoint_42_100_1_generic_sta_rh_p0",
+        config_entry_id=ENTRY_ID,
+    )
+    GENERIC_B = SimpleNamespace(
+        entity_id="sensor.rainpoint_42_100_2_generic_sta_tem_p0",
+        unique_id="rainpoint_42_100_2_generic_sta_tem_p0",
+        config_entry_id=ENTRY_ID,
+    )
+    TRUSTED_UNKNOWN = SimpleNamespace(
+        entity_id="sensor.rainpoint_42_100_1_unknown",
+        unique_id="rainpoint_42_100_1_unknown_HCS777ARF",
+        config_entry_id=ENTRY_ID,
+    )
+    RAW_PAYLOAD = SimpleNamespace(
+        entity_id="sensor.rainpoint_42_100_1_raw_payload",
+        unique_id="rainpoint_42_100_1_raw_payload",
+        config_entry_id=ENTRY_ID,
+    )
+    FOREIGN_INTEGRATION = SimpleNamespace(
+        entity_id="sensor.other_integration_generic",
+        unique_id="other_integration_42_100_1_generic_sta_rh_p0",
+        config_entry_id=ENTRY_ID,
+    )
+    FOREIGN_ENTRY_GENERIC = SimpleNamespace(
+        entity_id="sensor.rainpoint_99_1_1_generic_sta_rh_p0",
+        unique_id="rainpoint_99_1_1_generic_sta_rh_p0",
+        config_entry_id=OTHER_ENTRY_ID,
+    )
+    MALFORMED_UNIQUE_ID = SimpleNamespace(
+        entity_id="sensor.malformed",
+        unique_id=None,
+        config_entry_id=ENTRY_ID,
+    )
+
+    def _all_rows(self):
+        """Return every seeded row across both config entries."""
+        return [
+            self.GENERIC_A,
+            self.GENERIC_B,
+            self.TRUSTED_UNKNOWN,
+            self.RAW_PAYLOAD,
+            self.FOREIGN_INTEGRATION,
+            self.FOREIGN_ENTRY_GENERIC,
+            self.MALFORMED_UNIQUE_ID,
+        ]
+
+    def _make_fake_registry(self, raise_on_lookup=False, raise_once_for=None):
+        """Build patchable stand-ins for er.async_get / er.async_entries_for_config_entry.
+
+        `async_entries_for_config_entry` re-filters out already-removed rows
+        on every call, mirroring how a real registry lookup would no longer
+        return a row this sweep already removed - this is what makes the
+        idempotency case (two consecutive sweeps) meaningful.
+        """
+        removed: list[str] = []
+        raise_once_for = set(raise_once_for or ())
+
+        class _FakeRegistry:
+            def async_remove(self, entity_id):
+                if entity_id in raise_once_for:
+                    raise_once_for.discard(entity_id)
+                    raise RuntimeError(f"boom removing {entity_id}")
+                removed.append(entity_id)
+
+        fake_registry = _FakeRegistry()
+
+        def _async_get(hass):
+            if raise_on_lookup:
+                raise RuntimeError("registry unavailable")
+            return fake_registry
+
+        def _async_entries_for_config_entry(registry, entry_id):
+            return [row for row in self._all_rows() if row.config_entry_id == entry_id and row.entity_id not in removed]
+
+        return removed, _async_get, _async_entries_for_config_entry
+
+    def _make_coordinator_with_raising_data(self):
+        """Build a coordinator whose .data property raises when read."""
+
+        class _RaisingCoordinator:
+            @property
+            def data(self):
+                raise RuntimeError("coordinator data unavailable")
+
+        return _RaisingCoordinator()
+
+    def _sensors(self, slug_a_model="HCS777ARF", slug_b_model="HCS777ARF", include_slug_a=True):
+        """Build a coordinator.data['sensors'] mapping for the two seeded sub-devices."""
+        sensors = {self.SLUG_B: {"model": slug_b_model}}
+        if include_slug_a:
+            sensors[self.SLUG_A] = {"model": slug_a_model}
+        return sensors
+
+    def _make_entry_and_coordinator(self, options, sensors):
+        entry = MagicMock()
+        entry.entry_id = self.ENTRY_ID
+        entry.options = options
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": sensors}
+        return entry, coordinator
+
+
+class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
+    """Cover _remove_stale_generic_entities against a seeded fake registry.
+
+    A mocked registry is used rather than a live Home Assistant one: the
+    repository conftest replaces the whole homeassistant package tree with
+    stubs before any test module is imported, so the installed live-registry
+    fixtures cannot be mixed in without unpicking that, and a seeded fake
+    keeps every assertion explicit about exactly which entity ids were
+    removed.
+    """
+
+    def test_toggle_absent_removes_every_generic_row_for_this_entry(self):
+        """No CONF_GENERIC_ENTITIES_ENABLED key at all behaves like toggle-off."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator({}, self._sensors())
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert set(removed) == {self.GENERIC_A.entity_id, self.GENERIC_B.entity_id}
+
+    def test_toggle_explicitly_false_removes_every_generic_row_for_this_entry(self):
+        """An explicit False behaves identically to the key being absent."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator({CONF_GENERIC_ENTITIES_ENABLED: False}, self._sensors())
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert set(removed) == {self.GENERIC_A.entity_id, self.GENERIC_B.entity_id}
+
+    def test_toggle_true_no_graduated_model_removes_nothing(self):
+        """Toggle on, and no model has gained a hand-written decoder: nothing is removed."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True}, self._sensors(slug_b_model="HCS888ARF-V2")
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert removed == []
+
+    def test_toggle_true_graduated_model_removes_only_that_models_row(self):
+        """Toggle on, one model now hand-written: only its generic row is removed."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True},
+            self._sensors(slug_a_model="HCS777ARF", slug_b_model=MODEL_HCS026FRF),
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert removed == [self.GENERIC_B.entity_id]
+
+    def test_toggle_true_unresolvable_base_slug_survives(self):
+        """A generic row whose base slug is absent from the sensor records is left alone."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True},
+            self._sensors(slug_b_model=MODEL_HCS026FRF, include_slug_a=False),
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        # Slug B still graduates; slug A's row survives because it resolves
+        # to no model at all, which is not evidence of graduation.
+        assert removed == [self.GENERIC_B.entity_id]
+
+    def test_second_consecutive_sweep_removes_nothing_more(self):
+        """Idempotency: a repeat run over the post-removal registry state is a no-op."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator({}, self._sensors())
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+            first_run_removed = list(removed)
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert set(first_run_removed) == {self.GENERIC_A.entity_id, self.GENERIC_B.entity_id}
+        assert removed == first_run_removed
+
+    def test_foreign_integration_row_is_never_removed(self):
+        """A row belonging to another integration is returned by the lookup but skipped."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator({}, self._sensors())
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert self.FOREIGN_INTEGRATION.entity_id not in removed
+
+    def test_foreign_config_entry_row_is_never_touched(self):
+        """A row belonging to another config entry of this integration is never returned or removed."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator({}, self._sensors())
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert self.FOREIGN_ENTRY_GENERIC.entity_id not in removed
+
+    def test_trusted_and_raw_payload_rows_are_never_removed(self):
+        """A trusted unsupported-diagnostic row and a raw-payload row never match the marker guard."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator({}, self._sensors())
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert self.TRUSTED_UNKNOWN.entity_id not in removed
+        assert self.RAW_PAYLOAD.entity_id not in removed
+
+    def test_row_with_non_string_unique_id_is_skipped_defensively(self):
+        """A row whose unique_id reads defensively as non-string is skipped, not crashed on."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator({}, self._sensors())
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert self.MALFORMED_UNIQUE_ID.entity_id not in removed
+
+    def test_raising_registry_lookup_is_fail_soft(self):
+        """A raising er.async_get degrades to a no-op sweep rather than propagating."""
+        removed, async_get, async_entries = self._make_fake_registry(raise_on_lookup=True)
+        entry, coordinator = self._make_entry_and_coordinator({}, self._sensors())
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)  # must not raise
+
+        assert removed == []
+
+    def test_raising_removal_of_one_row_does_not_abandon_the_rest(self):
+        """A row whose removal raises does not prevent the remaining rows from being removed."""
+        removed, async_get, async_entries = self._make_fake_registry(raise_once_for={self.GENERIC_A.entity_id})
+        entry, coordinator = self._make_entry_and_coordinator({}, self._sensors())
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert removed == [self.GENERIC_B.entity_id]
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_removes_generic_row_with_toggle_off(self):
+        """End-to-end: async_setup_entry still returns True and sweeps generic rows."""
+        removed, async_get, async_entries = self._make_fake_registry()
+
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.entry_id = self.ENTRY_ID
+        # options == {} => generic entities disabled
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"sensors": self._sensors(), "hubs": []}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        assert self.GENERIC_A.entity_id in removed
+
+
+class TestSweepSurvivesUnreadableCoordinatorData(_GenericSweepFixtures):
+    """A raising coordinator.data must not abort the sweep or escape setup.
+
+    That read sits between the guarded registry lookup and the guarded
+    per-row removal, and only feeds the graduation check on the toggle-on
+    path. Aborting on it would also abandon the toggle-off path, which must
+    remove every generic row and needs none of that data to decide.
+    """
+
+    def test_toggle_off_still_removes_every_generic_row(self):
+        """The removal set is unchanged: toggle-off never consulted the coordinator anyway."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry = MagicMock()
+        entry.entry_id = self.ENTRY_ID
+        entry.options = {CONF_GENERIC_ENTITIES_ENABLED: False}
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, self._make_coordinator_with_raising_data())
+
+        assert set(removed) == {self.GENERIC_A.entity_id, self.GENERIC_B.entity_id}
+
+    def test_toggle_on_removes_nothing_rather_than_raising(self):
+        """Without graduation data no model resolves, so no row is evidence of graduation."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry = MagicMock()
+        entry.entry_id = self.ENTRY_ID
+        entry.options = {CONF_GENERIC_ENTITIES_ENABLED: True}
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, self._make_coordinator_with_raising_data())
+
+        assert removed == []
+
+
+class TestSweepSurvivesMalformedSensorRecords(_GenericSweepFixtures):
+    """A sensor record that is not a dict must not abort the sweep or escape setup.
+
+    Records come from the vendor payload, so their shape is an assumption
+    rather than a guarantee. Reading a model out of one is the last step in
+    this function that can raise, and it runs once per row: without a guard,
+    a single malformed record would abandon every row after it.
+    """
+
+    def test_a_row_whose_record_is_not_a_dict_is_skipped_and_the_rest_still_sweep(self):
+        """The graduated row is still removed even though the row before it could not be judged."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True},
+            {self.SLUG_A: "a string where a record should be", self.SLUG_B: {"model": MODEL_HCS026FRF}},
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert removed == [self.GENERIC_B.entity_id]
+
+    def test_a_sensors_mapping_that_is_not_a_dict_leaves_every_row_alone(self):
+        """Every per-row lookup raises, so no row is judged and none is removed."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator({CONF_GENERIC_ENTITIES_ENABLED: True}, "not a mapping")
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert removed == []
