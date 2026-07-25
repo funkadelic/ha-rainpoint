@@ -226,7 +226,7 @@ def _fit_param(params: dict, key: str, value: str) -> dict:
     return {**params, key: value[:low] + _ISSUE_FIELD_TRUNCATION_NOTE}
 
 
-def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: int | None = None) -> str:
+def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: int | str | None = None) -> str:
     """Return a GitHub New-device-support URL pre-filled with what the integration already knows.
 
     The reporter only has to add what the RainPoint app shows and submit, instead
@@ -283,7 +283,7 @@ def _resolve_addr_from_sid(sid: str) -> int | None:
         return None
 
 
-def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int | None = None) -> dict:
+def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int | str | None = None) -> dict:
     """Dispatch raw_value through DECODER_REGISTRY or the MODEL_DISPLAY_HUB special case.
 
     Returns the decoded dict, or an {"type": "unknown", ...} shape if no decoder is
@@ -587,7 +587,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         return status_by_mid
 
     def _notify_unknown_model(
-        self, model: str | None, mid: int, addr: int, raw_value: str, model_code: int | None = None
+        self, model: str | None, mid: int, addr: int, raw_value: str, model_code: int | str | None = None
     ) -> None:
         """Log the unsupported-sensor warning and fire a once-per-variant persistent notification.
 
