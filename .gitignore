@@ -9,18 +9,11 @@ venv/
 .coverage
 coverage.xml
 htmlcov/
-
-# Internal documentation
-PUBLISHING_GUIDE.md
-backup_guide.sh
+.pytest_cache/
+.ruff_cache/
 
 # Local-only workflow aids (never commit)
 CLAUDE.md
 .planning/
 .envrc
 .claude/
-
-# Documentation moved to external repo
-docs/
-post_with_curl.py
-POST_RESPONSES_README.md
