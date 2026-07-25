@@ -496,7 +496,7 @@ class RainPointGenericControlBase(CoordinatorEntity):
         yet" and "the poll has not annotated this port"). This is the only
         thing that ever changes what a control entity reports.
         """
-        sensors = self.coordinator.data.get("sensors", {})
+        sensors = (self.coordinator.data or {}).get("sensors", {})
         info = sensors.get(self._sensor_key)
         if not info:
             return None
@@ -578,6 +578,7 @@ class RainPointGenericControlBase(CoordinatorEntity):
         if self._refresh_cancel is not None:
             self._refresh_cancel()
             self._refresh_cancel = None
+        await super().async_will_remove_from_hass()
 
 
 class RainPointGenericValve(RainPointGenericControlBase, ValveEntity):

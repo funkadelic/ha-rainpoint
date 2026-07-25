@@ -163,6 +163,9 @@ class _HABaseEntity:
     _attr_unique_id = None
     _attr_name = None
 
+    async def async_will_remove_from_hass(self):
+        """No-op teardown hook, matching Entity's awaitable base implementation."""
+
 
 class _CoordinatorEntity(_HABaseEntity):
     """Minimal CoordinatorEntity stand-in.

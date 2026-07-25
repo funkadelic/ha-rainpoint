@@ -795,6 +795,8 @@ class TestRainPointGenericValveConstruction:
         entity, _, _ = _build_anchor_valve()
 
         assert entity._attr_reports_position is False
+        feature = generic_control_module.ValveEntityFeature
+        assert entity._attr_supported_features == (feature.OPEN | feature.CLOSE)
 
 
 # ---------------------------------------------------------------------------
@@ -823,6 +825,12 @@ class TestRunStateReading:
     def test_is_closed_none_when_data_absent(self):
         entity, coordinator, _ = _build_anchor_valve()
         coordinator.data["sensors"]["100_200_1"]["data"] = None
+        assert entity.is_closed is None
+
+    def test_is_closed_none_when_coordinator_data_is_none(self):
+        """DataUpdateCoordinator.data is None before the first update; is_closed must not raise."""
+        entity, coordinator, _ = _build_anchor_valve()
+        coordinator.data = None
         assert entity.is_closed is None
 
     def test_is_closed_none_when_raw_value_not_an_int(self):
@@ -1587,6 +1595,8 @@ class TestGenericControlCommandFailedRepairIssue:
 
         with patch.object(generic_control_module.ir, "async_create_issue"), pytest.raises(RainPointApiError):
             await entity.async_open_valve()
+
+        call_later.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
