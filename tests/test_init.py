@@ -1536,3 +1536,29 @@ class TestRemoveStaleGenericControlEntities(_GenericSweepFixtures):
                 _remove_stale_generic_entities(MagicMock(), entry, coordinator)
 
             assert self.FOREIGN_ENTRY_CONTROL.entity_id not in removed, f"leaked under options={options}"
+
+
+class TestGenericSensorNamespaceNeverCollidesWithControlNamespace:
+    """Guards the naming convention _remove_stale_generic_entities' dispatch relies on.
+
+    The sweep routes a row to the control-namespace reason function purely by
+    testing whether GENERIC_CONTROL_UNIQUE_ID_MARKER ("_generic_ctl_")
+    appears in its unique_id, falling through to the sensor-namespace reason
+    function otherwise. That is only correct because every curated sensor
+    identity in generic_entities._IDENTITY_SPECS happens to lower-case to
+    something that does not start with "ctl_". Nothing enforces that at
+    runtime, so this locks it in: a future curated sensor identity added to
+    that table without checking this would silently misroute its rows
+    through the control toggle instead of the sensor toggle.
+    """
+
+    def test_no_identity_spec_key_collides_with_the_control_marker(self):
+        from custom_components.rainpoint.const import GENERIC_CONTROL_UNIQUE_ID_MARKER, GENERIC_UNIQUE_ID_MARKER
+        from custom_components.rainpoint.generic_entities import _IDENTITY_SPECS
+
+        assert _IDENTITY_SPECS, "the identity table must not be empty, or this test proves nothing"
+        for identity in _IDENTITY_SPECS:
+            unique_id_fragment = f"{GENERIC_UNIQUE_ID_MARKER}{identity.lower()}"
+            assert GENERIC_CONTROL_UNIQUE_ID_MARKER not in unique_id_fragment, (
+                f"sensor identity {identity!r} would collide with the control namespace marker"
+            )
