@@ -653,7 +653,22 @@ class RainPointGenericSwitch(RainPointGenericControlBase, SwitchEntity):
     def is_on(self) -> bool | None:
         return self._run_state_open
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Surface the fixed on-duration this switch always sends, for transparency.
+
+        Not a configuration knob -- there is no companion number entity for
+        CTL_SOCK and no way to override the value below -- just a documented
+        fact so a user is not surprised if the connected device auto-offs.
+        """
+        return {"on_command_duration_seconds": DEFAULT_CONTROL_DURATION_SECONDS}
+
     async def async_turn_on(self, **kwargs: Any) -> None:
+        # Same fixed duration valve.py's own DEFAULT_DURATION_SECONDS falls
+        # back to for an unconfigured zone. Whether CTL_SOCK firmware treats
+        # this as an auto-off timer the way a valve zone does is unverified;
+        # see extra_state_attributes above for the value this exposes to the
+        # user rather than silently guessing at the firmware's behavior.
         await self._async_send_command(mode=1, duration=DEFAULT_CONTROL_DURATION_SECONDS)
 
     async def async_turn_off(self, **kwargs: Any) -> None:

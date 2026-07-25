@@ -1211,6 +1211,11 @@ class TestRainPointGenericSwitchConstruction:
 
         assert entity._attr_icon == generic_control_module.GENERIC_CONTROL_MARKER_ICON
 
+    def test_extra_state_attributes_exposes_the_fixed_on_duration(self):
+        entity, _, _ = _build_anchor_switch()
+
+        assert entity.extra_state_attributes == {"on_command_duration_seconds": DEFAULT_CONTROL_DURATION_SECONDS}
+
 
 # ---------------------------------------------------------------------------
 # RainPointGenericSwitch.is_on / run-state reading
