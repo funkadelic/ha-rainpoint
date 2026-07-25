@@ -41,7 +41,11 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
-    sensors_cfg = coordinator.data.get("sensors", {})
+    # Skip any record that is not a dict so one malformed sub-device entry
+    # cannot raise out of a builder loop and drop already-accumulated trusted
+    # entities. Both the trusted loop and the generic-control loop below read
+    # this mapping.
+    sensors_cfg = {key: info for key, info in coordinator.data.get("sensors", {}).items() if isinstance(info, dict)}
     # Widened from list[RainPointValveEntity]: the opt-in generic-control
     # branch below extends this same list with RainPointGenericValve
     # instances, which are ValveEntity subclasses but not RainPointValveEntity

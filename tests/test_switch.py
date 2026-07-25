@@ -164,6 +164,21 @@ class TestSwitchSetupEntryGenericControl:
         assert all(not isinstance(e, RainPointGenericSwitch) for e in captured)
 
     @pytest.mark.asyncio
+    async def test_a_non_dict_sensor_record_is_skipped_and_the_broadcast_switch_survives(self):
+        """A malformed sub-device record must not abort setup and drop the hub switch."""
+        hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0"}
+        hass, entry, coord = _make_hass(hubs=[hub_info])
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        coord.data["sensors"] = {"bad": "not-a-dict", "300_400_1": _socket_sensor_entry()}
+
+        captured: list = []
+        mock_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        assert any(isinstance(e, RainPointGenericSwitch) for e in captured)
+        assert len(captured) == 2
+
+    @pytest.mark.asyncio
     async def test_option_absent_creates_no_generic_switch(self):
         hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0"}
         hass, entry, coord = _make_hass(hubs=[hub_info])

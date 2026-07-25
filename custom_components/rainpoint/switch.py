@@ -46,7 +46,9 @@ async def async_setup_entry(
         # justification for the same import.
         from .generic_control import build_generic_switch_entities
 
-        sensors_cfg = coordinator.data.get("sensors", {})
+        # Skip any record that is not a dict so one malformed sub-device entry
+        # cannot raise here and drop the hub broadcast switches already added.
+        sensors_cfg = {key: info for key, info in coordinator.data.get("sensors", {}).items() if isinstance(info, dict)}
         for key, info in sensors_cfg.items():
             hid = info.get("hid", "")
             mid = info.get("mid", "")
