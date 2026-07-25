@@ -358,6 +358,35 @@ class TestEvaluateGenericGate:
         assert "278" in reason and "279" in reason
         assert "not in the product catalog" not in reason
 
+    def test_a_reported_code_the_catalog_does_not_list_is_not_called_ambiguous(self, monkeypatch):
+        """The device did say which variant it is; the catalog is the side that has the gap.
+
+        Calling this "more than one hardware variant ... and this device did
+        not report which one it is" is wrong on both counts when a single code
+        is listed and the device reported a different one, and this string
+        reaches the diagnostic sensor and the pre-filled issue body.
+        """
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: None)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_variant_codes", lambda model: ("278",))
+
+        result = evaluate_generic_gate(FAKE_MODEL, 999)
+
+        assert len(result.blocked_by) == 1
+        reason = result.blocked_by[0]
+        assert "no entry for this device's hardware variant" in reason
+        assert "999" in reason and "278" in reason
+        assert "did not report which one it is" not in reason
+        assert "not in the product catalog" not in reason
+
+    def test_an_uncatalogued_model_reads_the_same_whether_or_not_a_code_was_reported(self, monkeypatch):
+        """Nothing is known about the model at all, so the reported code adds nothing to say."""
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: None)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_variant_codes", lambda model: ())
+
+        result = evaluate_generic_gate(FAKE_MODEL, 999)
+
+        assert result.blocked_by == (f"{FAKE_MODEL} is not in the product catalog, so nothing is known about what it reports",)
+
     def test_variant_declaring_only_control_identities(self, monkeypatch):
         dp_entries = [{"identity": "CTL_WATER", "dpPort": 0}, {"identity": "CTL_SOCK", "dpPort": 1}]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)

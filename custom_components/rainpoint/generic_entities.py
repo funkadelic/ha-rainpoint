@@ -301,6 +301,29 @@ def _uncurated_reason(dp_entries: list[dict], unmapped_identities: tuple[str, ..
     )
 
 
+def _unresolved_variant_reason(model: str | None, model_code: int | str | None) -> str:
+    """Return why a catalog lookup for this model and modelCode resolved to nothing.
+
+    Three outcomes, because they call for three different fixes: a model the
+    catalog has never heard of needs the snapshot extended, a device reporting
+    a modelCode the catalog does not list needs that variant added, and a
+    device reporting no modelCode at all against several listed variants needs
+    the code from the device rather than any catalog change.
+    """
+    known_codes = get_catalog_variant_codes(model)
+    if not known_codes:
+        return f"{model} is not in the product catalog, so nothing is known about what it reports"
+    if model_code is not None:
+        return (
+            f"the product catalog has no entry for this device's hardware variant of {model} "
+            f"(it reports {model_code}; the catalog lists {', '.join(known_codes)})"
+        )
+    return (
+        f"the catalog lists more than one hardware variant for {model} "
+        f"({', '.join(known_codes)}) and this device did not report which one it is"
+    )
+
+
 def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> GenericGateResult:
     """Body of evaluate_generic_gate, without the never-raise wrapper.
 
@@ -330,27 +353,19 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
             port_number=None,
         )
 
-    # Three distinct lookup outcomes, deliberately not collapsed into one
-    # "not in the catalog" message. They call for different fixes: a missing
-    # model needs the catalog snapshot extended, an unresolved variant needs
-    # the device's modelCode, and a model the vendor describes with no
-    # datapoints at all cannot be helped by either. Roughly a third of the
-    # committed catalog is that last case, so reporting it as absent would
-    # misdirect most reports about those models.
+    # Distinct lookup outcomes, deliberately not collapsed into one "not in
+    # the catalog" message. They call for different fixes: an unresolved
+    # variant is broken down further by _unresolved_variant_reason, while a
+    # model the vendor describes with no datapoints at all cannot be helped
+    # by any of those. Roughly a third of the committed catalog is that last
+    # case, so reporting it as absent would misdirect most reports about
+    # those models.
     raw_entry = get_catalog_entry(model, model_code)
     if raw_entry is None:
-        known_codes = get_catalog_variant_codes(model)
-        if not known_codes:
-            reason = f"{model} is not in the product catalog, so nothing is known about what it reports"
-        else:
-            reason = (
-                f"the catalog lists more than one hardware variant for {model} "
-                f"({', '.join(known_codes)}) and this device did not report which one it is"
-            )
         return GenericGateResult(
             datapoints=[],
             unmapped_identities=(),
-            blocked_by=(reason,),
+            blocked_by=(_unresolved_variant_reason(model, model_code),),
             port_number=None,
         )
     if not raw_entry:
