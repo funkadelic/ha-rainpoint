@@ -1,0 +1,60 @@
+# Auto-label rules consumed by actions/labeler in labeler.yml.
+# Paths are matched against the PR's changed files; touch a path,
+# get the label.
+#
+# There is deliberately no `dependencies` rule here. Dependabot applies
+# `dependencies` (plus `python` / `github-actions`) to its own PRs via
+# .github/dependabot.yml, and `sync-labels: true` strips any label that IS
+# in this file but no longer matches. A `dependencies` rule would therefore
+# fight Dependabot on its GitHub Actions PRs, which touch .github/workflows
+# rather than a Python requirements file. Labels absent from this file are
+# left alone by the action, so leaving it out is what keeps them stable.
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/workflows/**
+          - .github/labeler.yml
+          - .github/dependabot.yml
+          - .github/ISSUE_TEMPLATE/**
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.md'
+          - LICENSE
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - tests/**
+
+source:
+  - changed-files:
+      - any-glob-to-any-file:
+          - custom_components/rainpoint/**
+
+scripts:
+  - changed-files:
+      - any-glob-to-any-file:
+          - scripts/**
+
+config:
+  - changed-files:
+      - any-glob-to-any-file:
+          - pyproject.toml
+          - hacs.json
+          - codecov.yml
+          - sonar-project.properties
+          - requirements-test.txt
+          - .pre-commit-config.yaml
+          - .coderabbit.yaml
+          - .python-version
+          - .gitignore
+
+release:
+  - changed-files:
+      - any-glob-to-any-file:
+          - release-please-config.json
+          - .release-please-manifest.json
+          - CHANGELOG.md
