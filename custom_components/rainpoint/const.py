@@ -46,6 +46,42 @@ CONF_GENERIC_ENTITIES_ENABLED = "generic_entities_enabled"
 # name the same unique_id vocabulary.
 UNIQUE_ID_PREFIX = "rainpoint_"
 GENERIC_UNIQUE_ID_MARKER = "_generic_"
+
+# === Generic (catalog-driven) control entity factory ===
+CONF_GENERIC_CONTROL_ENABLED = "generic_control_enabled"
+# The control marker is nested inside GENERIC_UNIQUE_ID_MARKER (checkpoint
+# decision: option-a) rather than given a top-level marker of its own. That
+# keeps the existing __init__.py registry sweep guard (which matches on
+# GENERIC_UNIQUE_ID_MARKER alone) already matching every control row, with no
+# second substring guard needed. The trailing "ctl_" segment is what
+# distinguishes a control row from a sensor row within the shared substring,
+# per D-11's requirement that the two namespaces stay distinguishable -- every
+# namespace test must assert on this FULL marker, never on GENERIC_UNIQUE_ID_MARKER
+# alone, which a control unique_id also contains.
+GENERIC_CONTROL_UNIQUE_ID_MARKER = f"{GENERIC_UNIQUE_ID_MARKER}ctl_"
+# Trailing suffix for the duration companion entity (added in a later plan),
+# mirroring the trusted zone-duration convention ("_zone{n}_duration"): the
+# companion's unique_id is the control entity's own id plus this suffix, never
+# a separate namespace of its own.
+GENERIC_CONTROL_DURATION_SUFFIX = "_duration"
+# Long enough for the device to actuate and report its new state back to the
+# cloud; far shorter than DEFAULT_SCAN_INTERVAL, which remains the backstop
+# poll if this delayed refresh still reads a stale state.
+GENERIC_CONTROL_REFRESH_DELAY_SECONDS = 8
+# Matches the provisional marker icon the generic sensor path already uses --
+# one glance tells a reader an entity is unverified, whether it is read-only
+# or a control.
+GENERIC_CONTROL_MARKER_ICON = "mdi:flask-outline"
+# Committed, variant-keyed force-disable list. Each member is a
+# (model, modelCode-as-string) tuple, keyed exactly the way the product
+# catalog itself is keyed: get_catalog_entry's UNCODED_VARIANT sentinel ("*")
+# is the modelCode for a variant the vendor supplied without one. Empty
+# because no committed variant is currently known to be misrouted; it exists
+# so one misrouted variant can be force-disabled without disabling every
+# variant of that model line. Deliberately NOT keyed on bare model strings
+# the way HAND_WRITTEN_MODELS is -- a model string alone is not a unique
+# catalog key.
+GENERIC_CONTROL_OVERRIDE_DISABLED: frozenset[tuple[str, str]] = frozenset()
 # No subscribe topics: the observer's productKey policy forbids client
 # subscriptions (any SUBSCRIBE force-closes the connection), and the broker
 # auto-delivers the hub's thing/service/property/set downlink messages to the

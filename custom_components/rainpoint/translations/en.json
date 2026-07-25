@@ -56,10 +56,11 @@
     "step": {
       "init": {
         "title": "RainPoint Options",
-        "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback. Enable unverified generic sensors, off by default, to get provisional sensors for devices this integration does not support yet; these readings are derived from an unverified vendor catalog, may be wrong, are always labeled unverified in their names, and should not be relied on for automations. Generic sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices.",
+        "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback. Enable unverified generic sensors, off by default, to get provisional sensors for devices this integration does not support yet; these readings are derived from an unverified vendor catalog, may be wrong, are always labeled unverified in their names, and should not be relied on for automations. Generic sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices. Enable unverified generic device control, off by default, to open and close real hardware -- including water valves -- for devices this integration does not support yet. The zone mapping comes from an unverified vendor catalog rather than a tested per-model decoder, so a wrong mapping can run the wrong zone or leave water running. Nothing is assumed about the outcome of a command: a control entity only ever shows state read back from the device, never a guess. On this account that currently applies to {generic_control_eligible} of {generic_control_unsupported} unsupported devices.",
         "data": {
           "push_enabled": "Enable push updates",
-          "generic_entities_enabled": "Enable unverified generic sensors"
+          "generic_entities_enabled": "Enable unverified generic sensors",
+          "generic_control_enabled": "Enable unverified generic device control (moves hardware)"
         }
       }
     }

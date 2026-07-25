@@ -271,6 +271,11 @@ sys.modules["homeassistant.helpers.issue_registry"].async_delete_issue = MagicMo
 # it and calls it on stop.
 sys.modules["homeassistant.helpers.event"].async_track_time_interval = MagicMock(return_value=MagicMock())
 
+# event.async_call_later likewise returns a cancel callback; the generic
+# control path stores it and calls it before scheduling a new one / on
+# entity removal.
+sys.modules["homeassistant.helpers.event"].async_call_later = MagicMock(return_value=MagicMock())
+
 
 # DeviceInfo: callable that stores kwargs as a dict subclass.
 class _DeviceInfo(dict):

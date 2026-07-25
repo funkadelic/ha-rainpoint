@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import decode_htv145frf, decode_htv213frf_valve, decode_valve_hub
 from .const import (
+    CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
     MODEL_VALVE_113,
     MODEL_VALVE_145,
@@ -41,7 +42,11 @@ async def async_setup_entry(
     coordinator: RainPointCoordinator = data["coordinator"]
 
     sensors_cfg = coordinator.data.get("sensors", {})
-    entities: list[RainPointValveEntity] = []
+    # Widened from list[RainPointValveEntity]: the opt-in generic-control
+    # branch below extends this same list with RainPointGenericValve
+    # instances, which are ValveEntity subclasses but not RainPointValveEntity
+    # subclasses.
+    entities: list = []
 
     for key, info in sensors_cfg.items():
         model = info.get("model")
@@ -62,6 +67,20 @@ async def async_setup_entry(
                 zone_num,
                 info.get("model"),
             )
+
+    if entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False):
+        # Deferred import: generic_control reaches sensor.py's
+        # RainPointSensorBase transitively through generic_entities, so a
+        # top-level import here would pull the whole sensor platform into
+        # this module's import graph.
+        from .generic_control import build_generic_control_entities
+
+        for key, info in sensors_cfg.items():
+            hid = info.get("hid", "")
+            mid = info.get("mid", "")
+            addr = info.get("addr", "")
+            base_slug = f"{hid}_{mid}_{addr}"
+            entities.extend(build_generic_control_entities(coordinator, key, info, base_slug))
 
     if entities:
         async_add_entities(entities)

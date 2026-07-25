@@ -84,6 +84,11 @@ def _temperature_c(raw: int) -> float | None:
     return _f10_to_c(raw)
 
 
+def _wkstate_open(raw: int) -> float | None:
+    """Mask bit zero: the open/closed reading both cited decoders agree on."""
+    return float(raw & 0x01)
+
+
 # Evidence-backed only: a row exists here only because an existing
 # hand-written decoder proves both its unit and its scaling, on the same wire
 # format the generic decode path reads. Nothing is inferred from the
@@ -116,6 +121,25 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         # Evidence: api/utils.py:93-95 (_f10_to_c) treats the raw value as
         # Fahrenheit times ten, and api/decoders.py:582 and api/decoders.py:734
         # both show that scaling against real captured values.
+    ),
+    "STA_WKSTATE": GenericSensorSpec(
+        label="Run State",
+        device_class=None,
+        unit=None,
+        state_class=None,
+        transform=_wkstate_open,
+        valid_range=(0.0, 1.0),
+        precision=0,
+        # Evidence: api/decoders.py:264 (decode_htv213frf_valve, the ASCII
+        # HTV213FRF/HTV245FRF path) masks bit zero and notes the device
+        # reports 0x21 and 0x20 rather than 0x01 and 0x00, and
+        # api/decoders.py:821 (_extract_valve_hub_zone, the TLV valve-hub
+        # path) compares the raw byte against 0x01 on hardware that reports
+        # plain 0x01 and 0x00. Masking bit zero is the one reading that
+        # satisfies both decoders at once.
+        #
+        # The bits above the lowest one are not explained by either decoder
+        # and are deliberately left unread.
     ),
 }
 
