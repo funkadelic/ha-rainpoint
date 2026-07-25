@@ -45,6 +45,7 @@ from .api import (
     _f10_to_c,
     get_catalog_entry,
     get_catalog_port_number,
+    get_catalog_variant_codes,
     is_hand_written_model,
 )
 from .const import GENERIC_UNIQUE_ID_MARKER, UNIQUE_ID_PREFIX
@@ -201,13 +202,35 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
             port_number=None,
         )
 
+    # Three distinct lookup outcomes, deliberately not collapsed into one
+    # "not in the catalog" message. They call for different fixes: a missing
+    # model needs the catalog snapshot extended, an unresolved variant needs
+    # the device's modelCode, and a model the vendor describes with no
+    # datapoints at all cannot be helped by either. Roughly a third of the
+    # committed catalog is that last case, so reporting it as absent would
+    # misdirect most reports about those models.
     raw_entry = get_catalog_entry(model, model_code)
+    if raw_entry is None:
+        known_codes = get_catalog_variant_codes(model)
+        if not known_codes:
+            reason = f"{model} is not in the product catalog, so nothing is known about what it reports"
+        else:
+            reason = (
+                f"the catalog lists more than one hardware variant for {model} "
+                f"({', '.join(known_codes)}) and this device did not report which one it is"
+            )
+        return GenericGateResult(
+            datapoints=[],
+            unmapped_identities=(),
+            blocked_by=(reason,),
+            port_number=None,
+        )
     if not raw_entry:
         return GenericGateResult(
             datapoints=[],
             unmapped_identities=(),
-            blocked_by=(f"{model} is not in the product catalog, so nothing is known about what it reports",),
-            port_number=None,
+            blocked_by=(f"{model} is in the product catalog, but the catalog lists no readings for it",),
+            port_number=get_catalog_port_number(model, model_code),
         )
 
     dp_entries = _filter_status_entries(raw_entry)

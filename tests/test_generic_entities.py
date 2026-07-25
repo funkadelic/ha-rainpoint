@@ -314,7 +314,14 @@ class TestEvaluateGenericGate:
         assert len(result.blocked_by) == 1
         assert "not in" in result.blocked_by[0]
 
-    def test_empty_declared_datapoint_list(self, monkeypatch):
+    def test_model_present_in_catalog_but_declaring_nothing_is_not_reported_as_absent(self, monkeypatch):
+        """An empty dp list means the catalog carries the model but describes no readings.
+
+        Roughly a third of the committed catalog is this shape, so reporting it
+        as "not in the product catalog" would misdirect most reports about
+        those models: extending the snapshot cannot help a model the vendor
+        already describes with nothing.
+        """
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: [])
 
         result = evaluate_generic_gate(FAKE_MODEL, None)
@@ -322,7 +329,34 @@ class TestEvaluateGenericGate:
         assert result.passed is False
         assert result.unmapped_identities == ()
         assert len(result.blocked_by) == 1
-        assert "not in" in result.blocked_by[0]
+        assert "is in the product catalog" in result.blocked_by[0]
+        assert "no readings" in result.blocked_by[0]
+
+    def test_model_absent_from_catalog_is_reported_as_absent(self, monkeypatch):
+        """A model the catalog does not carry at all reports exactly that."""
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: None)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_variant_codes", lambda model: ())
+
+        result = evaluate_generic_gate(FAKE_MODEL, None)
+
+        assert result.blocked_by == (f"{FAKE_MODEL} is not in the product catalog, so nothing is known about what it reports",)
+
+    def test_unresolved_variant_names_the_codes_rather_than_claiming_absence(self, monkeypatch):
+        """A model with several variants and no reported code asks for the modelCode, not the catalog.
+
+        The lookup misses for a reason the reporter can actually fix, so the
+        reason has to distinguish it from a genuinely uncatalogued model.
+        """
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: None)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_variant_codes", lambda model: ("278", "279"))
+
+        result = evaluate_generic_gate(FAKE_MODEL, None)
+
+        assert len(result.blocked_by) == 1
+        reason = result.blocked_by[0]
+        assert "more than one hardware variant" in reason
+        assert "278" in reason and "279" in reason
+        assert "not in the product catalog" not in reason
 
     def test_variant_declaring_only_control_identities(self, monkeypatch):
         dp_entries = [{"identity": "CTL_WATER", "dpPort": 0}, {"identity": "CTL_SOCK", "dpPort": 1}]

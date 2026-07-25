@@ -867,6 +867,29 @@ class TestUnknownSensor:
         assert "report_url" in attrs
         assert "instructions" in attrs
 
+    def test_report_url_is_the_prefilled_form_not_the_bare_issue_list(self):
+        """The durable surface gets the good link.
+
+        The unsupported-model notification fires once per variant and can be
+        dismissed, so a user returning to the device later finds only this
+        attribute. Pointing it at the bare issue list would leave the lasting
+        path worse than the transient one.
+        """
+        sensor = self._make(model="MODELX", data={"type": "unknown", "model": "MODELX", "raw_value": "10#ZZ"})
+
+        report_url = sensor.extra_state_attributes["report_url"]
+
+        assert "/issues/new?" in report_url
+        assert "template=new_device.yml" in report_url
+        assert "model=MODELX" in report_url
+        assert "primary_payload=10%23ZZ" in report_url
+
+    def test_report_url_survives_a_missing_model(self):
+        """A payload with no model name still yields a usable link rather than raising."""
+        sensor = self._make(model=None, data={"type": "unknown", "raw_value": "10#ZZ"})
+
+        assert "/issues/new?" in sensor.extra_state_attributes["report_url"]
+
     def test_extra_state_attributes_surfaces_generic_decode(self):
         """A generic structural decode is exposed as decoded_fields/_values."""
         generic = {

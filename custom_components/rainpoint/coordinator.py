@@ -166,13 +166,41 @@ def _format_generic_fields(generic: dict | None) -> str:
     return "\n".join(lines)
 
 
+def _format_gate_diagnostics(model: str | None, model_code: int | str | None) -> str:
+    """Render what the catalog already explains about this model, for the issue form.
+
+    Names the readings that have no verified definition yet and every reason
+    the generic sensor factory produced nothing, so triage starts from what is
+    already known rather than rediscovering it from the payload.
+
+    Returns "" when there is nothing to say, so the caller can omit the
+    pre-fill rather than seed the form with an empty section.
+    """
+    # Imported locally: generic_entities imports sensor, which imports this
+    # module, so a top-level import here would close that cycle.
+    from .generic_entities import describe_generic_gate
+
+    described = describe_generic_gate(model, model_code)
+    lines = []
+    unmapped = described.get("unmapped_generic_identities") or []
+    if unmapped:
+        lines.append("Readings with no verified definition yet: " + ", ".join(unmapped))
+    lines.extend(f"Blocked: {reason}" for reason in described.get("generic_gate_blocked_by") or [])
+    return "\n".join(lines)
+
+
 def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: int | None = None) -> str:
-    """Return a GitHub New-device-support URL pre-filled with model + raw payload.
+    """Return a GitHub New-device-support URL pre-filled with what the integration already knows.
 
     The reporter only has to add what the RainPoint app shows and submit, instead
     of hand-copying the model and hex payload into a blank issue. When the payload
     yields any named fields, an unverified auto-decode is pre-filled too, to give
     triage a head start.
+
+    modelCode is carried whenever it is known because a model string can map to
+    more than one modelCode and the variants can differ in port count, so a
+    report naming only the model string can be ambiguous about which hardware it
+    describes.
     """
     params = {
         "template": NEW_DEVICE_ISSUE_TEMPLATE,
@@ -180,9 +208,14 @@ def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: i
         "model": model,
         "primary_payload": raw_value or "",
     }
+    if model_code is not None:
+        params["model_code"] = str(model_code)
     auto_decoded = _format_generic_fields(decode_generic(raw_value, model=model, model_code=model_code)) if raw_value else ""
     if auto_decoded:
         params["auto_decoded"] = auto_decoded
+    gate_diagnostics = _format_gate_diagnostics(model, model_code)
+    if gate_diagnostics:
+        params["gate_diagnostics"] = gate_diagnostics
     return f"{ISSUE_URL}/new?{urlencode(params)}"
 
 

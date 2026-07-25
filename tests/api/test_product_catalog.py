@@ -290,3 +290,39 @@ class TestLoadCatalogFailSoft:
         oversized_path.write_text(json.dumps({"MODEL": [{"dpCode": 1}]}), encoding="utf-8")
 
         assert _load_catalog(oversized_path) == {}
+
+
+class TestGetCatalogVariantCodes:
+    """get_catalog_variant_codes distinguishes an absent model from an unresolved variant.
+
+    A plain lookup miss cannot tell those apart, but they need different fixes:
+    extending the catalog snapshot versus getting the device's modelCode.
+    """
+
+    _CODED: ClassVar[dict] = {"portNumber": 2, "dp": [{"dpCode": 1, "identity": "STA_TEM", "dpPort": 1}]}
+
+    @staticmethod
+    def _install(monkeypatch, catalog):
+        monkeypatch.setattr(product_catalog_module, "_CATALOG", catalog)
+
+    def test_returns_empty_for_none_model(self):
+        """A None model is a miss, not a crash."""
+        assert product_catalog_module.get_catalog_variant_codes(None) == ()
+
+    def test_returns_empty_for_unknown_model(self, monkeypatch):
+        """A model the catalog does not carry reports no variants."""
+        self._install(monkeypatch, {"HIC801W": {"278": self._CODED}})
+
+        assert product_catalog_module.get_catalog_variant_codes("NOPE") == ()
+
+    def test_returns_sorted_codes_for_a_known_model(self, monkeypatch):
+        """Codes come back sorted so a message built from them is deterministic."""
+        self._install(monkeypatch, {"HIC801W": {"279": self._CODED, "278": self._CODED}})
+
+        assert product_catalog_module.get_catalog_variant_codes("HIC801W") == ("278", "279")
+
+    def test_uncoded_bucket_is_reported_rather_than_omitted(self, monkeypatch):
+        """A model carried only under the uncoded bucket still reports as present."""
+        self._install(monkeypatch, {"HIC801W": {UNCODED_VARIANT: self._CODED}})
+
+        assert product_catalog_module.get_catalog_variant_codes("HIC801W") == (UNCODED_VARIANT,)

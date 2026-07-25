@@ -294,6 +294,59 @@ class TestCoordinatorUpdate:
         url = _coord_module._build_new_device_issue_url("HTV999XYZ", "garbage-no-hash")
         assert "auto_decoded=" not in url
 
+    def test_build_new_device_issue_url_carries_model_code_when_known(self):
+        """modelCode reaches the form: one model string can cover variants differing in port count."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", "10#ABCD", 303)
+
+        assert "model_code=303" in url
+
+    def test_build_new_device_issue_url_omits_model_code_when_unknown(self):
+        """No reported modelCode leaves the field empty rather than seeding a guess."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", "10#ABCD")
+
+        assert "model_code=" not in url
+
+    def test_build_new_device_issue_url_prefills_gate_diagnostics(self):
+        """What the catalog already explains reaches the form, so triage does not rederive it."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", "10#ABCD")
+
+        assert "gate_diagnostics=" in url
+        assert "not+in+the+product+catalog" in url
+
+    def test_format_gate_diagnostics_lists_unmapped_readings_and_every_reason(self, monkeypatch):
+        """Both the uncurated-reading list and all block reasons are rendered, not just one."""
+        import custom_components.rainpoint.generic_entities as generic_entities_module
+
+        monkeypatch.setattr(generic_entities_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(
+            generic_entities_module,
+            "get_catalog_entry",
+            lambda model, model_code=None: [
+                {"dpCode": 9, "identity": "STA_ALARM", "dpPort": 1},
+                {"dpCode": 9, "identity": "STA_BAT", "dpPort": 2},
+            ],
+        )
+        monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 2)
+
+        text = _coord_module._format_gate_diagnostics("FAKE_MODEL", None)
+
+        assert "Readings with no verified definition yet: STA_ALARM, STA_BAT" in text
+        assert len([line for line in text.splitlines() if line.startswith("Blocked: ")]) >= 1
+
+    def test_format_gate_diagnostics_blank_when_nothing_to_say(self, monkeypatch):
+        """A model the gate passes contributes no section rather than an empty one."""
+        import custom_components.rainpoint.generic_entities as generic_entities_module
+
+        monkeypatch.setattr(generic_entities_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(
+            generic_entities_module,
+            "get_catalog_entry",
+            lambda model, model_code=None: [{"dpCode": 9, "identity": "STA_TEM", "dpPort": 1}],
+        )
+        monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
+
+        assert _coord_module._format_gate_diagnostics("FAKE_MODEL", None) == ""
+
     def test_format_generic_fields_empty_returns_blank(self):
         """No decoded fields -> empty string so the caller can omit the section."""
         assert _coord_module._format_generic_fields({"fields": []}) == ""

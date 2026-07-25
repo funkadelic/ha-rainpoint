@@ -51,7 +51,7 @@ from .const import (
     MODEL_RAIN,
     MODEL_TEMPHUM,
 )
-from .coordinator import RainPointCoordinator
+from .coordinator import RainPointCoordinator, _build_new_device_issue_url
 from .diagnostic_sensors import (
     RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
@@ -1136,9 +1136,15 @@ class RainPointUnknownSensor(RainPointSensorBase):
         model_code = self._sensor_info.get("model_code")
         attrs.update(describe_generic_gate(model, model_code))
 
-        attrs["report_url"] = "https://github.com/funkadelic/ha-rainpoint/issues"
+        # The same pre-filled report link the unsupported-model notification
+        # uses. This attribute is the durable surface: the notification fires
+        # once per variant and can be dismissed, so a user who comes back to
+        # the device later finds only this. Pointing it at the bare issue list
+        # would make the lasting path the worse one.
+        attrs["report_url"] = _build_new_device_issue_url(model or "unknown", data.get("raw_value"), model_code)
         attrs["instructions"] = (
-            "This sensor model is not yet supported. Please open a GitHub issue with the model and raw_payload values above."
+            "This sensor model is not yet supported. Open report_url to file a pre-filled support request, "
+            "then add what the RainPoint app shows for this device."
         )
 
         return attrs
