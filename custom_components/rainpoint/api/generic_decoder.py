@@ -277,6 +277,20 @@ def _pair_group_by_dp_id_and_port(group_fields: list[dict], candidates: list[dic
         return []
     ordered_fields = sorted(group_fields, key=lambda f: f["dp_id"])
     ordered_candidates = sorted(candidates, key=lambda dp: dp.get("dpPort"))
+    if len(ordered_fields) > 1:
+        # A group of one has nothing to disambiguate. A group of more than
+        # one is paired purely by position (ascending dp_id zipped against
+        # ascending dpPort) rather than by an unambiguous per-entry key, so
+        # log the pairing at debug level -- this is the one place a future
+        # catalog-driven variant whose dp_id numbering does not track its
+        # dpPort numbering would be discoverable, rather than silently
+        # mis-paired.
+        _LOGGER.debug(
+            "Pairing %d fields by positional dp_id/dpPort ordering: dp_ids=%s dpPorts=%s",
+            len(ordered_fields),
+            [f["dp_id"] for f in ordered_fields],
+            [dp.get("dpPort") for dp in ordered_candidates],
+        )
     return list(zip(ordered_fields, ordered_candidates, strict=True))
 
 

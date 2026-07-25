@@ -44,6 +44,7 @@ from custom_components.rainpoint.api import product_catalog as product_catalog_m
 from custom_components.rainpoint.api.decoders import decode_htv213frf_valve
 from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.api.product_catalog import get_catalog_entry, get_catalog_variant_codes
+from custom_components.rainpoint.generic_control import CONTROL_IDENTITY_ALLOWLIST, RUN_STATE_IDENTITY
 from tests.payload_samples import (
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
@@ -213,3 +214,45 @@ class TestGroundTruthZoneOrdering:
         for field, dp_entry in pairs:
             zone = dp_entry["dpPort"]
             assert field["value"] == trusted_zones[zone]["duration_seconds"]
+
+
+class TestControlEligibleVariantRunStatePortOrdering:
+    """Lock in that every generic-control-allowlisted variant's run-state
+    dpPort groups are dense and ascending, the structural precondition
+    position-based dp_id pairing depends on.
+
+    Real per-payload dp_id evidence exists only for the models with a
+    captured TLV sample (see TestGroundTruthZoneOrdering above); this sweep
+    checks a necessary, catalog-only precondition across every variant
+    generic_control.evaluate_control_gate could ever admit. If a future
+    catalog update ever declared a control-eligible variant's run-state ports
+    out of the expected 1..N contiguous ascending shape, position-based
+    pairing could not reproduce the vendor's real per-instance ordering,
+    whatever it turns out to be - locking this in now means such a catalog
+    change fails loudly here rather than silently mis-displaying a zone's
+    state.
+    """
+
+    def test_every_control_eligible_variants_run_state_ports_are_contiguous_ascending(self):
+        checked_groups = 0
+        for model in sorted(product_catalog_module._CATALOG):
+            for model_code in get_catalog_variant_codes(model):
+                dp_list = get_catalog_entry(model, model_code) or []
+                if not any(isinstance(dp, dict) and dp.get("identity") in CONTROL_IDENTITY_ALLOWLIST for dp in dp_list):
+                    continue
+                run_state = [dp for dp in dp_list if isinstance(dp, dict) and dp.get("identity") == RUN_STATE_IDENTITY]
+                by_dp_code: dict = {}
+                for dp in run_state:
+                    by_dp_code.setdefault(dp.get("dpCode"), []).append(dp.get("dpPort"))
+                for dp_code, ports in by_dp_code.items():
+                    if len(ports) <= 1:
+                        continue
+                    checked_groups += 1
+                    assert sorted(ports) == list(range(1, len(ports) + 1)), (
+                        f"{model}/{model_code} dpCode {dp_code} run-state ports {ports} are not a contiguous ascending 1..N run"
+                    )
+
+        # A regression-proof floor: fails loudly if the catalog sweep above
+        # stops finding any multi-port control-eligible variant at all (e.g.
+        # a broken import), rather than passing vacuously on zero groups.
+        assert checked_groups > 0
