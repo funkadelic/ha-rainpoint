@@ -341,10 +341,12 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
         can otherwise enable it, see nothing appear, and reasonably conclude
         the integration is broken.
 
-        Imported inside the function for the same reason sensor.py does:
-        generic_entities imports sensor at module load, so a top-level import
-        here would close an import cycle. Degrades to (0, 0) when the entry
-        is not loaded, which reads as "this adds nothing".
+        Imported inside the function to keep the whole sensor platform out of
+        this module's import, since generic_entities pulls in sensor at load
+        time and nothing else here needs it. Note this is not the cycle-breaking
+        case sensor.py has: nothing imports config_flow, so a top-level import
+        would resolve fine. Degrades to (0, 0) when the entry is not loaded,
+        which reads as "this adds nothing".
         """
         from .generic_entities import count_generic_eligible_devices
 

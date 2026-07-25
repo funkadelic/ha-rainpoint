@@ -983,6 +983,16 @@ class TestRemoveStaleGenericEntities:
 
         return removed, _async_get, _async_entries_for_config_entry
 
+    def _make_coordinator_with_raising_data(self):
+        """Build a coordinator whose .data property raises when read."""
+
+        class _RaisingCoordinator:
+            @property
+            def data(self):
+                raise RuntimeError("coordinator data unavailable")
+
+        return _RaisingCoordinator()
+
     def _sensors(self, slug_a_model="HCS777ARF", slug_b_model="HCS777ARF", include_slug_a=True):
         """Build a coordinator.data['sensors'] mapping for the two seeded sub-devices."""
         sensors = {self.SLUG_B: {"model": slug_b_model}}
@@ -1198,3 +1208,43 @@ class TestRemoveStaleGenericEntities:
 
         assert result is True
         assert self.GENERIC_A.entity_id in removed
+
+
+class TestSweepSurvivesUnreadableCoordinatorData(TestRemoveStaleGenericEntities):
+    """A raising coordinator.data must not abort the sweep or escape setup.
+
+    That read sits between the guarded registry lookup and the guarded
+    per-row removal, and only feeds the graduation check on the toggle-on
+    path. Aborting on it would also abandon the toggle-off path, which must
+    remove every generic row and needs none of that data to decide.
+    """
+
+    def test_toggle_off_still_removes_every_generic_row(self):
+        """The removal set is unchanged: toggle-off never consulted the coordinator anyway."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry = MagicMock()
+        entry.entry_id = self.ENTRY_ID
+        entry.options = {CONF_GENERIC_ENTITIES_ENABLED: False}
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, self._make_coordinator_with_raising_data())
+
+        assert set(removed) == {self.GENERIC_A.entity_id, self.GENERIC_B.entity_id}
+
+    def test_toggle_on_removes_nothing_rather_than_raising(self):
+        """Without graduation data no model resolves, so no row is evidence of graduation."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry = MagicMock()
+        entry.entry_id = self.ENTRY_ID
+        entry.options = {CONF_GENERIC_ENTITIES_ENABLED: True}
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, self._make_coordinator_with_raising_data())
+
+        assert removed == []

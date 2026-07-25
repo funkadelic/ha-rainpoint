@@ -1049,3 +1049,66 @@ class TestCountGenericEligibleDevices:
     def test_malformed_coordinator_data_degrades_to_zero_rather_than_raising(self):
         """A sensors value that is not a mapping degrades to zero instead of breaking the options form."""
         assert count_generic_eligible_devices({"sensors": 5}) == (0, 0)
+
+
+class TestMalformedCatalogValuesKeepSpecificReasons:
+    """Unhashable catalog values must not collapse the gate into its generic fallback.
+
+    Catalog data is vendor JSON reshaped at load time, so a list or dict can
+    appear where a scalar was expected. Those values cannot key the gate's
+    dedup structures. If they reached them, the outer never-raise wrapper
+    would swallow the TypeError and report only "the product catalog could not
+    be read", losing the specific reason the rules had already determined.
+    """
+
+    @staticmethod
+    def _gate(monkeypatch, dp_entries):
+        monkeypatch.setattr(generic_entities_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
+        return evaluate_generic_gate(FAKE_MODEL, None)
+
+    def test_is_hashable_rejects_a_tuple_containing_a_list(self):
+        """Hashing, not an isinstance check: a tuple of a list passes isinstance and still raises."""
+        assert generic_entities_module._is_hashable((1, 2)) is True
+        assert generic_entities_module._is_hashable([1, 2]) is False
+        assert generic_entities_module._is_hashable((1, [2])) is False
+
+    def test_unhashable_dp_port_still_reports_the_port_by_name(self, monkeypatch):
+        """The port rule already names it, so rule 2 skips it rather than raising on the set key."""
+        result = self._gate(monkeypatch, [{"dpCode": 1, "identity": "STA_TEM", "dpPort": [1, 2]}])
+
+        assert len(result.blocked_by) == 1
+        assert "usable port number" in result.blocked_by[0]
+        assert "STA_TEM" in result.blocked_by[0]
+        assert "could not be read" not in result.blocked_by[0]
+
+    def test_unhashable_dp_code_gets_its_own_reason(self, monkeypatch):
+        """No earlier rule covers a bad dpCode, so skipping it silently would lose the finding."""
+        result = self._gate(monkeypatch, [{"dpCode": {"a": 1}, "identity": "STA_TEM", "dpPort": 1}])
+
+        assert len(result.blocked_by) == 1
+        assert "usable datapoint code" in result.blocked_by[0]
+        assert "STA_TEM" in result.blocked_by[0]
+        assert "could not be read" not in result.blocked_by[0]
+
+    def test_both_malformed_at_once_reports_both_reasons(self, monkeypatch):
+        """The two guards are independent and neither suppresses the other."""
+        result = self._gate(monkeypatch, [{"dpCode": {"a": 1}, "identity": "STA_TEM", "dpPort": [1]}])
+
+        assert len(result.blocked_by) == 2
+        assert any("usable port number" in reason for reason in result.blocked_by)
+        assert any("usable datapoint code" in reason for reason in result.blocked_by)
+
+    def test_a_well_formed_variant_is_unaffected_by_the_guards(self, monkeypatch):
+        """The skip only applies to values the rules already rejected; normal variants still pass."""
+        result = self._gate(
+            monkeypatch,
+            [
+                {"dpCode": 9, "identity": "STA_TEM", "dpPort": 1},
+                {"dpCode": 10, "identity": "STA_RSSI", "dpPort": 0},
+            ],
+        )
+
+        assert result.passed is True
+        assert result.blocked_by == ()

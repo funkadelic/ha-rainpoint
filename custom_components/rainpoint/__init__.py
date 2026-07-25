@@ -97,7 +97,8 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
     Synchronous on purpose: both registry helpers it uses are callbacks, so
     there is nothing to await and no suspension point at which a reload
     could interleave with a partially completed removal set. Never raises:
-    a raising registry lookup or a raising single-row removal must never
+    the registry lookup, the read of the coordinator's current sensors, and
+    each single-row removal are guarded independently, so none of them can
     propagate out of config-entry setup.
     """
     generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
@@ -109,7 +110,16 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
         _LOGGER.debug("Entity registry lookup failed; skipping generic entity sweep: %s", exc)
         return
 
-    sensors = (coordinator.data or {}).get("sensors", {}) if coordinator is not None else {}
+    # Degrades to no sensors rather than aborting the sweep. This data only
+    # feeds the graduation check on the toggle-on path, where an unresolvable
+    # model already means "leave the row alone"; aborting instead would also
+    # abandon the toggle-off path, which must remove every generic row and
+    # needs none of this data to do it.
+    try:
+        sensors = (coordinator.data or {}).get("sensors", {}) if coordinator is not None else {}
+    except Exception as exc:
+        _LOGGER.debug("Coordinator data unreadable; sweeping without graduation data: %s", exc)
+        sensors = {}
 
     for row in rows:
         unique_id = getattr(row, "unique_id", None)

@@ -120,6 +120,21 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
 }
 
 
+def _is_hashable(value: Any) -> bool:
+    """Return True when value can key a set or dict.
+
+    Checked by hashing rather than by isinstance against Hashable, because a
+    tuple containing a list satisfies that check and still raises. Catalog
+    values are vendor data reshaped from JSON, so a list or dict can appear
+    anywhere a scalar was expected.
+    """
+    try:
+        hash(value)
+    except TypeError:
+        return False
+    return True
+
+
 def _filter_status_entries(dp_list: list) -> list[dict]:
     """Return only the well-formed STA_-prefixed dict entries from a catalog dp list."""
     declared: list[dict] = []
@@ -266,13 +281,19 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
 
     # Rule 2: two entries sharing the same (identity, dpPort) fail the whole
     # model's gate, since an entity built over either one could not tell
-    # which of the two values it should show. dpPort may be a non-int here
-    # (rule 1 above does not stop this rule from running on the same data),
-    # but a tuple key works regardless of the port's type.
-    seen_keys: set[tuple[str | None, Any]] = set()
-    duplicate_keys: set[tuple[str | None, Any]] = set()
+    # which of the two values it should show. Entries rule 1 already rejected
+    # are skipped here: their port is not an int, and a non-int port can be
+    # unhashable (a JSON array arrives as a list), which would raise on the
+    # set key below and collapse this whole evaluation into the outer
+    # wrapper's single generic reason. Skipping them loses nothing, because
+    # rule 1 has already reported them by name.
+    seen_keys: set[tuple[str | None, int]] = set()
+    duplicate_keys: set[tuple[str | None, int]] = set()
     for entry in dp_entries:
-        key = (entry.get("identity"), entry.get("dpPort"))
+        dp_port = entry.get("dpPort")
+        if not isinstance(dp_port, int) or isinstance(dp_port, bool):
+            continue
+        key = (entry.get("identity"), dp_port)
         if key in seen_keys:
             duplicate_keys.add(key)
         seen_keys.add(key)
@@ -296,14 +317,28 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
     # status entry just as unresolvable. Multi-zone variants that repeat one
     # dpCode across ports are the common shape here, so this rejects real
     # catalog models by design rather than as an edge case.
+    # An unhashable dpCode (a JSON array or object arrives as a list or dict)
+    # cannot key the counter below and would raise, collapsing this whole
+    # evaluation into the outer wrapper's single generic reason. Unlike a bad
+    # dpPort, no earlier rule has reported it, so it gets a reason of its own
+    # rather than being skipped silently.
     code_counts: dict[Any, int] = {}
     code_identities: dict[Any, set[str]] = {}
+    unusable_code_identities: set[str] = set()
     for entry in raw_entry:
         if not isinstance(entry, dict):
             continue
         dp_code = entry.get("dpCode")
+        if not _is_hashable(dp_code):
+            unusable_code_identities.add(str(entry.get("identity")))
+            continue
         code_counts[dp_code] = code_counts.get(dp_code, 0) + 1
         code_identities.setdefault(dp_code, set()).add(str(entry.get("identity")))
+    if unusable_code_identities:
+        reasons.append(
+            "these readings don't declare a usable datapoint code, so they can't be matched to a decoded "
+            "value: " + ", ".join(sorted(unusable_code_identities))
+        )
     # Integer codes sort numerically so the message reads 1, 2, 15 rather than
     # the 1, 15, 2 a plain string sort would produce; anything non-integer the
     # catalog might carry sorts after them by its text form, which keeps the
