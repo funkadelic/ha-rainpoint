@@ -220,30 +220,85 @@ def _declared_signedness(dp_entry: dict) -> bool | None:
     return match.group(1) == "S"
 
 
-def _match_catalog_dp(dp_list: list, index: int, dp_id: int, dp_id_prefixed: bool) -> dict | None:
-    """Return the catalog dp entry for a decoded field, or None on no match.
+def _match_catalog_dp(dp_list: list, index: int) -> dict | None:
+    """Return the catalog dp entry for a flat (10#) field's structural index, or None.
 
-    The ``11#`` (TLV) framing carries the vendor's real per-instance dp_id on
-    each entry, so it is matched first - this also disambiguates duplicate
-    structural indices, such as two STA_DURATION fields on different zones.
-    The ``10#`` (flat) framing has no per-entry dp_id, so it falls back to
-    matching on the structural field index, the same numbering the STA_*
-    names in _STATUS_FIELDS were originally harvested from.
+    The ``10#`` framing has no per-entry dp_id, so the structural field index
+    is the only candidate key - the same numbering the STA_* names in
+    _STATUS_FIELDS were originally harvested from, and the numbering the
+    catalog's dpCode lines up with on both framings.
 
-    Both framings key off the catalog's dpCode, which the vendor uses as a
-    per-instance identifier and is therefore expected to be unique within a
-    model. The catalog is regenerated from an external API though, so that is
-    an assumption rather than a guarantee: an ambiguous key (two or more
-    entries sharing it) yields None instead of whichever entry happened to
-    sort first, since a wrong zone number is worse than an absent one.
+    dpCode is the vendor's per-instance identifier and is therefore expected
+    to be unique within a model for a single-field key. The catalog is
+    regenerated from an external API though, so that is an assumption rather
+    than a guarantee: an ambiguous key (two or more entries sharing it)
+    yields None instead of whichever entry happened to sort first, since a
+    wrong zone number is worse than an absent one.
     """
-    key = dp_id if dp_id_prefixed else index
-    matches = [dp for dp in dp_list if isinstance(dp, dict) and dp.get("dpCode") == key]
+    matches = [dp for dp in dp_list if isinstance(dp, dict) and dp.get("dpCode") == index]
     if len(matches) == 1:
         return matches[0]
     if matches:
-        _LOGGER.debug("Catalog has %d entries for dpCode %s; leaving the field unannotated", len(matches), key)
+        _LOGGER.debug("Catalog has %d entries for dpCode %s; leaving the field unannotated", len(matches), index)
     return None
+
+
+def _usable_dp_port(dp_port) -> bool:
+    """True when a declared dpPort is a plain int, usable to order a group.
+
+    Mirrors generic_entities._usable_port's shape test: a bool is technically
+    an int subtype in Python but is never a real port number, and anything
+    else (a JSON list, a string, None) cannot be sorted against its peers.
+    """
+    return isinstance(dp_port, int) and not isinstance(dp_port, bool)
+
+
+def _pair_group_by_dp_id_and_port(group_fields: list[dict], candidates: list[dict]) -> list[tuple[dict, dict]]:
+    """Pair one dpCode's worth of 11# fields to their catalog candidates, or refuse the whole group.
+
+    Several decoded fields can share one structural index - the ordinary
+    multi-zone shape, such as two STA_WKSTATE fields on a two-zone valve.
+    Disambiguation pairs the fields in ascending dp_id order (the vendor's
+    real per-instance ordering handle, only present on ``11#`` TLV framing)
+    against the catalog's own candidates in ascending dpPort order. This is
+    the pairing validated in tests/api/test_tlv_catalog_alignment.py against
+    the trusted hand-written valve decoder's exact per-zone assignment.
+
+    The whole group is refused - never a prefix of it - when there are no
+    candidates, when the candidate count disagrees with the field count, or
+    when the group has more than one member and any candidate's dpPort is
+    not a plain int (a group of one keeps the flat path's simple behaviour
+    and does not require a usable dpPort, so a variant whose dpPort the
+    vendor left unusable still gets its data-type and width annotation).
+    """
+    if not candidates or len(candidates) != len(group_fields):
+        return []
+    if len(group_fields) > 1 and not all(_usable_dp_port(dp.get("dpPort")) for dp in candidates):
+        return []
+    ordered_fields = sorted(group_fields, key=lambda f: f["dp_id"])
+    ordered_candidates = sorted(candidates, key=lambda dp: dp.get("dpPort"))
+    return list(zip(ordered_fields, ordered_candidates, strict=True))
+
+
+def _apply_catalog_annotation(field: dict, dp_entry: dict, port_number: int | None) -> None:
+    """Attach one catalog dp entry's zone/type annotation to a field, in place.
+
+    Annotate-never-override: this never modifies a field's existing "value"
+    or "raw". port_number is a property of the model variant, not of the
+    individual dp entry, so callers resolve it once for the whole model
+    rather than read it off each dp entry.
+    """
+    declared_width = _declared_byte_width(dp_entry)
+    actual_width = len(field["raw"]) // 2
+    width_mismatch = declared_width is not None and declared_width != actual_width
+    field["catalog"] = {
+        "dp_port": dp_entry.get("dpPort"),
+        "data_type": dp_entry.get("dpDataType"),
+        "declared_width": declared_width,
+        "signed": _declared_signedness(dp_entry),
+        "port_number": port_number,
+        "width_mismatch": width_mismatch,
+    }
 
 
 def _annotate_fields_with_catalog(
@@ -251,17 +306,22 @@ def _annotate_fields_with_catalog(
 ) -> None:
     """Attach catalog zone/type annotation to fields in place.
 
-    Annotate-never-override: looks up the (model, model_code) variant in the
-    committed product catalog and, for each field that maps to a catalog dp
-    entry, attaches a "catalog" sub-dict carrying the declared zone (dpPort),
-    data type (dpDataType), declared byte width and signedness, the model's
-    port count, and a width_mismatch flag. Fields with no catalog match are
-    left exactly as built by the caller - no "catalog" key is added. This never
-    modifies a field's existing "value" or "raw".
+    Looks up the (model, model_code) variant in the committed product
+    catalog and, for each field that maps to a catalog dp entry, attaches a
+    "catalog" sub-dict via _apply_catalog_annotation. Fields with no catalog
+    match are left exactly as built by the caller - no "catalog" key is
+    added.
 
-    port_number is a property of the model variant, not of the individual dp
-    entry, so it is resolved once for the whole model rather than read off each
-    dp entry.
+    Both framings key on the field's structural index against the catalog's
+    dpCode - that is the numbering space the catalog actually uses, on both
+    the ``10#`` (flat) and ``11#`` (TLV) framings. The ``11#`` framing
+    additionally carries a per-entry dp_id, the vendor's per-instance
+    ordering handle; it is not in the catalog's dpCode space, so it is never
+    compared against dpCode, but it disambiguates several fields sharing one
+    index by fixing the order they pair against that index's candidate
+    catalog entries (see _pair_group_by_dp_id_and_port). The ``10#`` framing
+    has no per-entry dp_id, so a shared index there is simply ambiguous and
+    is refused by _match_catalog_dp.
     """
     dp_list = get_catalog_entry(model, model_code)
     if not dp_list:
@@ -269,21 +329,20 @@ def _annotate_fields_with_catalog(
 
     port_number = get_catalog_port_number(model, model_code)
 
-    for field in fields:
-        dp_entry = _match_catalog_dp(dp_list, field["index"], field["dp_id"], dp_id_prefixed)
-        if dp_entry is None:
-            continue
-        declared_width = _declared_byte_width(dp_entry)
-        actual_width = len(field["raw"]) // 2
-        width_mismatch = declared_width is not None and declared_width != actual_width
-        field["catalog"] = {
-            "dp_port": dp_entry.get("dpPort"),
-            "data_type": dp_entry.get("dpDataType"),
-            "declared_width": declared_width,
-            "signed": _declared_signedness(dp_entry),
-            "port_number": port_number,
-            "width_mismatch": width_mismatch,
-        }
+    if dp_id_prefixed:
+        groups: dict[int, list[dict]] = {}
+        for field in fields:
+            groups.setdefault(field["index"], []).append(field)
+        for index, group_fields in groups.items():
+            candidates = [dp for dp in dp_list if isinstance(dp, dict) and dp.get("dpCode") == index]
+            for field, dp_entry in _pair_group_by_dp_id_and_port(group_fields, candidates):
+                _apply_catalog_annotation(field, dp_entry, port_number)
+    else:
+        for field in fields:
+            dp_entry = _match_catalog_dp(dp_list, field["index"])
+            if dp_entry is None:
+                continue
+            _apply_catalog_annotation(field, dp_entry, port_number)
 
 
 def decode_generic(raw: str, model: str | None = None, model_code: int | str | None = None) -> dict:

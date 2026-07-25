@@ -6,6 +6,7 @@ from tests.payload_samples import (
     CATALOG_ANCHOR_MODEL,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
+    SAMPLE_HTV405_TLV_PAYLOAD,
     SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
 )
 
@@ -39,7 +40,7 @@ class TestDecodeGenericTLV:
     def test_htv245_carries_dp_ids(self):
         """dp_id-prefixed framing exposes the per-entry dp_id for port mapping."""
         fields = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD)["fields"]
-        assert [f["dp_id"] for f in fields] == [0x18, 0x19, 0x1A, 0x25, 0x26]
+        assert [f["dp_id"] for f in fields] == [24, 25, 26, 37, 38]
 
 
 class TestDecodeGenericFlat:
@@ -181,38 +182,117 @@ class TestDecodeGenericCatalogAnnotation:
             assert actual["raw"] == expected["raw"]
             assert actual["value"] == expected["value"]
 
-    def test_tlv_framing_matches_by_per_entry_dp_id(self, monkeypatch):
-        """11# framing matches catalog entries on the per-entry dp_id, not the structural index."""
-        fake_catalog = [{"dpCode": 0x18, "identity": "STA_BAT", "dpPort": 2, "dpDataType": "U8", "dpLen": 1}]
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: fake_catalog)
+    def test_tlv_single_index_single_candidate_annotates_from_committed_catalog(self):
+        """A field whose structural index has exactly one catalog candidate annotates from it.
 
-        result = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD, model="FAKE_TLV_MODEL")
-        fields = result["fields"]
-
-        # Only the entry whose dp_id (0x18) matches dpCode is annotated.
-        assert fields[0]["dp_id"] == 0x18
-        assert fields[0]["catalog"]["dp_port"] == 2
-        for other in fields[1:]:
-            assert "catalog" not in other
-
-    def test_ambiguous_dp_code_leaves_the_field_unannotated(self, monkeypatch):
-        """Two catalog entries sharing a dpCode annotate nothing, rather than picking one.
-
-        dpCode is the vendor's per-instance identifier and should be unique
-        within a model, but the catalog is regenerated from an external API,
-        so a duplicate must not silently resolve to whichever entry sorted
-        first: that is how one zone's port metadata ends up on another zone's
-        field.
+        Exercises _annotate_fields_with_catalog directly against the real
+        get_catalog_entry, with no monkeypatched catalog - the fix is proven
+        against real vendor data, not a fixture built to match the code's
+        own assumption. HTV245FRF is a hand-written model, so decode_generic
+        itself never reaches this step for it in production; that trust
+        boundary is proven separately in tests/api/test_trust.py and is out
+        of scope here.
         """
-        duplicate_catalog = [
-            {"dpCode": 0x18, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "U8", "dpLen": 1},
-            {"dpCode": 0x18, "identity": "STA_BAT", "dpPort": 2, "dpDataType": "U8", "dpLen": 1},
+        result = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD)
+        fields = result["fields"]
+        generic_decoder_module._annotate_fields_with_catalog(fields, "HTV245FRF", result["dp_id_prefixed"], "303")
+        by_name = {f["name"]: f for f in fields}
+
+        assert by_name["STA_BAT"]["catalog"] == {
+            "dp_port": 0,
+            "data_type": "U8",
+            "declared_width": 1,
+            "signed": False,
+            "port_number": 2,
+            "width_mismatch": False,
+        }
+
+    def test_tlv_duplicate_index_group_pairs_ascending_dp_id_to_ascending_dp_port(self):
+        """Two fields sharing one structural index resolve to two distinct dpPorts.
+
+        The lower dp_id (zone 1) pairs to the lower dpPort and the higher
+        dp_id (zone 2) to the higher dpPort - the pairing
+        tests/api/test_tlv_catalog_alignment.py validates against the
+        trusted hand-written valve decoder's exact zone assignment. Getting
+        the direction backwards would silently swap zone 1 and zone 2, so
+        this checks distinct dpPort values, not merely that annotation ran.
+        """
+        result = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD)
+        fields = result["fields"]
+        generic_decoder_module._annotate_fields_with_catalog(fields, "HTV245FRF", result["dp_id_prefixed"], "303")
+
+        wkstate_fields = sorted((f for f in fields if f["name"] == "STA_WKSTATE"), key=lambda f: f["dp_id"])
+        assert [f["catalog"]["dp_port"] for f in wkstate_fields] == [1, 2]
+
+        duration_fields = sorted((f for f in fields if f["name"] == "STA_DURATION"), key=lambda f: f["dp_id"])
+        assert [f["catalog"]["dp_port"] for f in duration_fields] == [1, 2]
+
+    def test_tlv_field_with_no_catalog_match_carries_no_catalog_key(self):
+        """A TLV field whose index the committed catalog does not declare stays unannotated.
+
+        HTV405FRF's catalog entry has no dpCode 54 (STA_REPTIME), a real gap
+        in the committed catalog rather than a monkeypatched one.
+        """
+        no_model = decode_generic(SAMPLE_HTV405_TLV_PAYLOAD)
+        annotated_fields = [dict(f) for f in no_model["fields"]]
+        generic_decoder_module._annotate_fields_with_catalog(annotated_fields, "HTV405FRF", no_model["dp_id_prefixed"], "38")
+
+        no_model_by_dp_id = {f["dp_id"]: f for f in no_model["fields"]}
+        reptime = next(f for f in annotated_fields if f["name"] == "STA_REPTIME")
+
+        assert "catalog" not in reptime
+        expected = no_model_by_dp_id[reptime["dp_id"]]
+        assert reptime["value"] == expected["value"]
+        assert reptime["raw"] == expected["raw"]
+
+    def test_group_count_mismatch_leaves_the_whole_group_unannotated(self, monkeypatch):
+        """A group whose field count disagrees with the catalog's candidate count is refused entirely.
+
+        Refusing the whole group - not pairing a prefix of it - is what
+        stops a corrupted or reordered catalog from silently minting a wrong
+        zone number for a subset of the group's fields.
+        """
+        mismatched_catalog = [
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": 1, "dpDataType": "U8", "dpLen": 1},
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": 2, "dpDataType": "U8", "dpLen": 1},
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": 3, "dpDataType": "U8", "dpLen": 1},
         ]
-        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: duplicate_catalog)
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: mismatched_catalog)
 
         result = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD, model="FAKE_TLV_MODEL")
+        wkstate_fields = [f for f in result["fields"] if f["name"] == "STA_WKSTATE"]
 
-        assert all("catalog" not in field for field in result["fields"])
+        assert len(wkstate_fields) == 2
+        assert all("catalog" not in f for f in wkstate_fields)
+
+    def test_group_with_unusable_dp_port_leaves_the_whole_group_unannotated(self, monkeypatch):
+        """A multi-member group refuses annotation entirely when any candidate's dpPort is not a plain int."""
+        unusable_port_catalog = [
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": 1, "dpDataType": "U8", "dpLen": 1},
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": "2", "dpDataType": "U8", "dpLen": 1},
+        ]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: unusable_port_catalog)
+
+        result = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD, model="FAKE_TLV_MODEL")
+        wkstate_fields = [f for f in result["fields"] if f["name"] == "STA_WKSTATE"]
+
+        assert all("catalog" not in f for f in wkstate_fields)
+
+    def test_single_member_group_annotates_even_with_unusable_dp_port(self, monkeypatch):
+        """A lone field at its index annotates even when the catalog's dpPort for it is unusable.
+
+        A single-candidate group keeps the flat path's simple behaviour and
+        does not require a usable dpPort, so a variant whose dpPort the
+        vendor left unusable still gets its data-type and width annotation.
+        """
+        odd_port_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": None, "dpDataType": "U8", "dpLen": 1}]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: odd_port_catalog)
+
+        result = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD, model="FAKE_TLV_MODEL")
+        by_name = {f["name"]: f for f in result["fields"]}
+
+        assert by_name["STA_BAT"]["catalog"]["dp_port"] is None
+        assert by_name["STA_BAT"]["catalog"]["declared_width"] == 1
 
     def test_ambiguous_dp_code_also_guards_the_flat_framing(self, monkeypatch):
         """The 10# path keys off the same dpCode field, so it needs the same guard."""
