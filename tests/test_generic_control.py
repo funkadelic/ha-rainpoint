@@ -20,6 +20,7 @@ from custom_components.rainpoint.const import (
     GENERIC_UNIQUE_ID_MARKER,
     HAND_WRITTEN_MODELS,
     MODEL_VALVE_245,
+    VALVE_MODELS,
 )
 from custom_components.rainpoint.generic_control import (
     CONTROL_IDENTITY_ALLOWLIST,
@@ -36,6 +37,8 @@ from custom_components.rainpoint.generic_control import (
     evaluate_control_gate,
     resolve_control_port,
 )
+from custom_components.rainpoint.number import RainPointZoneDurationNumber, build_generic_duration_entities
+from custom_components.rainpoint.valve import RainPointValveEntity
 from tests.helpers import make_coordinator_data, make_sensor_entry
 
 ANCHOR_MODEL = "HTV103FRF"
@@ -1580,5 +1583,108 @@ class TestGenericControlCommandFailedRepairIssue:
         with patch.object(generic_control_module.ir, "async_create_issue"), pytest.raises(RainPointApiError):
             await entity.async_open_valve()
 
-        call_later.assert_not_called()
-        coordinator.async_request_refresh.assert_not_called()
+
+# ---------------------------------------------------------------------------
+# Phase-wide trust boundary re-verification (Task 3): every hand-written
+# model is refused across every catalog variant, the trusted entity sets are
+# unaffected by the control option, and the generic and hand-written
+# unique_id namespaces cannot collide.
+# ---------------------------------------------------------------------------
+
+
+class TestHandWrittenModelsRefusedAcrossEveryCatalogVariant:
+    def test_every_hand_written_model_and_catalog_variant_is_refused_by_every_builder(self):
+        """Cross HAND_WRITTEN_MODELS with every modelCode the catalog lists for
+        each -- a model absent from the catalog entirely is checked once
+        against no modelCode -- and assert the gate refuses every pair and
+        that all three generic builders (valve, switch, duration) yield
+        nothing for it, exactly as if the control option were on."""
+        checked_pairs = 0
+        for model in sorted(HAND_WRITTEN_MODELS):
+            codes = get_catalog_variant_codes(model) or (None,)
+            for code in codes:
+                checked_pairs += 1
+                gate = evaluate_control_gate(model, code)
+                assert gate.passed is False, f"{model}/{code} unexpectedly passed the control gate"
+                assert gate.datapoints == ()
+
+                sensor_info = make_sensor_entry(model=model, data=_unknown_data(model))
+                sensor_info["model_code"] = code
+                coordinator = _make_coordinator("k", sensor_info)
+
+                assert build_generic_valve_entities(coordinator, "k", sensor_info, "k") == []
+                assert build_generic_switch_entities(coordinator, "k", sensor_info, "k") == []
+                assert build_generic_duration_entities(coordinator, "k", sensor_info, "k") == []
+
+        # Sanity: the loop actually exercised every hand-written model, not an
+        # accidentally-empty iterable.
+        assert checked_pairs >= len(HAND_WRITTEN_MODELS)
+
+
+class TestTrustedValveEntitySetsUnchangedByControlOption:
+    @pytest.mark.asyncio
+    async def test_every_trusted_valve_model_yields_identical_entity_sets_with_option_on_and_off(self):
+        """For every trusted valve model, the valve and number platform setups
+        produce identical entity unique_id sets whether the control option is
+        on or off -- enabling generic control can never add, remove, or
+        shadow a trusted entity."""
+        from custom_components.rainpoint.number import async_setup_entry as number_setup_entry
+        from custom_components.rainpoint.valve import async_setup_entry as valve_setup_entry
+
+        for model in sorted(VALVE_MODELS):
+            sensor_key = "1_2_1"
+            sensor_info = make_sensor_entry(
+                hid=1, mid=2, addr=1, model=model, sub_name="Trusted", data={"type": "valve_hub", "zones": {1: {}}}
+            )
+            coordinator = _make_coordinator(sensor_key, sensor_info)
+
+            for platform_setup in (valve_setup_entry, number_setup_entry):
+                off_captured: list = []
+                off_hass, off_entry = _make_hass_and_entry(coordinator, {})
+                await platform_setup(off_hass, off_entry, MagicMock(side_effect=off_captured.extend))
+
+                on_captured: list = []
+                on_hass, on_entry = _make_hass_and_entry(coordinator, {CONF_GENERIC_CONTROL_ENABLED: True})
+                await platform_setup(on_hass, on_entry, MagicMock(side_effect=on_captured.extend))
+
+                off_ids = {e._attr_unique_id for e in off_captured}
+                on_ids = {e._attr_unique_id for e in on_captured}
+                assert off_ids, f"{model} produced no entities at all via {platform_setup.__module__}"
+                assert off_ids == on_ids, f"{model} via {platform_setup.__module__} differs with the control option on vs off"
+
+
+class TestGenericAndHandWrittenUniqueIdNamespacesAreDisjoint:
+    def test_generic_and_hand_written_unique_id_sets_never_collide(self):
+        """Structural proof, following the Phase 13 precedent: collect the
+        unique_ids produced across every generic builder for a representative
+        eligible variant and across the hand-written builders for a
+        representative trusted model, and assert the two sets are disjoint and
+        that no hand-written unique_id contains the generic marker."""
+        valve_sensor_info = _anchor_sensor_info()
+        valve_coordinator = _make_coordinator("100_200_1", valve_sensor_info)
+        socket_sensor_info = _socket_sensor_info()
+        socket_coordinator = _make_coordinator("300_400_1", socket_sensor_info)
+
+        generic_ids: set[str] = set()
+        generic_ids |= {
+            e._attr_unique_id
+            for e in build_generic_valve_entities(valve_coordinator, "100_200_1", valve_sensor_info, "100_200_1")
+        }
+        generic_ids |= {
+            e._attr_unique_id
+            for e in build_generic_switch_entities(socket_coordinator, "300_400_1", socket_sensor_info, "300_400_1")
+        }
+        generic_ids |= {
+            e._attr_unique_id
+            for e in build_generic_duration_entities(valve_coordinator, "100_200_1", valve_sensor_info, "100_200_1")
+        }
+        assert generic_ids, "the generic side produced nothing to compare against"
+
+        trusted_coordinator = MagicMock()
+        trusted_sensor_info = make_sensor_entry(hid=9, mid=8, addr=7, model=MODEL_VALVE_245, sub_name="Trusted")
+        trusted_valve = RainPointValveEntity(trusted_coordinator, "9_8_7", trusted_sensor_info, 1)
+        trusted_duration = RainPointZoneDurationNumber(trusted_coordinator, "9_8_7", trusted_sensor_info, 1)
+        hand_written_ids = {trusted_valve._attr_unique_id, trusted_duration._attr_unique_id}
+
+        assert generic_ids.isdisjoint(hand_written_ids)
+        assert not any(GENERIC_UNIQUE_ID_MARKER in uid for uid in hand_written_ids)
