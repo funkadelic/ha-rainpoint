@@ -1137,17 +1137,23 @@ class RainPointUnknownSensor(RainPointSensorBase):
         model = self._sensor_info.get("model")
         model_code = self._sensor_info.get("model_code")
         if self._gate_description is None:
-            # Imported locally to avoid a circular import: generic_entities
+            # Both imported locally to avoid a circular import: generic_entities
             # subclasses RainPointSensorBase, which is defined later in this
-            # module than this class.
+            # module than this class, and generic_control reaches
+            # generic_entities the same way (it imports _IDENTITY_SPECS and
+            # friends from it). Both are genuinely cycle-breaking for that
+            # reason, unlike the deferral-of-convenience import in the options
+            # flow.
+            from .generic_control import describe_control_gate
             from .generic_entities import describe_generic_gate
 
-            self._gate_description = describe_generic_gate(model, model_code)
-        # Always present, regardless of the generic entities options toggle:
-        # computed from the catalog and the curated table alone, involves no
-        # entity creation, and is most valuable to a user who has not opted
-        # in. Copied out so a consumer editing the attributes cannot reach
-        # back into the cached lists.
+            self._gate_description = {**describe_generic_gate(model, model_code), **describe_control_gate(model, model_code)}
+        # Always present, regardless of either the generic entities or the
+        # generic control options toggle: computed from the catalog and the
+        # curated table alone, involves no entity creation, and is most
+        # valuable to a user who has not opted in to either. Copied out so a
+        # consumer editing the attributes cannot reach back into the cached
+        # lists.
         attrs.update({key: list(value) for key, value in self._gate_description.items()})
 
         # The same pre-filled report link the unsupported-model notification
