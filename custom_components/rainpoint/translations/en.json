@@ -55,10 +55,11 @@
     "options": {
         "step": {
             "init": {
-                "title": "RainPoint Push Channel",
-                "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback.",
+                "title": "RainPoint Options",
+                "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback. Enable unverified generic sensors, off by default, to get provisional sensors for devices RainPoint has not hand-written support for yet; these readings are derived from an unverified vendor catalog, may be wrong, are always labelled unverified in their names, and should not be relied on for automations.",
                 "data": {
-                    "push_enabled": "Enable push updates"
+                    "push_enabled": "Enable push updates",
+                    "generic_entities_enabled": "Enable unverified generic sensors"
                 }
             }
         }

@@ -16,6 +16,7 @@ from custom_components.rainpoint.const import (
     CONF_AREA_CODE,
     CONF_COUNTRY,
     CONF_EMAIL,
+    CONF_GENERIC_ENTITIES_ENABLED,
     CONF_HIDS,
     CONF_PASSWORD,
     CONF_PUSH_ENABLED,
@@ -545,11 +546,17 @@ class TestConfigFlowSelectHomesReconfigure:
 # ---------------------------------------------------------------------------
 
 
-def _make_options_flow(current_push_enabled: bool = False) -> RainPointOptionsFlow:
+def _make_options_flow(
+    current_push_enabled: bool = False,
+    current_generic_enabled: bool = False,
+) -> RainPointOptionsFlow:
     """Create a RainPointOptionsFlow with a fake config_entry and HA stub methods wired up."""
     flow = RainPointOptionsFlow()
     flow.config_entry = MagicMock()
-    flow.config_entry.options = {CONF_PUSH_ENABLED: current_push_enabled}
+    flow.config_entry.options = {
+        CONF_PUSH_ENABLED: current_push_enabled,
+        CONF_GENERIC_ENTITIES_ENABLED: current_generic_enabled,
+    }
     flow.async_show_form = MagicMock(return_value={"type": "form"})
     flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
     return flow
@@ -566,7 +573,7 @@ class TestAsyncGetOptionsFlow:
 
 
 class TestOptionsFlowInitStep:
-    """RainPointOptionsFlow.async_step_init shows/handles the push toggle form."""
+    """RainPointOptionsFlow.async_step_init shows/handles the two-toggle form."""
 
     @pytest.mark.asyncio
     async def test_no_input_shows_form_with_current_default(self):
@@ -604,4 +611,52 @@ class TestOptionsFlowInitStep:
         result = await flow.async_step_init({CONF_PUSH_ENABLED: True})
 
         flow.async_create_entry.assert_called_once_with(title="", data={CONF_PUSH_ENABLED: True})
+        assert result == {"type": "create_entry"}
+
+    @pytest.mark.asyncio
+    async def test_schema_exposes_both_toggle_keys_in_one_step(self):
+        """The single form schema carries both the push and generic-entities keys."""
+        flow = _make_options_flow()
+
+        await flow.async_step_init(None)
+
+        call_kwargs = flow.async_show_form.call_args.kwargs
+        assert call_kwargs["step_id"] == "init"
+        schema = call_kwargs["data_schema"]
+        keys = set(schema.schema)
+        assert CONF_PUSH_ENABLED in keys
+        assert CONF_GENERIC_ENTITIES_ENABLED in keys
+
+    @pytest.mark.asyncio
+    async def test_generic_toggle_defaults_false_when_absent(self):
+        """The generic-entities marker defaults to False when entry.options is empty."""
+        flow = _make_options_flow()
+        flow.config_entry.options = {}
+
+        await flow.async_step_init(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        (marker,) = [k for k in schema.schema if k == CONF_GENERIC_ENTITIES_ENABLED]
+        assert marker.default() is False
+
+    @pytest.mark.asyncio
+    async def test_generic_toggle_defaults_to_stored_value(self):
+        """The generic-entities marker defaults to the stored entry.options value."""
+        flow = _make_options_flow(current_generic_enabled=True)
+
+        await flow.async_step_init(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        (marker,) = [k for k in schema.schema if k == CONF_GENERIC_ENTITIES_ENABLED]
+        assert marker.default() is True
+
+    @pytest.mark.asyncio
+    async def test_submitting_both_booleans_writes_both_to_entry_options(self):
+        """Submitting both keys reaches async_create_entry carrying both."""
+        flow = _make_options_flow()
+
+        payload = {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: True}
+        result = await flow.async_step_init(payload)
+
+        flow.async_create_entry.assert_called_once_with(title="", data=payload)
         assert result == {"type": "create_entry"}

@@ -20,6 +20,7 @@ from .const import (
     CONF_AREA_CODE,
     CONF_COUNTRY,
     CONF_EMAIL,
+    CONF_GENERIC_ENTITIES_ENABLED,
     CONF_HIDS,
     CONF_PASSWORD,
     CONF_PUSH_ENABLED,
@@ -303,10 +304,10 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class RainPointOptionsFlow(config_entries.OptionsFlow):
-    """Handle the RainPoint options flow -- push toggle."""
+    """Handle the RainPoint options flow -- push and generic-sensor toggles."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Show/handle the single push-toggle form."""
+        """Show/handle the single form carrying both toggles."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
@@ -315,6 +316,10 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
                 vol.Required(
                     CONF_PUSH_ENABLED,
                     default=self.config_entry.options.get(CONF_PUSH_ENABLED, False),
+                ): bool,
+                vol.Required(
+                    CONF_GENERIC_ENTITIES_ENABLED,
+                    default=self.config_entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False),
                 ): bool,
             }
         )
