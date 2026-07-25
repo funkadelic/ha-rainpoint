@@ -17,8 +17,19 @@ The curated table carries no battery row. The hand-written battery
 percentage is derived from a sixteen-bit composite status code read at fixed
 trailing offsets and mapped through a lookup table, not from the single-byte
 battery datapoint the catalog declares, so no raw-to-percent mapping is
-proven for it. Adding a row later is additive and only widens which models
-pass the gate.
+proven for it.
+
+The table carries no humidity row either. The only hand-written decoder that
+reports a humidity percentage parses a decimal ASCII token, which is
+evidence about the end value but not about the scale of the single raw byte
+the catalog declares for that identity; the byte-level temperature/humidity
+decoders extract signal strength only and never decode humidity at all. A
+raw-byte-to-percent mapping is therefore unproven, and a systematic scale
+error would land inside a plausible zero-to-one-hundred range where nothing
+downstream would catch it.
+
+Adding either row later is additive and only widens which models pass the
+gate.
 """
 
 from __future__ import annotations
@@ -61,11 +72,6 @@ class GenericSensorSpec:
     precision: int
 
 
-def _rh_percent(raw: int) -> float | None:
-    """Identity mapping: the catalog datapoint is already a direct percent."""
-    return float(raw)
-
-
 def _rssi_dbm(raw: int) -> float | None:
     """Reinterpret an unsigned byte as a signed int8 dBm reading."""
     value = raw - 256 if raw >= 128 else raw
@@ -78,27 +84,14 @@ def _temperature_c(raw: int) -> float | None:
 
 
 # Evidence-backed only: a row exists here only because an existing
-# hand-written decoder proves both its unit and its scaling. Nothing is
-# inferred from the catalog's dpDataType. Exactly one evidence marker per row
-# - the battery-absence note in the module docstring above is deliberately
-# worded without one, so the marker count and the row count stay equal.
+# hand-written decoder proves both its unit and its scaling, on the same wire
+# format the generic decode path reads. Nothing is inferred from the
+# catalog's dpDataType. An identity whose only citable decoder works on a
+# different encoding stays out of the table: see the humidity note in the
+# module docstring above. Exactly one evidence marker per row - the
+# absent-row notes in that docstring are deliberately worded without one, so
+# the marker count and the row count stay equal.
 _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
-    "STA_RH": GenericSensorSpec(
-        label="Humidity",
-        device_class=SensorDeviceClass.HUMIDITY,
-        unit="%",
-        state_class=None,
-        transform=_rh_percent,
-        valid_range=(0.0, 100.0),
-        precision=0,
-        # Evidence: api/decoders.py:734 documents "42 = current humidity
-        # (42%)" for the HWS019WRF-V2 display-hub decoder - a direct integer
-        # percent, no scale factor - and _apply_hws019_positional_item
-        # (api/decoders.py:692-701) stores that value unmodified. This is an
-        # ASCII-format route rather than the single unsigned byte the catalog
-        # declares for STA_RH, but the mapping it proves (raw value equals
-        # percent) is the same one this row applies.
-    ),
     "STA_RSSI": GenericSensorSpec(
         label="Signal Strength",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
@@ -137,18 +130,6 @@ def _filter_status_entries(dp_list: list) -> list[dict]:
             continue
         declared.append(entry)
     return declared
-
-
-def _declared_status_datapoints(model: str | None, model_code: int | str | None) -> list[dict]:
-    """Return the model variant's declared STA_* catalog dp entries, or [] on any miss."""
-    try:
-        dp_list = get_catalog_entry(model, model_code)
-    except Exception as exc:
-        _LOGGER.debug("get_catalog_entry failed for model=%s model_code=%s: %s", model, model_code, exc)
-        return []
-    if not dp_list:
-        return []
-    return _filter_status_entries(dp_list)
 
 
 def _matching_field(fields: list[dict], identity: str, dp_port: int) -> dict | None:
@@ -255,6 +236,30 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
                 port_number=port_number,
             )
         seen_keys.add(key)
+
+    # A dpCode shared by two entries anywhere in the variant's dp list fails
+    # the whole model's gate. The runtime catalog matcher keys on dpCode
+    # alone and refuses to annotate a field whose dpCode is ambiguous, so an
+    # entity built over one of those entries would never resolve a value and
+    # would sit at None forever. The check spans the full dp list, not just
+    # the status entries, because the matcher searches the full list too: a
+    # control entry sharing a status entry's dpCode makes that status entry
+    # just as unresolvable. Multi-zone variants that repeat one dpCode across
+    # ports are the common shape here, so this rejects real catalog models by
+    # design rather than as an edge case.
+    seen_codes: set[Any] = set()
+    for entry in raw_entry:
+        if not isinstance(entry, dict):
+            continue
+        dp_code = entry.get("dpCode")
+        if dp_code in seen_codes:
+            return GenericGateResult(
+                datapoints=[],
+                unmapped_identities=unmapped_identities,
+                blocked_by=f"dpCode {dp_code} is declared more than once",
+                port_number=port_number,
+            )
+        seen_codes.add(dp_code)
 
     if unmapped_identities:
         # The unmapped list is itself the explanation; a separate reason

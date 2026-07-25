@@ -23,7 +23,7 @@ from custom_components.rainpoint.generic_entities import (
     GenericGateResult,
     GenericSensorSpec,
     RainPointGenericSensor,
-    _declared_status_datapoints,
+    _filter_status_entries,
     _matching_field,
     build_generic_entities,
     describe_generic_gate,
@@ -93,33 +93,20 @@ def _make_hass_and_entry(coordinator, options: dict):
 
 
 # ---------------------------------------------------------------------------
-# _declared_status_datapoints
+# _filter_status_entries
 # ---------------------------------------------------------------------------
 
 
-class TestDeclaredStatusDatapoints:
-    """Tests for _declared_status_datapoints."""
+class TestFilterStatusEntries:
+    """Tests for _filter_status_entries."""
 
-    def test_returns_empty_when_catalog_lookup_raises(self, monkeypatch):
-        def _boom(model, model_code=None):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", _boom)
-        assert _declared_status_datapoints(FAKE_MODEL, None) == []
-
-    def test_returns_empty_when_catalog_has_no_entry(self, monkeypatch):
-        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: None)
-        assert _declared_status_datapoints(FAKE_MODEL, None) == []
-
-    def test_skips_non_dict_entries_and_non_status_identities(self, monkeypatch):
+    def test_skips_non_dict_entries_and_non_status_identities(self):
         dp_list = ["not-a-dict", {"identity": "CTL_WATER", "dpPort": 0}, _dp("STA_RH")]
-        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_list)
-        assert _declared_status_datapoints(FAKE_MODEL, None) == [_dp("STA_RH")]
+        assert _filter_status_entries(dp_list) == [_dp("STA_RH")]
 
-    def test_skips_entry_with_non_string_identity(self, monkeypatch):
+    def test_skips_entry_with_non_string_identity(self):
         dp_list = [{"identity": 123, "dpPort": 0}, _dp("STA_TEM")]
-        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_list)
-        assert _declared_status_datapoints(FAKE_MODEL, None) == [_dp("STA_TEM")]
+        assert _filter_status_entries(dp_list) == [_dp("STA_TEM")]
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +151,7 @@ class TestBuildGenericEntitiesGate:
     def test_hand_written_model_yields_nothing_even_when_catalog_is_curated(self, monkeypatch):
         """A hand-written valve model absent from _MODEL_FACTORIES still yields zero generic sensors."""
         assert MODEL_VALVE_245 not in _MODEL_FACTORIES
-        dp_entries = [_dp("STA_RH")]
+        dp_entries = [_dp("STA_TEM", dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         sensor_info = make_sensor_entry(model=MODEL_VALVE_245, data=_unknown_data(model=MODEL_VALVE_245))
         coordinator = self._coordinator_for("100_200_1", sensor_info)
@@ -220,7 +207,7 @@ class TestBuildGenericEntitiesGate:
         assert build_generic_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
     def test_uncurated_identity_fails_whole_model(self, monkeypatch):
-        dp_entries = [_dp("STA_RH", dp_port=0), _dp("STA_BAT", dp_port=0, dp_code=11)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_BAT", dp_port=0, dp_code=11)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         sensor_info = make_sensor_entry(model=FAKE_MODEL, data=_unknown_data())
         coordinator = self._coordinator_for("100_200_1", sensor_info)
@@ -266,7 +253,7 @@ class TestBuildGenericEntitiesGate:
         assert build_generic_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
     def test_fully_curated_variant_yields_one_sensor_per_declared_datapoint(self, monkeypatch):
-        dp_entries = [_dp("STA_RH", dp_port=0, dp_code=10), _dp("STA_TEM", dp_port=0, dp_code=9)]
+        dp_entries = [_dp("STA_RSSI", dp_port=0, dp_code=10), _dp("STA_TEM", dp_port=0, dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
         sensor_info = make_sensor_entry(model=FAKE_MODEL, data=_unknown_data())
@@ -280,8 +267,8 @@ class TestBuildGenericEntitiesGate:
     def test_entities_are_ordered_by_port_then_identity(self, monkeypatch):
         dp_entries = [
             _dp("STA_TEM", dp_port=1, dp_code=1),
-            _dp("STA_RH", dp_port=0, dp_code=2),
-            _dp("STA_RSSI", dp_port=1, dp_code=3),
+            _dp("STA_RSSI", dp_port=0, dp_code=2),
+            _dp("STA_TEM", dp_port=0, dp_code=3),
         ]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 4)
@@ -291,10 +278,10 @@ class TestBuildGenericEntitiesGate:
         entities = build_generic_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
 
         identities = [e._identity for e in entities]
-        assert identities == ["STA_RH", "STA_RSSI", "STA_TEM"]
+        assert identities == ["STA_RSSI", "STA_TEM", "STA_TEM"]
 
     def test_repeated_setup_over_identical_data_yields_identical_unique_id_sets(self, monkeypatch):
-        dp_entries = [_dp("STA_RH", dp_port=0), _dp("STA_TEM", dp_port=0, dp_code=9)]
+        dp_entries = [_dp("STA_RSSI", dp_port=0, dp_code=10), _dp("STA_TEM", dp_port=0, dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
         sensor_info = make_sensor_entry(model=FAKE_MODEL, data=_unknown_data())
@@ -348,7 +335,7 @@ class TestEvaluateGenericGate:
         assert "no status datapoints" in result.blocked_by
 
     def test_exactly_one_curated_status_datapoint_passes(self, monkeypatch):
-        dp_entries = [_dp("STA_RH", dp_port=0)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
 
@@ -361,7 +348,7 @@ class TestEvaluateGenericGate:
         assert result.port_number == 1
 
     def test_one_curated_and_one_uncurated_identity_fails_with_no_blocked_reason(self, monkeypatch):
-        dp_entries = [_dp("STA_RH", dp_port=0), _dp("STA_BAT", dp_port=0, dp_code=11)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_BAT", dp_port=0, dp_code=11)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
 
         result = evaluate_generic_gate(FAKE_MODEL, None)
@@ -397,7 +384,7 @@ class TestEvaluateGenericGate:
         assert "0" in result.blocked_by
 
     def test_same_identity_different_ports_both_curated_yields_two_entities(self, monkeypatch):
-        dp_entries = [_dp("STA_RH", dp_port=0, dp_code=10), _dp("STA_RH", dp_port=1, dp_code=11)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_TEM", dp_port=1, dp_code=8)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 2)
 
@@ -440,8 +427,8 @@ class TestEvaluateGenericGate:
     def test_emission_order_is_ascending_port_then_identity(self, monkeypatch):
         dp_entries = [
             _dp("STA_TEM", dp_port=1, dp_code=1),
-            _dp("STA_RH", dp_port=0, dp_code=2),
-            _dp("STA_RSSI", dp_port=1, dp_code=3),
+            _dp("STA_RSSI", dp_port=0, dp_code=2),
+            _dp("STA_TEM", dp_port=0, dp_code=3),
         ]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 4)
@@ -449,16 +436,16 @@ class TestEvaluateGenericGate:
         result = evaluate_generic_gate(FAKE_MODEL, None)
 
         identities = [entry.get("identity") for entry in result.datapoints]
-        assert identities == ["STA_RH", "STA_RSSI", "STA_TEM"]
+        assert identities == ["STA_RSSI", "STA_TEM", "STA_TEM"]
 
     def test_decoded_field_not_in_declared_list_does_not_change_verdict(self, monkeypatch):
         """The gate is evaluated against the static catalog list, never the decoded payload."""
-        dp_entries = [_dp("STA_RH", dp_port=0)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
         fields = [
-            _decoded_field("STA_RH", 42, 0),
-            _decoded_field("STA_TEM", 683, 0),  # not declared - must not surface an entity or affect the gate
+            _decoded_field("STA_TEM", 683, 0),
+            _decoded_field("STA_RSSI", 42, 0),  # not declared - must not surface an entity or affect the gate
         ]
         sensor_info = make_sensor_entry(model=FAKE_MODEL, data=_unknown_data(fields))
         coordinator = MagicMock()
@@ -469,7 +456,7 @@ class TestEvaluateGenericGate:
 
         assert result.passed is True
         assert len(entities) == 1
-        assert entities[0]._identity == "STA_RH"
+        assert entities[0]._identity == "STA_TEM"
 
     def test_catalog_lookup_raising_yields_fail_closed_result(self, monkeypatch):
         def _boom(model, model_code=None):
@@ -510,6 +497,95 @@ class TestEvaluateGenericGate:
                 checked += 1
         assert checked > 0
 
+        # Empirical baseline over the full committed catalog (including
+        # hand-written models, whose variants still carry a dp list even
+        # though the gate short-circuits before ever reaching the dpCode
+        # check for them): 18 of the catalog's 90 variants declare the same
+        # dpCode more than once anywhere in their dp list. This is the
+        # ordinary multi-zone encoding (the same identity repeated on the
+        # same dpCode across dpPort 1 and 2), not a rare quirk, so a future
+        # catalog refresh that changes either number should force a
+        # deliberate look rather than a silent pass.
+        total_variants = 0
+        duplicate_dp_code_variants = 0
+        for variants in product_catalog_module._CATALOG.values():
+            for record in variants.values():
+                total_variants += 1
+                codes = [entry.get("dpCode") for entry in record["dp"] if isinstance(entry, dict)]
+                if len(codes) != len(set(codes)):
+                    duplicate_dp_code_variants += 1
+        assert total_variants == 90
+        assert duplicate_dp_code_variants == 18
+
+
+class TestDpCodeAmbiguityRule:
+    """Tests for the "same dpCode declared more than once" gate rule.
+
+    The runtime catalog matcher (_match_catalog_dp in api/generic_decoder.py)
+    keys on dpCode alone and refuses to annotate a field whose dpCode is
+    ambiguous, so an entity built over one of those entries would never
+    resolve a value and would sit at None forever.
+    """
+
+    def test_duplicate_dp_code_across_status_entries_fails_whole_model(self, monkeypatch):
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_RSSI", dp_port=1, dp_code=9)]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+
+        result = evaluate_generic_gate(FAKE_MODEL, None)
+
+        assert result.passed is False
+        assert result.datapoints == []
+        assert result.blocked_by
+        assert "dpCode" in result.blocked_by
+        assert "9" in result.blocked_by
+
+    def test_duplicate_dp_code_between_status_and_control_entry_fails_whole_model(self, monkeypatch):
+        """Proves the check spans the full dp list, not just the status entries."""
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), {"identity": "CTL_WATER", "dpPort": 0, "dpCode": 9}]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+
+        result = evaluate_generic_gate(FAKE_MODEL, None)
+
+        assert result.passed is False
+        assert result.datapoints == []
+        assert result.blocked_by
+        assert "dpCode" in result.blocked_by
+        assert "9" in result.blocked_by
+
+    def test_distinct_dp_codes_still_passes(self, monkeypatch):
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_RSSI", dp_port=0, dp_code=10)]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
+
+        result = evaluate_generic_gate(FAKE_MODEL, None)
+
+        assert result.passed is True
+        assert len(result.datapoints) == 2
+        assert result.blocked_by is None
+
+    def test_non_dict_entries_in_full_dp_list_are_skipped(self, monkeypatch):
+        """The dpCode scan walks the raw catalog list directly, so it must tolerate malformed entries too."""
+        dp_entries = ["not-a-dict", _dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_RSSI", dp_port=0, dp_code=10)]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
+
+        result = evaluate_generic_gate(FAKE_MODEL, None)
+
+        assert result.passed is True
+        assert len(result.datapoints) == 2
+
+    def test_dp_port_validity_rule_takes_precedence_over_dp_code_rule(self, monkeypatch):
+        """A variant that violates both rules reports the dpPort problem, not the dpCode one."""
+        dp_entries = [_dp("STA_TEM", dp_port="bad", dp_code=9), _dp("STA_RSSI", dp_port=0, dp_code=9)]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+
+        result = evaluate_generic_gate(FAKE_MODEL, None)
+
+        assert result.passed is False
+        assert result.blocked_by
+        assert "dpPort" in result.blocked_by
+        assert "dpCode" not in result.blocked_by
+
 
 class TestDescribeGenericGate:
     """Tests for describe_generic_gate's two-key projection."""
@@ -522,7 +598,7 @@ class TestDescribeGenericGate:
         assert set(described.keys()) == {"unmapped_generic_identities", "generic_gate_blocked_by"}
 
     def test_unmapped_identities_is_always_a_list_never_none(self, monkeypatch):
-        dp_entries = [_dp("STA_RH", dp_port=0)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
 
@@ -549,14 +625,14 @@ class TestRainPointGenericSensorConstruction:
     """Tests for unique_id / name / icon / device_class / state_class construction."""
 
     def test_unique_id_exact_shape(self):
-        dp_entry = _dp("STA_RH", dp_port=0, dp_code=10)
+        dp_entry = _dp("STA_TEM", dp_port=0, dp_code=9)
         sensor = _make_generic_sensor(dp_entry, port_number=1)
-        assert sensor._attr_unique_id == "rainpoint_100_200_1_generic_sta_rh_p0"
+        assert sensor._attr_unique_id == "rainpoint_100_200_1_generic_sta_tem_p0"
 
     def test_name_single_port_variant_omits_zone(self):
-        dp_entry = _dp("STA_RH", dp_port=0)
+        dp_entry = _dp("STA_RSSI", dp_port=0)
         sensor = _make_generic_sensor(dp_entry, port_number=1)
-        assert sensor._attr_name == "Garden Sensor Humidity (unverified)"
+        assert sensor._attr_name == "Garden Sensor Signal Strength (unverified)"
 
     def test_name_multi_port_variant_includes_zone(self):
         dp_entry = _dp("STA_TEM", dp_port=2, dp_code=9)
@@ -580,7 +656,7 @@ class TestRainPointGenericSensorConstruction:
         assert sensor._attr_device_class is not None
 
     def test_state_class_is_always_none(self):
-        dp_entry = _dp("STA_RH", dp_port=0)
+        dp_entry = _dp("STA_RSSI", dp_port=0)
         sensor = _make_generic_sensor(dp_entry, port_number=1)
         assert sensor._attr_state_class is None
 
@@ -592,18 +668,6 @@ class TestRainPointGenericSensorConstruction:
 
 class TestRainPointGenericSensorNativeValue:
     """Tests for native_value transform/range/validity handling."""
-
-    def test_humidity_in_range(self):
-        dp_entry = _dp("STA_RH", dp_port=0)
-        fields = [_decoded_field("STA_RH", 42, 0)]
-        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
-        assert sensor.native_value == 42.0
-
-    def test_humidity_out_of_range_is_none(self):
-        dp_entry = _dp("STA_RH", dp_port=0)
-        fields = [_decoded_field("STA_RH", 250, 0)]
-        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
-        assert sensor.native_value is None
 
     def test_signal_strength_negative_reading(self):
         dp_entry = _dp("STA_RSSI", dp_port=0, dp_code=32)
@@ -673,21 +737,21 @@ class TestRainPointGenericSensorAttributes:
     """Tests for the six-key provenance attribute allowlist."""
 
     def test_exactly_six_provenance_keys_present(self):
-        dp_entry = _dp("STA_RH", dp_port=0, dp_code=10, data_type="U8")
-        fields = [_decoded_field("STA_RH", 42, 0, width_mismatch=False)]
+        dp_entry = _dp("STA_RSSI", dp_port=0, dp_code=10, data_type="U8")
+        fields = [_decoded_field("STA_RSSI", 42, 0, width_mismatch=False)]
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
 
         attrs = sensor.extra_state_attributes
 
         assert attrs["catalog_derived"] is True
-        assert attrs["identity"] == "STA_RH"
+        assert attrs["identity"] == "STA_RSSI"
         assert attrs["dp_code"] == 10
         assert attrs["dp_port"] == 0
         assert attrs["dp_data_type"] == "U8"
         assert attrs["width_mismatch"] is False
 
     def test_width_mismatch_is_none_when_datapoint_absent_from_poll(self):
-        dp_entry = _dp("STA_RH", dp_port=0, dp_code=10)
+        dp_entry = _dp("STA_TEM", dp_port=0, dp_code=9)
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data([]))
 
         attrs = sensor.extra_state_attributes
@@ -695,7 +759,7 @@ class TestRainPointGenericSensorAttributes:
         assert attrs["width_mismatch"] is None
 
     def test_no_account_identifying_fields_leak_into_attributes(self):
-        dp_entry = _dp("STA_RH", dp_port=0)
+        dp_entry = _dp("STA_RSSI", dp_port=0)
         sensor = _make_generic_sensor(
             dp_entry,
             port_number=1,
@@ -723,7 +787,7 @@ class TestGenericSensorDispatchEndToEnd:
 
     @pytest.mark.asyncio
     async def test_toggle_off_yields_no_generic_entities(self, monkeypatch):
-        dp_entries = [_dp("STA_RH", dp_port=0)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
 
@@ -742,7 +806,7 @@ class TestGenericSensorDispatchEndToEnd:
 
     @pytest.mark.asyncio
     async def test_toggle_on_fully_curated_variant_yields_generic_plus_unsupported_plus_raw(self, monkeypatch):
-        dp_entries = [_dp("STA_RH", dp_port=0), _dp("STA_TEM", dp_port=0, dp_code=9)]
+        dp_entries = [_dp("STA_RSSI", dp_port=0, dp_code=10), _dp("STA_TEM", dp_port=0, dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
 
@@ -763,7 +827,7 @@ class TestGenericSensorDispatchEndToEnd:
 
     @pytest.mark.asyncio
     async def test_toggle_on_uncurated_identity_yields_zero_generic_sensors(self, monkeypatch):
-        dp_entries = [_dp("STA_RH", dp_port=0), _dp("STA_BAT", dp_port=0, dp_code=11)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_BAT", dp_port=0, dp_code=11)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
 

@@ -898,7 +898,7 @@ class TestUnknownSensor:
 
     def test_unmapped_identity_attributes_present_regardless_of_toggle_state(self, monkeypatch):
         """The two new attributes never depend on the generic-entities options toggle."""
-        dp_entries = [{"identity": "STA_RH", "dpPort": 0}]
+        dp_entries = [{"identity": "STA_TEM", "dpPort": 0}]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         sensor = self._make(model="MYSTERY")
 
@@ -912,7 +912,7 @@ class TestUnknownSensor:
         assert attrs["generic_gate_blocked_by"] is None
 
     def test_unmapped_list_contains_exactly_the_uncurated_identity(self, monkeypatch):
-        dp_entries = [{"identity": "STA_RH", "dpPort": 0}, {"identity": "STA_BAT", "dpPort": 0, "dpCode": 2}]
+        dp_entries = [{"identity": "STA_TEM", "dpPort": 0}, {"identity": "STA_BAT", "dpPort": 0, "dpCode": 2}]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         sensor = self._make(model="MYSTERY")
 
@@ -922,7 +922,7 @@ class TestUnknownSensor:
         assert attrs["generic_gate_blocked_by"] is None
 
     def test_fully_curated_variant_reports_no_unmapped_identities_and_no_reason(self, monkeypatch):
-        dp_entries = [{"identity": "STA_RH", "dpPort": 0}]
+        dp_entries = [{"identity": "STA_TEM", "dpPort": 0}]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
         sensor = self._make(model="MYSTERY")
