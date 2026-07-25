@@ -616,6 +616,38 @@ class TestDpCodeAmbiguityRule:
         assert "9" in dp_code_reasons[0]
         assert "20" in dp_code_reasons[0]
 
+    def test_duplicate_dp_codes_are_listed_in_numeric_order(self, monkeypatch):
+        """Codes read 2, 15, 100 rather than the 100, 15, 2 a plain string sort would produce."""
+        dp_entries = [
+            _dp("STA_TEM", dp_port=0, dp_code=100),
+            _dp("STA_TEM", dp_port=1, dp_code=100),
+            _dp("STA_RSSI", dp_port=0, dp_code=15),
+            _dp("STA_RSSI", dp_port=1, dp_code=15),
+            _dp("STA_ALARM", dp_port=0, dp_code=2),
+            _dp("STA_ALARM", dp_port=1, dp_code=2),
+        ]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+
+        result = evaluate_generic_gate(FAKE_MODEL, None)
+
+        reason = next(r for r in result.blocked_by if "dpCode" in r)
+        assert reason.index("dpCode 2") < reason.index("dpCode 15") < reason.index("dpCode 100")
+
+    def test_non_integer_dp_codes_sort_after_integers_without_raising(self, monkeypatch):
+        """A catalog carrying a non-integer dpCode still yields a totally ordered message rather than a TypeError."""
+        dp_entries = [
+            _dp("STA_TEM", dp_port=0, dp_code=None),
+            _dp("STA_TEM", dp_port=1, dp_code=None),
+            _dp("STA_RSSI", dp_port=0, dp_code=7),
+            _dp("STA_RSSI", dp_port=1, dp_code=7),
+        ]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+
+        result = evaluate_generic_gate(FAKE_MODEL, None)
+
+        reason = next(r for r in result.blocked_by if "dpCode" in r)
+        assert reason.index("dpCode 7") < reason.index("dpCode None")
+
 
 class TestRealCatalogMultiReasonRegression:
     """Regression coverage for the motivating bug: a variant blocked by multiple independent rules.

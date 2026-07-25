@@ -281,7 +281,14 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
         dp_code = entry.get("dpCode")
         code_counts[dp_code] = code_counts.get(dp_code, 0) + 1
         code_identities.setdefault(dp_code, set()).add(str(entry.get("identity")))
-    duplicate_codes = sorted((code for code, count in code_counts.items() if count > 1), key=str)
+    # Integer codes sort numerically so the message reads 1, 2, 15 rather than
+    # the 1, 15, 2 a plain string sort would produce; anything non-integer the
+    # catalog might carry sorts after them by its text form, which keeps the
+    # order total without assuming the codes are always integers.
+    duplicate_codes = sorted(
+        (code for code, count in code_counts.items() if count > 1),
+        key=lambda code: (0, code, "") if isinstance(code, int) and not isinstance(code, bool) else (1, 0, str(code)),
+    )
     if duplicate_codes:
         formatted_codes = ", ".join(f"dpCode {code} ({', '.join(sorted(code_identities[code]))})" for code in duplicate_codes)
         reasons.append(
