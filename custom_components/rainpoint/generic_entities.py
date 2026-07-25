@@ -126,15 +126,8 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
 }
 
 
-def _declared_status_datapoints(model: str | None, model_code: int | str | None) -> list[dict]:
-    """Return the model variant's declared STA_* catalog dp entries, or [] on any miss."""
-    try:
-        dp_list = get_catalog_entry(model, model_code)
-    except Exception as exc:
-        _LOGGER.debug("get_catalog_entry failed for model=%s model_code=%s: %s", model, model_code, exc)
-        return []
-    if not dp_list:
-        return []
+def _filter_status_entries(dp_list: list) -> list[dict]:
+    """Return only the well-formed STA_-prefixed dict entries from a catalog dp list."""
     declared: list[dict] = []
     for entry in dp_list:
         if not isinstance(entry, dict):
@@ -144,6 +137,18 @@ def _declared_status_datapoints(model: str | None, model_code: int | str | None)
             continue
         declared.append(entry)
     return declared
+
+
+def _declared_status_datapoints(model: str | None, model_code: int | str | None) -> list[dict]:
+    """Return the model variant's declared STA_* catalog dp entries, or [] on any miss."""
+    try:
+        dp_list = get_catalog_entry(model, model_code)
+    except Exception as exc:
+        _LOGGER.debug("get_catalog_entry failed for model=%s model_code=%s: %s", model, model_code, exc)
+        return []
+    if not dp_list:
+        return []
+    return _filter_status_entries(dp_list)
 
 
 def _matching_field(fields: list[dict], identity: str, dp_port: int) -> dict | None:
@@ -159,6 +164,146 @@ def _matching_field(fields: list[dict], identity: str, dp_port: int) -> dict | N
     return None
 
 
+@dataclass(frozen=True)
+class GenericGateResult:
+    """The single verdict evaluate_generic_gate produces for one model variant.
+
+    ``datapoints`` is the ordered list of declared status datapoints that
+    become entities - always empty when the gate fails, so a caller never
+    needs to also check ``passed`` before iterating it.
+    """
+
+    datapoints: list[dict]
+    unmapped_identities: tuple[str, ...]
+    blocked_by: str | None
+    port_number: int | None
+
+    @property
+    def passed(self) -> bool:
+        """True only when the gate produced at least one entity's worth of datapoints."""
+        return bool(self.datapoints)
+
+
+def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> GenericGateResult:
+    """Body of evaluate_generic_gate, without the never-raise wrapper.
+
+    Kept separate so the outer wrapper's except clause is the single place
+    that decides what a raising catalog lookup degrades to.
+    """
+    # Load-bearing, not defence in depth: the sensor model-factory map in
+    # sensor.py is a strict subset of the hand-written set, because every
+    # hand-written valve model gets its entities from the valve and number
+    # platforms and therefore has no entry in that map. Without this check a
+    # hand-written valve model would reach this factory.
+    if is_hand_written_model(model):
+        return GenericGateResult(
+            datapoints=[],
+            unmapped_identities=(),
+            blocked_by="the model has a hand-written decoder",
+            port_number=None,
+        )
+
+    raw_entry = get_catalog_entry(model, model_code)
+    if not raw_entry:
+        return GenericGateResult(
+            datapoints=[],
+            unmapped_identities=(),
+            blocked_by=f"{model} is not in the product catalog",
+            port_number=None,
+        )
+
+    dp_entries = _filter_status_entries(raw_entry)
+    port_number = get_catalog_port_number(model, model_code)
+    if not dp_entries:
+        # A control-only variant hits this branch too. Control identities are
+        # reserved for a later phase and never gate a model out, so this is
+        # never reported as an unmapped-identity problem.
+        return GenericGateResult(
+            datapoints=[],
+            unmapped_identities=(),
+            blocked_by=f"{model} declares no status datapoints",
+            port_number=port_number,
+        )
+
+    uncurated = {entry.get("identity") for entry in dp_entries if entry.get("identity") not in _IDENTITY_SPECS}
+    unmapped_identities = tuple(sorted(uncurated))
+
+    # Any dp entry with a missing/unusable dpPort fails the whole model's
+    # gate rather than being skipped, so no two entities can ever contend
+    # for one unique_id.
+    for entry in dp_entries:
+        dp_port = entry.get("dpPort")
+        if not isinstance(dp_port, int) or isinstance(dp_port, bool):
+            return GenericGateResult(
+                datapoints=[],
+                unmapped_identities=unmapped_identities,
+                blocked_by=f"{entry.get('identity')} declares an unusable dpPort",
+                port_number=port_number,
+            )
+
+    # Two entries sharing the same (identity, dpPort) fail the whole model's
+    # gate for the same reason as above.
+    seen_keys: set[tuple[str | None, int]] = set()
+    for entry in dp_entries:
+        key = (entry.get("identity"), entry.get("dpPort"))
+        if key in seen_keys:
+            identity, dp_port = key
+            return GenericGateResult(
+                datapoints=[],
+                unmapped_identities=unmapped_identities,
+                blocked_by=f"{identity} is declared twice on port {dp_port}",
+                port_number=port_number,
+            )
+        seen_keys.add(key)
+
+    if unmapped_identities:
+        # The unmapped list is itself the explanation; a separate reason
+        # string here would only duplicate it.
+        return GenericGateResult(
+            datapoints=[],
+            unmapped_identities=unmapped_identities,
+            blocked_by=None,
+            port_number=port_number,
+        )
+
+    ordered = sorted(dp_entries, key=lambda entry: (entry.get("dpPort"), entry.get("identity")))
+    return GenericGateResult(datapoints=ordered, unmapped_identities=(), blocked_by=None, port_number=port_number)
+
+
+def evaluate_generic_gate(model: str | None, model_code: int | str | None = None) -> GenericGateResult:
+    """Decide whether a model variant yields generic entities, and why not.
+
+    The single producer of the verdict, consumed by both
+    build_generic_entities (the create-or-not decision) and
+    describe_generic_gate (the human-readable reason), so the two can never
+    disagree. Never raises: any exception degrades to a fail-closed result.
+    """
+    try:
+        return _evaluate_generic_gate(model, model_code)
+    except Exception as exc:
+        _LOGGER.debug("evaluate_generic_gate failed for model=%s model_code=%s: %s", model, model_code, exc)
+        return GenericGateResult(
+            datapoints=[],
+            unmapped_identities=(),
+            blocked_by="the catalog could not be read",
+            port_number=None,
+        )
+
+
+def describe_generic_gate(model: str | None, model_code: int | str | None = None) -> dict:
+    """Project evaluate_generic_gate's result to the two keys a diagnostic sensor needs.
+
+    Holds no logic of its own and never raises. Computed from the catalog
+    and the curated table alone, so it can be reported regardless of the
+    options toggle.
+    """
+    result = evaluate_generic_gate(model, model_code)
+    return {
+        "unmapped_generic_identities": list(result.unmapped_identities),
+        "generic_gate_blocked_by": result.blocked_by,
+    }
+
+
 def build_generic_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
     """Return the generic sensors for one sub-device, or [] for every rejection path.
 
@@ -166,47 +311,22 @@ def build_generic_entities(coordinator, sensor_key: str, sensor_info: dict, base
     setup for the whole integration.
     """
     try:
-        model = sensor_info.get("model")
-
-        # Load-bearing, not defence in depth: the sensor model-factory map in
-        # sensor.py is a strict subset of the hand-written set, because every
-        # hand-written valve model gets its entities from the valve and
-        # number platforms and therefore has no entry in that map. Without
-        # this check a hand-written valve model would reach this factory.
-        if is_hand_written_model(model):
-            return []
-
+        # A per-poll fact, not a static model property, so it stays here
+        # rather than moving into evaluate_generic_gate.
         data = sensor_info.get("data") or {}
         if data.get("type") != "unknown":
             return []
 
+        model = sensor_info.get("model")
         model_code = sensor_info.get("model_code")
-        dp_entries = _declared_status_datapoints(model, model_code)
-        if not dp_entries:
+        result = evaluate_generic_gate(model, model_code)
+        if not result.passed:
             return []
 
-        # Any dp entry with a missing/unusable dpPort, or two entries sharing
-        # the same (identity, dpPort), fails the whole model's gate rather
-        # than being skipped, so no two entities can ever contend for one
-        # unique_id.
-        seen_keys: set[tuple[str | None, int]] = set()
-        for entry in dp_entries:
-            dp_port = entry.get("dpPort")
-            if not isinstance(dp_port, int) or isinstance(dp_port, bool):
-                return []
-            key = (entry.get("identity"), dp_port)
-            if key in seen_keys:
-                return []
-            seen_keys.add(key)
-
-        # All-or-nothing per model, never a best-effort subset.
-        for entry in dp_entries:
-            if entry.get("identity") not in _IDENTITY_SPECS:
-                return []
-
-        port_number = get_catalog_port_number(model, model_code)
-        ordered = sorted(dp_entries, key=lambda entry: (entry.get("dpPort"), entry.get("identity")))
-        return [RainPointGenericSensor(coordinator, sensor_key, sensor_info, base_slug, entry, port_number) for entry in ordered]
+        return [
+            RainPointGenericSensor(coordinator, sensor_key, sensor_info, base_slug, entry, result.port_number)
+            for entry in result.datapoints
+        ]
     except Exception as exc:
         _LOGGER.debug("build_generic_entities failed for sensor_key=%s: %s", sensor_key, exc)
         return []
