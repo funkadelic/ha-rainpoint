@@ -1091,6 +1091,16 @@ class RainPointUnknownSensor(RainPointSensorBase):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:help-circle-outline"
 
+    # extra_state_attributes is read on every state write and every template
+    # render, and two of the values it returns cost a full catalog gate
+    # evaluation (plus, for the link, a structural decode of the payload).
+    # The gate answer depends only on this entity's fixed model and modelCode,
+    # and the link only on those and the current payload, so both are computed
+    # once and reused until their inputs change. Declared on the class so an
+    # instance built without __init__ still starts from an empty memo.
+    _gate_description: dict | None = None
+    _report_url_for_payload: tuple[str | None, str] | None = None
+
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         model = sensor_info.get("model", "unknown")
@@ -1124,24 +1134,31 @@ class RainPointUnknownSensor(RainPointSensorBase):
             attrs["decoded_fields"] = field_names
             attrs["decoded_values"] = generic.get("fields")
 
-        # Imported locally to avoid a circular import: generic_entities
-        # subclasses RainPointSensorBase, which is defined later in this
-        # module than this class. Always present, regardless of the generic
-        # entities options toggle: this is computed from the catalog and the
-        # curated table alone, involves no entity creation, and is most
-        # valuable to a user who has not opted in.
-        from .generic_entities import describe_generic_gate
-
         model = self._sensor_info.get("model")
         model_code = self._sensor_info.get("model_code")
-        attrs.update(describe_generic_gate(model, model_code))
+        if self._gate_description is None:
+            # Imported locally to avoid a circular import: generic_entities
+            # subclasses RainPointSensorBase, which is defined later in this
+            # module than this class.
+            from .generic_entities import describe_generic_gate
+
+            self._gate_description = describe_generic_gate(model, model_code)
+        # Always present, regardless of the generic entities options toggle:
+        # computed from the catalog and the curated table alone, involves no
+        # entity creation, and is most valuable to a user who has not opted
+        # in. Copied out so a consumer editing the attributes cannot reach
+        # back into the cached lists.
+        attrs.update({key: list(value) for key, value in self._gate_description.items()})
 
         # The same pre-filled report link the unsupported-model notification
         # uses. This attribute is the durable surface: the notification fires
         # once per variant and can be dismissed, so a user who comes back to
         # the device later finds only this. Pointing it at the bare issue list
         # would make the lasting path the worse one.
-        attrs["report_url"] = _build_new_device_issue_url(model or "unknown", data.get("raw_value"), model_code)
+        raw_value = data.get("raw_value")
+        if self._report_url_for_payload is None or self._report_url_for_payload[0] != raw_value:
+            self._report_url_for_payload = (raw_value, _build_new_device_issue_url(model or "unknown", raw_value, model_code))
+        attrs["report_url"] = self._report_url_for_payload[1]
         attrs["instructions"] = (
             "This sensor model is not yet supported. Open report_url to file a pre-filled support request, "
             "then add what the RainPoint app shows for this device."

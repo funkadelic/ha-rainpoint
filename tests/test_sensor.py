@@ -829,21 +829,25 @@ def test_native_value_none_when_data_missing(cls, data_key, uid_suffix, _value):
 _UNK_SENTINEL = object()
 
 
+def _make_unknown_sensor(data=_UNK_SENTINEL, model="MYSTERY"):
+    """Build a RainPointUnknownSensor, shared by the classes that exercise it."""
+    if data is _UNK_SENTINEL:
+        data = {"type": "unknown", "model": model, "raw_value": "10#ABC"}
+    sensor = _make_sensor_base(
+        RainPointUnknownSensor,
+        "100_200_1",
+        data,
+        sensor_info_overrides={"model": model, "sub_name": "Mystery"},
+    )
+    sensor._attr_unique_id = f"rainpoint_100_200_1_unknown_{model}"
+    sensor._attr_name = f"Mystery Unsupported ({model})"
+    return sensor
+
+
 class TestUnknownSensor:
     """Tests for RainPointUnknownSensor."""
 
-    def _make(self, data=_UNK_SENTINEL, model="MYSTERY"):
-        if data is _UNK_SENTINEL:
-            data = {"type": "unknown", "model": model, "raw_value": "10#ABC"}
-        sensor = _make_sensor_base(
-            RainPointUnknownSensor,
-            "100_200_1",
-            data,
-            sensor_info_overrides={"model": model, "sub_name": "Mystery"},
-        )
-        sensor._attr_unique_id = f"rainpoint_100_200_1_unknown_{model}"
-        sensor._attr_name = f"Mystery Unsupported ({model})"
-        return sensor
+    _make = staticmethod(_make_unknown_sensor)
 
     def test_native_value_reports_model_when_data_present(self):
         # native_value reads data["model"], not sensor_info["model"], so pass
@@ -1000,6 +1004,75 @@ class TestUnknownSensor:
 
         assert "unmapped_generic_identities" in attrs
         assert "generic_gate_blocked_by" in attrs
+
+
+class TestUnknownSensorAttributeCost:
+    """extra_state_attributes is read on every state write and every template render.
+
+    Two of the values it returns are expensive: a full catalog gate
+    evaluation, and a report link that restructures the payload. Neither
+    input changes between most reads, so both are memoised. These cases fix
+    what the memo is keyed on, so a later change cannot make it stale.
+    """
+
+    def test_re_reading_attributes_evaluates_the_catalog_gate_no_further_times(self, monkeypatch):
+        """Both memoised values are gate-backed, so a repeat read must cost nothing.
+
+        The report link builds its own catalog summary, so the first read
+        evaluates the gate more than once. What matters is that the second
+        read adds none.
+        """
+        calls = []
+
+        def _counting(model, model_code=None):
+            calls.append((model, model_code))
+            return {"unmapped_generic_identities": ["STA_X"], "generic_gate_blocked_by": ["nope"]}
+
+        monkeypatch.setattr(generic_entities_module, "describe_generic_gate", _counting)
+        sensor = _make_unknown_sensor(model="MODELX")
+
+        first = sensor.extra_state_attributes
+        after_first_read = len(calls)
+        second = sensor.extra_state_attributes
+
+        assert after_first_read >= 1
+        assert len(calls) == after_first_read
+        assert first["unmapped_generic_identities"] == ["STA_X"]
+        assert second["generic_gate_blocked_by"] == ["nope"]
+
+    def test_editing_the_returned_lists_cannot_reach_the_memo(self, monkeypatch):
+        """The attributes dict is handed out; the cached lists behind it stay intact."""
+        monkeypatch.setattr(
+            generic_entities_module,
+            "describe_generic_gate",
+            lambda model, model_code=None: {"unmapped_generic_identities": ["STA_X"], "generic_gate_blocked_by": []},
+        )
+        sensor = _make_unknown_sensor(model="MODELX")
+
+        sensor.extra_state_attributes["unmapped_generic_identities"].append("STA_INJECTED")
+
+        assert sensor.extra_state_attributes["unmapped_generic_identities"] == ["STA_X"]
+
+    def test_the_report_link_is_rebuilt_only_when_the_payload_changes(self, monkeypatch):
+        import custom_components.rainpoint.sensor as sensor_module
+
+        calls = []
+
+        def _counting(model, raw_value, model_code=None):
+            calls.append(raw_value)
+            return f"https://example.invalid/{raw_value}"
+
+        monkeypatch.setattr(sensor_module, "_build_new_device_issue_url", _counting)
+        sensor = _make_unknown_sensor(model="MODELX", data={"type": "unknown", "model": "MODELX", "raw_value": "10#AA"})
+
+        assert sensor.extra_state_attributes["report_url"].endswith("10#AA")
+        assert sensor.extra_state_attributes["report_url"].endswith("10#AA")
+        assert calls == ["10#AA"]
+
+        sensor.coordinator.data["sensors"]["100_200_1"]["data"]["raw_value"] = "10#BB"
+
+        assert sensor.extra_state_attributes["report_url"].endswith("10#BB")
+        assert calls == ["10#AA", "10#BB"]
 
 
 class TestRawPayloadSensor:
