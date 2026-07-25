@@ -467,7 +467,7 @@ class RainPointGenericControlBase(CoordinatorEntity):
         zone = ""
         if port_number is not None and port_number > 1 and datapoint.dp_port >= 1:
             zone = f" Zone {datapoint.dp_port}"
-        self._attr_name = f"{sub_name}{zone} (unverified)"
+        self._attr_name = f"{sub_name}{zone} {identity} (unverified)"
 
         # Assigned last so the marker always wins over any domain default icon.
         self._attr_icon = GENERIC_CONTROL_MARKER_ICON
