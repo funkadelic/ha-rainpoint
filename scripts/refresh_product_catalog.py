@@ -46,7 +46,21 @@ _MODEL_PREFIXES = ("HTV", "HCS", "HWS", "HWG", "HIC")
 
 # Per dp entry, keep only the fields the loader/enrichment needs. Drop
 # UI/provisioning metadata the vendor catalog also carries.
-_KEPT_DP_FIELDS = ("dpCode", "identity", "dpPort", "dpDataType", "portNumber")
+#
+# dpLen is the vendor's own byte count and is what the enrichment compares a
+# decoded field's width against; dpDataType ("U8", "S16", ...) is kept for its
+# signedness letter. portNumber is deliberately absent: it is a per-model
+# property, not a per-dp one, and is written once on the variant record.
+_KEPT_DP_FIELDS = ("dpCode", "identity", "dpPort", "dpDataType", "dpLen")
+
+# Identity namespaces kept in the committed snapshot.
+#
+# STA_ entries are the status datapoints the generic decoder actually sees in a
+# payload. CTL_ entries are the control datapoints the generic-control
+# allowlist is built from. The vendor catalog also carries P_/C_/S_/ATTR_/MAX_/
+# RD_ provisioning, config, and UI metadata that no code path in this
+# integration reads, so it is dropped rather than shipped to every user.
+_KEPT_IDENTITY_PREFIXES = ("STA_", "CTL_")
 
 # Bucket key for vendor entries carrying no modelCode. Duplicated from
 # custom_components/rainpoint/api/product_catalog.py rather than imported,
@@ -60,32 +74,38 @@ def trim_catalog(raw: list[dict]) -> dict:
 
     raw is the list returned by RainPointClient.get_product_catalog(): one
     entry per vendor model, each carrying a "model" name, an optional
-    "modelCode", and a "dp" list of per-datapoint metadata dicts. Returns an
-    object keyed by model string then by modelCode, where RainPoint-prefixed
-    models keep only their dp entries' dpCode/identity/dpPort/dpDataType/
-    portNumber fields and every other model is dropped.
+    "modelCode", a model-level "portNumber", and a "dp" list of per-datapoint
+    metadata dicts. Returns an object keyed by model string then by modelCode,
+    whose values are {"portNumber": ..., "dp": [...]} records. RainPoint-prefixed
+    models keep only their STA_/CTL_ dp entries, trimmed to _KEPT_DP_FIELDS;
+    every other model, and every other identity namespace, is dropped.
 
     The model string alone is not a unique key: the vendor maps some models to
-    several modelCodes whose port counts differ, so a flat model-keyed object
-    would silently keep whichever variant happened to come last. Entries with
-    no modelCode land in the UNCODED_VARIANT bucket. Pure function: no I/O, no
-    network.
+    several modelCodes whose port counts genuinely differ (HIC801W is 0 ports
+    under code 278 and 8 under 279), so a flat model-keyed object would silently
+    keep whichever variant happened to come last. Entries with no modelCode land
+    in the UNCODED_VARIANT bucket. Pure function: no I/O, no network.
     """
-    trimmed: dict[str, dict[str, list[dict]]] = {}
+    trimmed: dict[str, dict[str, dict]] = {}
     for entry in raw:
         model = entry.get("model")
         if not model or not str(model).startswith(_MODEL_PREFIXES):
             continue
         model_code = entry.get("modelCode")
         variant = UNCODED_VARIANT if model_code is None else str(model_code)
-        dp_entries = entry.get("dp") or []
-        # Sort by dpCode so re-running against an unchanged vendor catalog is
-        # deterministic, even if the vendor API does not guarantee a stable
-        # dp array order across calls. Entries missing dpCode sort last.
-        trimmed.setdefault(model, {})[variant] = sorted(
-            ({field: dp.get(field) for field in _KEPT_DP_FIELDS} for dp in dp_entries),
-            key=lambda d: (d.get("dpCode") is None, d.get("dpCode")),
-        )
+        dp_entries = [dp for dp in (entry.get("dp") or []) if str(dp.get("identity") or "").startswith(_KEPT_IDENTITY_PREFIXES)]
+        port_number = entry.get("portNumber")
+        trimmed.setdefault(model, {})[variant] = {
+            "portNumber": port_number if isinstance(port_number, int) and not isinstance(port_number, bool) else None,
+            # Sort by dpCode so re-running against an unchanged vendor catalog
+            # is deterministic, even if the vendor API does not guarantee a
+            # stable dp array order across calls. Entries missing dpCode sort
+            # last.
+            "dp": sorted(
+                ({field: dp.get(field) for field in _KEPT_DP_FIELDS} for dp in dp_entries),
+                key=lambda d: (d.get("dpCode") is None, d.get("dpCode")),
+            ),
+        }
     return trimmed
 
 

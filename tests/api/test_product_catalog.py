@@ -9,7 +9,10 @@ from custom_components.rainpoint.api.product_catalog import (
     UNCODED_VARIANT,
     _load_catalog,
     _normalize_model_variants,
+    _normalize_variant_record,
+    get_catalog_port_number,
 )
+from tests.payload_samples import CATALOG_ANCHOR_MODEL
 
 
 class TestLoadCatalogValid:
@@ -18,11 +21,14 @@ class TestLoadCatalogValid:
     def test_valid_fixture_returns_dict_keyed_by_model_and_code(self, tmp_path):
         """A well-formed nested catalog survives the load unchanged."""
         catalog_path = tmp_path / "product_catalog.json"
-        catalog_path.write_text(json.dumps({"SOME_MODEL": {"278": [{"dpCode": 1}]}}), encoding="utf-8")
+        catalog_path.write_text(
+            json.dumps({"SOME_MODEL": {"278": {"portNumber": 4, "dp": [{"dpCode": 1}]}}}),
+            encoding="utf-8",
+        )
 
         loaded = _load_catalog(catalog_path)
 
-        assert loaded == {"SOME_MODEL": {"278": [{"dpCode": 1}]}}
+        assert loaded == {"SOME_MODEL": {"278": {"portNumber": 4, "dp": [{"dpCode": 1}]}}}
 
     def test_bare_dp_list_is_read_as_the_uncoded_bucket(self, tmp_path):
         """A pre-split catalog file still loads, as the model-level default."""
@@ -31,7 +37,20 @@ class TestLoadCatalogValid:
 
         loaded = _load_catalog(catalog_path)
 
-        assert loaded == {"SOME_MODEL": {UNCODED_VARIANT: [{"dpCode": 1}]}}
+        assert loaded == {"SOME_MODEL": {UNCODED_VARIANT: {"portNumber": None, "dp": [{"dpCode": 1}]}}}
+
+    def test_variant_written_as_a_bare_dp_list_still_loads(self, tmp_path):
+        """A catalog written before portNumber was hoisted keeps working.
+
+        The dp entries are still usable; only the port count is unknown, and an
+        unknown port count must read as None rather than 0.
+        """
+        catalog_path = tmp_path / "product_catalog.json"
+        catalog_path.write_text(json.dumps({"SOME_MODEL": {"278": [{"dpCode": 1}]}}), encoding="utf-8")
+
+        loaded = _load_catalog(catalog_path)
+
+        assert loaded == {"SOME_MODEL": {"278": {"portNumber": None, "dp": [{"dpCode": 1}]}}}
 
     def test_numeric_model_codes_are_normalized_to_strings(self):
         """Variant keys are coerced to str, so an int-keyed mapping still resolves.
@@ -40,7 +59,9 @@ class TestLoadCatalogValid:
         keys are always strings: a round trip through _load_catalog could never
         hand the coercion a non-string key to work on.
         """
-        assert _normalize_model_variants({278: [{"dpCode": 1}]}) == {"278": [{"dpCode": 1}]}
+        assert _normalize_model_variants({278: {"portNumber": 1, "dp": [{"dpCode": 1}]}}) == {
+            "278": {"portNumber": 1, "dp": [{"dpCode": 1}]}
+        }
 
     def test_unusable_model_entry_is_skipped_not_fatal(self, tmp_path):
         """One malformed model does not cost the whole catalog."""
@@ -61,13 +82,6 @@ class TestLoadCatalogValid:
 
         assert _load_catalog(catalog_path) == {}
 
-    def test_get_catalog_entry_returns_seeded_model_dp_list(self):
-        """The shipped catalog carries the seeded bootstrap model."""
-        entry = get_catalog_entry("HCS777ARF")
-        assert isinstance(entry, list)
-        assert len(entry) > 0
-        assert all("dpCode" in dp for dp in entry)
-
     def test_get_catalog_entry_unknown_model_returns_none(self):
         """A model the catalog has never heard of is a plain miss."""
         assert get_catalog_entry("TOTALLY_UNKNOWN_MODEL") is None
@@ -86,9 +100,11 @@ class TestVariantResolution:
     instead.
     """
 
-    _CODED: ClassVar[list[dict]] = [{"dpCode": 1, "dpPort": 1}]
-    _OTHER_CODED: ClassVar[list[dict]] = [{"dpCode": 1, "dpPort": 2}]
-    _UNCODED: ClassVar[list[dict]] = [{"dpCode": 1, "dpPort": 9}]
+    # These go straight into _CATALOG, which holds post-normalization state,
+    # so they must be variant records rather than bare dp lists.
+    _CODED: ClassVar[dict] = {"portNumber": 1, "dp": [{"dpCode": 1, "dpPort": 1}]}
+    _OTHER_CODED: ClassVar[dict] = {"portNumber": 8, "dp": [{"dpCode": 1, "dpPort": 2}]}
+    _UNCODED: ClassVar[dict] = {"portNumber": 3, "dp": [{"dpCode": 1, "dpPort": 9}]}
 
     def _install(self, monkeypatch, catalog):
         """Swap in a purpose-built catalog for the duration of one test."""
@@ -98,14 +114,14 @@ class TestVariantResolution:
         """A code listed in the catalog resolves to its own variant."""
         self._install(monkeypatch, {"HIC801W": {"278": self._CODED, "279": self._OTHER_CODED}})
 
-        assert product_catalog_module.get_catalog_entry("HIC801W", 279) == self._OTHER_CODED
+        assert product_catalog_module.get_catalog_entry("HIC801W", 279) == self._OTHER_CODED["dp"]
 
     def test_integer_and_string_model_codes_resolve_alike(self, monkeypatch):
         """Devices report modelCode as an int; the catalog keys it as a string."""
         self._install(monkeypatch, {"HIC801W": {"278": self._CODED}})
 
-        assert product_catalog_module.get_catalog_entry("HIC801W", 278) == self._CODED
-        assert product_catalog_module.get_catalog_entry("HIC801W", "278") == self._CODED
+        assert product_catalog_module.get_catalog_entry("HIC801W", 278) == self._CODED["dp"]
+        assert product_catalog_module.get_catalog_entry("HIC801W", "278") == self._CODED["dp"]
 
     def test_unlisted_model_code_never_borrows_another_variant(self, monkeypatch):
         """The whole point: an unknown code must not resolve to a sibling's data."""
@@ -117,13 +133,13 @@ class TestVariantResolution:
         """A model-level default is a legitimate fallback; a sibling code is not."""
         self._install(monkeypatch, {"HIC801W": {"278": self._CODED, UNCODED_VARIANT: self._UNCODED}})
 
-        assert product_catalog_module.get_catalog_entry("HIC801W", 999) == self._UNCODED
+        assert product_catalog_module.get_catalog_entry("HIC801W", 999) == self._UNCODED["dp"]
 
     def test_missing_model_code_resolves_a_single_variant(self, monkeypatch):
         """With only one variant there is nothing to disambiguate."""
-        self._install(monkeypatch, {"HCS777ARF": {"278": self._CODED}})
+        self._install(monkeypatch, {"HCS702B": {"278": self._CODED}})
 
-        assert product_catalog_module.get_catalog_entry("HCS777ARF") == self._CODED
+        assert product_catalog_module.get_catalog_entry("HCS702B") == self._CODED["dp"]
 
     def test_missing_model_code_refuses_to_guess_between_variants(self, monkeypatch):
         """A device that reports no modelCode gets no annotation, not a coin flip."""
@@ -138,13 +154,110 @@ class TestVariantResolution:
             {"HIC801W": {"278": self._CODED, "279": self._OTHER_CODED, UNCODED_VARIANT: self._UNCODED}},
         )
 
-        assert product_catalog_module.get_catalog_entry("HIC801W") == self._UNCODED
+        assert product_catalog_module.get_catalog_entry("HIC801W") == self._UNCODED["dp"]
 
     def test_model_with_no_variants_returns_none(self, monkeypatch):
         """An empty variant map carries nothing to annotate with."""
         self._install(monkeypatch, {"HIC801W": {}})
 
         assert product_catalog_module.get_catalog_entry("HIC801W", 278) is None
+
+
+class TestPortNumberResolution:
+    """portNumber is a per-model property and must resolve per variant.
+
+    Eight models in the shipped catalog map to two modelCodes whose port counts
+    genuinely differ (HIC801W is 0 ports under 278 and 8 under 279), so reading
+    the wrong variant's count would put a bogus zone count on a device.
+    """
+
+    _A: ClassVar[dict] = {"portNumber": 0, "dp": [{"dpCode": 1}]}
+    _B: ClassVar[dict] = {"portNumber": 8, "dp": [{"dpCode": 1}]}
+
+    def _install(self, monkeypatch, catalog):
+        monkeypatch.setattr(product_catalog_module, "_CATALOG", catalog)
+
+    def test_each_variant_reports_its_own_port_count(self, monkeypatch):
+        """The two codes of one model string must not share a port count."""
+        self._install(monkeypatch, {"HIC801W": {"278": self._A, "279": self._B}})
+
+        assert get_catalog_port_number("HIC801W", 278) == 0
+        assert get_catalog_port_number("HIC801W", 279) == 8
+
+    def test_ambiguous_model_refuses_to_guess(self, monkeypatch):
+        """No modelCode plus several variants is a miss, not a coin flip."""
+        self._install(monkeypatch, {"HIC801W": {"278": self._A, "279": self._B}})
+
+        assert get_catalog_port_number("HIC801W") is None
+
+    def test_unknown_model_returns_none(self, monkeypatch):
+        """A model the catalog never heard of has no declared port count."""
+        self._install(monkeypatch, {"HIC801W": {"278": self._A}})
+
+        assert get_catalog_port_number("TOTALLY_UNKNOWN") is None
+        assert get_catalog_port_number(None) is None
+
+    def test_zero_ports_is_distinct_from_unknown(self, monkeypatch):
+        """0 means "the vendor declares no ports"; None means "the catalog does not say".
+
+        Collapsing the two would let a caller read a missing value as a real
+        zero-port declaration.
+        """
+        self._install(monkeypatch, {"M": {"1": self._A, "2": {"portNumber": None, "dp": []}}})
+
+        assert get_catalog_port_number("M", 1) == 0
+        assert get_catalog_port_number("M", 2) is None
+
+
+class TestNormalizeVariantRecord:
+    """One malformed variant must degrade to a miss, never raise at import."""
+
+    def test_dp_list_is_required(self):
+        """A record with no usable dp list carries nothing to annotate with."""
+        assert _normalize_variant_record({"portNumber": 4}) is None
+        assert _normalize_variant_record({"portNumber": 4, "dp": "not a list"}) is None
+
+    def test_non_integer_port_number_degrades_to_none(self):
+        """A junk port count is dropped rather than propagated to callers."""
+        assert _normalize_variant_record({"portNumber": "4", "dp": []}) == {"portNumber": None, "dp": []}
+
+    def test_boolean_port_number_is_not_an_integer(self):
+        """bool is an int subclass in Python; True must not become 1 port."""
+        assert _normalize_variant_record({"portNumber": True, "dp": []}) == {"portNumber": None, "dp": []}
+
+    def test_unusable_shapes_are_rejected(self):
+        """Anything that is neither a record nor a bare dp list is a miss."""
+        assert _normalize_variant_record("not a record") is None
+        assert _normalize_variant_record(None) is None
+
+
+class TestShippedCatalog:
+    """Assertions against the committed snapshot itself, not a purpose-built fixture.
+
+    These are what catch a regeneration that silently changes shape or scope;
+    the fixture-driven tests above would keep passing through such a change.
+    """
+
+    def test_get_catalog_entry_returns_a_real_model_dp_list(self):
+        """The shipped catalog resolves a real model to a usable dp list."""
+        entry = get_catalog_entry(CATALOG_ANCHOR_MODEL)
+        assert isinstance(entry, list)
+        assert len(entry) > 0
+        assert all("dpCode" in dp for dp in entry)
+
+    def test_shipped_catalog_declares_only_status_and_control_identities(self):
+        """The trim drops the provisioning/config namespaces the integration never reads.
+
+        Shipping P_/C_/S_/ATTR_ entries would bloat a file that goes out to
+        every user with metadata no code path consumes.
+        """
+        entry = get_catalog_entry(CATALOG_ANCHOR_MODEL)
+
+        assert all(dp["identity"].startswith(("STA_", "CTL_")) for dp in entry)
+
+    def test_shipped_catalog_reports_a_real_port_count(self):
+        """End-to-end port-count resolution against the committed snapshot."""
+        assert get_catalog_port_number(CATALOG_ANCHOR_MODEL) == 1
 
 
 class TestLoadCatalogFailSoft:

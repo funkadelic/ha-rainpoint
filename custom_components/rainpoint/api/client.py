@@ -299,11 +299,19 @@ class RainPointClient:
         return data.get("data", [])
 
     async def get_product_catalog(self) -> list[dict]:
-        """Fetch the vendor's full productModel catalog.
+        """Fetch the vendor's full productModel catalog as a list of model entries.
 
         Used only by the maintainer refresh script (scripts/refresh_product_catalog.py)
         to regenerate the committed, trimmed catalog snapshot -- the running
         integration never calls this at runtime.
+
+        The endpoint does not return a bare list. Its "data" is an object whose
+        "models" key holds the per-model entries, alongside catalog-wide keys
+        ("version", "addGroups", "replaceGroups", "codePushKeys") the snapshot
+        does not use. This unwraps to the models list so callers get the one
+        shape they care about. A "data" that is already a list is passed
+        through, so a future response shape that drops the envelope keeps
+        working.
         """
         await self.ensure_logged_in()
         url = f"{self._base_url}/app/common/core/productModel"
@@ -318,7 +326,13 @@ class RainPointClient:
             self._maybe_invalidate_token(data.get("code"), request_token)
             _LOGGER.debug("get_product_catalog failed response: %s", data)
             raise RainPointApiError(f"get_product_catalog failed: code {data.get('code')}")
-        return data.get("data", [])
+        payload = data.get("data") or []
+        if isinstance(payload, dict):
+            payload = payload.get("models") or []
+        if not isinstance(payload, list):
+            _LOGGER.debug("get_product_catalog returned an unusable data shape: %s", type(payload).__name__)
+            return []
+        return payload
 
     async def get_devices_by_hid(self, hid: int) -> list[dict]:
         await self.ensure_logged_in()

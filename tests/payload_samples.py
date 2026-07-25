@@ -201,9 +201,16 @@ SYNTHETIC_POOL_PLUS_DATA = {
 }
 
 # A synthetic 10# (flat) payload built for the generic-decoder and catalog
-# tests: a compact-form STA_ALARM entry the seeded catalog does not know
-# about, followed by four wide-form entries (STA_TEM, STA_RH, STA_BAT,
-# STA_RSSI) whose structural indices match the "HCS777ARF" bootstrap seed
-# committed in api/data/product_catalog.json.
+# tests: a compact-form STA_ALARM entry the anchor model does not declare,
+# followed by four wide-form entries (STA_TEM, STA_RH, STA_BAT, STA_RSSI)
+# whose structural indices match the anchor model's dpCodes.
 SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD = "10#208500968832DC64E0C5"
-SEEDED_CATALOG_MODEL = "HCS777ARF"
+
+# The real catalog model the enrichment tests anchor on. Chosen because it is
+# a genuine entry in the committed snapshot that is NOT in HAND_WRITTEN_MODELS
+# (so the generic path actually runs for it), has exactly one modelCode
+# variant (so lookups need no model_code), declares dpCodes 9/10/31/32 to match
+# the payload above, and does NOT declare dpCode 2 - which keeps the
+# "decoded field the catalog knows nothing about" case alive for STA_ALARM.
+# Its STA_TEM is S16, so it also exercises the signed/multi-byte annotation.
+CATALOG_ANCHOR_MODEL = "HCS702B"

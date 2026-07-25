@@ -47,11 +47,11 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_VALVE_HUB,
 )
 from tests.payload_samples import (  # noqa: E402
+    CATALOG_ANCHOR_MODEL,
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
     SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
-    SEEDED_CATALOG_MODEL,
 )
 
 # ---------------------------------------------------------------------------
@@ -1004,13 +1004,16 @@ class TestPureHelpers:
 
     def test_decode_subdevice_payload_unknown_model_carries_catalog_annotation(self):
         """A catalog-recognized unsupported model's unknown-branch decode is enriched."""
-        # STA_BAT entry from the seeded bootstrap catalog.
-        result = _coord_module._decode_subdevice_payload(SEEDED_CATALOG_MODEL, SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD)
+        # STA_BAT is declared by the anchor model in the committed catalog.
+        result = _coord_module._decode_subdevice_payload(CATALOG_ANCHOR_MODEL, SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD)
 
         assert result["type"] == "unknown"
         fields_by_name = {f["name"]: f for f in result["generic"]["fields"]}
-        assert fields_by_name["STA_BAT"]["catalog"]["dp_port"] == 1
-        assert fields_by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
+        catalog = fields_by_name["STA_BAT"]["catalog"]
+        assert catalog["dp_port"] == 0
+        assert catalog["declared_width"] == 1
+        assert catalog["port_number"] == 1
+        assert catalog["width_mismatch"] is False
 
     def test_decode_subdevice_payload_registered_model_never_reaches_generic_path(self):
         """A DECODER_REGISTRY model always dispatches to its hand-written decoder,

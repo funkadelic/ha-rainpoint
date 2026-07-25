@@ -15,7 +15,7 @@ nothing in the entity or control path consumes them.
 import logging
 import re
 
-from .product_catalog import get_catalog_entry
+from .product_catalog import get_catalog_entry, get_catalog_port_number
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -159,31 +159,65 @@ def _int_from_bytes(value_bytes: list[int], field: int) -> int | None:
     return int.from_bytes(bytes(value_bytes), order)
 
 
-_DATA_TYPE_WIDTH_RE = re.compile(r"^u?int(\d+)$")
+# The vendor's dpDataType vocabulary is "U8" / "S16" / "U32" style: a
+# signedness letter then a bit count. Anchored rather than a bare digit
+# search, so a future type name that merely embeds a digit (an "ENUM8" whose
+# 8 means "8 possible states", not "8 bits") is not misread as a width.
+_DATA_TYPE_RE = re.compile(r"^([US])(\d+)$")
 
 
-def _declared_byte_width(data_type) -> int | None:
-    """Parse a declared byte width out of a catalog dpDataType string.
-
-    Only matches strings shaped exactly like "uint8" / "int16" (an optional
-    "u" prefix, "int", then a digit run with nothing else). This is
-    deliberately anchored rather than a bare digit search: a catalog
-    dpDataType like "enum8" embeds a digit that means "8 possible states",
-    not "8 bits", and a loose search would silently misparse it as a byte
-    width. Returns None when no width can be determined (non-string,
-    non-matching shape, or a bit count that is not a whole number of bytes),
-    in which case the caller treats the field as "cannot compare" rather
-    than guessing at a mismatch.
-    """
+def _parse_data_type(dp_entry: dict) -> re.Match | None:
+    """Return a dp entry's parsed dpDataType, or None when it is absent or unparseable."""
+    data_type = dp_entry.get("dpDataType")
     if not isinstance(data_type, str):
         return None
-    match = _DATA_TYPE_WIDTH_RE.match(data_type)
+    return _DATA_TYPE_RE.match(data_type)
+
+
+def _declared_byte_width(dp_entry: dict) -> int | None:
+    """Return a catalog dp entry's declared byte width, or None if it has none.
+
+    dpLen is the vendor's own byte count and is authoritative: it is present on
+    every entry, including the ones whose dpDataType is blank, and it disagrees
+    with the type name where the two conflict (the "TD2" timestamp type appears
+    at both 1 and 2 bytes). The dpDataType parse is only a fallback for an entry
+    that somehow lacks a usable dpLen.
+
+    A dpLen of 0 means variable-length (the STRING types) and yields None, as
+    does any non-integer value. None means "cannot compare", which the caller
+    treats as no mismatch rather than guessing at one.
+
+    dp_entry is always a dict: _match_catalog_dp only ever returns entries it
+    has already type-checked.
+    """
+    dp_len = dp_entry.get("dpLen")
+    if isinstance(dp_len, int) and not isinstance(dp_len, bool) and dp_len > 0:
+        return dp_len
+
+    match = _parse_data_type(dp_entry)
     if not match:
         return None
-    bits = int(match.group(1))
+    bits = int(match.group(2))
     if bits <= 0 or bits % 8 != 0:
         return None
     return bits // 8
+
+
+def _declared_signedness(dp_entry: dict) -> bool | None:
+    """Return True/False for a signed/unsigned dp entry, or None if undeclared.
+
+    Signedness comes from the dpDataType letter ("S16" is signed, "U8" is
+    not). Types that carry no signedness at all (STRING, the timestamp types
+    T4/TD2, and blank values) return None rather than defaulting to unsigned,
+    so a caller can tell "the vendor says unsigned" apart from "the vendor does
+    not say".
+
+    dp_entry is always a dict, for the same reason as _declared_byte_width.
+    """
+    match = _parse_data_type(dp_entry)
+    if not match:
+        return None
+    return match.group(1) == "S"
 
 
 def _match_catalog_dp(dp_list: list, index: int, dp_id: int, dp_id_prefixed: bool) -> dict | None:
@@ -220,26 +254,34 @@ def _annotate_fields_with_catalog(
     Annotate-never-override: looks up the (model, model_code) variant in the
     committed product catalog and, for each field that maps to a catalog dp
     entry, attaches a "catalog" sub-dict carrying the declared zone (dpPort),
-    data type (dpDataType), port number, and a width_mismatch flag. Fields
-    with no catalog match are left exactly as built by the caller - no
-    "catalog" key is added. This never modifies a field's existing "value" or
-    "raw".
+    data type (dpDataType), declared byte width and signedness, the model's
+    port count, and a width_mismatch flag. Fields with no catalog match are
+    left exactly as built by the caller - no "catalog" key is added. This never
+    modifies a field's existing "value" or "raw".
+
+    port_number is a property of the model variant, not of the individual dp
+    entry, so it is resolved once for the whole model rather than read off each
+    dp entry.
     """
     dp_list = get_catalog_entry(model, model_code)
     if not dp_list:
         return
 
+    port_number = get_catalog_port_number(model, model_code)
+
     for field in fields:
         dp_entry = _match_catalog_dp(dp_list, field["index"], field["dp_id"], dp_id_prefixed)
         if dp_entry is None:
             continue
-        declared_width = _declared_byte_width(dp_entry.get("dpDataType"))
+        declared_width = _declared_byte_width(dp_entry)
         actual_width = len(field["raw"]) // 2
         width_mismatch = declared_width is not None and declared_width != actual_width
         field["catalog"] = {
             "dp_port": dp_entry.get("dpPort"),
             "data_type": dp_entry.get("dpDataType"),
-            "port_number": dp_entry.get("portNumber"),
+            "declared_width": declared_width,
+            "signed": _declared_signedness(dp_entry),
+            "port_number": port_number,
             "width_mismatch": width_mismatch,
         }
 
@@ -265,8 +307,10 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
 
     When ``model`` is given, each field whose position matches an entry in the
     committed product catalog for that model additionally carries a "catalog"
-    sub-dict: ``{"dp_port": ..., "data_type": ..., "port_number": ...,
-    "width_mismatch": bool}``. The catalog only annotates - a field's "value"
+    sub-dict: ``{"dp_port": ..., "data_type": ..., "declared_width": ...,
+    "signed": ..., "port_number": ..., "width_mismatch": bool}``. Both
+    "declared_width" and "signed" are None when the vendor does not declare
+    them. The catalog only annotates - a field's "value"
     and "raw" are never modified by this step. A field with no catalog match,
     a model with no catalog entry, or a model of None all leave the field
     dict exactly as it is without ``model`` (no "catalog" key at all).
