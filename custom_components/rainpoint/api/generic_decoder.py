@@ -344,19 +344,38 @@ def _annotate_fields_with_catalog(
     port_number = get_catalog_port_number(model, model_code)
 
     if dp_id_prefixed:
-        groups: dict[int, list[dict]] = {}
-        for field in fields:
-            groups.setdefault(field["index"], []).append(field)
-        for index, group_fields in groups.items():
-            candidates = [dp for dp in dp_list if isinstance(dp, dict) and dp.get("dpCode") == index]
-            for field, dp_entry in _pair_group_by_dp_id_and_port(group_fields, candidates):
-                _apply_catalog_annotation(field, dp_entry, port_number)
+        _annotate_tlv_fields(fields, dp_list, port_number)
     else:
-        for field in fields:
-            dp_entry = _match_catalog_dp(dp_list, field["index"])
-            if dp_entry is None:
-                continue
+        _annotate_flat_fields(fields, dp_list, port_number)
+
+
+def _annotate_tlv_fields(fields: list[dict], dp_list: list, port_number: int | None) -> None:
+    """Annotate ``11#`` fields, disambiguating a shared index by dp_id then port.
+
+    Fields sharing one structural index pair against that index's catalog
+    candidates in _pair_group_by_dp_id_and_port order; see the framing note
+    in _annotate_fields_with_catalog.
+    """
+    groups: dict[int, list[dict]] = {}
+    for field in fields:
+        groups.setdefault(field["index"], []).append(field)
+    for index, group_fields in groups.items():
+        candidates = [dp for dp in dp_list if isinstance(dp, dict) and dp.get("dpCode") == index]
+        for field, dp_entry in _pair_group_by_dp_id_and_port(group_fields, candidates):
             _apply_catalog_annotation(field, dp_entry, port_number)
+
+
+def _annotate_flat_fields(fields: list[dict], dp_list: list, port_number: int | None) -> None:
+    """Annotate ``10#`` fields, matching each field's index to a unique catalog dp.
+
+    A shared index is ambiguous on this framing (no per-entry dp_id) and is
+    refused by _match_catalog_dp, so the field is left unannotated.
+    """
+    for field in fields:
+        dp_entry = _match_catalog_dp(dp_list, field["index"])
+        if dp_entry is None:
+            continue
+        _apply_catalog_annotation(field, dp_entry, port_number)
 
 
 def decode_generic(raw: str, model: str | None = None, model_code: int | str | None = None) -> dict:
