@@ -189,6 +189,41 @@ def _format_gate_diagnostics(model: str | None, model_code: int | str | None) ->
     return "\n".join(lines)
 
 
+# GitHub answers a request line past roughly 8 KB with 414 URI Too Long, and
+# a report link that silently fails is worse than one carrying less detail.
+ISSUE_URL_MAX_LENGTH = 8000
+
+_ISSUE_FIELD_TRUNCATION_NOTE = "\n... truncated to keep this link usable; the device's diagnostic entity carries the full text"
+
+
+def _url_for_params(params: dict) -> str:
+    """Render the issue URL for a parameter set."""
+    return f"{ISSUE_URL}/new?{urlencode(params)}"
+
+
+def _fit_param(params: dict, key: str, value: str) -> dict:
+    """Return params with as much of value under key as the length budget allows.
+
+    Percent-encoding expands the value by an amount that depends on its
+    content, so the fit is measured against the rendered URL rather than
+    estimated from the raw text. A value that cannot fit even partially is
+    omitted rather than added empty, so the reporter sees a blank form field
+    instead of a lone truncation marker.
+    """
+    if len(_url_for_params({**params, key: value})) <= ISSUE_URL_MAX_LENGTH:
+        return {**params, key: value}
+    low, high = 0, len(value)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if len(_url_for_params({**params, key: value[:mid] + _ISSUE_FIELD_TRUNCATION_NOTE})) <= ISSUE_URL_MAX_LENGTH:
+            low = mid
+        else:
+            high = mid - 1
+    if low == 0:
+        return params
+    return {**params, key: value[:low] + _ISSUE_FIELD_TRUNCATION_NOTE}
+
+
 def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: int | None = None) -> str:
     """Return a GitHub New-device-support URL pre-filled with what the integration already knows.
 
@@ -201,6 +236,12 @@ def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: i
     more than one modelCode and the variants can differ in port count, so a
     report naming only the model string can be ambiguous about which hardware it
     describes.
+
+    The two growable fields are fitted to a total length budget, lowest value
+    first. The raw payload is never trimmed: it is the one thing here that
+    cannot be regenerated later. The auto-decode can be recomputed from that
+    payload, and the catalog summary from the model and modelCode, so both are
+    recoverable if they are cut.
     """
     params = {
         "template": NEW_DEVICE_ISSUE_TEMPLATE,
@@ -212,11 +253,11 @@ def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: i
         params["model_code"] = str(model_code)
     auto_decoded = _format_generic_fields(decode_generic(raw_value, model=model, model_code=model_code)) if raw_value else ""
     if auto_decoded:
-        params["auto_decoded"] = auto_decoded
+        params = _fit_param(params, "auto_decoded", auto_decoded)
     gate_diagnostics = _format_gate_diagnostics(model, model_code)
     if gate_diagnostics:
-        params["gate_diagnostics"] = gate_diagnostics
-    return f"{ISSUE_URL}/new?{urlencode(params)}"
+        params = _fit_param(params, "gate_diagnostics", gate_diagnostics)
+    return _url_for_params(params)
 
 
 def _resolve_addr_from_sid(sid: str) -> int | None:

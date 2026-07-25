@@ -1402,3 +1402,77 @@ class TestApplyPushUpdate:
         zone1 = coord.data["sensors"]["100_200_1"]["data"]["zones"][1]
         assert zone1["open"] is True
         assert zone1["state_raw"] == 1
+
+
+class TestIssueUrlLengthBudget:
+    """The pre-filled report link is capped so GitHub cannot answer it with 414 URI Too Long.
+
+    Three growable fields feed this URL. The raw payload is never trimmed:
+    it is the only one that cannot be regenerated later. The auto-decode is
+    recomputable from that payload and the catalog summary from the model
+    and modelCode, so both are safe to cut.
+    """
+
+    _PAYLOAD = "11#" + ("0100AD3C00" * 20)
+
+    def _url(self, budget=None):
+        import custom_components.rainpoint.coordinator as coord
+
+        if budget is None:
+            return coord._build_new_device_issue_url("HTV445FRF", self._PAYLOAD, 360)
+        with patch.object(coord, "ISSUE_URL_MAX_LENGTH", budget):
+            return coord._build_new_device_issue_url("HTV445FRF", self._PAYLOAD, 360)
+
+    @staticmethod
+    def _fields(url):
+        from urllib.parse import parse_qs, urlparse
+
+        return parse_qs(urlparse(url).query)
+
+    def test_realistic_worst_case_needs_no_truncation(self):
+        """The largest committed catalog variant with a long payload still fits comfortably."""
+        url = self._url()
+
+        assert len(url) < _coord_module.ISSUE_URL_MAX_LENGTH
+        assert "truncated to keep" not in url
+
+    def test_gate_diagnostics_is_sacrificed_before_the_auto_decode(self):
+        """Lowest-value field first: the catalog summary is fully derivable from model plus modelCode."""
+        url = self._url(budget=700)
+        fields = self._fields(url)
+
+        assert len(url) <= 700
+        assert "gate_diagnostics" not in fields
+        assert "auto_decoded" in fields
+
+    def test_the_raw_payload_is_never_trimmed(self):
+        """Even at a budget the payload alone blows, it survives intact and the optional fields go."""
+        url = self._url(budget=120)
+        fields = self._fields(url)
+
+        assert fields["primary_payload"][0] == self._PAYLOAD
+        assert "auto_decoded" not in fields
+        assert "gate_diagnostics" not in fields
+
+    def test_a_field_that_fits_only_partially_is_truncated_with_a_marker(self):
+        """A budget leaving room for some of the text keeps that text and says it was cut."""
+        params = {"template": "new_device.yml", "model": "X"}
+        long_value = "D" * 4000
+
+        with patch.object(_coord_module, "ISSUE_URL_MAX_LENGTH", 500):
+            fitted = _coord_module._fit_param(params, "gate_diagnostics", long_value)
+
+        assert "gate_diagnostics" in fitted
+        assert fitted["gate_diagnostics"].startswith("DDDD")
+        assert len(fitted["gate_diagnostics"]) < len(long_value)
+        assert "truncated to keep" in fitted["gate_diagnostics"]
+        assert len(_coord_module._url_for_params(fitted)) <= 500
+
+    def test_a_field_with_no_room_at_all_is_omitted_not_left_as_a_bare_marker(self):
+        """A lone truncation marker would be noise; the field is dropped instead."""
+        params = {"template": "new_device.yml", "model": "X"}
+
+        with patch.object(_coord_module, "ISSUE_URL_MAX_LENGTH", 60):
+            fitted = _coord_module._fit_param(params, "gate_diagnostics", "D" * 4000)
+
+        assert "gate_diagnostics" not in fitted
