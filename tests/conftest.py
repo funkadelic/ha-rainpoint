@@ -163,6 +163,9 @@ class _HABaseEntity:
     _attr_unique_id = None
     _attr_name = None
 
+    async def async_will_remove_from_hass(self):
+        """No-op teardown hook, matching Entity's awaitable base implementation."""
+
 
 class _CoordinatorEntity(_HABaseEntity):
     """Minimal CoordinatorEntity stand-in.
@@ -270,6 +273,11 @@ sys.modules["homeassistant.helpers.issue_registry"].async_delete_issue = MagicMo
 # event.async_track_time_interval returns a cancel callback; the watchdog stores
 # it and calls it on stop.
 sys.modules["homeassistant.helpers.event"].async_track_time_interval = MagicMock(return_value=MagicMock())
+
+# event.async_call_later likewise returns a cancel callback; the generic
+# control path stores it and calls it before scheduling a new one / on
+# entity removal.
+sys.modules["homeassistant.helpers.event"].async_call_later = MagicMock(return_value=MagicMock())
 
 
 # DeviceInfo: callable that stores kwargs as a dict subclass.

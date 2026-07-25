@@ -2,19 +2,44 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_345
+from custom_components.rainpoint.const import CONF_GENERIC_CONTROL_ENABLED, DOMAIN, MODEL_VALVE_345
 from custom_components.rainpoint.number import (
     DURATION_DEFAULT_MINUTES,
     DURATION_MAX_MINUTES,
     DURATION_MIN_MINUTES,
     DURATION_STEP_MINUTES,
+    RainPointGenericZoneDurationNumber,
     RainPointZoneDurationNumber,
+    build_generic_duration_entities,
 )
-from tests.helpers import make_sensor_coordinator
+from tests.helpers import make_coordinator_data, make_sensor_coordinator, make_sensor_entry
+
+# Real, non-hand-written catalog variants reused from tests/test_generic_control.py's
+# own fixtures, so the companion duration builder is proven against the same
+# ground truth rather than a synthetic one.
+ANCHOR_MODEL = "HTV103FRF"  # single-zone: portNumber 1, CTL_WATER on dpPort 1
+ANCHOR_MODEL_CODE = 31
+TWO_ZONE_MODEL = "HTV214FRF"  # two-zone: portNumber 2, CTL_WATER on dpPort 1 and 2
+TWO_ZONE_MODEL_CODE = 288
+SOCKET_MODEL = "HWG004WRF"  # CTL_SOCK only -- no valve zone, so no duration companion
+SOCKET_MODEL_CODE = 34
+
+
+def _unknown_data(model: str) -> dict:
+    """Build the {"type": "unknown", ...} decoded-payload shape the control gate requires."""
+    return {"type": "unknown", "model": model, "raw_value": "11#00", "generic": {"fields": [], "field_names": []}}
+
+
+def _generic_control_sensor_info(model: str, model_code: int, sub_name: str = "Valve Hub 1") -> dict:
+    entry = make_sensor_entry(hid=100, mid=200, addr=1, model=model, sub_name=sub_name, data=_unknown_data(model))
+    entry["model_code"] = model_code
+    entry["device_name"] = "dev1"
+    entry["product_key"] = "pk1"
+    return entry
 
 
 def _make_number(current_value=10.0, firmware_version="1.0"):
@@ -387,3 +412,265 @@ class TestNumberSetupEntry:
         await async_setup_entry(hass, entry, added)
 
         added.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# build_generic_duration_entities (companion duration entities for generic
+# control valve zones)
+# ---------------------------------------------------------------------------
+
+
+def _make_generic_coordinator(sensor_key: str, sensor_info: dict):
+    coord = MagicMock()
+    coord.data = make_coordinator_data(sensors={sensor_key: sensor_info})
+    return coord
+
+
+class TestBuildGenericDurationEntities:
+    def test_single_zone_anchor_yields_one_companion(self):
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
+        coordinator = _make_generic_coordinator("100_200_1", sensor_info)
+
+        entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+
+        assert len(entities) == 1
+        assert isinstance(entities[0], RainPointGenericZoneDurationNumber)
+        assert entities[0]._attr_unique_id == "rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration"
+
+    def test_two_zone_anchor_yields_two_companions_matching_the_valves_unique_ids(self):
+        """A two-zone anchor variant's companions are exactly its two valve unique_ids, each plus the duration suffix."""
+        from custom_components.rainpoint.generic_control import build_generic_valve_entities
+
+        sensor_info = _generic_control_sensor_info(TWO_ZONE_MODEL, TWO_ZONE_MODEL_CODE, sub_name="Yard")
+        coordinator = _make_generic_coordinator("1_2_1", sensor_info)
+
+        valves = build_generic_valve_entities(coordinator, "1_2_1", sensor_info, "1_2_1")
+        durations = build_generic_duration_entities(coordinator, "1_2_1", sensor_info, "1_2_1")
+
+        assert len(valves) == 2
+        assert len(durations) == 2
+        assert {d._attr_unique_id for d in durations} == {f"{v._attr_unique_id}_duration" for v in valves}
+
+    def test_socket_only_variant_yields_no_companions(self):
+        """CTL_SOCK carries no run duration -- only valve zones get a companion."""
+        sensor_info = _generic_control_sensor_info(SOCKET_MODEL, SOCKET_MODEL_CODE, sub_name="Outlet 1")
+        coordinator = _make_generic_coordinator("300_400_1", sensor_info)
+
+        assert build_generic_duration_entities(coordinator, "300_400_1", sensor_info, "300_400_1") == []
+
+    def test_non_unknown_payload_yields_nothing(self):
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
+        sensor_info["data"] = {"type": "valve"}
+        coordinator = _make_generic_coordinator("100_200_1", sensor_info)
+
+        assert build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
+
+
+# ---------------------------------------------------------------------------
+# RainPointGenericZoneDurationNumber construction and behavior
+# ---------------------------------------------------------------------------
+
+
+class TestGenericZoneDurationNumberConstruction:
+    def test_single_zone_name_omits_zone_segment(self):
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE, sub_name="Garden Valve")
+        coordinator = _make_generic_coordinator("100_200_1", sensor_info)
+
+        entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+
+        assert entities[0]._attr_name == "Garden Valve CTL_WATER Duration (unverified)"
+
+    def test_two_zone_names_include_the_zone_segment(self):
+        sensor_info = _generic_control_sensor_info(TWO_ZONE_MODEL, TWO_ZONE_MODEL_CODE, sub_name="Yard")
+        coordinator = _make_generic_coordinator("1_2_1", sensor_info)
+
+        entities = build_generic_duration_entities(coordinator, "1_2_1", sensor_info, "1_2_1")
+
+        names = sorted(e._attr_name for e in entities)
+        assert names == [
+            "Yard Zone 1 CTL_WATER Duration (unverified)",
+            "Yard Zone 2 CTL_WATER Duration (unverified)",
+        ]
+
+    def test_icon_is_the_generic_control_marker_icon(self):
+        from custom_components.rainpoint.const import GENERIC_CONTROL_MARKER_ICON
+
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
+        coordinator = _make_generic_coordinator("100_200_1", sensor_info)
+
+        entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+
+        assert entities[0]._attr_icon == GENERIC_CONTROL_MARKER_ICON
+
+    def test_bounds_match_the_trusted_duration_entity(self):
+        assert RainPointGenericZoneDurationNumber._attr_native_min_value == DURATION_MIN_MINUTES
+        assert RainPointGenericZoneDurationNumber._attr_native_max_value == DURATION_MAX_MINUTES
+        assert RainPointGenericZoneDurationNumber._attr_native_step == DURATION_STEP_MINUTES
+
+    def test_default_value_matches_the_trusted_duration_entity(self):
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
+        coordinator = _make_generic_coordinator("100_200_1", sensor_info)
+
+        entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+
+        assert entities[0].native_value == DURATION_DEFAULT_MINUTES
+
+    def test_device_info_matches_the_sub_device_card(self):
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
+        coordinator = _make_generic_coordinator("100_200_1", sensor_info)
+
+        entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+
+        info = entities[0].device_info
+        assert info["identifiers"] == {(DOMAIN, "100_200_1")}
+        assert info["manufacturer"] == "RainPoint"
+        assert info["model"] == ANCHOR_MODEL
+
+
+class TestGenericZoneDurationNumberBehavior:
+    def _build(self):
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
+        coordinator = _make_generic_coordinator("100_200_1", sensor_info)
+        entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+        entity = entities[0]
+        entity.async_write_ha_state = MagicMock()
+        return entity
+
+    @pytest.mark.asyncio
+    async def test_set_native_value_updates_and_writes_state(self):
+        entity = self._build()
+        await entity.async_set_native_value(45.0)
+        assert entity.native_value == 45.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_restore_valid_value_within_bounds(self):
+        entity = self._build()
+        last_state = MagicMock()
+        last_state.state = "25.0"
+        entity.async_get_last_state = AsyncMock(return_value=last_state)
+
+        await entity.async_added_to_hass()
+
+        assert entity.native_value == 25.0
+
+    @pytest.mark.asyncio
+    async def test_restore_out_of_range_is_discarded(self):
+        entity = self._build()
+        last_state = MagicMock()
+        last_state.state = "999.0"
+        entity.async_get_last_state = AsyncMock(return_value=last_state)
+
+        await entity.async_added_to_hass()
+
+        assert entity.native_value == DURATION_DEFAULT_MINUTES
+
+    @pytest.mark.asyncio
+    async def test_restore_unparseable_value_is_discarded(self):
+        entity = self._build()
+        last_state = MagicMock()
+        last_state.state = "not-a-number"
+        entity.async_get_last_state = AsyncMock(return_value=last_state)
+
+        await entity.async_added_to_hass()
+
+        assert entity.native_value == DURATION_DEFAULT_MINUTES
+
+    @pytest.mark.asyncio
+    async def test_restore_no_last_state_keeps_default(self):
+        entity = self._build()
+        entity.async_get_last_state = AsyncMock(return_value=None)
+
+        await entity.async_added_to_hass()
+
+        assert entity.native_value == DURATION_DEFAULT_MINUTES
+
+    def test_extra_state_attributes_firmware(self):
+        entity = self._build()
+        assert entity.extra_state_attributes["firmware_version"] == "1.0.0"
+
+    def test_extra_state_attributes_no_firmware_when_missing(self):
+        entity = self._build()
+        entity.coordinator.data["sensors"]["100_200_1"]["firmware_version"] = None
+        assert "firmware_version" not in entity.extra_state_attributes
+
+    def test_extra_state_attributes_device_timestamp(self):
+        entity = self._build()
+        entity.coordinator.data["sensors"]["100_200_1"]["data"]["device_timestamp"] = "2024-01-01T00:00:00+00:00"
+        entity.coordinator.data["sensors"]["100_200_1"]["data"]["timestamp_method"] = "rtc"
+        entity.coordinator.data["sensors"]["100_200_1"]["data"]["timestamp_source"] = "device"
+
+        attrs = entity.extra_state_attributes
+
+        assert attrs["device_timestamp"] == "2024-01-01T00:00:00+00:00"
+        assert attrs["timestamp_method"] == "rtc"
+        assert attrs["timestamp_source"] == "device"
+
+    def test_extra_state_attributes_server_timestamp_fallback(self):
+        entity = self._build()
+        entity.coordinator.data["sensors"]["100_200_1"]["data"]["server_timestamp"] = "2024-06-01T00:00:00+00:00"
+        entity.coordinator.data["sensors"]["100_200_1"]["data"]["timestamp_source"] = "server"
+
+        attrs = entity.extra_state_attributes
+
+        assert attrs["device_timestamp"] == "2024-06-01T00:00:00+00:00"
+        assert attrs["timestamp_source"] == "server"
+
+
+class TestNumberSetupEntryGenericControl:
+    """Cover the async_setup_entry generic-control branch added in this plan."""
+
+    @pytest.mark.asyncio
+    async def test_option_absent_creates_no_companion(self):
+        from custom_components.rainpoint.number import async_setup_entry
+
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
+        coord = _make_generic_coordinator("100_200_1", sensor_info)
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        added = MagicMock()
+        await async_setup_entry(hass, entry, added)
+
+        added.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_option_false_creates_no_companion(self):
+        from custom_components.rainpoint.number import async_setup_entry
+
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
+        coord = _make_generic_coordinator("100_200_1", sensor_info)
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: False}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        added = MagicMock()
+        await async_setup_entry(hass, entry, added)
+
+        added.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_option_true_creates_one_companion_for_the_anchor(self):
+        from custom_components.rainpoint.number import async_setup_entry
+
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
+        coord = _make_generic_coordinator("100_200_1", sensor_info)
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        added = MagicMock()
+        await async_setup_entry(hass, entry, added)
+
+        added.assert_called_once()
+        entities = added.call_args[0][0]
+        assert len(entities) == 1
+        assert isinstance(entities[0], RainPointGenericZoneDurationNumber)
+        assert entities[0]._attr_unique_id == "rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration"

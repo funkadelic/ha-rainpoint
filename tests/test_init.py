@@ -9,13 +9,19 @@ import pytest
 
 from custom_components.rainpoint import (
     DOMAIN,
+    _generic_control_row_removal_reason,
     _remove_stale_generic_entities,
     async_reload_integration,
     async_setup,
     async_setup_entry,
     async_unload_entry,
 )
-from custom_components.rainpoint.const import CONF_GENERIC_ENTITIES_ENABLED, CONF_PUSH_ENABLED, MODEL_HCS026FRF
+from custom_components.rainpoint.const import (
+    CONF_GENERIC_CONTROL_ENABLED,
+    CONF_GENERIC_ENTITIES_ENABLED,
+    CONF_PUSH_ENABLED,
+    MODEL_HCS026FRF,
+)
 
 
 def _make_entry(entry_id="test_entry_id"):
@@ -900,6 +906,7 @@ class _GenericSweepFixtures:
     # sensor-record keying.
     SLUG_A = "42_100_1"  # never gains a hand-written decoder in these tests
     SLUG_B = "42_100_2"  # the graduation case
+    SLUG_UNRESOLVED = "42_100_9"  # never present in any seeded sensors mapping
 
     GENERIC_A = SimpleNamespace(
         entity_id="sensor.rainpoint_42_100_1_generic_sta_rh_p0",
@@ -909,6 +916,35 @@ class _GenericSweepFixtures:
     GENERIC_B = SimpleNamespace(
         entity_id="sensor.rainpoint_42_100_2_generic_sta_tem_p0",
         unique_id="rainpoint_42_100_2_generic_sta_tem_p0",
+        config_entry_id=ENTRY_ID,
+    )
+    # Control-namespace rows: the control marker nests inside the sensor
+    # marker (option-a), so these unique_ids also contain GENERIC_UNIQUE_ID_MARKER
+    # -- exactly the ambiguity the dispatch-order guard in
+    # _remove_stale_generic_entities exists to resolve correctly.
+    CONTROL_A = SimpleNamespace(
+        entity_id="valve.rainpoint_42_100_1_generic_ctl_ctl_water_p1",
+        unique_id="rainpoint_42_100_1_generic_ctl_ctl_water_p1",
+        config_entry_id=ENTRY_ID,
+    )
+    DURATION_A = SimpleNamespace(
+        entity_id="number.rainpoint_42_100_1_generic_ctl_ctl_water_p1_duration",
+        unique_id="rainpoint_42_100_1_generic_ctl_ctl_water_p1_duration",
+        config_entry_id=ENTRY_ID,
+    )
+    CONTROL_B = SimpleNamespace(
+        entity_id="valve.rainpoint_42_100_2_generic_ctl_ctl_water_p1",
+        unique_id="rainpoint_42_100_2_generic_ctl_ctl_water_p1",
+        config_entry_id=ENTRY_ID,
+    )
+    DURATION_B = SimpleNamespace(
+        entity_id="number.rainpoint_42_100_2_generic_ctl_ctl_water_p1_duration",
+        unique_id="rainpoint_42_100_2_generic_ctl_ctl_water_p1_duration",
+        config_entry_id=ENTRY_ID,
+    )
+    UNRESOLVABLE_CONTROL = SimpleNamespace(
+        entity_id="valve.rainpoint_42_100_9_generic_ctl_ctl_water_p1",
+        unique_id="rainpoint_42_100_9_generic_ctl_ctl_water_p1",
         config_entry_id=ENTRY_ID,
     )
     TRUSTED_UNKNOWN = SimpleNamespace(
@@ -931,6 +967,11 @@ class _GenericSweepFixtures:
         unique_id="rainpoint_99_1_1_generic_sta_rh_p0",
         config_entry_id=OTHER_ENTRY_ID,
     )
+    FOREIGN_ENTRY_CONTROL = SimpleNamespace(
+        entity_id="valve.rainpoint_99_1_1_generic_ctl_ctl_water_p1",
+        unique_id="rainpoint_99_1_1_generic_ctl_ctl_water_p1",
+        config_entry_id=OTHER_ENTRY_ID,
+    )
     MALFORMED_UNIQUE_ID = SimpleNamespace(
         entity_id="sensor.malformed",
         unique_id=None,
@@ -942,12 +983,28 @@ class _GenericSweepFixtures:
         return [
             self.GENERIC_A,
             self.GENERIC_B,
+            self.CONTROL_A,
+            self.DURATION_A,
+            self.CONTROL_B,
+            self.DURATION_B,
+            self.UNRESOLVABLE_CONTROL,
             self.TRUSTED_UNKNOWN,
             self.RAW_PAYLOAD,
             self.FOREIGN_INTEGRATION,
             self.FOREIGN_ENTRY_GENERIC,
+            self.FOREIGN_ENTRY_CONTROL,
             self.MALFORMED_UNIQUE_ID,
         ]
+
+    def _all_control_namespace_entity_ids(self) -> set[str]:
+        """Every seeded control-namespace (control + companion duration) row for this entry."""
+        return {
+            self.CONTROL_A.entity_id,
+            self.DURATION_A.entity_id,
+            self.CONTROL_B.entity_id,
+            self.DURATION_B.entity_id,
+            self.UNRESOLVABLE_CONTROL.entity_id,
+        }
 
     def _make_fake_registry(self, raise_on_lookup=False, raise_once_for=None):
         """Build patchable stand-ins for er.async_get / er.async_entries_for_config_entry.
@@ -989,11 +1046,18 @@ class _GenericSweepFixtures:
 
         return _RaisingCoordinator()
 
-    def _sensors(self, slug_a_model="HCS777ARF", slug_b_model="HCS777ARF", include_slug_a=True):
+    def _sensors(
+        self,
+        slug_a_model="HCS777ARF",
+        slug_b_model="HCS777ARF",
+        include_slug_a=True,
+        slug_a_model_code=None,
+        slug_b_model_code=None,
+    ):
         """Build a coordinator.data['sensors'] mapping for the two seeded sub-devices."""
-        sensors = {self.SLUG_B: {"model": slug_b_model}}
+        sensors = {self.SLUG_B: {"model": slug_b_model, "model_code": slug_b_model_code}}
         if include_slug_a:
-            sensors[self.SLUG_A] = {"model": slug_a_model}
+            sensors[self.SLUG_A] = {"model": slug_a_model, "model_code": slug_a_model_code}
         return sensors
 
     def _make_entry_and_coordinator(self, options, sensors):
@@ -1017,9 +1081,16 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
     """
 
     def test_toggle_absent_removes_every_generic_row_for_this_entry(self):
-        """No CONF_GENERIC_ENTITIES_ENABLED key at all behaves like toggle-off."""
+        """No CONF_GENERIC_ENTITIES_ENABLED key at all behaves like toggle-off.
+
+        The control option is explicitly enabled here so this test's scope
+        stays on the sensor toggle alone; it also doubles as one direction of
+        D-11's independence guarantee -- the sensor option, off, removes only
+        sensor-namespace rows and leaves every control-namespace row
+        (including the always-unresolvable one) untouched.
+        """
         removed, async_get, async_entries = self._make_fake_registry()
-        entry, coordinator = self._make_entry_and_coordinator({}, self._sensors())
+        entry, coordinator = self._make_entry_and_coordinator({CONF_GENERIC_CONTROL_ENABLED: True}, self._sensors())
 
         with (
             patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
@@ -1032,7 +1103,9 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
     def test_toggle_explicitly_false_removes_every_generic_row_for_this_entry(self):
         """An explicit False behaves identically to the key being absent."""
         removed, async_get, async_entries = self._make_fake_registry()
-        entry, coordinator = self._make_entry_and_coordinator({CONF_GENERIC_ENTITIES_ENABLED: False}, self._sensors())
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}, self._sensors()
+        )
 
         with (
             patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
@@ -1046,7 +1119,8 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
         """Toggle on, and no model has gained a hand-written decoder: nothing is removed."""
         removed, async_get, async_entries = self._make_fake_registry()
         entry, coordinator = self._make_entry_and_coordinator(
-            {CONF_GENERIC_ENTITIES_ENABLED: True}, self._sensors(slug_b_model="HCS888ARF-V2")
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True},
+            self._sensors(slug_b_model="HCS888ARF-V2"),
         )
 
         with (
@@ -1057,11 +1131,17 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
 
         assert removed == []
 
-    def test_toggle_true_graduated_model_removes_only_that_models_row(self):
-        """Toggle on, one model now hand-written: only its generic row is removed."""
+    def test_toggle_true_graduated_model_removes_only_that_models_rows(self):
+        """Toggle on, one model now hand-written: only its rows are removed.
+
+        Both options are enabled here, so the graduated model's rows in
+        *both* namespaces (the sensor row and its control + companion
+        duration rows) are removed together -- graduation is a model
+        property, not a namespace-specific one.
+        """
         removed, async_get, async_entries = self._make_fake_registry()
         entry, coordinator = self._make_entry_and_coordinator(
-            {CONF_GENERIC_ENTITIES_ENABLED: True},
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True},
             self._sensors(slug_a_model="HCS777ARF", slug_b_model=MODEL_HCS026FRF),
         )
 
@@ -1071,13 +1151,13 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
         ):
             _remove_stale_generic_entities(MagicMock(), entry, coordinator)
 
-        assert removed == [self.GENERIC_B.entity_id]
+        assert set(removed) == {self.GENERIC_B.entity_id, self.CONTROL_B.entity_id, self.DURATION_B.entity_id}
 
     def test_toggle_true_unresolvable_base_slug_survives(self):
-        """A generic row whose base slug is absent from the sensor records is left alone."""
+        """A row whose base slug is absent from the sensor records is left alone, in both namespaces."""
         removed, async_get, async_entries = self._make_fake_registry()
         entry, coordinator = self._make_entry_and_coordinator(
-            {CONF_GENERIC_ENTITIES_ENABLED: True},
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True},
             self._sensors(slug_b_model=MODEL_HCS026FRF, include_slug_a=False),
         )
 
@@ -1087,9 +1167,10 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
         ):
             _remove_stale_generic_entities(MagicMock(), entry, coordinator)
 
-        # Slug B still graduates; slug A's row survives because it resolves
-        # to no model at all, which is not evidence of graduation.
-        assert removed == [self.GENERIC_B.entity_id]
+        # Slug B still graduates in both namespaces; slug A's rows (and the
+        # always-unresolvable control row) survive because they resolve to
+        # no model at all, which is not evidence of graduation.
+        assert set(removed) == {self.GENERIC_B.entity_id, self.CONTROL_B.entity_id, self.DURATION_B.entity_id}
 
     def test_second_consecutive_sweep_removes_nothing_more(self):
         """Idempotency: a repeat run over the post-removal registry state is a no-op."""
@@ -1104,7 +1185,14 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
             first_run_removed = list(removed)
             _remove_stale_generic_entities(MagicMock(), entry, coordinator)
 
-        assert set(first_run_removed) == {self.GENERIC_A.entity_id, self.GENERIC_B.entity_id}
+        assert (
+            set(first_run_removed)
+            == {
+                self.GENERIC_A.entity_id,
+                self.GENERIC_B.entity_id,
+            }
+            | self._all_control_namespace_entity_ids()
+        )
         assert removed == first_run_removed
 
     def test_foreign_integration_row_is_never_removed(self):
@@ -1132,6 +1220,7 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
             _remove_stale_generic_entities(MagicMock(), entry, coordinator)
 
         assert self.FOREIGN_ENTRY_GENERIC.entity_id not in removed
+        assert self.FOREIGN_ENTRY_CONTROL.entity_id not in removed
 
     def test_trusted_and_raw_payload_rows_are_never_removed(self):
         """A trusted unsupported-diagnostic row and a raw-payload row never match the marker guard."""
@@ -1184,7 +1273,8 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
         ):
             _remove_stale_generic_entities(MagicMock(), entry, coordinator)
 
-        assert removed == [self.GENERIC_B.entity_id]
+        assert self.GENERIC_A.entity_id not in removed
+        assert set(removed) == {self.GENERIC_B.entity_id} | self._all_control_namespace_entity_ids()
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_removes_generic_row_with_toggle_off(self):
@@ -1228,7 +1318,12 @@ class TestSweepSurvivesUnreadableCoordinatorData(_GenericSweepFixtures):
     """
 
     def test_toggle_off_still_removes_every_generic_row(self):
-        """The removal set is unchanged: toggle-off never consulted the coordinator anyway."""
+        """The removal set is unchanged: toggle-off never consulted the coordinator anyway.
+
+        Both namespace toggles are off here (control absent, same as the
+        sensor toggle's explicit False), which also proves the control-off
+        removal condition needs no coordinator data at all.
+        """
         removed, async_get, async_entries = self._make_fake_registry()
         entry = MagicMock()
         entry.entry_id = self.ENTRY_ID
@@ -1240,14 +1335,21 @@ class TestSweepSurvivesUnreadableCoordinatorData(_GenericSweepFixtures):
         ):
             _remove_stale_generic_entities(MagicMock(), entry, self._make_coordinator_with_raising_data())
 
-        assert set(removed) == {self.GENERIC_A.entity_id, self.GENERIC_B.entity_id}
+        assert (
+            set(removed)
+            == {
+                self.GENERIC_A.entity_id,
+                self.GENERIC_B.entity_id,
+            }
+            | self._all_control_namespace_entity_ids()
+        )
 
     def test_toggle_on_removes_nothing_rather_than_raising(self):
-        """Without graduation data no model resolves, so no row is evidence of graduation."""
+        """Without graduation data no model resolves, so no row in either namespace is evidence of graduation."""
         removed, async_get, async_entries = self._make_fake_registry()
         entry = MagicMock()
         entry.entry_id = self.ENTRY_ID
-        entry.options = {CONF_GENERIC_ENTITIES_ENABLED: True}
+        entry.options = {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True}
 
         with (
             patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
@@ -1268,10 +1370,10 @@ class TestSweepSurvivesMalformedSensorRecords(_GenericSweepFixtures):
     """
 
     def test_a_row_whose_record_is_not_a_dict_is_skipped_and_the_rest_still_sweep(self):
-        """The graduated row is still removed even though the row before it could not be judged."""
+        """The graduated rows are still removed, in both namespaces, even though slug A's record could not be judged."""
         removed, async_get, async_entries = self._make_fake_registry()
         entry, coordinator = self._make_entry_and_coordinator(
-            {CONF_GENERIC_ENTITIES_ENABLED: True},
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True},
             {self.SLUG_A: "a string where a record should be", self.SLUG_B: {"model": MODEL_HCS026FRF}},
         )
 
@@ -1281,12 +1383,14 @@ class TestSweepSurvivesMalformedSensorRecords(_GenericSweepFixtures):
         ):
             _remove_stale_generic_entities(MagicMock(), entry, coordinator)
 
-        assert removed == [self.GENERIC_B.entity_id]
+        assert set(removed) == {self.GENERIC_B.entity_id, self.CONTROL_B.entity_id, self.DURATION_B.entity_id}
 
     def test_a_sensors_mapping_that_is_not_a_dict_leaves_every_row_alone(self):
-        """Every per-row lookup raises, so no row is judged and none is removed."""
+        """Every per-row lookup, in either namespace, raises -- so no row is judged and none is removed."""
         removed, async_get, async_entries = self._make_fake_registry()
-        entry, coordinator = self._make_entry_and_coordinator({CONF_GENERIC_ENTITIES_ENABLED: True}, "not a mapping")
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True}, "not a mapping"
+        )
 
         with (
             patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
@@ -1295,3 +1399,166 @@ class TestSweepSurvivesMalformedSensorRecords(_GenericSweepFixtures):
             _remove_stale_generic_entities(MagicMock(), entry, coordinator)
 
         assert removed == []
+
+
+class TestGenericControlRowRemovalReasonGuards:
+    """Direct coverage of _generic_control_row_removal_reason's own scoping guards.
+
+    The sweep's dispatch already filters to (str, contains-control-marker)
+    unique_ids before ever calling this function, so these two guard clauses
+    are unreachable through _remove_stale_generic_entities itself; they exist
+    on the function directly (mirroring _generic_row_removal_reason's shape)
+    so a future direct caller gets the same defensive behaviour without
+    depending on the dispatch's own filtering.
+    """
+
+    def test_non_string_unique_id_is_kept(self):
+        assert _generic_control_row_removal_reason(None, True, {}) is None
+        assert _generic_control_row_removal_reason(12345, True, {}) is None
+
+    def test_unique_id_without_the_control_marker_is_kept(self):
+        assert _generic_control_row_removal_reason("rainpoint_42_100_1_generic_sta_rh_p0", False, {}) is None
+        assert _generic_control_row_removal_reason("not_the_right_prefix_generic_ctl_ctl_water_p1", False, {}) is None
+
+
+class TestRemoveStaleGenericControlEntities(_GenericSweepFixtures):
+    """Control-namespace-specific coverage: the two independence directions,
+    the override removal condition, and foreign-entry isolation under every
+    option combination.
+
+    The single-namespace behaviours already covered symmetrically by
+    TestRemoveStaleGenericEntities (toggle absent/false/true, graduation,
+    unresolvable survival, idempotency, malformed data resilience) are not
+    repeated here -- both reason functions share the same shape and the same
+    sweep loop, so those cases are proven once, generically, by exercising
+    both namespaces together in that class.
+    """
+
+    def test_sensor_option_true_control_option_false_removes_only_control_namespace(self):
+        """Exact converse of the sensor-only tests: control off removes every
+        control-namespace row for this entry (control + companion duration)
+        and no sensor-namespace row, regardless of graduation state."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: False}, self._sensors()
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert set(removed) == self._all_control_namespace_entity_ids()
+        assert self.GENERIC_A.entity_id not in removed
+        assert self.GENERIC_B.entity_id not in removed
+
+    def test_sensor_option_false_control_option_true_removes_only_sensor_namespace(self):
+        """Exact converse of the previous test: sensor off removes every
+        sensor-namespace row for this entry and no control-namespace row."""
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}, self._sensors()
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert set(removed) == {self.GENERIC_A.entity_id, self.GENERIC_B.entity_id}
+        assert removed
+        assert not (set(removed) & self._all_control_namespace_entity_ids())
+
+    def test_override_rule_removes_only_the_overridden_variant(self, monkeypatch):
+        """A committed override matching one seeded row's (model, modelCode) removes
+        that row's control and companion duration entities; a sibling variant of the
+        same model under a different modelCode is untouched."""
+        monkeypatch.setattr("custom_components.rainpoint.GENERIC_CONTROL_OVERRIDE_DISABLED", frozenset({("HCS777ARF", "1")}))
+        removed, async_get, async_entries = self._make_fake_registry()
+        # The sensor option is also enabled here, matching the sibling-graduation
+        # tests' pattern, so this test's assertion isolates the override
+        # condition without the sensor-off condition also contributing rows.
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True},
+            self._sensors(
+                slug_a_model="HCS777ARF",
+                slug_a_model_code=1,
+                slug_b_model="HCS777ARF",
+                slug_b_model_code=2,
+            ),
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert set(removed) == {self.CONTROL_A.entity_id, self.DURATION_A.entity_id}
+
+    def test_override_rule_is_inert_when_the_variant_is_not_listed(self, monkeypatch):
+        """An override set that names a different variant entirely removes nothing on its account."""
+        monkeypatch.setattr(
+            "custom_components.rainpoint.GENERIC_CONTROL_OVERRIDE_DISABLED", frozenset({("SOME_OTHER_MODEL", "7")})
+        )
+        removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True},
+            self._sensors(slug_a_model="HCS777ARF", slug_a_model_code=1, slug_b_model="HCS777ARF", slug_b_model_code=2),
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert removed == []
+
+    def test_foreign_config_entry_control_row_is_never_removed_under_any_option_combination(self):
+        """A control row belonging to another config entry is never removed, whichever option state applies."""
+        option_combinations = (
+            {},
+            {CONF_GENERIC_CONTROL_ENABLED: True},
+            {CONF_GENERIC_CONTROL_ENABLED: False},
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True},
+        )
+        for options in option_combinations:
+            removed, async_get, async_entries = self._make_fake_registry()
+            entry, coordinator = self._make_entry_and_coordinator(options, self._sensors())
+
+            with (
+                patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+                patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+            ):
+                _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+            assert self.FOREIGN_ENTRY_CONTROL.entity_id not in removed, f"leaked under options={options}"
+
+
+class TestGenericSensorNamespaceNeverCollidesWithControlNamespace:
+    """Guards the naming convention _remove_stale_generic_entities' dispatch relies on.
+
+    The sweep routes a row to the control-namespace reason function purely by
+    testing whether GENERIC_CONTROL_UNIQUE_ID_MARKER ("_generic_ctl_")
+    appears in its unique_id, falling through to the sensor-namespace reason
+    function otherwise. That is only correct because every curated sensor
+    identity in generic_entities._IDENTITY_SPECS happens to lower-case to
+    something that does not start with "ctl_". Nothing enforces that at
+    runtime, so this locks it in: a future curated sensor identity added to
+    that table without checking this would silently misroute its rows
+    through the control toggle instead of the sensor toggle.
+    """
+
+    def test_no_identity_spec_key_collides_with_the_control_marker(self):
+        from custom_components.rainpoint.const import GENERIC_CONTROL_UNIQUE_ID_MARKER, GENERIC_UNIQUE_ID_MARKER
+        from custom_components.rainpoint.generic_entities import _IDENTITY_SPECS
+
+        assert _IDENTITY_SPECS, "the identity table must not be empty, or this test proves nothing"
+        for identity in _IDENTITY_SPECS:
+            unique_id_fragment = f"{GENERIC_UNIQUE_ID_MARKER}{identity.lower()}"
+            assert GENERIC_CONTROL_UNIQUE_ID_MARKER not in unique_id_fragment, (
+                f"sensor identity {identity!r} would collide with the control namespace marker"
+            )

@@ -519,6 +519,37 @@ class TestValveSetupEntry:
         assert not async_add_entities.called
 
     @pytest.mark.asyncio
+    async def test_setup_entry_skips_non_dict_sensor_records(self):
+        """A malformed sub-device record must not abort setup and drop valid valve entities."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        sensors = {
+            "bad": "not-a-dict",
+            "10_20_1": {
+                "hid": 10,
+                "mid": 20,
+                "addr": 1,
+                "model": MODEL_VALVE_245,
+                "data": {"hub_online": True, "zones": {1: {"open": False, "duration_seconds": 0, "state_raw": 0}}},
+            },
+        }
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {"sensors": sensors}
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.options = {}
+        hass.data = {DOMAIN: {"e1": {"coordinator": mock_coordinator}}}
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert len(captured) == 1
+        assert captured[0]._zone_num == 1
+
+    @pytest.mark.asyncio
     async def test_setup_entry_skips_when_no_zones(self):
         """Valve model with empty zones dict produces no entities."""
         from custom_components.rainpoint.valve import async_setup_entry

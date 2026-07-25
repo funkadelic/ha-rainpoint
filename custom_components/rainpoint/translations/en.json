@@ -3,6 +3,10 @@
     "push_channel_down": {
       "title": "Real-time push updates are not being received",
       "description": "The real-time push connection to RainPoint has been down for a while, so changes from your devices may be delayed. Your devices keep updating because polling every couple of minutes is still running as a fallback. If this keeps happening, try reloading the integration, or turn push updates off and back on in the integration options."
+    },
+    "generic_control_command_failed": {
+      "title": "A generic control command failed",
+      "description": "RainPoint rejected a control command sent to {model} through generic control: {error}. Generic control uses an unverified vendor-catalog mapping rather than a tested per-model decoder, so this device's behavior is not fully proven. As far as this integration can tell, the device's state was not changed by the failed command. If this keeps happening, you can turn generic control off in the integration's options."
     }
   },
   "config": {
@@ -56,10 +60,11 @@
     "step": {
       "init": {
         "title": "RainPoint Options",
-        "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback. Enable unverified generic sensors, off by default, to get provisional sensors for devices this integration does not support yet; these readings are derived from an unverified vendor catalog, may be wrong, are always labeled unverified in their names, and should not be relied on for automations. Generic sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices.",
+        "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback. Enable unverified generic sensors, off by default, to get provisional sensors for devices this integration does not support yet; these readings are derived from an unverified vendor catalog, may be wrong, are always labeled unverified in their names, and should not be relied on for automations. Generic sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices. Enable unverified generic device control, off by default, to open and close real hardware -- including water valves -- for devices this integration does not support yet. The zone mapping comes from an unverified vendor catalog rather than a tested per-model decoder, so a wrong mapping can run the wrong zone or leave water running. Nothing is assumed about the outcome of a command: a control entity only ever shows state read back from the device, never a guess. On this account that currently applies to {generic_control_eligible} of {generic_control_unsupported} unsupported devices.",
         "data": {
           "push_enabled": "Enable push updates",
-          "generic_entities_enabled": "Enable unverified generic sensors"
+          "generic_entities_enabled": "Enable unverified generic sensors",
+          "generic_control_enabled": "Enable unverified generic device control (moves hardware)"
         }
       }
     }

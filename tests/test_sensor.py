@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.const import (
     DOMAIN,
@@ -844,6 +845,26 @@ def _make_unknown_sensor(data=_UNK_SENTINEL, model="MYSTERY"):
     return sensor
 
 
+def _make_unknown_sensor_with_model_code(model, model_code, data=_UNK_SENTINEL):
+    """Build a RainPointUnknownSensor whose sensor_info also carries a model_code.
+
+    _make_unknown_sensor doesn't expose model_code, but describe_control_gate
+    keys the catalog lookup on (model, model_code), so a real-catalog "admits"
+    test needs it set.
+    """
+    if data is _UNK_SENTINEL:
+        data = {"type": "unknown", "model": model, "raw_value": "10#ABC"}
+    sensor = _make_sensor_base(
+        RainPointUnknownSensor,
+        "100_200_1",
+        data,
+        sensor_info_overrides={"model": model, "model_code": model_code, "sub_name": "Mystery"},
+    )
+    sensor._attr_unique_id = f"rainpoint_100_200_1_unknown_{model}"
+    sensor._attr_name = f"Mystery Unsupported ({model})"
+    return sensor
+
+
 class TestUnknownSensor:
     """Tests for RainPointUnknownSensor."""
 
@@ -1073,6 +1094,98 @@ class TestUnknownSensorAttributeCost:
 
         assert sensor.extra_state_attributes["report_url"].endswith("10#BB")
         assert calls == ["10#AA", "10#BB"]
+
+
+class TestUnknownSensorControlGateAttribute:
+    """The control-gate reasons attribute (generic_control_blocked_by) is
+    toggle-independent, exactly like the sensor-gate attributes it merges
+    alongside -- it is computed from the catalog and the in-source allowlist
+    alone, so a user who never enabled generic control still sees it.
+    """
+
+    def test_key_present_with_no_options_entry_at_all(self):
+        """No config-entry option is ever read here -- the key's presence and
+        value are identical whether or not an options entry even exists for
+        this sensor, matching the two sensor-gate attributes it sits beside.
+        """
+        sensor = _make_unknown_sensor(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert "generic_control_blocked_by" in attrs
+        assert isinstance(attrs["generic_control_blocked_by"], list)
+
+    def test_value_is_empty_list_for_a_model_the_control_gate_admits(self):
+        """HTV103FRF/31 is the anchor variant the control-gate test suite
+        proves admits exactly one CTL_WATER datapoint.
+        """
+        sensor = _make_unknown_sensor_with_model_code("HTV103FRF", 31)
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["generic_control_blocked_by"] == []
+
+    def test_value_is_non_empty_list_for_a_model_the_control_gate_refuses(self):
+        sensor = _make_unknown_sensor(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["generic_control_blocked_by"]
+
+    def test_reasons_match_the_order_describe_control_gate_produces(self, monkeypatch):
+        monkeypatch.setattr(
+            generic_control_module,
+            "describe_control_gate",
+            lambda model, model_code=None: {"generic_control_blocked_by": ["first reason", "second reason"]},
+        )
+        sensor = _make_unknown_sensor(model="MODELX")
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["generic_control_blocked_by"] == ["first reason", "second reason"]
+
+    def test_computed_once_and_cached_alongside_the_sensor_gate_description(self, monkeypatch):
+        calls = []
+
+        def _counting(model, model_code=None):
+            calls.append((model, model_code))
+            return {"generic_control_blocked_by": ["nope"]}
+
+        monkeypatch.setattr(generic_control_module, "describe_control_gate", _counting)
+        sensor = _make_unknown_sensor(model="MODELX")
+
+        first = sensor.extra_state_attributes
+        after_first_read = len(calls)
+        second = sensor.extra_state_attributes
+
+        assert after_first_read >= 1
+        assert len(calls) == after_first_read
+        assert first["generic_control_blocked_by"] == ["nope"]
+        assert second["generic_control_blocked_by"] == ["nope"]
+
+    def test_mutating_the_returned_list_does_not_reach_the_cached_value(self):
+        sensor = _make_unknown_sensor(model="MYSTERY")
+
+        sensor.extra_state_attributes["generic_control_blocked_by"].append("INJECTED")
+
+        assert "INJECTED" not in sensor.extra_state_attributes["generic_control_blocked_by"]
+
+    def test_a_raising_projection_does_not_break_the_rest_of_the_attributes(self, monkeypatch):
+        monkeypatch.setattr(
+            generic_control_module,
+            "get_catalog_entry",
+            lambda model, model_code=None: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        sensor = _make_unknown_sensor(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        # evaluate_control_gate never raises (it degrades to a fail-closed
+        # result internally), so the sensor's other attributes are still
+        # present and the gate reason list is simply non-empty.
+        assert attrs["model"] == "MYSTERY"
+        assert "generic_control_blocked_by" in attrs
+        assert attrs["generic_control_blocked_by"]
 
 
 class TestRawPayloadSensor:

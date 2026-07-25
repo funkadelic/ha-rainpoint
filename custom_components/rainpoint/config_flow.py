@@ -20,6 +20,7 @@ from .const import (
     CONF_AREA_CODE,
     CONF_COUNTRY,
     CONF_EMAIL,
+    CONF_GENERIC_CONTROL_ENABLED,
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_HIDS,
     CONF_PASSWORD,
@@ -304,10 +305,10 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class RainPointOptionsFlow(config_entries.OptionsFlow):
-    """Handle the RainPoint options flow -- push and generic-sensor toggles."""
+    """Handle the RainPoint options flow -- push, generic-sensor, and generic-control toggles."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Show/handle the single form carrying both toggles."""
+        """Show/handle the single form carrying all three toggles."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
@@ -321,15 +322,22 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
                     CONF_GENERIC_ENTITIES_ENABLED,
                     default=self.config_entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False),
                 ): bool,
+                vol.Required(
+                    CONF_GENERIC_CONTROL_ENABLED,
+                    default=self.config_entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False),
+                ): bool,
             }
         )
         eligible, unsupported = self._generic_eligibility()
+        control_eligible, control_unsupported = self._generic_control_eligibility()
         return self.async_show_form(
             step_id="init",
             data_schema=data_schema,
             description_placeholders={
                 "generic_eligible": str(eligible),
                 "generic_unsupported": str(unsupported),
+                "generic_control_eligible": str(control_eligible),
+                "generic_control_unsupported": str(control_unsupported),
             },
         )
 
@@ -353,3 +361,20 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
         entry_store = (self.hass.data.get(DOMAIN) or {}).get(self.config_entry.entry_id) or {}
         coordinator = entry_store.get("coordinator")
         return count_generic_eligible_devices(getattr(coordinator, "data", None))
+
+    def _generic_control_eligibility(self) -> tuple[int, int]:
+        """Return (eligible, unsupported_total) for the control toggle's real effect.
+
+        Mirrors _generic_eligibility exactly, but counts against the control
+        gate (generic_control.evaluate_control_gate) instead of the sensor
+        gate, so the control toggle states its own real effect rather than
+        borrowing the sensor toggle's numbers. Imported inside the function
+        for the same reason _generic_eligibility defers its import --
+        generic_control reaches the sensor platform transitively through
+        generic_entities. Degrades to (0, 0) when the entry is not loaded.
+        """
+        from .generic_control import count_generic_control_eligible_devices
+
+        entry_store = (self.hass.data.get(DOMAIN) or {}).get(self.config_entry.entry_id) or {}
+        coordinator = entry_store.get("coordinator")
+        return count_generic_control_eligible_devices(getattr(coordinator, "data", None))

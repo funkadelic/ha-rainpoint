@@ -742,7 +742,6 @@ class TestRealCatalogMultiReasonRegression:
             "STA_EVTIME2",
             "STA_LASTUSAGE",
             "STA_RSRP",
-            "STA_WKSTATE",
         )
 
 

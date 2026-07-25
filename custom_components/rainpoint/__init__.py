@@ -11,10 +11,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import RainPointClient, is_hand_written_model
 from .api.mqtt import RainPointMqttClient
 from .const import (
+    CONF_GENERIC_CONTROL_ENABLED,
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_PUSH_ENABLED,
     CONF_TOKEN,
     DOMAIN,
+    GENERIC_CONTROL_OVERRIDE_DISABLED,
+    GENERIC_CONTROL_UNIQUE_ID_MARKER,
     GENERIC_UNIQUE_ID_MARKER,
     UNIQUE_ID_PREFIX,
 )
@@ -105,15 +108,70 @@ def _generic_row_removal_reason(unique_id, generic_enabled: bool, sensors: dict)
     return "the model now has a hand-written decoder"
 
 
+def _generic_control_row_removal_reason(unique_id, control_enabled: bool, sensors: dict) -> str | None:
+    """Return why this control-namespace registry row should be removed, or None to keep it.
+
+    Shaped exactly like _generic_row_removal_reason, and scoped by the same
+    prefix-and-marker guard -- a row belonging to another integration is
+    rejected here even if the config-entry-scoped lookup that produced it
+    ever regressed. A companion duration row matches the same guard: it
+    carries the control marker too, so it is decided by this function
+    alongside the control row it companions.
+
+    Three removal conditions, in order: the control option is off, which
+    removes every control-namespace row for this entry regardless of
+    resolvability; the base slug's model is now in the hand-written set
+    (graduation, mirroring the sensor branch's rule); and the base slug's
+    model paired with its modelCode is in the committed override set, so a
+    maintainer force-disabling a misrouted variant cannot leave its
+    actuating entities behind even while the option stays on. A base slug
+    absent from the current sensor data resolves to no model and no
+    modelCode, which is not evidence of graduation or of an override, and
+    keeps the row -- same reasoning the sensor branch already documents.
+    """
+    if not isinstance(unique_id, str):
+        return None
+    if not unique_id.startswith(UNIQUE_ID_PREFIX) or GENERIC_CONTROL_UNIQUE_ID_MARKER not in unique_id:
+        return None
+    if not control_enabled:
+        return "generic control is disabled"
+
+    base_slug = unique_id[len(UNIQUE_ID_PREFIX) :].split(GENERIC_CONTROL_UNIQUE_ID_MARKER, 1)[0]
+    record = sensors.get(base_slug) or {}
+    model = record.get("model")
+    if is_hand_written_model(model):
+        return "the model now has a hand-written decoder"
+
+    # Deferred import: generic_control reaches sensor.py's RainPointSensorBase
+    # transitively through generic_entities, so a top-level import here would
+    # pull the whole sensor platform into this module's import graph.
+    from .generic_control import _override_key
+
+    if _override_key(model, record.get("model_code")) in GENERIC_CONTROL_OVERRIDE_DISABLED:
+        return "generic control for this variant has been force-disabled by the maintainer"
+    return None
+
+
 def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Remove generic-namespace registry rows that should no longer exist.
 
     Runs on every config-entry setup, not only on a toggle transition, so a
-    row orphaned by a crash mid-toggle-off is cleaned on the next start. When
-    the toggle is off, every generic row for this entry is removed; when it
-    is on, only rows whose model has since gained a hand-written decoder are
-    removed, so a graduated model can never keep a stale unverified entity
-    beside its new trusted one.
+    row orphaned by a crash mid-toggle-off is cleaned on the next start.
+    Covers two independently governed unique_id namespaces sharing one sweep:
+    the read-only sensor namespace (CONF_GENERIC_ENTITIES_ENABLED) and the
+    control namespace (CONF_GENERIC_CONTROL_ENABLED), the latter also
+    covering its companion duration rows. When a namespace's own toggle is
+    off, every row in that namespace for this entry is removed; when it is
+    on, a row is removed only when its model has since gained a hand-written
+    decoder (graduation) or -- control namespace only -- its (model,
+    modelCode) variant is in the committed override list, so a graduated or
+    force-disabled model can never keep a stale or actuating unverified
+    entity beside its new trusted state. Neither toggle can reach the
+    other's namespace (D-11): the control marker nests inside the sensor
+    marker (option-a), so every row is dispatched to the control reason
+    function first and only falls through to the sensor reason function when
+    the control marker is absent -- reversing that order would let the
+    sensor toggle govern control rows it was never supposed to touch.
 
     Scoped by two independent guards -- the config-entry-scoped registry
     lookup and a unique_id prefix-and-marker match -- so the sweep can never
@@ -128,6 +186,7 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
     so none of them can propagate out of config-entry setup.
     """
     generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
+    control_enabled = entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False)
 
     try:
         registry = er.async_get(hass)
@@ -153,7 +212,18 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
         # record is malformed is skipped like any other unremovable row rather
         # than abandoning the rest of the sweep.
         try:
-            reason = _generic_row_removal_reason(getattr(row, "unique_id", None), generic_enabled, sensors)
+            unique_id = getattr(row, "unique_id", None)
+            # Dispatch order is load-bearing (D-11): the control marker nests
+            # inside the sensor marker, so a control-namespace unique_id also
+            # contains the sensor marker substring. Testing for the control
+            # marker first, and only falling through to the sensor reason
+            # function when it is absent, is what keeps each option confined
+            # to its own namespace -- reversed, the sensor toggle could delete
+            # or spare control rows it was never supposed to touch.
+            if isinstance(unique_id, str) and GENERIC_CONTROL_UNIQUE_ID_MARKER in unique_id:
+                reason = _generic_control_row_removal_reason(unique_id, control_enabled, sensors)
+            else:
+                reason = _generic_row_removal_reason(unique_id, generic_enabled, sensors)
         except Exception as exc:
             _LOGGER.debug("Could not decide on generic entity row %s: %s", getattr(row, "entity_id", None), exc)
             continue

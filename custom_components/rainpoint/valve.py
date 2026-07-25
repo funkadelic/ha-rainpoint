@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import decode_htv145frf, decode_htv213frf_valve, decode_valve_hub
 from .const import (
+    CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
     MODEL_VALVE_113,
     MODEL_VALVE_145,
@@ -40,8 +41,16 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
-    sensors_cfg = coordinator.data.get("sensors", {})
-    entities: list[RainPointValveEntity] = []
+    # Skip any record that is not a dict so one malformed sub-device entry
+    # cannot raise out of a builder loop and drop already-accumulated trusted
+    # entities. Both the trusted loop and the generic-control loop below read
+    # this mapping.
+    sensors_cfg = {key: info for key, info in coordinator.data.get("sensors", {}).items() if isinstance(info, dict)}
+    # Widened from list[RainPointValveEntity]: the opt-in generic-control
+    # branch below extends this same list with RainPointGenericValve
+    # instances, which are ValveEntity subclasses but not RainPointValveEntity
+    # subclasses.
+    entities: list = []
 
     for key, info in sensors_cfg.items():
         model = info.get("model")
@@ -62,6 +71,20 @@ async def async_setup_entry(
                 zone_num,
                 info.get("model"),
             )
+
+    if entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False):
+        # Deferred import: generic_control reaches sensor.py's
+        # RainPointSensorBase transitively through generic_entities, so a
+        # top-level import here would pull the whole sensor platform into
+        # this module's import graph.
+        from .generic_control import build_generic_valve_entities
+
+        for key, info in sensors_cfg.items():
+            hid = info.get("hid", "")
+            mid = info.get("mid", "")
+            addr = info.get("addr", "")
+            base_slug = f"{hid}_{mid}_{addr}"
+            entities.extend(build_generic_valve_entities(coordinator, key, info, base_slug))
 
     if entities:
         async_add_entities(entities)
