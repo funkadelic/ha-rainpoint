@@ -20,6 +20,7 @@ condition is disabled by construction, never by an explicit deny entry.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -511,9 +512,13 @@ class RainPointGenericControlBase(CoordinatorEntity):
         if not isinstance(raw, int) or isinstance(raw, bool):
             return None
         value = _IDENTITY_SPECS[RUN_STATE_IDENTITY].transform(raw)
-        if value == 1.0:
+        # The run-state transform yields exactly 0.0 or 1.0 (a bit-zero mask),
+        # so isclose is exact here; it also keeps a scaled future transform
+        # from tripping on float representation while preserving the three-way
+        # open / closed / unknown result.
+        if math.isclose(value, 1.0):
             return True
-        if value == 0.0:
+        if math.isclose(value, 0.0):
             return False
         return None
 
