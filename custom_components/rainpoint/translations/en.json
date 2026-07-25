@@ -56,7 +56,7 @@
     "step": {
       "init": {
         "title": "RainPoint Options",
-        "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback. Enable unverified generic sensors, off by default, to get provisional sensors for devices RainPoint has not hand-written support for yet; these readings are derived from an unverified vendor catalog, may be wrong, are always labelled unverified in their names, and should not be relied on for automations. Generic sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices.",
+        "description": "Enable real-time push updates, off by default. Polling is always retained as a fallback. Enable unverified generic sensors, off by default, to get provisional sensors for devices this integration does not support yet; these readings are derived from an unverified vendor catalog, may be wrong, are always labeled unverified in their names, and should not be relied on for automations. Generic sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices.",
         "data": {
           "push_enabled": "Enable push updates",
           "generic_entities_enabled": "Enable unverified generic sensors"
