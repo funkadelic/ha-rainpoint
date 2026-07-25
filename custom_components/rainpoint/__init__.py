@@ -79,6 +79,32 @@ def _persist_tokens(hass: HomeAssistant, entry: ConfigEntry, client: RainPointCl
     hass.config_entries.async_update_entry(entry, data={**entry.data, **token_data})
 
 
+def _generic_row_removal_reason(unique_id, generic_enabled: bool, sensors: dict) -> str | None:
+    """Return why this registry row should be removed, or None to keep it.
+
+    The prefix-and-marker match is the second of the sweep's two independent
+    scoping guards, so a row belonging to another integration is rejected
+    here even if the config-entry-scoped lookup that produced it ever
+    regressed.
+    """
+    if not isinstance(unique_id, str):
+        return None
+    if not unique_id.startswith(UNIQUE_ID_PREFIX) or GENERIC_UNIQUE_ID_MARKER not in unique_id:
+        return None
+    if not generic_enabled:
+        return "generic entities are disabled"
+
+    base_slug = unique_id[len(UNIQUE_ID_PREFIX) :].split(GENERIC_UNIQUE_ID_MARKER, 1)[0]
+    model = (sensors.get(base_slug) or {}).get("model")
+    # A base slug absent from the current sensor data resolves to no model,
+    # which is not evidence that the model graduated. This falls out of
+    # is_hand_written_model(None) being False on its own, but is stated here
+    # so a later reader does not "fix" it into a removal.
+    if not is_hand_written_model(model):
+        return None
+    return "the model now has a hand-written decoder"
+
+
 def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Remove generic-namespace registry rows that should no longer exist.
 
@@ -122,26 +148,9 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
         sensors = {}
 
     for row in rows:
-        unique_id = getattr(row, "unique_id", None)
-        if not isinstance(unique_id, str):
+        reason = _generic_row_removal_reason(getattr(row, "unique_id", None), generic_enabled, sensors)
+        if reason is None:
             continue
-        if not unique_id.startswith(UNIQUE_ID_PREFIX) or GENERIC_UNIQUE_ID_MARKER not in unique_id:
-            continue
-
-        if not generic_enabled:
-            reason = "generic entities are disabled"
-        else:
-            base_slug = unique_id[len(UNIQUE_ID_PREFIX) :].split(GENERIC_UNIQUE_ID_MARKER, 1)[0]
-            model = (sensors.get(base_slug) or {}).get("model")
-            # A base slug absent from the current sensor data resolves to no
-            # model, which is not evidence that the model graduated. This
-            # falls out of is_hand_written_model(None) being False on its
-            # own, but is stated here so a later reader does not "fix" it
-            # into a removal.
-            if not is_hand_written_model(model):
-                continue
-            reason = "the model now has a hand-written decoder"
-
         try:
             registry.async_remove(row.entity_id)
             _LOGGER.debug("Removed stale generic entity %s: %s", row.entity_id, reason)

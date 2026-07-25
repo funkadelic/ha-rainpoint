@@ -886,15 +886,11 @@ class TestReloadService:
             schema({"entry_id": ""})
 
 
-class TestRemoveStaleGenericEntities:
-    """Cover _remove_stale_generic_entities against a seeded fake registry.
+class _GenericSweepFixtures:
+    """Seeded fake-registry fixtures shared by the sweep test classes.
 
-    A mocked registry is used rather than a live Home Assistant one: the
-    repository conftest replaces the whole homeassistant package tree with
-    stubs before any test module is imported, so the installed live-registry
-    fixtures cannot be mixed in without unpicking that, and a seeded fake
-    keeps every assertion explicit about exactly which entity ids were
-    removed.
+    Held in a plain mixin rather than a base test class so a second class can
+    reuse the fixtures without also inheriting and re-running every case.
     """
 
     ENTRY_ID = "this_entry"
@@ -1007,6 +1003,18 @@ class TestRemoveStaleGenericEntities:
         coordinator = MagicMock()
         coordinator.data = {"sensors": sensors}
         return entry, coordinator
+
+
+class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
+    """Cover _remove_stale_generic_entities against a seeded fake registry.
+
+    A mocked registry is used rather than a live Home Assistant one: the
+    repository conftest replaces the whole homeassistant package tree with
+    stubs before any test module is imported, so the installed live-registry
+    fixtures cannot be mixed in without unpicking that, and a seeded fake
+    keeps every assertion explicit about exactly which entity ids were
+    removed.
+    """
 
     def test_toggle_absent_removes_every_generic_row_for_this_entry(self):
         """No CONF_GENERIC_ENTITIES_ENABLED key at all behaves like toggle-off."""
@@ -1210,7 +1218,7 @@ class TestRemoveStaleGenericEntities:
         assert self.GENERIC_A.entity_id in removed
 
 
-class TestSweepSurvivesUnreadableCoordinatorData(TestRemoveStaleGenericEntities):
+class TestSweepSurvivesUnreadableCoordinatorData(_GenericSweepFixtures):
     """A raising coordinator.data must not abort the sweep or escape setup.
 
     That read sits between the guarded registry lookup and the guarded

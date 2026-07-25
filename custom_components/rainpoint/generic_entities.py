@@ -188,6 +188,119 @@ class GenericGateResult:
         return bool(self.datapoints)
 
 
+def _usable_port(dp_port: Any) -> bool:
+    """True when a declared dpPort can address one entity's unique_id."""
+    return isinstance(dp_port, int) and not isinstance(dp_port, bool)
+
+
+def _bad_port_reason(dp_entries: list[dict]) -> str | None:
+    """Rule 1: any entry with a missing or unusable dpPort fails the whole model.
+
+    Failing the model rather than skipping the entry is what stops two
+    entities ever contending for one unique_id.
+    """
+    offenders = sorted({str(entry.get("identity")) for entry in dp_entries if not _usable_port(entry.get("dpPort"))})
+    if not offenders:
+        return None
+    return "these readings don't declare a usable port number, so they can't be turned into entities: " + ", ".join(offenders)
+
+
+def _duplicate_port_reason(dp_entries: list[dict]) -> str | None:
+    """Rule 2: two entries sharing an (identity, dpPort) pair fail the whole model.
+
+    An entity built over either one could not tell which value to show.
+    Entries rule 1 already rejected are skipped: their port is not an int, and
+    a non-int port can be unhashable (a JSON array arrives as a list), which
+    would raise on the set key and collapse the evaluation into the outer
+    wrapper's single generic reason. Skipping loses nothing, since rule 1 has
+    already named them.
+    """
+    seen: set[tuple[str | None, int]] = set()
+    duplicates: set[tuple[str | None, int]] = set()
+    for entry in dp_entries:
+        dp_port = entry.get("dpPort")
+        if not _usable_port(dp_port):
+            continue
+        key = (entry.get("identity"), dp_port)
+        if key in seen:
+            duplicates.add(key)
+        seen.add(key)
+    if not duplicates:
+        return None
+    formatted = ", ".join(
+        f"{identity} on port {dp_port}" for identity, dp_port in sorted(duplicates, key=lambda pair: (str(pair[0]), str(pair[1])))
+    )
+    return "the catalog declares the same reading more than once for the same port, so its value would be ambiguous: " + formatted
+
+
+def _dp_code_sort_key(code: Any) -> tuple[int, Any, str]:
+    """Order integer codes numerically and anything else after them by text.
+
+    Keeps a message reading 1, 2, 15 rather than the 1, 15, 2 a plain string
+    sort produces, without assuming the catalog only ever carries integers.
+    """
+    if isinstance(code, int) and not isinstance(code, bool):
+        return (0, code, "")
+    return (1, 0, str(code))
+
+
+def _dp_code_reasons(raw_entry: list) -> list[str]:
+    """Rule 3: unusable and reused dpCodes, scanned across the variant's full dp list.
+
+    The runtime catalog matcher keys on dpCode alone and refuses to annotate a
+    field whose dpCode is ambiguous, so an entity built over such an entry
+    would never resolve a value. The scan spans control entries too, because
+    the matcher searches the full list: a control entry sharing a status
+    entry's dpCode makes that status entry just as unresolvable. Multi-zone
+    variants repeating one dpCode across ports are the common shape here, so
+    this rejects real catalog models by design rather than as an edge case.
+
+    An unhashable dpCode cannot key the counter and would raise. Unlike a bad
+    dpPort, no earlier rule reports it, so it earns a reason of its own.
+    """
+    counts: dict[Any, int] = {}
+    identities: dict[Any, set[str]] = {}
+    unusable: set[str] = set()
+    for entry in raw_entry:
+        if not isinstance(entry, dict):
+            continue
+        dp_code = entry.get("dpCode")
+        if not _is_hashable(dp_code):
+            unusable.add(str(entry.get("identity")))
+            continue
+        counts[dp_code] = counts.get(dp_code, 0) + 1
+        identities.setdefault(dp_code, set()).add(str(entry.get("identity")))
+
+    found: list[str] = []
+    if unusable:
+        found.append(
+            "these readings don't declare a usable datapoint code, so they can't be matched to a decoded value: "
+            + ", ".join(sorted(unusable))
+        )
+    duplicates = sorted((code for code, count in counts.items() if count > 1), key=_dp_code_sort_key)
+    if duplicates:
+        formatted = ", ".join(f"dpCode {code} ({', '.join(sorted(identities[code]))})" for code in duplicates)
+        found.append(
+            "the catalog reuses one datapoint code for more than one reading, so those readings can't be told apart: " + formatted
+        )
+    return found
+
+
+def _uncurated_reason(dp_entries: list[dict], unmapped_identities: tuple[str, ...]) -> str | None:
+    """Rule 4: declared status identities with no curated row.
+
+    unmapped_identities is reported as its own attribute regardless of
+    outcome, so this reason summarises it rather than repeating it.
+    """
+    if not unmapped_identities:
+        return None
+    total = len({entry.get("identity") for entry in dp_entries})
+    return (
+        f"{len(unmapped_identities)} of this device's {total} status readings have no verified "
+        "definition yet, so they can't be turned into entities (see the unmapped identities list)"
+    )
+
+
 def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> GenericGateResult:
     """Body of evaluate_generic_gate, without the never-raise wrapper.
 
@@ -261,111 +374,21 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
             port_number=port_number,
         )
 
-    reasons: list[str] = []
-
-    # Rule 1: any dp entry with a missing/unusable dpPort fails the whole
-    # model's gate rather than being skipped, so no two entities can ever
-    # contend for one unique_id.
-    bad_port_identities = sorted(
-        {
-            str(entry.get("identity"))
-            for entry in dp_entries
-            if not isinstance(entry.get("dpPort"), int) or isinstance(entry.get("dpPort"), bool)
-        }
-    )
-    if bad_port_identities:
-        reasons.append(
-            "these readings don't declare a usable port number, so they can't be turned into entities: "
-            + ", ".join(bad_port_identities)
-        )
-
-    # Rule 2: two entries sharing the same (identity, dpPort) fail the whole
-    # model's gate, since an entity built over either one could not tell
-    # which of the two values it should show. Entries rule 1 already rejected
-    # are skipped here: their port is not an int, and a non-int port can be
-    # unhashable (a JSON array arrives as a list), which would raise on the
-    # set key below and collapse this whole evaluation into the outer
-    # wrapper's single generic reason. Skipping them loses nothing, because
-    # rule 1 has already reported them by name.
-    seen_keys: set[tuple[str | None, int]] = set()
-    duplicate_keys: set[tuple[str | None, int]] = set()
-    for entry in dp_entries:
-        dp_port = entry.get("dpPort")
-        if not isinstance(dp_port, int) or isinstance(dp_port, bool):
-            continue
-        key = (entry.get("identity"), dp_port)
-        if key in seen_keys:
-            duplicate_keys.add(key)
-        seen_keys.add(key)
-    if duplicate_keys:
-        formatted_pairs = ", ".join(
-            f"{identity} on port {dp_port}"
-            for identity, dp_port in sorted(duplicate_keys, key=lambda pair: (str(pair[0]), str(pair[1])))
-        )
-        reasons.append(
-            "the catalog declares the same reading more than once for the same port, so its value would be "
-            "ambiguous: " + formatted_pairs
-        )
-
-    # Rule 3: a dpCode shared by two entries anywhere in the variant's dp
-    # list fails the whole model's gate. The runtime catalog matcher keys on
-    # dpCode alone and refuses to annotate a field whose dpCode is ambiguous,
-    # so an entity built over one of those entries would never resolve a
-    # value and would sit at None forever. The check spans the full dp list,
-    # not just the status entries, because the matcher searches the full
-    # list too: a control entry sharing a status entry's dpCode makes that
-    # status entry just as unresolvable. Multi-zone variants that repeat one
-    # dpCode across ports are the common shape here, so this rejects real
-    # catalog models by design rather than as an edge case.
-    # An unhashable dpCode (a JSON array or object arrives as a list or dict)
-    # cannot key the counter below and would raise, collapsing this whole
-    # evaluation into the outer wrapper's single generic reason. Unlike a bad
-    # dpPort, no earlier rule has reported it, so it gets a reason of its own
-    # rather than being skipped silently.
-    code_counts: dict[Any, int] = {}
-    code_identities: dict[Any, set[str]] = {}
-    unusable_code_identities: set[str] = set()
-    for entry in raw_entry:
-        if not isinstance(entry, dict):
-            continue
-        dp_code = entry.get("dpCode")
-        if not _is_hashable(dp_code):
-            unusable_code_identities.add(str(entry.get("identity")))
-            continue
-        code_counts[dp_code] = code_counts.get(dp_code, 0) + 1
-        code_identities.setdefault(dp_code, set()).add(str(entry.get("identity")))
-    if unusable_code_identities:
-        reasons.append(
-            "these readings don't declare a usable datapoint code, so they can't be matched to a decoded "
-            "value: " + ", ".join(sorted(unusable_code_identities))
-        )
-    # Integer codes sort numerically so the message reads 1, 2, 15 rather than
-    # the 1, 15, 2 a plain string sort would produce; anything non-integer the
-    # catalog might carry sorts after them by its text form, which keeps the
-    # order total without assuming the codes are always integers.
-    duplicate_codes = sorted(
-        (code for code, count in code_counts.items() if count > 1),
-        key=lambda code: (0, code, "") if isinstance(code, int) and not isinstance(code, bool) else (1, 0, str(code)),
-    )
-    if duplicate_codes:
-        formatted_codes = ", ".join(f"dpCode {code} ({', '.join(sorted(code_identities[code]))})" for code in duplicate_codes)
-        reasons.append(
-            "the catalog reuses one datapoint code for more than one reading, so those readings can't be told "
-            "apart: " + formatted_codes
-        )
-
-    # Rule 4: declared status identities with no curated row in
-    # _IDENTITY_SPECS. unmapped_identities is reported as its own attribute
-    # regardless of outcome (see describe_generic_gate), so this reason is a
-    # summary rather than a repeat of that list.
     uncurated = {entry.get("identity") for entry in dp_entries if entry.get("identity") not in _IDENTITY_SPECS}
     unmapped_identities = tuple(sorted(uncurated))
-    if unmapped_identities:
-        total_identities = len({entry.get("identity") for entry in dp_entries})
-        reasons.append(
-            f"{len(unmapped_identities)} of this device's {total_identities} status readings have no verified "
-            "definition yet, so they can't be turned into entities (see the unmapped identities list)"
+
+    # Every rule is evaluated; none short-circuits another. A variant failing
+    # several independent rules reports all of them rather than just the first.
+    reasons = [
+        reason
+        for reason in (
+            _bad_port_reason(dp_entries),
+            _duplicate_port_reason(dp_entries),
+            *_dp_code_reasons(raw_entry),
+            _uncurated_reason(dp_entries, unmapped_identities),
         )
+        if reason
+    ]
 
     if reasons:
         return GenericGateResult(
