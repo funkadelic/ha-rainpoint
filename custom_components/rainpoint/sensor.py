@@ -1124,6 +1124,18 @@ class RainPointUnknownSensor(RainPointSensorBase):
             attrs["decoded_fields"] = field_names
             attrs["decoded_values"] = generic.get("fields")
 
+        # Imported locally to avoid a circular import: generic_entities
+        # subclasses RainPointSensorBase, which is defined later in this
+        # module than this class. Always present, regardless of the generic
+        # entities options toggle: this is computed from the catalog and the
+        # curated table alone, involves no entity creation, and is most
+        # valuable to a user who has not opted in.
+        from .generic_entities import describe_generic_gate
+
+        model = self._sensor_info.get("model")
+        model_code = self._sensor_info.get("model_code")
+        attrs.update(describe_generic_gate(model, model_code))
+
         attrs["report_url"] = "https://github.com/funkadelic/ha-rainpoint/issues"
         attrs["instructions"] = (
             "This sensor model is not yet supported. Please open a GitHub issue with the model and raw_payload values above."

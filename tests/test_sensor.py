@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.const import (
     DOMAIN,
     MODEL_DISPLAY_HUB,
@@ -894,6 +895,87 @@ class TestUnknownSensor:
         attrs = sensor.extra_state_attributes
         assert "decoded_fields" not in attrs
         assert "decoded_values" not in attrs
+
+    def test_unmapped_identity_attributes_present_regardless_of_toggle_state(self, monkeypatch):
+        """The two new attributes never depend on the generic-entities options toggle."""
+        dp_entries = [{"identity": "STA_RH", "dpPort": 0}]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        sensor = self._make(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert "unmapped_generic_identities" in attrs
+        assert "generic_gate_blocked_by" in attrs
+        # No toggle is ever read here - the value is identical whether or not
+        # an options entry even exists for this sensor.
+        assert attrs["unmapped_generic_identities"] == []
+        assert attrs["generic_gate_blocked_by"] is None
+
+    def test_unmapped_list_contains_exactly_the_uncurated_identity(self, monkeypatch):
+        dp_entries = [{"identity": "STA_RH", "dpPort": 0}, {"identity": "STA_BAT", "dpPort": 0, "dpCode": 2}]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        sensor = self._make(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["unmapped_generic_identities"] == ["STA_BAT"]
+        assert attrs["generic_gate_blocked_by"] is None
+
+    def test_fully_curated_variant_reports_no_unmapped_identities_and_no_reason(self, monkeypatch):
+        dp_entries = [{"identity": "STA_RH", "dpPort": 0}]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
+        sensor = self._make(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["unmapped_generic_identities"] == []
+        assert attrs["generic_gate_blocked_by"] is None
+
+    def test_model_absent_from_catalog_reports_a_blocked_reason(self, monkeypatch):
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: None)
+        sensor = self._make(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["unmapped_generic_identities"] == []
+        assert attrs["generic_gate_blocked_by"]
+
+    def test_duplicate_identity_and_port_names_the_identity_in_the_reason(self, monkeypatch):
+        dp_entries = [
+            {"identity": "STA_RH", "dpPort": 0, "dpCode": 1},
+            {"identity": "STA_RH", "dpPort": 0, "dpCode": 2},
+        ]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        sensor = self._make(model="MYSTERY")
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["generic_gate_blocked_by"]
+        assert "STA_RH" in attrs["generic_gate_blocked_by"]
+
+    def test_preexisting_attributes_are_unchanged_alongside_the_new_keys(self, monkeypatch):
+        dp_entries = [{"identity": "STA_RH", "dpPort": 0}]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        sensor = self._make(model="MODELX", data={"type": "unknown", "model": "MODELX", "raw_value": "10#ZZ"})
+
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["model"] == "MODELX"
+        assert attrs["raw_payload"] == "10#ZZ"
+        assert "report_url" in attrs
+        assert "instructions" in attrs
+        assert "unmapped_generic_identities" in attrs
+        assert "generic_gate_blocked_by" in attrs
+
+    def test_no_generic_sub_dict_does_not_raise(self):
+        """No decoded payload at all still yields the two always-on keys, never an exception."""
+        sensor = self._make(data=None)
+
+        attrs = sensor.extra_state_attributes
+
+        assert "unmapped_generic_identities" in attrs
+        assert "generic_gate_blocked_by" in attrs
 
 
 class TestRawPayloadSensor:
