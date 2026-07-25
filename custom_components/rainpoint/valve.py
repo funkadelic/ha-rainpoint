@@ -73,14 +73,14 @@ async def async_setup_entry(
         # RainPointSensorBase transitively through generic_entities, so a
         # top-level import here would pull the whole sensor platform into
         # this module's import graph.
-        from .generic_control import build_generic_control_entities
+        from .generic_control import build_generic_valve_entities
 
         for key, info in sensors_cfg.items():
             hid = info.get("hid", "")
             mid = info.get("mid", "")
             addr = info.get("addr", "")
             base_slug = f"{hid}_{mid}_{addr}"
-            entities.extend(build_generic_control_entities(coordinator, key, info, base_slug))
+            entities.extend(build_generic_valve_entities(coordinator, key, info, base_slug))
 
     if entities:
         async_add_entities(entities)

@@ -6,7 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DEBUG_WORKER_URL, DOMAIN
+from .const import CONF_GENERIC_CONTROL_ENABLED, DEBUG_WORKER_URL, DOMAIN
 from .coordinator import RainPointCoordinator
 from .hub_entities import RainPointHubBroadcastSwitch
 
@@ -37,6 +37,22 @@ async def async_setup_entry(
 
         debug_switch = RainPointDebugSwitchEntity(hass, coordinator, entry)
         entities.append(debug_switch)
+
+    if entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False):
+        # Deferred import: generic_control reaches sensor.py's
+        # RainPointSensorBase transitively through generic_entities, so a
+        # top-level import here would pull the whole sensor platform into
+        # this module's import graph. Mirrors valve.py's identical branch and
+        # justification for the same import.
+        from .generic_control import build_generic_switch_entities
+
+        sensors_cfg = coordinator.data.get("sensors", {})
+        for key, info in sensors_cfg.items():
+            hid = info.get("hid", "")
+            mid = info.get("mid", "")
+            addr = info.get("addr", "")
+            base_slug = f"{hid}_{mid}_{addr}"
+            entities.extend(build_generic_switch_entities(coordinator, key, info, base_slug))
 
     _LOGGER.info("Added %d switch entities", len(entities))
     async_add_entities(entities)

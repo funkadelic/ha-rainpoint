@@ -72,6 +72,14 @@ GENERIC_CONTROL_REFRESH_DELAY_SECONDS = 8
 # one glance tells a reader an entity is unverified, whether it is read-only
 # or a control.
 GENERIC_CONTROL_MARKER_ICON = "mdi:flask-outline"
+# Both the repair issue's translation key and the stem of its per-model,
+# per-code issue id (see generic_control._create_command_failed_issue). The
+# issue id itself is the dedup key -- two failures with the same model and
+# the same extracted response code converge on the same id, so a retry loop
+# or a multi-zone device raises one issue rather than one per attempt or per
+# zone, mirroring how coordinator._notify_unknown_model dedupes on its
+# notification id.
+GENERIC_CONTROL_ISSUE_ID_PREFIX = "generic_control_command_failed"
 # Committed, variant-keyed force-disable list. Each member is a
 # (model, modelCode-as-string) tuple, keyed exactly the way the product
 # catalog itself is keyed: get_catalog_entry's UNCODED_VARIANT sentinel ("*")

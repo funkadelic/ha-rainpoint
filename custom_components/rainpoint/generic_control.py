@@ -20,17 +20,21 @@ condition is disabled by construction, never by an explicit deny entry.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.valve import ValveEntity, ValveEntityFeature
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import get_catalog_entry, get_catalog_port_number, is_hand_written_model
+from .api import RainPointApiError, get_catalog_entry, get_catalog_port_number, is_hand_written_model
 from .api.product_catalog import UNCODED_VARIANT
 from .const import (
     DOMAIN,
+    GENERIC_CONTROL_ISSUE_ID_PREFIX,
     GENERIC_CONTROL_MARKER_ICON,
     GENERIC_CONTROL_OVERRIDE_DISABLED,
     GENERIC_CONTROL_REFRESH_DELAY_SECONDS,
@@ -61,6 +65,65 @@ SWITCH_CONTROL_IDENTITIES = frozenset({"CTL_SOCK"})
 # The single curated row (generic_entities._IDENTITY_SPECS) both the sensor
 # and control paths read the open/closed reading from.
 RUN_STATE_IDENTITY = "STA_WKSTATE"
+
+# Matches "code" followed by whitespace and an optionally negative run of
+# digits, e.g. "controlWorkMode failed: code 5". Anchored to the word "code"
+# rather than to a fixed position, since the sentence prefix is not part of
+# any contract this module owns.
+_RESPONSE_CODE_PATTERN = re.compile(r"code\s+(-?\d+)")
+
+
+def _response_code_from_error(exc: Exception) -> str:
+    """Extract the numeric controlWorkMode response code from the client's error text.
+
+    Extracting from the message rather than from an attribute on the
+    exception is deliberate: GCTL-02 requires api/client.py be reused
+    unchanged, so the message is the only place the code is exposed. Do not
+    "fix" this by adding a code attribute to RainPointApiError -- that would
+    be an unrequested change to the reused client.
+
+    Returns the literal string "unknown" when no code can be found (e.g. the
+    HTTP-status branch of control_work_mode, which never mentions "code" at
+    all), rather than raising or omitting the segment.
+    """
+    match = _RESPONSE_CODE_PATTERN.search(str(exc))
+    return match.group(1) if match else "unknown"
+
+
+def _create_command_failed_issue(hass: Any, model: str | None, exc: Exception) -> None:
+    """Raise the one-shot repair issue for a failed generic control command.
+
+    The issue id (built from the prefix, the model, and the extracted
+    response code) is itself the dedup key: two failures with the same model
+    and the same code converge on the same id, so a retry loop -- or a
+    multi-zone device where several entities hit the same failure -- raises
+    one issue for the whole device and code rather than one per attempt or
+    per zone, mirroring how coordinator._notify_unknown_model dedupes on its
+    notification id.
+
+    Guarded by its own narrow try/except so a failing diagnostic surface can
+    never suppress the real error the caller re-raises immediately after
+    calling this.
+    """
+    model_label = model or "unknown"
+    code = _response_code_from_error(exc)
+    issue_id = f"{GENERIC_CONTROL_ISSUE_ID_PREFIX}_{model_label}_{code}"
+    try:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=GENERIC_CONTROL_ISSUE_ID_PREFIX,
+            translation_placeholders={"model": model_label, "error": str(exc)},
+        )
+    except Exception as issue_exc:
+        _LOGGER.debug(
+            "Failed to create the repair issue for a failed generic control command (model=%s): %s",
+            model_label,
+            issue_exc,
+        )
 
 
 @dataclass(frozen=True)
@@ -301,11 +364,22 @@ def count_generic_control_eligible_devices(coordinator_data: dict | None) -> tup
     return (eligible, unsupported)
 
 
-def build_generic_control_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
-    """Return the generic control entities for one sub-device, or [] for every rejection path.
+def _build_generic_entities(
+    coordinator,
+    sensor_key: str,
+    sensor_info: dict,
+    base_slug: str,
+    identity_set: frozenset[str],
+    entity_cls: type,
+) -> list:
+    """Shared body: one gate evaluation, projected through one identity set and one entity class.
 
-    Never raises: a malformed catalog entry must not abort valve platform
-    setup for the whole integration.
+    Both platform-specific wrappers (build_generic_valve_entities,
+    build_generic_switch_entities) call this with their own identity_set and
+    entity_cls, so the gate is evaluated identically for both domains and can
+    never disagree about which datapoints are admitted -- only which class
+    they become. Never raises: a malformed catalog entry must not abort
+    platform setup for the whole integration.
     """
     try:
         # A per-poll fact, not a static model property, so it stays here
@@ -320,25 +394,33 @@ def build_generic_control_entities(coordinator, sensor_key: str, sensor_info: di
         if not result.passed:
             return []
 
-        entities: list = []
-        for datapoint in result.datapoints:
-            if datapoint.identity in VALVE_CONTROL_IDENTITIES:
-                entities.append(
-                    RainPointGenericValve(coordinator, sensor_key, sensor_info, base_slug, datapoint, result.port_number)
-                )
-            elif datapoint.identity in SWITCH_CONTROL_IDENTITIES:
-                # A later plan fills this branch in with a real switch
-                # entity; every CTL_SOCK model in the committed catalog is
-                # already hand-written, so this is expected to be inert.
-                _LOGGER.debug(
-                    "Skipping generic switch control for identity=%s sensor_key=%s: not implemented yet",
-                    datapoint.identity,
-                    sensor_key,
-                )
-        return entities
+        return [
+            entity_cls(coordinator, sensor_key, sensor_info, base_slug, datapoint, result.port_number)
+            for datapoint in result.datapoints
+            if datapoint.identity in identity_set
+        ]
     except Exception as exc:
-        _LOGGER.debug("build_generic_control_entities failed for sensor_key=%s: %s", sensor_key, exc)
+        _LOGGER.debug("_build_generic_entities failed for sensor_key=%s: %s", sensor_key, exc)
         return []
+
+
+def build_generic_valve_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
+    """Return the generic valve entities (CTL_WATER / CTL_BT_WATER) for one sub-device, or []."""
+    return _build_generic_entities(
+        coordinator, sensor_key, sensor_info, base_slug, VALVE_CONTROL_IDENTITIES, RainPointGenericValve
+    )
+
+
+def build_generic_switch_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
+    """Return the generic switch entities (CTL_SOCK) for one sub-device, or [].
+
+    Ships the allowlist's third identity literally rather than silently
+    narrowing generic control to valves: a CTL_SOCK datapoint names a mains
+    socket, not a valve, so it belongs on the switch platform.
+    """
+    return _build_generic_entities(
+        coordinator, sensor_key, sensor_info, base_slug, SWITCH_CONTROL_IDENTITIES, RainPointGenericSwitch
+    )
 
 
 class RainPointGenericControlBase(CoordinatorEntity):
@@ -439,6 +521,12 @@ class RainPointGenericControlBase(CoordinatorEntity):
         Never decodes the response and never touches coordinator data --
         D-14's no-optimistic-state rule. The client method is reused
         unchanged; nothing here (or anywhere in this module) modifies it.
+
+        A raised RainPointApiError propagates unchanged after raising the
+        one-shot repair issue, so Home Assistant still reports the action as
+        failed (T-14-10): the issue is additional, never a substitute, and
+        the confirming refresh below is never reached on a failure -- there
+        is nothing to confirm.
         """
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
@@ -446,15 +534,19 @@ class RainPointGenericControlBase(CoordinatorEntity):
         product_key = self._sensor_info.get("product_key") or ""
 
         client = self.coordinator._client
-        await client.control_work_mode(
-            mid=mid,
-            addr=addr,
-            device_name=device_name,
-            product_key=product_key,
-            port=self._datapoint.command_port,
-            mode=mode,
-            duration=duration,
-        )
+        try:
+            await client.control_work_mode(
+                mid=mid,
+                addr=addr,
+                device_name=device_name,
+                product_key=product_key,
+                port=self._datapoint.command_port,
+                mode=mode,
+                duration=duration,
+            )
+        except RainPointApiError as exc:
+            _create_command_failed_issue(self.hass, self._sensor_info.get("model"), exc)
+            raise
         self._schedule_refresh()
 
     def _schedule_refresh(self) -> None:
@@ -504,4 +596,32 @@ class RainPointGenericValve(RainPointGenericControlBase, ValveEntity):
         await self._async_send_command(mode=1, duration=duration)
 
     async def async_close_valve(self, **kwargs: Any) -> None:
+        await self._async_send_command(mode=0, duration=0)
+
+
+class RainPointGenericSwitch(RainPointGenericControlBase, SwitchEntity):
+    """Opt-in, unverified generic switch entity for one allowlisted CTL_SOCK control datapoint.
+
+    Ships the allowlist's third identity literally (D-04): CTL_SOCK names a
+    mains socket, not a valve, so it belongs on the switch platform rather
+    than silently collapsing into a valve entity. There is no existing
+    per-device write-path switch in this repository to copy -- the two
+    entities in switch.py are a hub-level broadcast switch and a debug
+    switch, both structurally unrelated -- so this is built from the shared
+    control base and the same coordinator-read-plus-actuate-through-client
+    shape RainPointGenericValve already has.
+
+    Never optimistic (D-14): ``is_on`` is read only from the shared base's
+    run-state property, so a command's effect only ever becomes visible once
+    the coordinator's own data confirms it.
+    """
+
+    @property
+    def is_on(self) -> bool | None:
+        return self._run_state_open
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._async_send_command(mode=1, duration=DEFAULT_CONTROL_DURATION_SECONDS)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
         await self._async_send_command(mode=0, duration=0)

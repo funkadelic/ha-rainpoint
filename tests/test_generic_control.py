@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import copy
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from custom_components.rainpoint import generic_control as generic_control_module
-from custom_components.rainpoint.api import get_catalog_variant_codes
+from custom_components.rainpoint.api import RainPointApiError, get_catalog_variant_codes
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
 from custom_components.rainpoint.api.product_catalog import UNCODED_VARIANT
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
+    GENERIC_CONTROL_ISSUE_ID_PREFIX,
     GENERIC_CONTROL_REFRESH_DELAY_SECONDS,
     GENERIC_CONTROL_UNIQUE_ID_MARKER,
     GENERIC_UNIQUE_ID_MARKER,
@@ -26,8 +27,10 @@ from custom_components.rainpoint.generic_control import (
     RUN_STATE_IDENTITY,
     ControlDatapoint,
     ControlGateResult,
+    RainPointGenericSwitch,
     RainPointGenericValve,
-    build_generic_control_entities,
+    build_generic_switch_entities,
+    build_generic_valve_entities,
     count_generic_control_eligible_devices,
     describe_control_gate,
     evaluate_control_gate,
@@ -37,6 +40,13 @@ from tests.helpers import make_coordinator_data, make_sensor_entry
 
 ANCHOR_MODEL = "HTV103FRF"
 ANCHOR_MODEL_CODE = 31
+
+# HWG004WRF/34 is the one real CTL_SOCK candidate in the committed catalog:
+# it declares CTL_SOCK on port 1, STA_WKSTATE on port 1, portNumber 1, and has
+# no hand-written decoder (unlike HCS003FRF, the catalog's other CTL_SOCK
+# model, which is hand-written and therefore structurally excluded).
+SOCKET_MODEL = "HWG004WRF"
+SOCKET_MODEL_CODE = 34
 
 _SENTINEL = object()
 
@@ -79,6 +89,16 @@ def _anchor_sensor_info(sub_name: str = "Valve Hub 1", fields: list[dict] | None
     return entry
 
 
+def _socket_sensor_info(sub_name: str = "Outlet 1", fields: list[dict] | None = None) -> dict:
+    entry = make_sensor_entry(
+        hid=300, mid=400, addr=1, model=SOCKET_MODEL, sub_name=sub_name, data=_unknown_data(SOCKET_MODEL, fields)
+    )
+    entry["model_code"] = SOCKET_MODEL_CODE
+    entry["device_name"] = "dev2"
+    entry["product_key"] = "pk2"
+    return entry
+
+
 def _make_coordinator(sensor_key: str, sensor_info: dict):
     coordinator = MagicMock()
     coordinator.data = make_coordinator_data(sensors={sensor_key: sensor_info})
@@ -91,7 +111,17 @@ def _make_coordinator(sensor_key: str, sensor_info: dict):
 def _build_anchor_valve(sensor_key: str = "100_200_1", fields: list[dict] | None = None, sub_name: str = "Valve Hub 1"):
     sensor_info = _anchor_sensor_info(sub_name=sub_name, fields=fields)
     coordinator = _make_coordinator(sensor_key, sensor_info)
-    entities = build_generic_control_entities(coordinator, sensor_key, sensor_info, sensor_key)
+    entities = build_generic_valve_entities(coordinator, sensor_key, sensor_info, sensor_key)
+    assert len(entities) == 1
+    entity = entities[0]
+    entity.hass = MagicMock()
+    return entity, coordinator, sensor_info
+
+
+def _build_anchor_switch(sensor_key: str = "300_400_1", fields: list[dict] | None = None, sub_name: str = "Outlet 1"):
+    sensor_info = _socket_sensor_info(sub_name=sub_name, fields=fields)
+    coordinator = _make_coordinator(sensor_key, sensor_info)
+    entities = build_generic_switch_entities(coordinator, sensor_key, sensor_info, sensor_key)
     assert len(entities) == 1
     entity = entities[0]
     entity.hass = MagicMock()
@@ -521,30 +551,35 @@ class TestCountGenericControlEligibleDevices:
 
 
 # ---------------------------------------------------------------------------
-# build_generic_control_entities
+# build_generic_valve_entities / build_generic_switch_entities
+#
+# Both wrap the shared _build_generic_entities body with their own identity
+# set and entity class (one gate evaluation, two domain-specific
+# projections), so the never-raise and rejection-path behaviour is proven
+# once per wrapper rather than duplicated per rejection reason.
 # ---------------------------------------------------------------------------
 
 
-class TestBuildGenericControlEntities:
+class TestBuildGenericValveEntities:
     def test_non_unknown_payload_yields_nothing(self):
         sensor_info = make_sensor_entry(model=ANCHOR_MODEL, data={"type": "valve"})
         sensor_info["model_code"] = ANCHOR_MODEL_CODE
         coordinator = _make_coordinator("100_200_1", sensor_info)
 
-        assert build_generic_control_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
+        assert build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
     def test_no_data_yields_nothing(self):
         sensor_info = make_sensor_entry(model=ANCHOR_MODEL, data=None)
         sensor_info["model_code"] = ANCHOR_MODEL_CODE
         coordinator = _make_coordinator("100_200_1", sensor_info)
 
-        assert build_generic_control_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
+        assert build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
     def test_hand_written_model_yields_nothing_even_with_unknown_type_data(self):
         sensor_info = _anchor_sensor_info(model=MODEL_VALVE_245)
         coordinator = _make_coordinator("100_200_1", sensor_info)
 
-        assert build_generic_control_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
+        assert build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
     def test_gate_failure_yields_nothing(self, monkeypatch):
         monkeypatch.setattr(generic_control_module, "is_hand_written_model", lambda model: False)
@@ -552,30 +587,26 @@ class TestBuildGenericControlEntities:
         sensor_info = make_sensor_entry(model="FAKE_MODEL", data=_unknown_data("FAKE_MODEL"))
         coordinator = _make_coordinator("100_200_1", sensor_info)
 
-        assert build_generic_control_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
+        assert build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
     def test_fully_eligible_anchor_yields_one_valve(self):
         sensor_info = _anchor_sensor_info()
         coordinator = _make_coordinator("100_200_1", sensor_info)
 
-        entities = build_generic_control_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+        entities = build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
 
         assert len(entities) == 1
         assert isinstance(entities[0], RainPointGenericValve)
 
-    def test_switch_identity_is_skipped_rather_than_built(self, monkeypatch):
-        """CTL_SOCK admits a datapoint at the gate, but the switch branch is not
-        implemented in this plan -- it must be silently skipped, not raise.
+    def test_socket_identity_yields_no_valve(self):
+        """HWG004WRF/34 admits a CTL_SOCK datapoint at the gate; the valve
+        builder must produce nothing for it -- that identity belongs to the
+        switch builder only.
         """
-        dp = ControlDatapoint(identity="CTL_SOCK", dp_port=1, command_port=1, dp_code=2, dp_data_type="")
-        fake_result = ControlGateResult(datapoints=(dp,), blocked_by=(), port_number=1)
-        monkeypatch.setattr(generic_control_module, "evaluate_control_gate", lambda model, model_code=None: fake_result)
-        sensor_info = make_sensor_entry(model="FAKE_MODEL", data=_unknown_data("FAKE_MODEL"))
-        coordinator = _make_coordinator("100_200_1", sensor_info)
+        sensor_info = _socket_sensor_info()
+        coordinator = _make_coordinator("300_400_1", sensor_info)
 
-        entities = build_generic_control_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
-
-        assert entities == []
+        assert build_generic_valve_entities(coordinator, "300_400_1", sensor_info, "300_400_1") == []
 
     def test_unrecognized_identity_is_silently_skipped(self, monkeypatch):
         """Defensive branch: every admitted datapoint's identity is, by construction,
@@ -589,7 +620,7 @@ class TestBuildGenericControlEntities:
         sensor_info = make_sensor_entry(model="FAKE_MODEL", data=_unknown_data("FAKE_MODEL"))
         coordinator = _make_coordinator("100_200_1", sensor_info)
 
-        entities = build_generic_control_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+        entities = build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
 
         assert entities == []
 
@@ -608,7 +639,78 @@ class TestBuildGenericControlEntities:
         sensor_info = make_sensor_entry(model="FAKE_MODEL", data=_unknown_data("FAKE_MODEL"))
         coordinator = _make_coordinator("100_200_1", sensor_info)
 
-        assert build_generic_control_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
+        assert build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
+
+
+class TestBuildGenericSwitchEntities:
+    def test_non_unknown_payload_yields_nothing(self):
+        sensor_info = make_sensor_entry(model=SOCKET_MODEL, data={"type": "valve"})
+        sensor_info["model_code"] = SOCKET_MODEL_CODE
+        coordinator = _make_coordinator("300_400_1", sensor_info)
+
+        assert build_generic_switch_entities(coordinator, "300_400_1", sensor_info, "300_400_1") == []
+
+    def test_hand_written_model_yields_nothing_even_with_unknown_type_data(self):
+        sensor_info = _socket_sensor_info()
+        sensor_info["model"] = MODEL_VALVE_245
+        sensor_info["data"]["model"] = MODEL_VALVE_245
+        coordinator = _make_coordinator("300_400_1", sensor_info)
+
+        assert build_generic_switch_entities(coordinator, "300_400_1", sensor_info, "300_400_1") == []
+
+    def test_fully_eligible_anchor_yields_one_switch(self):
+        """HWG004WRF/34 is the one real CTL_SOCK candidate in the committed
+        catalog with no hand-written decoder (D-04's note); this proves the
+        switch branch actually builds an entity for it.
+        """
+        sensor_info = _socket_sensor_info()
+        coordinator = _make_coordinator("300_400_1", sensor_info)
+
+        entities = build_generic_switch_entities(coordinator, "300_400_1", sensor_info, "300_400_1")
+
+        assert len(entities) == 1
+        assert isinstance(entities[0], RainPointGenericSwitch)
+
+    def test_valve_identity_yields_no_switch(self):
+        sensor_info = _anchor_sensor_info()
+        coordinator = _make_coordinator("100_200_1", sensor_info)
+
+        assert build_generic_switch_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
+
+    def test_two_zone_valve_variant_yields_no_switch(self):
+        sensor_info = make_sensor_entry(hid=1, mid=2, addr=1, model="HTV214FRF", sub_name="Yard", data=_unknown_data("HTV214FRF"))
+        sensor_info["model_code"] = 288
+        coordinator = _make_coordinator("1_2_1", sensor_info)
+
+        assert build_generic_switch_entities(coordinator, "1_2_1", sensor_info, "1_2_1") == []
+
+    def test_unrecognized_identity_is_silently_skipped(self, monkeypatch):
+        dp = ControlDatapoint(identity="CTL_UNKNOWN", dp_port=1, command_port=1, dp_code=9, dp_data_type="")
+        fake_result = ControlGateResult(datapoints=(dp,), blocked_by=(), port_number=1)
+        monkeypatch.setattr(generic_control_module, "evaluate_control_gate", lambda model, model_code=None: fake_result)
+        sensor_info = make_sensor_entry(model="FAKE_MODEL", data=_unknown_data("FAKE_MODEL"))
+        coordinator = _make_coordinator("100_200_1", sensor_info)
+
+        entities = build_generic_switch_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+
+        assert entities == []
+
+    def test_entity_construction_failure_after_gate_pass_is_caught(self, monkeypatch):
+        bad_result = ControlGateResult(
+            datapoints=(ControlDatapoint(identity="CTL_SOCK", dp_port=1, command_port=1, dp_code=2, dp_data_type=""),),
+            blocked_by=(),
+            port_number=1,
+        )
+        monkeypatch.setattr(generic_control_module, "evaluate_control_gate", lambda model, model_code=None: bad_result)
+        monkeypatch.setattr(
+            generic_control_module,
+            "RainPointGenericSwitch",
+            MagicMock(side_effect=RuntimeError("boom")),
+        )
+        sensor_info = make_sensor_entry(model="FAKE_MODEL", data=_unknown_data("FAKE_MODEL"))
+        coordinator = _make_coordinator("300_400_1", sensor_info)
+
+        assert build_generic_switch_entities(coordinator, "300_400_1", sensor_info, "300_400_1") == []
 
 
 # ---------------------------------------------------------------------------
@@ -642,7 +744,7 @@ class TestRainPointGenericValveConstruction:
         sensor_info["model_code"] = 288
         coordinator = _make_coordinator("1_2_1", sensor_info)
 
-        entities = build_generic_control_entities(coordinator, "1_2_1", sensor_info, "1_2_1")
+        entities = build_generic_valve_entities(coordinator, "1_2_1", sensor_info, "1_2_1")
 
         names = sorted(e._attr_name for e in entities)
         assert names == ["Yard Zone 1 (unverified)", "Yard Zone 2 (unverified)"]
@@ -953,3 +1055,410 @@ class TestEndToEndValveSetupEntry:
         await async_setup_entry(hass, entry, async_add_entities)
 
         assert all(GENERIC_CONTROL_UNIQUE_ID_MARKER not in getattr(e, "_attr_unique_id", "") for e in captured)
+
+
+# ---------------------------------------------------------------------------
+# RainPointGenericControlBase / RainPointGenericSwitch construction
+# ---------------------------------------------------------------------------
+
+
+class TestRainPointGenericSwitchConstruction:
+    def test_unique_id_contains_the_full_control_marker(self):
+        entity, _, _ = _build_anchor_switch()
+
+        assert entity._attr_unique_id == "rainpoint_300_400_1_generic_ctl_ctl_sock_p1"
+        assert GENERIC_CONTROL_UNIQUE_ID_MARKER in entity._attr_unique_id
+        assert GENERIC_UNIQUE_ID_MARKER in entity._attr_unique_id
+
+    def test_name_single_port_variant_omits_zone(self):
+        entity, _, _ = _build_anchor_switch(sub_name="Pump Outlet")
+
+        assert entity._attr_name == "Pump Outlet (unverified)"
+
+    def test_device_info_matches_the_sub_device_card(self):
+        entity, _, _ = _build_anchor_switch()
+
+        info = entity.device_info
+        assert info["identifiers"] == {(DOMAIN, "300_400_1")}
+        assert info["manufacturer"] == "RainPoint"
+        assert info["model"] == SOCKET_MODEL
+
+    def test_icon_is_the_control_marker_icon(self):
+        entity, _, _ = _build_anchor_switch()
+
+        assert entity._attr_icon == generic_control_module.GENERIC_CONTROL_MARKER_ICON
+
+
+# ---------------------------------------------------------------------------
+# RainPointGenericSwitch.is_on / run-state reading
+# ---------------------------------------------------------------------------
+
+
+class TestSwitchRunStateReading:
+    def test_is_on_true_when_run_state_open(self):
+        entity, _, _ = _build_anchor_switch(fields=[_run_state_field(1, 1)])
+        assert entity.is_on is True
+
+    def test_is_on_false_when_run_state_closed(self):
+        entity, _, _ = _build_anchor_switch(fields=[_run_state_field(1, 0)])
+        assert entity.is_on is False
+
+    def test_is_on_none_when_no_matching_field(self):
+        entity, _, _ = _build_anchor_switch(fields=[])
+        assert entity.is_on is None
+
+
+# ---------------------------------------------------------------------------
+# RainPointGenericSwitch control (turn_on/turn_off, refresh scheduling)
+# ---------------------------------------------------------------------------
+
+
+class TestRainPointGenericSwitchControl:
+    @pytest.mark.asyncio
+    async def test_turn_on_calls_control_work_mode_with_resolved_port_and_default_duration(self, monkeypatch):
+        entity, coordinator, _ = _build_anchor_switch()
+        monkeypatch.setattr(generic_control_module, "async_call_later", MagicMock(return_value=MagicMock()))
+
+        await entity.async_turn_on()
+
+        coordinator._client.control_work_mode.assert_awaited_once_with(
+            mid=400,
+            addr=1,
+            device_name="dev2",
+            product_key="pk2",
+            port=1,
+            mode=1,
+            duration=DEFAULT_CONTROL_DURATION_SECONDS,
+        )
+
+    @pytest.mark.asyncio
+    async def test_turn_off_calls_control_work_mode_with_mode_zero_duration_zero(self, monkeypatch):
+        entity, coordinator, _ = _build_anchor_switch()
+        monkeypatch.setattr(generic_control_module, "async_call_later", MagicMock(return_value=MagicMock()))
+
+        await entity.async_turn_off()
+
+        coordinator._client.control_work_mode.assert_awaited_once_with(
+            mid=400,
+            addr=1,
+            device_name="dev2",
+            product_key="pk2",
+            port=1,
+            mode=0,
+            duration=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_command_leaves_coordinator_data_byte_for_byte_unchanged(self, monkeypatch):
+        entity, coordinator, _ = _build_anchor_switch()
+        monkeypatch.setattr(generic_control_module, "async_call_later", MagicMock(return_value=MagicMock()))
+        before = copy.deepcopy(coordinator.data)
+
+        await entity.async_turn_on()
+
+        assert coordinator.data == before
+
+    @pytest.mark.asyncio
+    async def test_a_delayed_refresh_is_scheduled_and_not_requested_synchronously(self, monkeypatch):
+        entity, coordinator, _ = _build_anchor_switch()
+        call_later = MagicMock(return_value=MagicMock())
+        monkeypatch.setattr(generic_control_module, "async_call_later", call_later)
+
+        await entity.async_turn_on()
+
+        call_later.assert_called_once_with(entity.hass, GENERIC_CONTROL_REFRESH_DELAY_SECONDS, entity._handle_refresh)
+        coordinator.async_request_refresh.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_command_raises_and_creates_the_same_repair_issue_as_a_failed_valve_command(self):
+        entity, coordinator, sensor_info = _build_anchor_switch()
+        coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
+
+        with patch.object(generic_control_module.ir, "async_create_issue") as create, pytest.raises(RainPointApiError):
+            await entity.async_turn_on()
+
+        create.assert_called_once()
+        _hass, domain, issue_id = create.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == f"{GENERIC_CONTROL_ISSUE_ID_PREFIX}_{sensor_info['model']}_5"
+        assert create.call_args.kwargs["translation_placeholders"]["model"] == sensor_info["model"]
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: switch.async_setup_entry dispatch with the control toggle
+# ---------------------------------------------------------------------------
+
+
+class TestEndToEndSwitchSetupEntry:
+    @staticmethod
+    def _make_hass_and_entry(coordinator, options: dict):
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.options = options
+        hass.data = {DOMAIN: {"test_entry": {"coordinator": coordinator}}}
+        return hass, entry
+
+    @pytest.mark.asyncio
+    async def test_option_absent_creates_no_control_entity(self):
+        from custom_components.rainpoint.switch import async_setup_entry
+
+        sensor_key = "300_400_1"
+        sensor_info = _socket_sensor_info()
+        coordinator = _make_coordinator(sensor_key, sensor_info)
+        coordinator.data["hubs"] = []
+        hass, entry = self._make_hass_and_entry(coordinator, {})
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_option_false_creates_no_control_entity(self):
+        from custom_components.rainpoint.switch import async_setup_entry
+
+        sensor_key = "300_400_1"
+        sensor_info = _socket_sensor_info()
+        coordinator = _make_coordinator(sensor_key, sensor_info)
+        coordinator.data["hubs"] = []
+        hass, entry = self._make_hass_and_entry(coordinator, {CONF_GENERIC_CONTROL_ENABLED: False})
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_option_true_creates_exactly_one_generic_switch_for_the_socket_anchor(self):
+        from custom_components.rainpoint.switch import async_setup_entry
+
+        sensor_key = "300_400_1"
+        sensor_info = _socket_sensor_info()
+        coordinator = _make_coordinator(sensor_key, sensor_info)
+        coordinator.data["hubs"] = []
+        hass, entry = self._make_hass_and_entry(coordinator, {CONF_GENERIC_CONTROL_ENABLED: True})
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert len(captured) == 1
+        assert isinstance(captured[0], RainPointGenericSwitch)
+        assert captured[0]._attr_unique_id == "rainpoint_300_400_1_generic_ctl_ctl_sock_p1"
+
+    @pytest.mark.asyncio
+    async def test_valve_anchor_creates_no_switch_entity_even_with_option_on(self):
+        from custom_components.rainpoint.switch import async_setup_entry
+
+        sensor_key = "100_200_1"
+        sensor_info = _anchor_sensor_info()
+        coordinator = _make_coordinator(sensor_key, sensor_info)
+        coordinator.data["hubs"] = []
+        hass, entry = self._make_hass_and_entry(coordinator, {CONF_GENERIC_CONTROL_ENABLED: True})
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert captured == []
+
+
+# ---------------------------------------------------------------------------
+# Cross-platform: valve and switch setups never produce a shared unique_id
+# ---------------------------------------------------------------------------
+
+
+class TestValveAndSwitchPlatformsShareNoUniqueId:
+    @pytest.mark.asyncio
+    async def test_combined_unique_ids_from_both_platform_setups_has_no_duplicate(self):
+        from custom_components.rainpoint.switch import async_setup_entry as switch_setup_entry
+        from custom_components.rainpoint.valve import async_setup_entry as valve_setup_entry
+
+        valve_sensor_key = "100_200_1"
+        valve_sensor_info = _anchor_sensor_info()
+        socket_sensor_key = "300_400_1"
+        socket_sensor_info = _socket_sensor_info()
+
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(
+            sensors={valve_sensor_key: valve_sensor_info, socket_sensor_key: socket_sensor_info}
+        )
+        coordinator._client = MagicMock()
+        coordinator._client.control_work_mode = AsyncMock(return_value=None)
+        coordinator.async_request_refresh = AsyncMock()
+
+        hass, entry = _make_hass_and_entry(coordinator, {CONF_GENERIC_CONTROL_ENABLED: True})
+
+        valve_captured = []
+        valve_add = MagicMock(side_effect=lambda ents, **kw: valve_captured.extend(ents))
+        await valve_setup_entry(hass, entry, valve_add)
+
+        switch_captured = []
+        switch_add = MagicMock(side_effect=lambda ents, **kw: switch_captured.extend(ents))
+        await switch_setup_entry(hass, entry, switch_add)
+
+        valve_ids = [e._attr_unique_id for e in valve_captured]
+        switch_ids = [e._attr_unique_id for e in switch_captured]
+        combined = valve_ids + switch_ids
+
+        assert valve_ids
+        assert switch_ids
+        assert len(combined) == len(set(combined))
+
+
+# ---------------------------------------------------------------------------
+# _response_code_from_error
+# ---------------------------------------------------------------------------
+
+
+class TestResponseCodeFromError:
+    def test_extracts_positive_code(self):
+        exc = RainPointApiError("controlWorkMode failed: code 5")
+        assert generic_control_module._response_code_from_error(exc) == "5"
+
+    def test_extracts_negative_code(self):
+        exc = RainPointApiError("controlWorkMode failed: code -1")
+        assert generic_control_module._response_code_from_error(exc) == "-1"
+
+    def test_no_code_in_message_returns_the_unknown_marker(self):
+        exc = RainPointApiError("controlWorkMode HTTP 500")
+        assert generic_control_module._response_code_from_error(exc) == "unknown"
+
+    def test_empty_message_returns_the_unknown_marker(self):
+        assert generic_control_module._response_code_from_error(RainPointApiError("")) == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Failed generic control commands: one-shot repair issue, re-raise
+# ---------------------------------------------------------------------------
+
+
+class TestGenericControlCommandFailedRepairIssue:
+    @pytest.mark.asyncio
+    async def test_open_reraises_the_original_exception_type(self):
+        entity, coordinator, _ = _build_anchor_valve()
+        coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
+
+        with patch.object(generic_control_module.ir, "async_create_issue"), pytest.raises(RainPointApiError):
+            await entity.async_open_valve()
+
+    @pytest.mark.asyncio
+    async def test_close_reraises_the_original_exception_type(self):
+        entity, coordinator, _ = _build_anchor_valve()
+        coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
+
+        with patch.object(generic_control_module.ir, "async_create_issue"), pytest.raises(RainPointApiError):
+            await entity.async_close_valve()
+
+    @pytest.mark.asyncio
+    async def test_failure_creates_exactly_one_issue_with_the_expected_fields(self):
+        entity, coordinator, sensor_info = _build_anchor_valve()
+        coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
+
+        with patch.object(generic_control_module.ir, "async_create_issue") as create, pytest.raises(RainPointApiError):
+            await entity.async_open_valve()
+
+        create.assert_called_once()
+        args, kwargs = create.call_args
+        _hass, domain, issue_id = args
+        assert domain == DOMAIN
+        assert issue_id == f"{GENERIC_CONTROL_ISSUE_ID_PREFIX}_{sensor_info['model']}_5"
+        assert kwargs["is_fixable"] is False
+        assert kwargs["severity"] == generic_control_module.ir.IssueSeverity.ERROR
+        assert kwargs["translation_key"] == GENERIC_CONTROL_ISSUE_ID_PREFIX
+        assert kwargs["translation_placeholders"]["model"] == sensor_info["model"]
+        assert "code 5" in kwargs["translation_placeholders"]["error"]
+
+    @pytest.mark.asyncio
+    async def test_two_failures_same_model_and_code_produce_the_same_issue_id(self):
+        entity, coordinator, _ = _build_anchor_valve()
+        coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
+
+        with patch.object(generic_control_module.ir, "async_create_issue") as create:
+            with pytest.raises(RainPointApiError):
+                await entity.async_open_valve()
+            with pytest.raises(RainPointApiError):
+                await entity.async_close_valve()
+
+        first_id = create.call_args_list[0].args[2]
+        second_id = create.call_args_list[1].args[2]
+        assert first_id == second_id
+
+    @pytest.mark.asyncio
+    async def test_two_failures_different_codes_produce_different_issue_ids(self):
+        entity, coordinator, _ = _build_anchor_valve()
+
+        with patch.object(generic_control_module.ir, "async_create_issue") as create:
+            coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
+            with pytest.raises(RainPointApiError):
+                await entity.async_open_valve()
+
+            coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 6"))
+            with pytest.raises(RainPointApiError):
+                await entity.async_close_valve()
+
+        ids = [c.args[2] for c in create.call_args_list]
+        assert ids[0] != ids[1]
+
+    @pytest.mark.asyncio
+    async def test_no_extractable_code_ends_the_issue_id_in_the_unknown_marker(self):
+        entity, coordinator, _ = _build_anchor_valve()
+        coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode HTTP 500"))
+
+        with patch.object(generic_control_module.ir, "async_create_issue") as create, pytest.raises(RainPointApiError):
+            await entity.async_open_valve()
+
+        issue_id = create.call_args.args[2]
+        assert issue_id.endswith("_unknown")
+
+    @pytest.mark.asyncio
+    async def test_success_creates_no_issue(self, monkeypatch):
+        entity, _coordinator, _ = _build_anchor_valve()
+        monkeypatch.setattr(generic_control_module, "async_call_later", MagicMock(return_value=MagicMock()))
+
+        with patch.object(generic_control_module.ir, "async_create_issue") as create:
+            await entity.async_open_valve()
+
+        create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_code_4_idempotent_success_creates_no_issue(self, monkeypatch):
+        """control_work_mode already treats code 4 as an idempotent success and
+        returns normally (no exception); this proves that path never reaches
+        the issue-creation branch.
+        """
+        entity, coordinator, _ = _build_anchor_valve()
+        monkeypatch.setattr(generic_control_module, "async_call_later", MagicMock(return_value=MagicMock()))
+        coordinator._client.control_work_mode = AsyncMock(return_value=None)
+
+        with patch.object(generic_control_module.ir, "async_create_issue") as create:
+            await entity.async_open_valve()
+
+        create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_raising_issue_registry_call_does_not_stop_the_original_error_propagating(self):
+        entity, coordinator, _ = _build_anchor_valve()
+        coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
+
+        with (
+            patch.object(generic_control_module.ir, "async_create_issue", side_effect=RuntimeError("registry unavailable")),
+            pytest.raises(RainPointApiError),
+        ):
+            await entity.async_open_valve()
+
+    @pytest.mark.asyncio
+    async def test_no_refresh_is_scheduled_when_the_command_fails(self, monkeypatch):
+        entity, coordinator, _ = _build_anchor_valve()
+        call_later = MagicMock(return_value=MagicMock())
+        monkeypatch.setattr(generic_control_module, "async_call_later", call_later)
+        coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
+
+        with patch.object(generic_control_module.ir, "async_create_issue"), pytest.raises(RainPointApiError):
+            await entity.async_open_valve()
+
+        call_later.assert_not_called()
+        coordinator.async_request_refresh.assert_not_called()
