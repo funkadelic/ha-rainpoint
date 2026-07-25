@@ -137,6 +137,32 @@ def _make_hass_and_entry(coordinator, options: dict):
     return hass, entry
 
 
+def _patch_duration_registry(monkeypatch, entity_id=None):
+    """Patch the entity_registry stub so a duration lookup resolves deterministically.
+
+    Mirrors the pattern tests/test_valve.py already uses for the trusted
+    duration lookup. Both the sys.modules entry AND the parent
+    "homeassistant.helpers" module's own "entity_registry" attribute must be
+    rebound: conftest's stub setup already bound that attribute once at
+    import time, and because the parent is itself a MagicMock,
+    ``hasattr(parent, "entity_registry")`` is always True, so a deferred
+    ``from homeassistant.helpers import entity_registry as er`` resolves via
+    that cached attribute rather than re-reading sys.modules. Patching only
+    sys.modules would silently leave the lookup on the original, unpatched
+    stub. Callers that want a resolved entity also set entity.hass.states.get's
+    return value themselves, exactly as tests/test_valve.py does.
+    """
+    import sys
+
+    mock_registry = MagicMock()
+    mock_registry.async_get_entity_id.return_value = entity_id
+    mock_er_module = MagicMock()
+    mock_er_module.async_get.return_value = mock_registry
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", mock_er_module)
+    monkeypatch.setattr(sys.modules["homeassistant.helpers"], "entity_registry", mock_er_module, raising=False)
+    return mock_registry
+
+
 # ---------------------------------------------------------------------------
 # resolve_control_port
 # ---------------------------------------------------------------------------
@@ -847,6 +873,12 @@ class TestRainPointGenericValveControl:
         entity, coordinator, _ = _build_anchor_valve()
         call_later = MagicMock(return_value=MagicMock())
         monkeypatch.setattr(generic_control_module, "async_call_later", call_later)
+        # No companion duration entity registered -- MagicMock's default magic
+        # methods (__float__ etc.) would otherwise make an unconfigured
+        # hass=MagicMock() lookup silently "succeed" with a plausible-looking
+        # number, so every duration test in this class configures the
+        # registry stub explicitly (see _patch_duration_registry).
+        _patch_duration_registry(monkeypatch, entity_id=None)
 
         await entity.async_open_valve()
 
@@ -986,6 +1018,94 @@ class TestRainPointGenericValveControl:
         await entity.async_will_remove_from_hass()  # must not raise
 
         assert entity._refresh_cancel is None
+
+
+# ---------------------------------------------------------------------------
+# RainPointGenericValve._get_configured_duration_seconds (companion duration
+# entity lookup)
+# ---------------------------------------------------------------------------
+
+
+class TestGenericValveConfiguredDuration:
+    def test_unique_id_is_the_valve_unique_id_plus_the_duration_suffix(self, monkeypatch):
+        entity, _, _ = _build_anchor_valve()
+        mock_registry = _patch_duration_registry(monkeypatch, entity_id=None)
+
+        entity._get_configured_duration_seconds()
+
+        mock_registry.async_get_entity_id.assert_called_once_with(
+            "number", "rainpoint", "rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration"
+        )
+
+    def test_registry_miss_falls_back_to_default(self, monkeypatch):
+        entity, _, _ = _build_anchor_valve()
+        _patch_duration_registry(monkeypatch, entity_id=None)
+
+        assert entity._get_configured_duration_seconds() == DEFAULT_CONTROL_DURATION_SECONDS
+
+    def test_no_state_falls_back_to_default(self, monkeypatch):
+        entity, _, _ = _build_anchor_valve()
+        _patch_duration_registry(monkeypatch, entity_id="number.rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration")
+        entity.hass.states.get.return_value = None
+
+        assert entity._get_configured_duration_seconds() == DEFAULT_CONTROL_DURATION_SECONDS
+
+    def test_unparseable_state_falls_back_to_default(self, monkeypatch):
+        entity, _, _ = _build_anchor_valve()
+        _patch_duration_registry(monkeypatch, entity_id="number.rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration")
+        fake_state = MagicMock()
+        fake_state.state = "unavailable"
+        entity.hass.states.get.return_value = fake_state
+
+        assert entity._get_configured_duration_seconds() == DEFAULT_CONTROL_DURATION_SECONDS
+
+    def test_numeric_state_converts_minutes_to_seconds(self, monkeypatch):
+        entity, _, _ = _build_anchor_valve()
+        _patch_duration_registry(monkeypatch, entity_id="number.rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration")
+        fake_state = MagicMock()
+        fake_state.state = "5"
+        entity.hass.states.get.return_value = fake_state
+
+        assert entity._get_configured_duration_seconds() == 300
+
+    def test_min_floor_of_one_second(self, monkeypatch):
+        entity, _, _ = _build_anchor_valve()
+        _patch_duration_registry(monkeypatch, entity_id="number.rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration")
+        fake_state = MagicMock()
+        fake_state.state = "0.001"
+        entity.hass.states.get.return_value = fake_state
+
+        assert entity._get_configured_duration_seconds() == 1
+
+    @pytest.mark.asyncio
+    async def test_open_with_no_explicit_duration_uses_the_companion_entitys_value(self, monkeypatch):
+        """A known companion value, in minutes, is honoured on open (converted to seconds)."""
+        entity, coordinator, _ = _build_anchor_valve()
+        monkeypatch.setattr(generic_control_module, "async_call_later", MagicMock(return_value=MagicMock()))
+        _patch_duration_registry(monkeypatch, entity_id="number.rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration")
+        fake_state = MagicMock()
+        fake_state.state = "7"
+        entity.hass.states.get.return_value = fake_state
+
+        await entity.async_open_valve()
+
+        _, kwargs = coordinator._client.control_work_mode.call_args
+        assert kwargs["duration"] == 420
+
+    @pytest.mark.asyncio
+    async def test_explicit_duration_still_overrides_the_companion_entitys_value(self, monkeypatch):
+        """An explicit duration argument wins over the companion entity, exactly like the trusted valve."""
+        entity, coordinator, _ = _build_anchor_valve()
+        monkeypatch.setattr(generic_control_module, "async_call_later", MagicMock(return_value=MagicMock()))
+        _patch_duration_registry(monkeypatch, entity_id="number.rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration")
+        fake_state = MagicMock()
+        fake_state.state = "7"
+        entity.hass.states.get.return_value = fake_state
+
+        await entity.async_open_valve(duration=42)
+
+        _, kwargs = coordinator._client.control_work_mode.call_args
+        assert kwargs["duration"] == 42
 
 
 # ---------------------------------------------------------------------------

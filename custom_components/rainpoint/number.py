@@ -11,7 +11,15 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, VALVE_MODELS
+from .const import (
+    CONF_GENERIC_CONTROL_ENABLED,
+    DOMAIN,
+    GENERIC_CONTROL_DURATION_SUFFIX,
+    GENERIC_CONTROL_MARKER_ICON,
+    GENERIC_CONTROL_UNIQUE_ID_MARKER,
+    UNIQUE_ID_PREFIX,
+    VALVE_MODELS,
+)
 from .coordinator import RainPointCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,7 +39,11 @@ async def async_setup_entry(
     coordinator: RainPointCoordinator = data["coordinator"]
 
     sensors_cfg = coordinator.data.get("sensors", {})
-    entities: list[RainPointZoneDurationNumber] = []
+    # Widened from list[RainPointZoneDurationNumber]: the opt-in
+    # generic-control branch below extends this same list with
+    # RainPointGenericZoneDurationNumber instances, mirroring how valve.py
+    # and switch.py widen their own entity lists for the same reason.
+    entities: list = []
 
     for key, info in sensors_cfg.items():
         model = info.get("model")
@@ -48,6 +60,14 @@ async def async_setup_entry(
                 key,
                 zone_num,
             )
+
+    if entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False):
+        for key, info in sensors_cfg.items():
+            hid = info.get("hid", "")
+            mid = info.get("mid", "")
+            addr = info.get("addr", "")
+            base_slug = f"{hid}_{mid}_{addr}"
+            entities.extend(build_generic_duration_entities(coordinator, key, info, base_slug))
 
     if entities:
         async_add_entities(entities)
@@ -142,6 +162,142 @@ class RainPointZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
         sub_name = self._sensor_info.get("sub_name") or f"Valve Hub {addr}"
+        model = self._sensor_info.get("model") or "Unknown"
+        return {
+            "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},
+            "name": sub_name,
+            "manufacturer": "RainPoint",
+            "model": model,
+        }
+
+
+def build_generic_duration_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
+    """Return the companion duration entities for one sub-device's generic valve zones, or [].
+
+    Deferred import: generic_control reaches sensor.py's RainPointSensorBase
+    transitively through generic_entities, so a top-level import here would
+    pull the whole sensor platform into this module's import graph.
+
+    Reuses generic_control's own shared gate-evaluation body
+    (_build_generic_entities) rather than re-deriving eligibility, so this
+    companion set can never disagree with the generic valve entity set it
+    companions -- one gate evaluation, projected through this module's own
+    entity class instead of the valve's.
+    """
+    from .generic_control import VALVE_CONTROL_IDENTITIES, _build_generic_entities
+
+    return _build_generic_entities(
+        coordinator, sensor_key, sensor_info, base_slug, VALVE_CONTROL_IDENTITIES, RainPointGenericZoneDurationNumber
+    )
+
+
+class RainPointGenericZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
+    """Companion run-duration entity for one generic control valve zone.
+
+    Built near-verbatim from RainPointZoneDurationNumber above: same bounds,
+    same default, same restore-on-add behaviour, same extra attributes, same
+    device_info construction. The differences are confined to identity and
+    presentation -- constructed from the sensor key, sensor info, base slug
+    and the resolved control datapoint rather than a bare zone number; its
+    unique_id is the control entity's own unique_id shape plus the locked
+    duration suffix; its display name carries the identity label and the
+    same provisional marker every other generic entity carries; and its icon
+    is the generic marker icon rather than a plain timer icon, so the
+    provisional marking stays consistent across all four generic namespaces.
+
+    generic_control.RainPointGenericValve._get_configured_duration_seconds
+    resolves this entity by unique_id through the entity registry, exactly
+    the way the trusted valve resolves its own duration companion.
+    """
+
+    _attr_native_min_value = DURATION_MIN_MINUTES
+    _attr_native_max_value = DURATION_MAX_MINUTES
+    _attr_native_step = DURATION_STEP_MINUTES
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+        datapoint: Any,
+        port_number: int | None,
+    ) -> None:
+        super().__init__(coordinator)
+        self._sensor_key = sensor_key
+        self._sensor_info = sensor_info
+        self._base_slug = base_slug
+        self._datapoint = datapoint
+        self._current_value: float = DURATION_DEFAULT_MINUTES
+
+        identity = datapoint.identity
+        self._attr_unique_id = (
+            f"{UNIQUE_ID_PREFIX}{base_slug}{GENERIC_CONTROL_UNIQUE_ID_MARKER}"
+            f"{identity.lower()}_p{datapoint.dp_port}{GENERIC_CONTROL_DURATION_SUFFIX}"
+        )
+
+        sub_name = sensor_info.get("sub_name") or "Device"
+        zone = ""
+        if port_number is not None and port_number > 1 and datapoint.dp_port >= 1:
+            zone = f" Zone {datapoint.dp_port}"
+        self._attr_name = f"{sub_name}{zone} {identity} Duration (unverified)"
+
+        # Assigned last so the marker always wins over any domain default icon.
+        self._attr_icon = GENERIC_CONTROL_MARKER_ICON
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None:
+            try:
+                restored = float(last_state.state)
+                if DURATION_MIN_MINUTES <= restored <= DURATION_MAX_MINUTES:
+                    self._current_value = restored
+                    _LOGGER.debug(
+                        "Restored duration for %s: %s min",
+                        self._attr_unique_id,
+                        restored,
+                    )
+            except (ValueError, TypeError):
+                pass
+
+    @property
+    def native_value(self) -> float:
+        return self._current_value
+
+    async def async_set_native_value(self, value: float) -> None:
+        self._current_value = value
+        self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {}
+
+        sensors = self.coordinator.data.get("sensors", {})
+        info = sensors.get(self._sensor_key) or {}
+        firmware_version = info.get("firmware_version")
+        if firmware_version:
+            attrs["firmware_version"] = firmware_version
+
+        data = info.get("data") or {}
+        if "device_timestamp" in data:
+            attrs["device_timestamp"] = data["device_timestamp"]
+            attrs["timestamp_method"] = data.get("timestamp_method")
+            attrs["timestamp_source"] = data.get("timestamp_source", "server")
+        elif "server_timestamp" in data:
+            attrs["device_timestamp"] = data["server_timestamp"]
+            attrs["timestamp_source"] = data.get("timestamp_source", "server")
+
+        return attrs
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        hid = self._sensor_info["hid"]
+        mid = self._sensor_info["mid"]
+        addr = self._sensor_info["addr"]
+        sub_name = self._sensor_info.get("sub_name") or f"Device {addr}"
         model = self._sensor_info.get("model") or "Unknown"
         return {
             "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},

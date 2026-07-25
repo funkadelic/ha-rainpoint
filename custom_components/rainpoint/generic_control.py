@@ -34,6 +34,7 @@ from .api import RainPointApiError, get_catalog_entry, get_catalog_port_number, 
 from .api.product_catalog import UNCODED_VARIANT
 from .const import (
     DOMAIN,
+    GENERIC_CONTROL_DURATION_SUFFIX,
     GENERIC_CONTROL_ISSUE_ID_PREFIX,
     GENERIC_CONTROL_MARKER_ICON,
     GENERIC_CONTROL_OVERRIDE_DISABLED,
@@ -50,8 +51,9 @@ from .generic_entities import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Used only until the registry-resolved per-zone duration companion (a later
-# plan) exists; mirrors valve.py's own DEFAULT_DURATION_SECONDS.
+# Fallback used when the registry-resolved per-zone duration companion (see
+# RainPointGenericValve._get_configured_duration_seconds) is not yet
+# available -- mirrors valve.py's own DEFAULT_DURATION_SECONDS.
 DEFAULT_CONTROL_DURATION_SECONDS = 600  # 10 minutes
 
 # The narrow set of catalog control identities this factory ever considers.
@@ -591,8 +593,39 @@ class RainPointGenericValve(RainPointGenericControlBase, ValveEntity):
             return None
         return not state
 
+    def _get_configured_duration_seconds(self) -> int:
+        """Look up the companion generic duration number entity for this zone.
+
+        Mirrors valve.py's identically-shaped method: resolves this
+        datapoint's companion unique_id (its own unique_id plus the locked
+        duration suffix) through the entity registry's entity-id resolver,
+        insensitive to Home Assistant's auto-generated entity_id naming.
+        Falls back to DEFAULT_CONTROL_DURATION_SECONDS with a debug log on
+        every miss -- a registry lookup that finds nothing, a state that is
+        not yet available, or a state that cannot be parsed as a number.
+        """
+        from homeassistant.helpers import entity_registry as er
+
+        unique_id = f"{self._attr_unique_id}{GENERIC_CONTROL_DURATION_SUFFIX}"
+        registry = er.async_get(self.hass)
+        entity_id = registry.async_get_entity_id("number", DOMAIN, unique_id)
+        if entity_id:
+            state = self.hass.states.get(entity_id)
+            if state is not None:
+                try:
+                    minutes = float(state.state)
+                    return max(1, int(minutes * 60))
+                except (ValueError, TypeError):
+                    pass
+        _LOGGER.debug(
+            "Generic duration entity for unique_id=%s not found, falling back to default %ss",
+            unique_id,
+            DEFAULT_CONTROL_DURATION_SECONDS,
+        )
+        return DEFAULT_CONTROL_DURATION_SECONDS
+
     async def async_open_valve(self, **kwargs: Any) -> None:
-        duration = int(kwargs["duration"]) if "duration" in kwargs else DEFAULT_CONTROL_DURATION_SECONDS
+        duration = int(kwargs["duration"]) if "duration" in kwargs else self._get_configured_duration_seconds()
         await self._async_send_command(mode=1, duration=duration)
 
     async def async_close_valve(self, **kwargs: Any) -> None:
