@@ -909,7 +909,7 @@ class TestUnknownSensor:
         # No toggle is ever read here - the value is identical whether or not
         # an options entry even exists for this sensor.
         assert attrs["unmapped_generic_identities"] == []
-        assert attrs["generic_gate_blocked_by"] is None
+        assert attrs["generic_gate_blocked_by"] == []
 
     def test_unmapped_list_contains_exactly_the_uncurated_identity(self, monkeypatch):
         dp_entries = [{"identity": "STA_TEM", "dpPort": 0}, {"identity": "STA_BAT", "dpPort": 0, "dpCode": 2}]
@@ -919,7 +919,8 @@ class TestUnknownSensor:
         attrs = sensor.extra_state_attributes
 
         assert attrs["unmapped_generic_identities"] == ["STA_BAT"]
-        assert attrs["generic_gate_blocked_by"] is None
+        assert len(attrs["generic_gate_blocked_by"]) == 1
+        assert "1 of this device's 2 status readings" in attrs["generic_gate_blocked_by"][0]
 
     def test_fully_curated_variant_reports_no_unmapped_identities_and_no_reason(self, monkeypatch):
         dp_entries = [{"identity": "STA_TEM", "dpPort": 0}]
@@ -930,7 +931,7 @@ class TestUnknownSensor:
         attrs = sensor.extra_state_attributes
 
         assert attrs["unmapped_generic_identities"] == []
-        assert attrs["generic_gate_blocked_by"] is None
+        assert attrs["generic_gate_blocked_by"] == []
 
     def test_model_absent_from_catalog_reports_a_blocked_reason(self, monkeypatch):
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: None)
@@ -952,7 +953,7 @@ class TestUnknownSensor:
         attrs = sensor.extra_state_attributes
 
         assert attrs["generic_gate_blocked_by"]
-        assert "STA_RH" in attrs["generic_gate_blocked_by"]
+        assert any("STA_RH" in reason for reason in attrs["generic_gate_blocked_by"])
 
     def test_preexisting_attributes_are_unchanged_alongside_the_new_keys(self, monkeypatch):
         dp_entries = [{"identity": "STA_RH", "dpPort": 0}]

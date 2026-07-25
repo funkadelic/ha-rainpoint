@@ -152,11 +152,18 @@ class GenericGateResult:
     ``datapoints`` is the ordered list of declared status datapoints that
     become entities - always empty when the gate fails, so a caller never
     needs to also check ``passed`` before iterating it.
+
+    ``blocked_by`` is every independent reason the variant was rejected, not
+    just the first one encountered. A variant can fail more than one rule at
+    once (for example: it reuses a datapoint code across zones AND most of
+    its readings have no curated definition), and fixing only the first
+    reason reported would not, by itself, produce entities. An empty tuple
+    means the gate passed.
     """
 
     datapoints: list[dict]
     unmapped_identities: tuple[str, ...]
-    blocked_by: str | None
+    blocked_by: tuple[str, ...]
     port_number: int | None
 
     @property
@@ -170,6 +177,16 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
 
     Kept separate so the outer wrapper's except clause is the single place
     that decides what a raising catalog lookup degrades to.
+
+    Three checks below are terminal, single-reason early returns because each
+    genuinely precludes analysing the dp list any further: a hand-written
+    decoder means this factory is never consulted at all, an uncatalogued
+    model has no dp list to analyse, and a variant with no status datapoints
+    has nothing to check the other rules against. The remaining four checks
+    are collected: each is evaluated over the full dp list and every
+    violated rule contributes one reason, so a variant that fails several
+    independent rules at once reports all of them together instead of
+    stopping at the first.
     """
     # Load-bearing, not defence in depth: the sensor model-factory map in
     # sensor.py is a strict subset of the hand-written set, because every
@@ -180,7 +197,7 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
         return GenericGateResult(
             datapoints=[],
             unmapped_identities=(),
-            blocked_by="the model has a hand-written decoder",
+            blocked_by=("this model already has a hand-written decoder, so it never uses generic entities",),
             port_number=None,
         )
 
@@ -189,7 +206,7 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
         return GenericGateResult(
             datapoints=[],
             unmapped_identities=(),
-            blocked_by=f"{model} is not in the product catalog",
+            blocked_by=(f"{model} is not in the product catalog, so nothing is known about what it reports",),
             port_number=None,
         )
 
@@ -202,77 +219,101 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
         return GenericGateResult(
             datapoints=[],
             unmapped_identities=(),
-            blocked_by=f"{model} declares no status datapoints",
+            blocked_by=(f"{model} does not report any readings in the catalog, so there is nothing to expose",),
             port_number=port_number,
         )
 
-    uncurated = {entry.get("identity") for entry in dp_entries if entry.get("identity") not in _IDENTITY_SPECS}
-    unmapped_identities = tuple(sorted(uncurated))
+    reasons: list[str] = []
 
-    # Any dp entry with a missing/unusable dpPort fails the whole model's
-    # gate rather than being skipped, so no two entities can ever contend
-    # for one unique_id.
-    for entry in dp_entries:
-        dp_port = entry.get("dpPort")
-        if not isinstance(dp_port, int) or isinstance(dp_port, bool):
-            return GenericGateResult(
-                datapoints=[],
-                unmapped_identities=unmapped_identities,
-                blocked_by=f"{entry.get('identity')} declares an unusable dpPort",
-                port_number=port_number,
-            )
+    # Rule 1: any dp entry with a missing/unusable dpPort fails the whole
+    # model's gate rather than being skipped, so no two entities can ever
+    # contend for one unique_id.
+    bad_port_identities = sorted(
+        {
+            str(entry.get("identity"))
+            for entry in dp_entries
+            if not isinstance(entry.get("dpPort"), int) or isinstance(entry.get("dpPort"), bool)
+        }
+    )
+    if bad_port_identities:
+        reasons.append(
+            "these readings don't declare a usable port number, so they can't be turned into entities: "
+            + ", ".join(bad_port_identities)
+        )
 
-    # Two entries sharing the same (identity, dpPort) fail the whole model's
-    # gate for the same reason as above.
-    seen_keys: set[tuple[str | None, int]] = set()
+    # Rule 2: two entries sharing the same (identity, dpPort) fail the whole
+    # model's gate, since an entity built over either one could not tell
+    # which of the two values it should show. dpPort may be a non-int here
+    # (rule 1 above does not stop this rule from running on the same data),
+    # but a tuple key works regardless of the port's type.
+    seen_keys: set[tuple[str | None, Any]] = set()
+    duplicate_keys: set[tuple[str | None, Any]] = set()
     for entry in dp_entries:
         key = (entry.get("identity"), entry.get("dpPort"))
         if key in seen_keys:
-            identity, dp_port = key
-            return GenericGateResult(
-                datapoints=[],
-                unmapped_identities=unmapped_identities,
-                blocked_by=f"{identity} is declared twice on port {dp_port}",
-                port_number=port_number,
-            )
+            duplicate_keys.add(key)
         seen_keys.add(key)
+    if duplicate_keys:
+        formatted_pairs = ", ".join(
+            f"{identity} on port {dp_port}"
+            for identity, dp_port in sorted(duplicate_keys, key=lambda pair: (str(pair[0]), str(pair[1])))
+        )
+        reasons.append(
+            "the catalog declares the same reading more than once for the same port, so its value would be "
+            "ambiguous: " + formatted_pairs
+        )
 
-    # A dpCode shared by two entries anywhere in the variant's dp list fails
-    # the whole model's gate. The runtime catalog matcher keys on dpCode
-    # alone and refuses to annotate a field whose dpCode is ambiguous, so an
-    # entity built over one of those entries would never resolve a value and
-    # would sit at None forever. The check spans the full dp list, not just
-    # the status entries, because the matcher searches the full list too: a
-    # control entry sharing a status entry's dpCode makes that status entry
-    # just as unresolvable. Multi-zone variants that repeat one dpCode across
-    # ports are the common shape here, so this rejects real catalog models by
-    # design rather than as an edge case.
-    seen_codes: set[Any] = set()
+    # Rule 3: a dpCode shared by two entries anywhere in the variant's dp
+    # list fails the whole model's gate. The runtime catalog matcher keys on
+    # dpCode alone and refuses to annotate a field whose dpCode is ambiguous,
+    # so an entity built over one of those entries would never resolve a
+    # value and would sit at None forever. The check spans the full dp list,
+    # not just the status entries, because the matcher searches the full
+    # list too: a control entry sharing a status entry's dpCode makes that
+    # status entry just as unresolvable. Multi-zone variants that repeat one
+    # dpCode across ports are the common shape here, so this rejects real
+    # catalog models by design rather than as an edge case.
+    code_counts: dict[Any, int] = {}
+    code_identities: dict[Any, set[str]] = {}
     for entry in raw_entry:
         if not isinstance(entry, dict):
             continue
         dp_code = entry.get("dpCode")
-        if dp_code in seen_codes:
-            return GenericGateResult(
-                datapoints=[],
-                unmapped_identities=unmapped_identities,
-                blocked_by=f"dpCode {dp_code} is declared more than once",
-                port_number=port_number,
-            )
-        seen_codes.add(dp_code)
+        code_counts[dp_code] = code_counts.get(dp_code, 0) + 1
+        code_identities.setdefault(dp_code, set()).add(str(entry.get("identity")))
+    duplicate_codes = sorted((code for code, count in code_counts.items() if count > 1), key=str)
+    if duplicate_codes:
+        formatted_codes = ", ".join(f"dpCode {code} ({', '.join(sorted(code_identities[code]))})" for code in duplicate_codes)
+        reasons.append(
+            "the catalog reuses one datapoint code for more than one reading, so those readings can't be told "
+            "apart: " + formatted_codes
+        )
 
+    # Rule 4: declared status identities with no curated row in
+    # _IDENTITY_SPECS. unmapped_identities is reported as its own attribute
+    # regardless of outcome (see describe_generic_gate), so this reason is a
+    # summary rather than a repeat of that list.
+    uncurated = {entry.get("identity") for entry in dp_entries if entry.get("identity") not in _IDENTITY_SPECS}
+    unmapped_identities = tuple(sorted(uncurated))
     if unmapped_identities:
-        # The unmapped list is itself the explanation; a separate reason
-        # string here would only duplicate it.
+        total_identities = len({entry.get("identity") for entry in dp_entries})
+        reasons.append(
+            f"{len(unmapped_identities)} of this device's {total_identities} status readings have no verified "
+            "definition yet, so they can't be turned into entities (see the unmapped identities list)"
+        )
+
+    if reasons:
         return GenericGateResult(
             datapoints=[],
             unmapped_identities=unmapped_identities,
-            blocked_by=None,
+            blocked_by=tuple(reasons),
             port_number=port_number,
         )
 
+    # Safe only because reaching here means the bad-dpPort check above found
+    # nothing: every dpPort is a plain int, so sorting on it can't raise.
     ordered = sorted(dp_entries, key=lambda entry: (entry.get("dpPort"), entry.get("identity")))
-    return GenericGateResult(datapoints=ordered, unmapped_identities=(), blocked_by=None, port_number=port_number)
+    return GenericGateResult(datapoints=ordered, unmapped_identities=(), blocked_by=(), port_number=port_number)
 
 
 def evaluate_generic_gate(model: str | None, model_code: int | str | None = None) -> GenericGateResult:
@@ -290,7 +331,7 @@ def evaluate_generic_gate(model: str | None, model_code: int | str | None = None
         return GenericGateResult(
             datapoints=[],
             unmapped_identities=(),
-            blocked_by="the catalog could not be read",
+            blocked_by=("the product catalog could not be read",),
             port_number=None,
         )
 
@@ -305,7 +346,7 @@ def describe_generic_gate(model: str | None, model_code: int | str | None = None
     result = evaluate_generic_gate(model, model_code)
     return {
         "unmapped_generic_identities": list(result.unmapped_identities),
-        "generic_gate_blocked_by": result.blocked_by,
+        "generic_gate_blocked_by": list(result.blocked_by),
     }
 
 

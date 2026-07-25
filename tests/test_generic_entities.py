@@ -229,7 +229,7 @@ class TestBuildGenericEntitiesGate:
         bad_result = GenericGateResult(
             datapoints=[{"identity": "STA_NOT_CURATED", "dpPort": 0}],
             unmapped_identities=(),
-            blocked_by=None,
+            blocked_by=(),
             port_number=1,
         )
         monkeypatch.setattr(generic_entities_module, "evaluate_generic_gate", lambda model, model_code=None: bad_result)
@@ -310,8 +310,8 @@ class TestEvaluateGenericGate:
         assert result.passed is False
         assert result.datapoints == []
         assert result.unmapped_identities == ()
-        assert result.blocked_by
-        assert "not in" in result.blocked_by
+        assert len(result.blocked_by) == 1
+        assert "not in" in result.blocked_by[0]
 
     def test_empty_declared_datapoint_list(self, monkeypatch):
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: [])
@@ -320,8 +320,8 @@ class TestEvaluateGenericGate:
 
         assert result.passed is False
         assert result.unmapped_identities == ()
-        assert result.blocked_by
-        assert "not in" in result.blocked_by
+        assert len(result.blocked_by) == 1
+        assert "not in" in result.blocked_by[0]
 
     def test_variant_declaring_only_control_identities(self, monkeypatch):
         dp_entries = [{"identity": "CTL_WATER", "dpPort": 0}, {"identity": "CTL_SOCK", "dpPort": 1}]
@@ -331,8 +331,8 @@ class TestEvaluateGenericGate:
 
         assert result.passed is False
         assert result.unmapped_identities == ()
-        assert result.blocked_by
-        assert "no status datapoints" in result.blocked_by
+        assert len(result.blocked_by) == 1
+        assert "does not report any readings" in result.blocked_by[0]
 
     def test_exactly_one_curated_status_datapoint_passes(self, monkeypatch):
         dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9)]
@@ -343,11 +343,11 @@ class TestEvaluateGenericGate:
 
         assert result.passed is True
         assert len(result.datapoints) == 1
-        assert result.blocked_by is None
+        assert result.blocked_by == ()
         assert result.unmapped_identities == ()
         assert result.port_number == 1
 
-    def test_one_curated_and_one_uncurated_identity_fails_with_no_blocked_reason(self, monkeypatch):
+    def test_one_curated_and_one_uncurated_identity_fails_naming_the_gap(self, monkeypatch):
         dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_BAT", dp_port=0, dp_code=11)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
 
@@ -356,7 +356,8 @@ class TestEvaluateGenericGate:
         assert result.passed is False
         assert result.datapoints == []
         assert result.unmapped_identities == ("STA_BAT",)
-        assert result.blocked_by is None
+        assert len(result.blocked_by) == 1
+        assert "1 of this device's 2 status readings" in result.blocked_by[0]
 
     def test_two_uncurated_identities_are_reported_sorted_and_deduped(self, monkeypatch):
         dp_entries = [
@@ -380,8 +381,9 @@ class TestEvaluateGenericGate:
         assert result.passed is False
         assert result.datapoints == []
         assert result.blocked_by
-        assert "STA_RH" in result.blocked_by
-        assert "0" in result.blocked_by
+        duplicate_reason = result.blocked_by[0]
+        assert "STA_RH" in duplicate_reason
+        assert "0" in duplicate_reason
 
     def test_same_identity_different_ports_both_curated_yields_two_entities(self, monkeypatch):
         dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_TEM", dp_port=1, dp_code=8)]
@@ -404,7 +406,7 @@ class TestEvaluateGenericGate:
 
         assert result.passed is False
         assert result.blocked_by
-        assert "STA_RH" in result.blocked_by
+        assert any("STA_RH" in reason for reason in result.blocked_by)
 
     def test_missing_dp_port_key_fails_whole_model(self, monkeypatch):
         dp_entries = [{"identity": "STA_RH", "dpCode": 1}]
@@ -421,8 +423,8 @@ class TestEvaluateGenericGate:
         result = evaluate_generic_gate(model, None)
 
         assert result.passed is False
-        assert result.blocked_by
-        assert "hand-written" in result.blocked_by
+        assert len(result.blocked_by) == 1
+        assert "hand-written" in result.blocked_by[0]
 
     def test_emission_order_is_ascending_port_then_identity(self, monkeypatch):
         dp_entries = [
@@ -535,9 +537,9 @@ class TestDpCodeAmbiguityRule:
 
         assert result.passed is False
         assert result.datapoints == []
-        assert result.blocked_by
-        assert "dpCode" in result.blocked_by
-        assert "9" in result.blocked_by
+        assert len(result.blocked_by) == 1
+        assert "dpCode" in result.blocked_by[0]
+        assert "9" in result.blocked_by[0]
 
     def test_duplicate_dp_code_between_status_and_control_entry_fails_whole_model(self, monkeypatch):
         """Proves the check spans the full dp list, not just the status entries."""
@@ -548,9 +550,9 @@ class TestDpCodeAmbiguityRule:
 
         assert result.passed is False
         assert result.datapoints == []
-        assert result.blocked_by
-        assert "dpCode" in result.blocked_by
-        assert "9" in result.blocked_by
+        assert len(result.blocked_by) == 1
+        assert "dpCode" in result.blocked_by[0]
+        assert "9" in result.blocked_by[0]
 
     def test_distinct_dp_codes_still_passes(self, monkeypatch):
         dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_RSSI", dp_port=0, dp_code=10)]
@@ -561,7 +563,7 @@ class TestDpCodeAmbiguityRule:
 
         assert result.passed is True
         assert len(result.datapoints) == 2
-        assert result.blocked_by is None
+        assert result.blocked_by == ()
 
     def test_non_dict_entries_in_full_dp_list_are_skipped(self, monkeypatch):
         """The dpCode scan walks the raw catalog list directly, so it must tolerate malformed entries too."""
@@ -574,17 +576,78 @@ class TestDpCodeAmbiguityRule:
         assert result.passed is True
         assert len(result.datapoints) == 2
 
-    def test_dp_port_validity_rule_takes_precedence_over_dp_code_rule(self, monkeypatch):
-        """A variant that violates both rules reports the dpPort problem, not the dpCode one."""
+    def test_multiple_independent_rule_violations_are_all_reported_together(self, monkeypatch):
+        """The core promise of the change: every independent rejection reason is surfaced, not just the first.
+
+        STA_TEM has an unusable dpPort (rule 1) *and* shares dpCode 9 with
+        STA_RSSI (rule 3). Both are independent grounds for rejection and
+        fixing only one would still leave the variant blocked, so both must
+        appear - in fixed rule order (dpPort problems before dpCode
+        problems).
+        """
         dp_entries = [_dp("STA_TEM", dp_port="bad", dp_code=9), _dp("STA_RSSI", dp_port=0, dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
 
         result = evaluate_generic_gate(FAKE_MODEL, None)
 
         assert result.passed is False
-        assert result.blocked_by
-        assert "dpPort" in result.blocked_by
-        assert "dpCode" not in result.blocked_by
+        assert len(result.blocked_by) == 2
+        assert "dpPort" not in result.blocked_by[0]  # jargon rewritten to plain language
+        assert "STA_TEM" in result.blocked_by[0]
+        assert "usable port number" in result.blocked_by[0]
+        assert "dpCode" in result.blocked_by[1]
+        assert "9" in result.blocked_by[1]
+
+    def test_two_dp_codes_each_reused_twice_produce_one_message_naming_both(self, monkeypatch):
+        """Two separate dpCode collisions in one variant collapse into a single aggregated reason, not two."""
+        dp_entries = [
+            _dp("STA_TEM", dp_port=0, dp_code=9),
+            _dp("STA_RSSI", dp_port=1, dp_code=9),
+            _dp("STA_RSSI", dp_port=0, dp_code=20),
+            {"identity": "CTL_WATER", "dpPort": 0, "dpCode": 20},
+        ]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+
+        result = evaluate_generic_gate(FAKE_MODEL, None)
+
+        assert result.passed is False
+        dp_code_reasons = [reason for reason in result.blocked_by if "dpCode" in reason]
+        assert len(dp_code_reasons) == 1
+        assert "9" in dp_code_reasons[0]
+        assert "20" in dp_code_reasons[0]
+
+
+class TestRealCatalogMultiReasonRegression:
+    """Regression coverage for the motivating bug: a variant blocked by multiple independent rules.
+
+    HTV245FRF (model code 303) has a hand-written decoder in this repo, so it
+    never actually reaches the generic gate at runtime - is_hand_written_model
+    is patched here purely to exercise the gate against its real, committed
+    catalog entry, which is exactly the shape a brand-new undecoded model
+    would have: it reuses dpCode 2 (STA_ALARM) and several other codes across
+    its two zones, AND most of its declared status identities have no
+    curated row. Before this change, only the first of those two problems
+    was ever reported.
+    """
+
+    def test_htv245frf_reports_both_the_dp_code_collision_and_the_uncurated_identities(self, monkeypatch):
+        monkeypatch.setattr(generic_entities_module, "is_hand_written_model", lambda model: False)
+
+        result = evaluate_generic_gate(MODEL_VALVE_245, 303)
+
+        assert result.passed is False
+        assert any("dpCode" in reason for reason in result.blocked_by)
+        assert any("status readings have no verified definition" in reason for reason in result.blocked_by)
+        assert result.unmapped_identities == (
+            "STA_ALARM",
+            "STA_BAT",
+            "STA_DURATION",
+            "STA_EVTIME",
+            "STA_EVTIME2",
+            "STA_LASTUSAGE",
+            "STA_RSRP",
+            "STA_WKSTATE",
+        )
 
 
 class TestDescribeGenericGate:
@@ -597,7 +660,7 @@ class TestDescribeGenericGate:
 
         assert set(described.keys()) == {"unmapped_generic_identities", "generic_gate_blocked_by"}
 
-    def test_unmapped_identities_is_always_a_list_never_none(self, monkeypatch):
+    def test_unmapped_identities_and_blocked_by_are_always_lists_never_none(self, monkeypatch):
         dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
@@ -605,7 +668,7 @@ class TestDescribeGenericGate:
         described = describe_generic_gate(FAKE_MODEL, None)
 
         assert described["unmapped_generic_identities"] == []
-        assert described["generic_gate_blocked_by"] is None
+        assert described["generic_gate_blocked_by"] == []
 
     def test_projects_the_evaluation_reason(self, monkeypatch):
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: None)
@@ -613,7 +676,16 @@ class TestDescribeGenericGate:
         described = describe_generic_gate(FAKE_MODEL, None)
 
         assert described["generic_gate_blocked_by"]
+        assert isinstance(described["generic_gate_blocked_by"], list)
         assert described["unmapped_generic_identities"] == []
+
+    def test_blocked_by_carries_every_reason_as_a_list(self, monkeypatch):
+        dp_entries = [_dp("STA_TEM", dp_port="bad", dp_code=9), _dp("STA_RSSI", dp_port=0, dp_code=9)]
+        monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+
+        described = describe_generic_gate(FAKE_MODEL, None)
+
+        assert len(described["generic_gate_blocked_by"]) == 2
 
 
 # ---------------------------------------------------------------------------
