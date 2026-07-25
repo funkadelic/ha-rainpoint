@@ -1407,10 +1407,12 @@ class TestApplyPushUpdate:
 class TestIssueUrlLengthBudget:
     """The pre-filled report link is capped so GitHub cannot answer it with 414 URI Too Long.
 
-    Three growable fields feed this URL. The raw payload is never trimmed:
-    it is the only one that cannot be regenerated later. The auto-decode is
-    recomputable from that payload and the catalog summary from the model
-    and modelCode, so both are safe to cut.
+    Three growable fields feed this URL. The raw payload is preferred over
+    the other two: it is the only one that cannot be regenerated later. The
+    auto-decode is recomputable from that payload and the catalog summary
+    from the model and modelCode, so both are cut first. A payload that blows
+    the budget on its own is the exception, since a link too long to open
+    carries nothing at all.
     """
 
     _PAYLOAD = "11#" + ("0100AD3C00" * 20)
@@ -1445,12 +1447,28 @@ class TestIssueUrlLengthBudget:
         assert "gate_diagnostics" not in fields
         assert "auto_decoded" in fields
 
-    def test_the_raw_payload_is_never_trimmed(self):
-        """Even at a budget the payload alone blows, it survives intact and the optional fields go."""
-        url = self._url(budget=120)
+    def test_the_raw_payload_outlives_both_optional_fields(self):
+        """At a budget only the payload fits, it survives intact and the optional fields go."""
+        url = self._url(budget=400)
         fields = self._fields(url)
 
         assert fields["primary_payload"][0] == self._PAYLOAD
+        assert "auto_decoded" not in fields
+        assert "gate_diagnostics" not in fields
+
+    def test_a_payload_that_blows_the_budget_alone_is_replaced_by_an_instruction(self):
+        """A link GitHub refuses to open would carry the payload nowhere, so the link wins.
+
+        The payload is not lost with it: the device's raw payload sensor is
+        named in the field the payload would have filled, so the reporter is
+        told where to copy it from.
+        """
+        url = self._url(budget=300)
+        fields = self._fields(url)
+
+        assert len(url) <= 300
+        assert fields["primary_payload"][0] == _coord_module._ISSUE_PAYLOAD_TOO_LONG_NOTE
+        assert self._PAYLOAD not in url
         assert "auto_decoded" not in fields
         assert "gate_diagnostics" not in fields
 

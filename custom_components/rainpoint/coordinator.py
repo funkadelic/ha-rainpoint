@@ -195,6 +195,8 @@ ISSUE_URL_MAX_LENGTH = 8000
 
 _ISSUE_FIELD_TRUNCATION_NOTE = "\n... truncated to keep this link usable; the device's diagnostic entity carries the full text"
 
+_ISSUE_PAYLOAD_TOO_LONG_NOTE = "too long for this link; please paste it from the device's Raw Payload sensor"
+
 
 def _url_for_params(params: dict) -> str:
     """Render the issue URL for a parameter set."""
@@ -238,10 +240,16 @@ def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: i
     describes.
 
     The two growable fields are fitted to a total length budget, lowest value
-    first. The raw payload is never trimmed: it is the one thing here that
-    cannot be regenerated later. The auto-decode can be recomputed from that
-    payload, and the catalog summary from the model and modelCode, so both are
-    recoverable if they are cut.
+    first. The raw payload is preferred over both: it is the one thing here
+    that cannot be regenerated later. The auto-decode can be recomputed from
+    that payload, and the catalog summary from the model and modelCode, so
+    both are recoverable if they are cut.
+
+    A payload large enough to blow the budget on its own is the one case where
+    that preference is dropped, since a link too long to open carries nothing
+    at all. The payload is left out and named in the form instead, so the
+    reporter is told to paste it from the device's raw payload sensor rather
+    than being handed a link GitHub refuses.
     """
     params = {
         "template": NEW_DEVICE_ISSUE_TEMPLATE,
@@ -251,6 +259,8 @@ def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: i
     }
     if model_code is not None:
         params["model_code"] = str(model_code)
+    if len(_url_for_params(params)) > ISSUE_URL_MAX_LENGTH:
+        return _url_for_params({**params, "primary_payload": _ISSUE_PAYLOAD_TOO_LONG_NOTE})
     auto_decoded = _format_generic_fields(decode_generic(raw_value, model=model, model_code=model_code)) if raw_value else ""
     if auto_decoded:
         params = _fit_param(params, "auto_decoded", auto_decoded)
