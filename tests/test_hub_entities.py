@@ -154,16 +154,23 @@ class TestRainPointHubRSSISensor:
 class TestRainPointHubDeviceIDSensor:
     """Tests for hub device ID sensor."""
 
-    def _make(self, hid=100):
+    def _make(self, hid=100, did=None):
         """Make helper."""
         coord = _make_coordinator()
         hub_info = _make_hub_info(hid=hid)
+        if did is not None:
+            hub_info["did"] = did
         sensor = RainPointHubDeviceIDSensor.__new__(RainPointHubDeviceIDSensor)
         RainPointHubDeviceIDSensor.__init__(sensor, coord, hub_info)
         return sensor
 
-    def test_native_value_returns_hid(self):
-        """native_value should return the hub hid."""
+    def test_native_value_returns_did(self):
+        """native_value should return the device id (did), matching the vendor app."""
+        sensor = self._make(hid=100, did="17053410")
+        assert sensor.native_value == "17053410"
+
+    def test_native_value_falls_back_to_hid_without_did(self):
+        """When the hub record omits did, native_value falls back to the home id."""
         sensor = self._make(hid=100)
         assert sensor.native_value == 100
 

@@ -106,7 +106,9 @@ class RainPointHubDeviceIDSensor(RainPointHubSensorBase):
 
     @property
     def native_value(self) -> str | int | None:
-        return self._hub_info.get("hid")
+        # `did` is the device ID the vendor app shows; the home id (hid) is only a
+        # fallback for a hub record that omits it.
+        return self._hub_info.get("did") or self._hub_info.get("hid")
 
 
 class RainPointHubFirmwareSensor(RainPointHubSensorBase):
