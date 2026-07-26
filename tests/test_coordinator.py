@@ -1,5 +1,6 @@
 """Tests for RainPointCoordinator: data fetching, decoder dispatch, fallback, and error handling."""
 
+import json
 import logging
 import types
 from datetime import UTC, datetime, timedelta
@@ -144,24 +145,40 @@ class TestCoordinatorUpdate:
     async def test_raw_hub_record_logged_at_debug(self, caplog):
         """At DEBUG level, the full raw hub record is dumped for field discovery."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model="HWG023WBRF-V2")]
+        hub = _make_hub(model="HWG023WBRF-V2")
+        # Only the serialized record can carry this; model and mid reach the log
+        # line as their own arguments, so asserting on them alone would not prove
+        # the whole hub record was dumped.
+        hub["rfChannel"] = "canary-7"
+        client.get_devices_by_hid.return_value = [hub]
         client.get_multiple_device_status.return_value = _make_status()
 
         with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.coordinator"):
             await _run(coord)
 
-        assert any("Raw hub record" in r.message and "HWG023WBRF-V2" in r.message for r in caplog.records)
+        assert any(
+            "Raw hub record" in r.message and "HWG023WBRF-V2" in r.message and "canary-7" in r.message for r in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_raw_hub_record_not_logged_above_debug(self, caplog):
-        """Above DEBUG, the raw hub record dump is skipped (guarded json.dumps)."""
+        """Above DEBUG, the raw hub record dump is skipped (guarded json.dumps).
+
+        Asserting that json.dumps never runs is what proves the guard skipped the
+        serialization; an absent log record alone would also be satisfied by the
+        logger filtering a record whose arguments had already been evaluated.
+        """
         coord, client = _make_coord()
         client.get_devices_by_hid.return_value = [_make_hub(model="HWG023WBRF-V2")]
         client.get_multiple_device_status.return_value = _make_status()
 
-        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.coordinator"):
+        with (
+            patch.object(_coord_module.json, "dumps", wraps=json.dumps) as dumps,
+            caplog.at_level(logging.INFO, logger="custom_components.rainpoint.coordinator"),
+        ):
             await _run(coord)
 
+        assert dumps.call_count == 0
         assert not any("Raw hub record" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio

@@ -180,6 +180,9 @@ class TestMessageReceiptLogging:
 
         The logger level is pinned to INFO explicitly so this covers the guard's
         skip branch deterministically, regardless of ambient log state or test order.
+        Asserting that _payload_preview never runs is what proves the guard skipped
+        the work; an absent log record alone would also be satisfied by the logger
+        filtering a record whose arguments had already been evaluated.
         """
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
@@ -191,11 +194,15 @@ class TestMessageReceiptLogging:
         payload = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
         msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
 
-        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.api.mqtt"):
+        with (
+            patch.object(mqtt_module, "_payload_preview", wraps=mqtt_module._payload_preview) as preview,
+            caplog.at_level(logging.INFO, logger="custom_components.rainpoint.api.mqtt"),
+        ):
             client._on_message(fake_paho, None, msg)
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 
+        assert preview.call_count == 0
         assert not any("carried no sub-device update" in r.message for r in caplog.records)
 
         await client.async_disconnect()
