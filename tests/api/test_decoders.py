@@ -33,6 +33,8 @@ from tests.payload_samples import (
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
+    SAMPLE_HTV245_FULL_IDLE_PAYLOAD,
+    SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
     VALVE_HUB_TLV_PAYLOAD,
@@ -196,6 +198,36 @@ class TestDecodeHtv213frfValve:
         assert result["zones"][1]["open"] is False
         assert result["zones"][2]["open"] is False
         assert result["zones"][3]["open"] is False
+
+    # --- Battery (trailing 0xFF0F status word on real hex frames) ---
+
+    def test_full_frame_reports_battery_percent(self):
+        """A real full HTV245FRF hex frame surfaces battery_percent from the tail word."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)
+        assert result["battery_percent"] == 100
+
+    def test_full_frame_zone2_active_still_reports_full_battery(self):
+        """The July 4 capture (zone 2 mid-run) reads 100% battery and a running zone 2."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)
+        assert result["battery_percent"] == 100
+        assert result["zones"][2]["duration_seconds"] == 2940
+
+    def test_low_battery_word_maps_to_percent(self):
+        """A frame whose tail word is 0x0FFA decodes to 50% (shared battery scale)."""
+        # Swap the trailing battery word FF0F (0x0FFF=100%) for FA0F (0x0FFA=50%).
+        raw = SAMPLE_HTV245_FULL_IDLE_PAYLOAD.replace("FEFF0F", "FEFA0F")
+        result = decode_htv213frf_valve(raw)
+        assert result["battery_percent"] == 50
+
+    def test_ascii_payload_has_no_battery_percent(self):
+        """The ASCII firmware format carries no battery word, so the key is absent."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_ASCII_PAYLOAD)
+        assert "battery_percent" not in result
+
+    def test_short_frame_has_no_battery_percent(self):
+        """A frame without the battery tail does not fabricate a battery reading."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)
+        assert "battery_percent" not in result
 
 
 class TestDecodeHtv145frf:

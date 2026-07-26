@@ -22,6 +22,17 @@ SAMPLE_HTV405_TLV_PAYLOAD = (
     "21B70000000022B70000000023B70000000024B70000000025AD000026AD000027AD000028AD0000FEFF0F5B55D219"
 )
 
+# Real full hex (11#) status frames from the maintainer's HTV245FRF (2-zone valve).
+# Both carry the trailing [marker 0xFE][battery 0xFF0F -> 0x0FFF = 100%][4-byte
+# timestamp] tail that the dp_id/type scan skips. The second capture (July 4) has
+# zone 2 mid-run: nonzero last-event time (dp 0x22) and duration (dp 0x26).
+SAMPLE_HTV245_FULL_IDLE_PAYLOAD = (
+    "11#17E1DB0018DC0119D8001AD8001D201E2021B70000000022B70000000025AD000026AD0000299FA50100002A9F30000000FEFF0F0270F219"
+)
+SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD = (
+    "11#17E1D90018DC0119D8001AD8211D201E2021B70000000022B77327C91925AD000026AD7C0B299F140100002A9F00000000FEFF0F331AC919"
+)
+
 # Real hex (10#) payloads from a reporter's HTV145FRF single-outlet WiFi water timer.
 # This model ships a compact [type_byte][value...] marker stream, not the HTV213FRF
 # dp_id/type/value layout. Markers: 0xE1 header (byte[1]=signed RSSI), 0xDC hub online,

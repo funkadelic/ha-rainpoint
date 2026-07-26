@@ -9,7 +9,14 @@ import logging
 import re
 
 from .utils import _base_decoder_dict, _f10_to_c, _le16, _parse_rainpoint_payload, _parse_tlv_payload
-from .validators import _battery_status_to_percent, _extract_rssi, _extract_status_code, _validate_payload, _validate_tag
+from .validators import (
+    _BATTERY_MAP,
+    _battery_status_to_percent,
+    _extract_rssi,
+    _extract_status_code,
+    _validate_payload,
+    _validate_tag,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -165,6 +172,24 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
         raise
 
 
+def _extract_htv213_battery(b: bytes) -> int | None:
+    """Return the battery percentage from an HTV213/245 hex frame, or None.
+
+    These frames end with a [marker][battery:2][timestamp:4] tail that the
+    dp_id/type scan skips (its bytes are not valid type records). The battery
+    word is little-endian and uses the shared 0x0FF6..0x0FFF scale
+    (0x0FFF = 100%, one 10% step per decrement). A word outside that band means
+    there is no battery tail (short, ASCII, or misaligned frame), so None is
+    returned rather than a false 0%.
+    """
+    if len(b) < 6:
+        return None
+    status_word = _extract_status_code(b, len(b) - 6, len(b) - 5)
+    if status_word not in _BATTERY_MAP:
+        return None
+    return _battery_status_to_percent(status_word)
+
+
 def _scan_htv213_dp_map(b: bytes) -> dict[int, tuple[int, int]]:
     """Scan a flat dp_id/type/value byte stream into {dp_id: (type_byte, value_int)}.
 
@@ -302,12 +327,15 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         hub_online, hub_state_raw = _extract_htv213_hub_state(dp_map, raw)
         zones = _extract_htv213_zones(dp_map)
 
+        battery_percent = _extract_htv213_battery(b)
+
         _LOGGER.debug(
-            debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s"),
+            debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s, battery=%s"),
             len(zones),
             hub_online,
+            battery_percent,
         )
-        return {
+        result = {
             "type": "valve_hub",
             "rssi_dbm": _extract_rssi(b) if len(b) > 1 else 0,
             "raw_bytes": b,
@@ -317,6 +345,9 @@ def _decode_htv213frf_hex(raw: str) -> dict:
             "hub_state_raw": hub_state_raw,
             "decoder": "htv213frf_hex",
         }
+        if battery_percent is not None:
+            result["battery_percent"] = battery_percent
+        return result
 
     except Exception:
         _LOGGER.exception("HTV213FRF hex decoder error for payload %r", raw)

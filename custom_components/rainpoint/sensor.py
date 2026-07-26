@@ -50,6 +50,8 @@ from .const import (
     MODEL_POOL_PLUS,
     MODEL_RAIN,
     MODEL_TEMPHUM,
+    MODEL_VALVE_213,
+    MODEL_VALVE_245,
 )
 from .coordinator import RainPointCoordinator, _build_new_device_issue_url
 from .diagnostic_sensors import (
@@ -193,6 +195,17 @@ def _make_pool_plus_entities(coordinator, key, info, base_slug):
     ]
 
 
+def _make_htv_valve_battery_entities(coordinator, key, info, base_slug):
+    """Battery diagnostic for the HTV213/245 valve family.
+
+    Zone control lives on the valve/number platforms; the sensor platform only
+    surfaces the battery status word these hubs carry in their status frame.
+    The decoder omits battery_percent when the frame has no battery tail, so
+    the entity reads unknown rather than a false value in that case.
+    """
+    return [RainPointBatterySensor(coordinator, key, info, base_slug)]
+
+
 def _make_hcs_moisture_only_entities(coordinator, key, info, base_slug):
     return [RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True)]
 
@@ -240,6 +253,8 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     MODEL_HCS999FRF: _make_hcs_multisensor_entities,
     MODEL_HCS999FRF_P: _make_hcs_multisensor_entities,
     MODEL_HCS666FRF_X: _make_hcs_multisensor_entities,
+    MODEL_VALVE_213: _make_htv_valve_battery_entities,
+    MODEL_VALVE_245: _make_htv_valve_battery_entities,
 }
 
 
