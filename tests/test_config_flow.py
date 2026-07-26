@@ -800,7 +800,7 @@ class TestOptionsFlowGenericEligibilityCopy:
     async def test_english_description_consumes_both_placeholders(self):
         """The shipped copy references both placeholder names, so neither silently goes unused."""
         translations = json.loads((Path(__file__).parent.parent / "custom_components/rainpoint/translations/en.json").read_text())
-        description = translations["options"]["step"]["init"]["description"]
+        description = translations["options"]["step"]["init"]["data_description"]["generic_entities_enabled"]
 
         assert "{generic_eligible}" in description
         assert "{generic_unsupported}" in description
@@ -879,7 +879,7 @@ class TestOptionsFlowGenericControlEligibilityCopy:
     async def test_english_description_consumes_both_control_placeholders(self):
         """The shipped copy references both control placeholder names, so neither goes unused."""
         translations = json.loads((Path(__file__).parent.parent / "custom_components/rainpoint/translations/en.json").read_text())
-        description = translations["options"]["step"]["init"]["description"]
+        description = translations["options"]["step"]["init"]["data_description"]["generic_control_enabled"]
 
         assert "{generic_control_eligible}" in description
         assert "{generic_control_unsupported}" in description
