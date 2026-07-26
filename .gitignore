@@ -9,6 +9,7 @@ venv/
 .coverage
 coverage.xml
 htmlcov/
+junit.xml
 .pytest_cache/
 .ruff_cache/
 
