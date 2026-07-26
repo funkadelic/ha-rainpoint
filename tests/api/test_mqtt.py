@@ -150,6 +150,40 @@ class TestMessageReceiptLogging:
         await client.async_disconnect()
 
     @pytest.mark.asyncio
+    async def test_undecodable_push_logs_payload_preview_on_drop_path(self, caplog):
+        """A message with no sub-device update logs a payload preview at DEBUG for diagnosis."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+        await client.async_start()
+        await _settle()
+
+        # A hub property/set downlink (not a sub-device status push) is dropped.
+        payload = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
+
+        with caplog.at_level(logging.DEBUG):
+            client._on_message(fake_paho, None, msg)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        drop_records = [r for r in caplog.records if "carried no sub-device update" in r.message]
+        assert len(drop_records) == 1
+        assert "BroadcastTime" in drop_records[0].message
+
+        await client.async_disconnect()
+
+    def test_payload_preview_returns_short_text_verbatim(self):
+        """A payload within the limit is decoded verbatim."""
+        assert mqtt_module._payload_preview(b'{"k":1}') == '{"k":1}'
+
+    def test_payload_preview_truncates_long_text(self):
+        """A payload over the limit is truncated with a marker."""
+        preview = mqtt_module._payload_preview(b"x" * 5000, limit=1024)
+        assert preview == "x" * 1024 + "...(truncated)"
+
+    @pytest.mark.asyncio
     async def test_message_count_increments_across_two_messages(self):
         """The running count increments once per delivered message."""
         loop = asyncio.get_running_loop()
