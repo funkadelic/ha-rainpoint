@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
@@ -515,6 +516,16 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 hub_copy["hid"] = hid
                 # All devices are RainPoint hardware
                 hub_copy["brand"] = "RainPoint"
+                # Full raw hub record, for diagnosing hub-level fields (RF channel,
+                # firmware, etc.) that the integration does not yet surface. Gated so
+                # the json.dumps cost is only paid when debug logging is on.
+                if _LOGGER.isEnabledFor(logging.DEBUG):
+                    _LOGGER.debug(
+                        "Raw hub record model=%s mid=%s: %s",
+                        hub.get("model"),
+                        hub.get("mid"),
+                        json.dumps(hub, default=str, sort_keys=True),
+                    )
                 hubs.append(hub_copy)
         return hubs
 

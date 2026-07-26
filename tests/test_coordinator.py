@@ -1,5 +1,6 @@
 """Tests for RainPointCoordinator: data fetching, decoder dispatch, fallback, and error handling."""
 
+import logging
 import types
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -138,6 +139,30 @@ class TestCoordinatorUpdate:
         assert "hubs" in result
         assert "status" in result
         assert "sensors" in result
+
+    @pytest.mark.asyncio
+    async def test_raw_hub_record_logged_at_debug(self, caplog):
+        """At DEBUG level, the full raw hub record is dumped for field discovery."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model="HWG023WBRF-V2")]
+        client.get_multiple_device_status.return_value = _make_status()
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.coordinator"):
+            await _run(coord)
+
+        assert any("Raw hub record" in r.message and "HWG023WBRF-V2" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_raw_hub_record_not_logged_above_debug(self, caplog):
+        """Above DEBUG, the raw hub record dump is skipped (guarded json.dumps)."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model="HWG023WBRF-V2")]
+        client.get_multiple_device_status.return_value = _make_status()
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.coordinator"):
+            await _run(coord)
+
+        assert not any("Raw hub record" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
     async def test_update_sensor_key_format(self):
