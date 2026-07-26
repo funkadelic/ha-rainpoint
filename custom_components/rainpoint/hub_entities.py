@@ -87,8 +87,10 @@ class RainPointHubRSSISensor(RainPointHubSensorBase):
     @property
     def native_value(self) -> int | None:
         mid = self._hub_info.get("mid")
-        mid_status = self.coordinator.data.get("status", {}).get(mid, {})
-        for entry in mid_status.get("subDeviceStatus", []):
+        # `or {}` / `or []` also handle an explicit None value (not just a missing
+        # key), which .get(key, default) would pass through and then crash on.
+        mid_status = self.coordinator.data.get("status", {}).get(mid) or {}
+        for entry in mid_status.get("subDeviceStatus") or []:
             if isinstance(entry, dict) and entry.get("id") == "state":
                 return _parse_hub_rssi(entry.get("value"))
         return None
@@ -159,7 +161,7 @@ def _parse_hub_rssi(state_value) -> int | None:
         return None
 
 
-_RF_CHANNEL_FALLBACK = list(range(1, 17))
+_RF_CHANNEL_FALLBACK = range(1, 17)
 
 
 def _hub_function(hub_info: dict) -> dict:

@@ -97,8 +97,14 @@ def _payload_preview(payload: bytes, limit: int = 1024) -> str:
     never dumped. Surfaces unrecognized downlinks (e.g. the hub property/set that
     a broadcast toggle triggers) so their shape can be reverse-engineered.
     """
-    text = payload.decode("utf-8", "replace")
-    return text if len(text) <= limit else text[:limit] + "...(truncated)"
+    # Decode only a bounded prefix so a large rejected payload never forces a
+    # full decode on the event loop. UTF-8 uses at most 4 bytes per code point,
+    # and the extra byte lets us detect that more payload followed.
+    prefix = payload[: limit * 4 + 1]
+    text = prefix.decode("utf-8", "replace")
+    if len(text) > limit or len(payload) > len(prefix):
+        return text[:limit] + "...(truncated)"
+    return text
 
 
 def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:

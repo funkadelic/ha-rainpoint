@@ -124,6 +124,24 @@ class TestRainPointHubRSSISensor:
         sensor = self._make_with_state(236547, "1")
         assert sensor.native_value is None
 
+    def test_native_value_none_when_status_entry_is_explicitly_none(self):
+        """An explicit None for the mid's status (not just a missing key) yields None, not a crash."""
+        coord = _make_coordinator()
+        coord.data["status"] = {236547: None}
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 236547
+        sensor = self._make(coord=coord, hub_info=hub_info)
+        assert sensor.native_value is None
+
+    def test_native_value_none_when_subdevicestatus_is_explicitly_none(self):
+        """An explicit None subDeviceStatus yields None rather than iterating None."""
+        coord = _make_coordinator()
+        coord.data["status"] = {236547: {"subDeviceStatus": None}}
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 236547
+        sensor = self._make(coord=coord, hub_info=hub_info)
+        assert sensor.native_value is None
+
     def test_native_value_skips_non_state_entries(self):
         """Non-`state` status entries are skipped before the `state` entry is read."""
         coord = _make_coordinator()
