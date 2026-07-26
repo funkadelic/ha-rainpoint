@@ -311,9 +311,9 @@ class TestEvaluateControlGateRealCatalog:
         assert result.passed is True
 
     def test_port_pairing_invariant_holds_across_the_full_committed_catalog(self):
-        """For every one of the 34 allowlist-touching variants, the set of ports on its
+        """For every one of the 29 allowlist-touching variants, the set of ports on its
         allowlisted control datapoints equals the set on its STA_WKSTATE datapoints --
-        this is what makes port pairing exact rather than heuristic (D-05).
+        this is what makes port pairing exact rather than heuristic.
         """
         checked = 0
         for variants in product_catalog_module._CATALOG.values():
@@ -327,7 +327,33 @@ class TestEvaluateControlGateRealCatalog:
                 checked += 1
                 wk_ports = {e.get("dpPort") for e in dp_list if isinstance(e, dict) and e.get("identity") == RUN_STATE_IDENTITY}
                 assert ctl_ports == wk_ports
-        assert checked == 34
+        assert checked == 29
+
+    def test_bluetooth_backed_valves_are_never_admitted(self):
+        """CTL_BT_WATER models must produce no control entity while the only command
+        path is control_work_mode.
+
+        Every model in the committed catalog whose sole control identity is
+        CTL_BT_WATER declares no CTL_WATER datapoint, so admitting it would build a
+        valve that commands through an endpoint the device does not appear to accept.
+        Nothing is assumed about the outcome of a command here, so the entity would
+        never report a state change either -- the user would read it as slow hardware
+        rather than an uncommanded one. This pins the exclusion until a capture
+        confirms the endpoint and payload.
+        """
+        bt_variants = [
+            (model, code)
+            for model, variants in product_catalog_module._CATALOG.items()
+            for code, record in variants.items()
+            if any(e.get("identity") == "CTL_BT_WATER" for e in record["dp"] if isinstance(e, dict))
+        ]
+
+        assert bt_variants, "catalog no longer carries a CTL_BT_WATER model; this guard needs rewriting"
+        for model, code in bt_variants:
+            record = product_catalog_module._CATALOG[model][code]
+            assert not any(e.get("identity") == "CTL_WATER" for e in record["dp"] if isinstance(e, dict))
+            model_code = None if code == UNCODED_VARIANT else int(code)
+            assert evaluate_control_gate(model, model_code).passed is False
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +399,7 @@ class TestEvaluateControlGateSynthetic:
     def test_two_separately_unresolvable_datapoints_report_two_reasons(self, monkeypatch):
         dp_entries = [
             {"dpCode": 1, "identity": "CTL_WATER", "dpPort": 0},  # unresolved: portNumber=3
-            {"dpCode": 2, "identity": "CTL_BT_WATER", "dpPort": True},  # unresolved: bool is never a usable port
+            {"dpCode": 2, "identity": "CTL_SOCK", "dpPort": True},  # unresolved: bool is never a usable port
         ]
         monkeypatch.setattr(generic_control_module, "is_hand_written_model", lambda model: False)
         monkeypatch.setattr(generic_control_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
