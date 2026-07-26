@@ -22,10 +22,18 @@ jobs:
         with:
           python-version: "3.13"
 
+      # uv resolves and unpacks this dependency tree in a fraction of pip's time,
+      # which is where the install cost actually sits. Caching is left off
+      # deliberately: restoring one costs more wall clock than an install this
+      # fast can save. Pinned to an exact patch because astral-sh stopped
+      # publishing moving major tags after v7, so "@v8" does not resolve.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: false
+
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-test.txt
+        run: uv pip install --system -r requirements-test.txt
 
       - name: Run tests with pytest
         run: |
