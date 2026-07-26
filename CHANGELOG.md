@@ -2,6 +2,18 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.10.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.10.0...v1.10.1) (2026-07-26)
+
+
+### What's new
+
+- **Changing an option no longer fills the log with errors.** Saving a change under **Settings → Devices & Services → RainPoint Cloud → Configure** reloaded the integration in a way Home Assistant did not recognize, which logged a batch of errors and, in some cases, left the integration failing to come back up until Home Assistant was restarted. Reloading now goes through Home Assistant properly. If you have been seeing "Config entry was never loaded!" in your log, this is the fix.
+
+
+### Fixed
+
+* reload the entry through Home Assistant instead of unload plus setup ([#116](https://github.com/funkadelic/ha-rainpoint/issues/116)) ([5ca8cb1](https://github.com/funkadelic/ha-rainpoint/commit/5ca8cb1a673b7e3220070aee50d3ffbead41d6a1))
+
 ## [1.10.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.9.0...v1.10.0) (2026-07-26)
 
 
