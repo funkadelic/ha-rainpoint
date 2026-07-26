@@ -5,6 +5,15 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.10.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.9.0...v1.10.0) (2026-07-26)
 
 
+### What's new
+
+- **Devices this integration doesn't support yet can now show up anyway.** Two new opt-in switches use RainPoint's own product catalog to create provisional sensors, and provisional open/close controls, for hardware that has no tested support here. Both are off by default and everything they create is labeled unverified: readings can be wrong, and a control moves real hardware including water valves, so treat them as a preview rather than something to build automations on. Turn either one on under **Settings → Devices & Services → RainPoint Cloud → Configure**, where the screen also tells you how many of your own devices each switch would actually affect (often zero, which is the honest answer).
+- **Battery and signal strength for HTV213 and HTV245 valves.** Each valve now reports its battery level and radio signal, so you can spot one going flat or dropping out of range before it misses a watering.
+- **More useful hub information.** The hub now shows its RF channel along with the correct list of channels it actually supports, its WiFi signal strength, and the same Device ID the RainPoint app displays, which makes it far easier to identify the right device when something goes wrong.
+- **Own a device this integration doesn't recognize? Two clicks gets it onboarded.** Home Assistant raises a notification naming the unsupported model, with a link that opens a pre-filled GitHub report: the model and its data are already in the form, so you only add what the RainPoint app shows and submit. This release makes that data far more useful, sending named, decoded fields and the product name from RainPoint's catalog instead of a raw hex string. Reports like these are how new hardware gets supported, so please send one if you see the notification.
+- **Reminder: real-time updates are available.** Since [1.8.0](https://github.com/funkadelic/ha-rainpoint/releases/tag/v1.8.0) you can optionally get near-instant device updates instead of waiting for the usual two-minute refresh. It's off by default; turn it on under **Settings → Devices & Services → RainPoint Cloud → Configure**. Worth a try if you haven't already.
+
+
 ### Added
 
 * add battery and signal-strength sensors for HTV213/245 valves ([#110](https://github.com/funkadelic/ha-rainpoint/issues/110)) ([d306e6b](https://github.com/funkadelic/ha-rainpoint/commit/d306e6b9d73a22b16ab884b3d1cf38f8b379430c))
