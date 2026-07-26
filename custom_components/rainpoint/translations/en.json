@@ -6,7 +6,7 @@
     },
     "generic_control_command_failed": {
       "title": "A generic control command failed",
-      "description": "RainPoint rejected a control command sent to {model} through generic control: {error}. Generic control uses an unverified vendor-catalog mapping rather than a tested per-model decoder, so this device's behavior is not fully proven. As far as this integration can tell, the device's state was not changed by the failed command. If this keeps happening, you can turn generic control off in the integration's options."
+      "description": "RainPoint rejected a control command sent to {model} through generic control: {error}. Generic control uses an unverified mapping from RainPoint's product catalog rather than a tested per-model decoder, so this device's behavior is not fully proven. As far as this integration can tell, the device's state was not changed by the failed command. If this keeps happening, you can turn generic control off in the integration's options."
     }
   },
   "config": {
@@ -68,8 +68,8 @@
         },
         "data_description": {
           "push_enabled": "Receive real-time updates from the RainPoint cloud instead of waiting for the next poll. Polling is always retained as a fallback.",
-          "generic_entities_enabled": "Adds provisional sensors for devices this integration does not support yet. These readings are derived from an unverified vendor catalog, may be wrong, are always labeled unverified in their names, and should not be relied on for automations.\n\nGeneric sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices.",
-          "generic_control_enabled": "Adds controls that open and close real hardware -- including water valves -- for devices this integration does not support yet. The zone mapping comes from an unverified vendor catalog rather than a tested per-model decoder, so a wrong mapping can run the wrong zone or leave water running.\n\nNothing is assumed about the outcome of a command: a control entity only ever shows state read back from the device, never a guess. On this account that currently applies to {generic_control_eligible} of {generic_control_unsupported} unsupported devices."
+          "generic_entities_enabled": "Adds provisional sensors for devices this integration does not support yet. These readings are derived from RainPoint's product catalog rather than a tested per-model decoder, so they may be wrong. They are always labeled unverified in their names and should not be relied on for automations.\n\nGeneric sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices.",
+          "generic_control_enabled": "Adds controls that open and close real hardware -- including water valves -- for devices this integration does not support yet. The zone mapping comes from RainPoint's product catalog rather than a tested per-model decoder, so a wrong mapping can run the wrong zone or leave water running.\n\nNothing is assumed about the outcome of a command: a control entity only ever shows state read back from the device, never a guess. On this account that currently applies to {generic_control_eligible} of {generic_control_unsupported} unsupported devices."
         }
       }
     }
