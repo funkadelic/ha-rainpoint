@@ -174,6 +174,32 @@ class TestMessageReceiptLogging:
 
         await client.async_disconnect()
 
+    @pytest.mark.asyncio
+    async def test_undecodable_push_skips_preview_above_debug(self, caplog):
+        """Above DEBUG, the drop-path preview is skipped (the isEnabledFor guard's off branch).
+
+        The logger level is pinned to INFO explicitly so this covers the guard's
+        skip branch deterministically, regardless of ambient log state or test order.
+        """
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+        await client.async_start()
+        await _settle()
+
+        payload = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.api.mqtt"):
+            client._on_message(fake_paho, None, msg)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        assert not any("carried no sub-device update" in r.message for r in caplog.records)
+
+        await client.async_disconnect()
+
     def test_payload_preview_returns_short_text_verbatim(self):
         """A payload within the limit is decoded verbatim."""
         assert mqtt_module._payload_preview(b'{"k":1}') == '{"k":1}'
