@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -24,6 +26,8 @@ from .const import (
 )
 from .coordinator import RainPointCoordinator
 from .device import RainPointHubDevice
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client) -> list[dict]:
@@ -131,6 +135,57 @@ class RainPointHubMACSensor(RainPointHubSensorBase):
         return self._hub_info.get("mac")
 
 
+_RF_CHANNEL_FALLBACK = list(range(1, 17))
+
+
+def _hub_function(hub_info: dict) -> dict:
+    """Parse the hub record's `function` JSON blob into a dict, or {} on any problem.
+
+    The blob looks like `{"model":"...","childMax":40,"RF":7,"SM":7,...}`; it is
+    a string in the API response, so it is parsed here rather than indexed.
+    """
+    raw = hub_info.get("function")
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        _LOGGER.debug("Hub %s has an unparseable function blob: %r", hub_info.get("hid"), raw)
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _hub_rf_current_channel(hub_info: dict) -> int | None:
+    """Return the hub's current RF channel from its `recich` field, or None.
+
+    `recich` is the receive channel the hub is tuned to (matches the value the
+    vendor app shows). bool is excluded because it is an int subclass.
+    """
+    value = hub_info.get("recich")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _hub_rf_channel_options(hub_info: dict) -> list[str]:
+    """Return the selectable RF channels for the hub as strings.
+
+    The hub's `function.RF` value is a bitmask of supported channels (bit i set
+    means channel i+1 is available); e.g. 7 (0b111) -> channels 1, 2, 3. Falls
+    back to the full 1-16 range when the field is missing or unusable, and always
+    includes the current channel so a live value outside the mask still renders.
+    """
+    rf = _hub_function(hub_info).get("RF")
+    if isinstance(rf, bool) or not isinstance(rf, int) or rf <= 0:
+        channels = set(_RF_CHANNEL_FALLBACK)
+    else:
+        channels = {bit + 1 for bit in range(rf.bit_length()) if rf >> bit & 1}
+    current = _hub_rf_current_channel(hub_info)
+    if current is not None:
+        channels.add(current)
+    return [str(channel) for channel in sorted(channels)]
+
+
 class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDevice):
     """RF Channel selector for RainPoint hub."""
 
@@ -142,8 +197,11 @@ class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDev
         RainPointHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_channel"
         self._attr_name = f"{hub_info.get('name', 'RainPoint Hub')} RF Channel"
-        self._attr_options = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"]
-        self._attr_current_option = None  # Unknown until API supports reading
+        self._attr_options = _hub_rf_channel_options(hub_info)
+        # Current channel comes from the hub record; None renders as unknown when
+        # the field is absent. Selecting a channel is still unsupported (below).
+        current = _hub_rf_current_channel(hub_info)
+        self._attr_current_option = str(current) if current is not None else None
 
     @property
     def available(self) -> bool:

@@ -189,29 +189,61 @@ class TestRainPointHubMACSensor:
 class TestRainPointHubChannelSelect:
     """Tests for hub RF channel select entity."""
 
-    def _make(self):
-        """Make helper."""
+    def _make(self, hub_info=None):
+        """Make helper. Defaults to a hub record without the RF fields."""
         coord = _make_coordinator()
-        hub_info = _make_hub_info()
+        hub_info = _make_hub_info() if hub_info is None else hub_info
         select = RainPointHubChannelSelect.__new__(RainPointHubChannelSelect)
         RainPointHubChannelSelect.__init__(select, coord, hub_info)
         return select
 
-    def test_options_has_16_items(self):
-        """Channel select should offer channels 1 through 16."""
+    def test_options_fallback_has_16_items(self):
+        """With no function.RF field, options fall back to channels 1 through 16."""
         select = self._make()
         assert len(select._attr_options) == 16
 
-    def test_options_include_all_channels(self):
-        """Options should be '1' through '16' as strings."""
+    def test_options_fallback_include_all_channels(self):
+        """Fallback options should be '1' through '16' as strings."""
         select = self._make()
         for i in range(1, 17):
             assert str(i) in select._attr_options
 
-    def test_current_option_initially_none(self):
-        """Current option should be None initially (API doesn't read it)."""
+    def test_current_option_none_when_recich_absent(self):
+        """Current option is None when the hub record has no recich field."""
         select = self._make()
         assert select.current_option is None
+
+    def test_current_and_options_from_hub_record(self):
+        """recich sets the current channel and function.RF (a bitmask) sets the options."""
+        hub_info = _make_hub_info()
+        hub_info["recich"] = 1
+        hub_info["function"] = '{"model":"HWG023WBRF-V2","childMax":40,"RF":7,"SM":7,"rst":3,"SW":1}'
+        select = self._make(hub_info)
+        assert select.current_option == "1"
+        assert select._attr_options == ["1", "2", "3"]
+
+    def test_options_from_non_contiguous_rf_bitmask(self):
+        """A non-contiguous RF bitmask maps each set bit to its channel number."""
+        hub_info = _make_hub_info()
+        hub_info["function"] = '{"RF":13}'  # 0b1101 -> channels 1, 3, 4
+        select = self._make(hub_info)
+        assert select._attr_options == ["1", "3", "4"]
+
+    def test_current_channel_outside_mask_is_still_offered(self):
+        """A current channel not present in the RF mask is added to the options."""
+        hub_info = _make_hub_info()
+        hub_info["recich"] = 9
+        hub_info["function"] = '{"RF":7}'  # channels 1, 2, 3
+        select = self._make(hub_info)
+        assert select.current_option == "9"
+        assert select._attr_options == ["1", "2", "3", "9"]
+
+    def test_malformed_function_blob_falls_back_to_16(self):
+        """An unparseable function blob degrades to the 1-16 fallback, not an error."""
+        hub_info = _make_hub_info()
+        hub_info["function"] = "not-json"
+        select = self._make(hub_info)
+        assert len(select._attr_options) == 16
 
     def test_available_is_true(self):
         """Channel select should always be available."""
