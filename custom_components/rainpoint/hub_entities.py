@@ -13,7 +13,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.components.select import SelectEntity
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import callback
@@ -76,6 +76,7 @@ class RainPointHubRSSISensor(RainPointHubSensorBase):
 
     _attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
     _attr_native_unit_of_measurement = "dBm"
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:wifi"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
@@ -85,8 +86,11 @@ class RainPointHubRSSISensor(RainPointHubSensorBase):
 
     @property
     def native_value(self) -> int | None:
-        # Hub RSSI would come from coordinator data if available
-        # For now, return None as this might not be directly available
+        mid = self._hub_info.get("mid")
+        mid_status = self.coordinator.data.get("status", {}).get(mid, {})
+        for entry in mid_status.get("subDeviceStatus", []):
+            if isinstance(entry, dict) and entry.get("id") == "state":
+                return _parse_hub_rssi(entry.get("value"))
         return None
 
 
@@ -133,6 +137,24 @@ class RainPointHubMACSensor(RainPointHubSensorBase):
     @property
     def native_value(self) -> str | None:
         return self._hub_info.get("mac")
+
+
+def _parse_hub_rssi(state_value) -> int | None:
+    """Extract the hub's own RSSI (dBm) from its `state` status value.
+
+    The hub reports `state` as a comma-separated string like `0,-52` whose second
+    field is the signed WiFi RSSI (distinct from the per-valve RF link RSSI in the
+    device payload). Returns None when the value is absent or unparseable.
+    """
+    if not isinstance(state_value, str):
+        return None
+    parts = state_value.split(",")
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
 
 
 _RF_CHANNEL_FALLBACK = list(range(1, 17))

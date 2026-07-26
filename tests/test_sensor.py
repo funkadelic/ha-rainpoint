@@ -265,11 +265,12 @@ class TestAsyncSetupEntryDispatch:
 
     @pytest.mark.asyncio
     async def test_setup_entry_hub_sensors_created(self):
-        """Hub list -> 3 hub sensors (DeviceID, Firmware, MAC) per hub."""
+        """Hub list -> 4 hub sensors (DeviceID, Firmware, MAC, RSSI) per hub."""
         from custom_components.rainpoint.hub_entities import (
             RainPointHubDeviceIDSensor,
             RainPointHubFirmwareSensor,
             RainPointHubMACSensor,
+            RainPointHubRSSISensor,
         )
 
         hub = make_hub_info(hid=100)
@@ -285,11 +286,12 @@ class TestAsyncSetupEntryDispatch:
 
         await async_setup_entry(hass, entry, async_add_entities)
 
-        assert len(captured) == 3
+        assert len(captured) == 4
         types = {type(e) for e in captured}
         assert RainPointHubDeviceIDSensor in types
         assert RainPointHubFirmwareSensor in types
         assert RainPointHubMACSensor in types
+        assert RainPointHubRSSISensor in types
 
     @pytest.mark.asyncio
     async def test_setup_entry_adds_push_last_message_sensor_when_push_enabled(self):

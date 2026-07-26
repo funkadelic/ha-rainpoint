@@ -83,18 +83,57 @@ class TestResolvePushDiagnosticHubs:
 class TestRainPointHubRSSISensor:
     """Tests for hub RSSI sensor."""
 
-    def _make(self):
-        """Make helper."""
-        coord = _make_coordinator()
-        hub_info = _make_hub_info()
+    def _make(self, coord=None, hub_info=None):
+        """Make helper. Defaults to an empty-status coordinator and a mid-less hub."""
+        coord = _make_coordinator() if coord is None else coord
+        hub_info = _make_hub_info() if hub_info is None else hub_info
         sensor = RainPointHubRSSISensor.__new__(RainPointHubRSSISensor)
         RainPointHubRSSISensor.__init__(sensor, coord, hub_info)
         return sensor
 
-    def test_native_value_is_none(self):
-        """Hub RSSI sensor always returns None (not yet available from API)."""
+    def _make_with_state(self, mid, state_value):
+        """Build a sensor whose coordinator carries a `state` status entry for mid."""
+        coord = _make_coordinator()
+        coord.data["status"] = {mid: {"subDeviceStatus": [{"id": "state", "value": state_value}]}}
+        hub_info = _make_hub_info()
+        hub_info["mid"] = mid
+        return self._make(coord=coord, hub_info=hub_info)
+
+    def test_native_value_none_when_status_missing(self):
+        """With no matching status entry, the hub RSSI reads None rather than erroring."""
         sensor = self._make()
         assert sensor.native_value is None
+
+    def test_native_value_reads_hub_rssi_from_state(self):
+        """The second field of the `state` value (e.g. '0,-52') is the hub RSSI."""
+        sensor = self._make_with_state(236547, "0,-52")
+        assert sensor.native_value == -52
+
+    def test_native_value_none_for_malformed_state(self):
+        """A `state` value without a parseable RSSI field yields None."""
+        sensor = self._make_with_state(236547, "0,notanumber")
+        assert sensor.native_value is None
+
+    def test_native_value_none_when_state_value_is_not_a_string(self):
+        """A `state` entry whose value is not a string (e.g. None) yields None."""
+        sensor = self._make_with_state(236547, None)
+        assert sensor.native_value is None
+
+    def test_native_value_none_when_state_has_no_rssi_field(self):
+        """A `state` value with no comma-separated RSSI field yields None."""
+        sensor = self._make_with_state(236547, "1")
+        assert sensor.native_value is None
+
+    def test_native_value_skips_non_state_entries(self):
+        """Non-`state` status entries are skipped before the `state` entry is read."""
+        coord = _make_coordinator()
+        coord.data["status"] = {
+            236547: {"subDeviceStatus": [{"id": "connected", "value": "1"}, {"id": "state", "value": "0,-40"}]}
+        }
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 236547
+        sensor = self._make(coord=coord, hub_info=hub_info)
+        assert sensor.native_value == -40
 
     def test_available_is_true(self):
         """Hub sensors are always available."""
