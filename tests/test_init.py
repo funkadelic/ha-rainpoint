@@ -515,25 +515,29 @@ class TestAsyncReloadEntry:
     """Cover async_reload_entry helper (lines 67-68)."""
 
     @pytest.mark.asyncio
-    async def test_async_reload_entry_calls_unload_then_setup(self):
-        """async_reload_entry unloads then re-sets up the entry."""
+    async def test_async_reload_entry_goes_through_config_entries(self):
+        """The reload runs through async_reload, not a hand-rolled unload/setup pair.
+
+        Calling async_unload_entry/async_setup_entry directly bypasses Home
+        Assistant's entry state machine: the entry never reaches LOADED, so
+        every platform forwarded afterwards raises "Config entry was never
+        loaded!" on the next unload.
+        """
         from custom_components.rainpoint import async_reload_entry
 
         hass = _make_hass()
+        hass.config_entries.async_reload = AsyncMock()
         entry = _make_entry()
 
-        tracker = MagicMock()
         with (
             patch("custom_components.rainpoint.async_unload_entry", new=AsyncMock(return_value=True)) as mu,
             patch("custom_components.rainpoint.async_setup_entry", new=AsyncMock(return_value=True)) as ms,
         ):
-            tracker.attach_mock(mu, "unload")
-            tracker.attach_mock(ms, "setup")
             await async_reload_entry(hass, entry)
 
-        mu.assert_awaited_once_with(hass, entry)
-        ms.assert_awaited_once_with(hass, entry)
-        assert [c[0] for c in tracker.mock_calls] == ["unload", "setup"]
+        hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+        mu.assert_not_awaited()
+        ms.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_async_reload_entry_skips_reload_on_data_only_change(self):
@@ -541,37 +545,29 @@ class TestAsyncReloadEntry:
         from custom_components.rainpoint import async_reload_entry
 
         hass = _make_hass()
+        hass.config_entries.async_reload = AsyncMock()
         entry = _make_entry()
         entry.options = {CONF_PUSH_ENABLED: True}
         hass.data = {DOMAIN: {entry.entry_id: {"options_snapshot": {CONF_PUSH_ENABLED: True}}}}
 
-        with (
-            patch("custom_components.rainpoint.async_unload_entry", new=AsyncMock()) as mu,
-            patch("custom_components.rainpoint.async_setup_entry", new=AsyncMock()) as ms,
-        ):
-            await async_reload_entry(hass, entry)
+        await async_reload_entry(hass, entry)
 
-        mu.assert_not_awaited()
-        ms.assert_not_awaited()
+        hass.config_entries.async_reload.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_async_reload_entry_reloads_on_options_change(self):
-        """An options change reloads the entry through unload then setup."""
+        """An options change reloads the entry."""
         from custom_components.rainpoint import async_reload_entry
 
         hass = _make_hass()
+        hass.config_entries.async_reload = AsyncMock()
         entry = _make_entry()
         entry.options = {CONF_PUSH_ENABLED: True}
         hass.data = {DOMAIN: {entry.entry_id: {"options_snapshot": {CONF_PUSH_ENABLED: False}}}}
 
-        with (
-            patch("custom_components.rainpoint.async_unload_entry", new=AsyncMock(return_value=True)) as mu,
-            patch("custom_components.rainpoint.async_setup_entry", new=AsyncMock(return_value=True)) as ms,
-        ):
-            await async_reload_entry(hass, entry)
+        await async_reload_entry(hass, entry)
 
-        mu.assert_awaited_once_with(hass, entry)
-        ms.assert_awaited_once_with(hass, entry)
+        hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
 
 
 class TestPersistTokens:

@@ -29,10 +29,15 @@ def _make_stub(name: str) -> ModuleType:
 class DataUpdateCoordinator:
     """Minimal real DataUpdateCoordinator stub for tests."""
 
-    def __init__(self, hass, logger, name, update_interval):
-        """Init helper."""
+    def __init__(self, hass, logger, *, name, update_interval, config_entry=None):
+        """Init helper.
+
+        Mirrors the real signature closely enough that a drift like a missing
+        config_entry kwarg fails here instead of at runtime in Home Assistant.
+        """
         self.hass = hass
         self.logger = logger
+        self.config_entry = config_entry
 
 
 class UpdateFailed(Exception):

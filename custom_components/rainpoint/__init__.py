@@ -349,12 +349,17 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     last-submission timestamp write to entry.data without touching options; a
     reload rebuilds the client and forces a fresh login against the
     rate-limited endpoint, so reload only when the options actually change.
+
+    Reload through async_reload rather than calling unload/setup directly.
+    Calling them in sequence bypasses Home Assistant's entry state machine, so
+    the entry never reaches LOADED, every platform forwarded afterwards raises
+    "Config entry was never loaded!" on the next unload, and setup runs outside
+    the config-entry context.
     """
     store = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if store is not None and store.get("options_snapshot") == dict(entry.options):
         return
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_supports_reconfigure(hass: HomeAssistant, entry: ConfigEntry) -> bool:
