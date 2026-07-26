@@ -2,6 +2,37 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.10.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.9.0...v1.10.0) (2026-07-26)
+
+
+### Added
+
+* add battery and signal-strength sensors for HTV213/245 valves ([#110](https://github.com/funkadelic/ha-rainpoint/issues/110)) ([d306e6b](https://github.com/funkadelic/ha-rainpoint/commit/d306e6b9d73a22b16ab884b3d1cf38f8b379430c))
+* decode unsupported-device payloads for diagnostics ([#102](https://github.com/funkadelic/ha-rainpoint/issues/102)) ([ccea0e1](https://github.com/funkadelic/ha-rainpoint/commit/ccea0e110b726209455d0ffa6866f11e21348cf7))
+* enrich unsupported-device diagnostics with a bundled product catalog ([#105](https://github.com/funkadelic/ha-rainpoint/issues/105)) ([4b25518](https://github.com/funkadelic/ha-rainpoint/commit/4b255183a17c812adfa44a87f774888ad64f436c))
+* hub diagnostics for RF channel, WiFi RSSI, and device ID ([#111](https://github.com/funkadelic/ha-rainpoint/issues/111)) ([18eb221](https://github.com/funkadelic/ha-rainpoint/commit/18eb221c83c82090754cb4fcfda08ddafcecc99f))
+* opt-in generic control entities for catalog-recognized devices ([#109](https://github.com/funkadelic/ha-rainpoint/issues/109)) ([514fa30](https://github.com/funkadelic/ha-rainpoint/commit/514fa30262dbc3839a7b45a908f86ea4d2224001))
+* opt-in generic sensor entities for catalog-recognized devices ([#107](https://github.com/funkadelic/ha-rainpoint/issues/107)) ([b25cab3](https://github.com/funkadelic/ha-rainpoint/commit/b25cab3ae5ca171f8f772d960cac872c32982b41))
+
+
+### Fixed
+
+* name RainPoint instead of "the vendor" in user-facing copy ([#115](https://github.com/funkadelic/ha-rainpoint/issues/115)) ([ad028a4](https://github.com/funkadelic/ha-rainpoint/commit/ad028a4a7632b42ea76195279295e9bc5ef324a6))
+* parse the real vendor product-catalog response shape ([#106](https://github.com/funkadelic/ha-rainpoint/issues/106)) ([59b4d53](https://github.com/funkadelic/ha-rainpoint/commit/59b4d53c543f759f111ac495b071aea1ee3d3ccc))
+* simplify push toggle description text ([#101](https://github.com/funkadelic/ha-rainpoint/issues/101)) ([5dc64a2](https://github.com/funkadelic/ha-rainpoint/commit/5dc64a2d195be7d31eb8bfeda494a0db8ab848f3))
+* split options-flow copy into per-field helper text ([#114](https://github.com/funkadelic/ha-rainpoint/issues/114)) ([ae6c774](https://github.com/funkadelic/ha-rainpoint/commit/ae6c774fabfd0f8a670f1a435ff1358159046e04))
+
+
+### Performance
+
+* speed up the CI test job ([#112](https://github.com/funkadelic/ha-rainpoint/issues/112)) ([33a51da](https://github.com/funkadelic/ha-rainpoint/commit/33a51dacd530daa2a7ca210c9e8625d0d0c2988d))
+
+
+### Other Changes
+
+* pin third-party actions to commit SHAs and use uv for local setup ([#113](https://github.com/funkadelic/ha-rainpoint/issues/113)) ([fd59393](https://github.com/funkadelic/ha-rainpoint/commit/fd5939362c594a93a94994cb4ed81c8b92431143))
+* repo maintenance ([#108](https://github.com/funkadelic/ha-rainpoint/issues/108)) ([c23f78b](https://github.com/funkadelic/ha-rainpoint/commit/c23f78bc4b95754c9e0b068687002f25bce6ed0a))
+
 ## [1.9.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.8.0...v1.9.0) (2026-07-24)
 
 
