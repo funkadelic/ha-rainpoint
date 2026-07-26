@@ -15,7 +15,17 @@ source .venv/bin/activate
 uv pip install -r requirements-test.txt ruff
 ```
 
-uv installs this dependency tree in a fraction of pip's time (seconds rather than a minute), which is why CI uses it too. If you'd rather stick with pip, `python3 -m venv .venv` and `pip install -r requirements-test.txt ruff` produce the same environment — nothing else in this guide changes.
+uv installs this dependency tree in a fraction of pip's time (seconds rather than a minute), which is why CI uses it too.
+
+If you'd rather stick with pip, the equivalent is:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-test.txt ruff
+```
+
+Nothing else in this guide depends on which installer you used.
 
 `requirements-test.txt` pulls in `pytest-homeassistant-custom-component`, which in turn installs a pinned `homeassistant` — do not add `homeassistant` as a separate dependency.
 
