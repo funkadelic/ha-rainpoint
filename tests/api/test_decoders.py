@@ -226,6 +226,16 @@ class TestDecodeHtv213frfValve:
         result = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)
         assert result["rssi_dbm"] is None
 
+    def test_rssi_ignores_0x17e1_collision_inside_value_bytes(self):
+        """A 0x17/0xE1 pair inside a value (not followed by 0x00) is skipped for the real header.
+
+        The leading 0x9F record carries value bytes 17 E1 05 42: a false 0x17/0xE1
+        pair whose fourth byte is 0x42, not the header's trailing 0x00. The decoder
+        must skip it and resolve RSSI from the genuine 17E1CA00 header (0xCA -> -54).
+        """
+        raw = "11#2B9F17E1054217E1CA0018DC0119D800FEFF0FEC4BCB19"
+        assert decode_htv213frf_valve(raw)["rssi_dbm"] == -54
+
     # --- Battery (trailing 0xFF0F status word on real hex frames) ---
 
     def test_full_frame_reports_battery_percent(self):
@@ -245,6 +255,13 @@ class TestDecodeHtv213frfValve:
         raw = SAMPLE_HTV245_FULL_IDLE_PAYLOAD.replace("FEFF0F", "FEFA0F")
         result = decode_htv213frf_valve(raw)
         assert result["battery_percent"] == 50
+
+    def test_marker_present_but_word_not_a_battery_code_is_omitted(self):
+        """A 0xFE tail marker with an out-of-band word (0x0000) yields no battery_percent."""
+        # Keep the 0xFE marker but blank the battery word so it is not in _BATTERY_MAP.
+        raw = SAMPLE_HTV245_FULL_IDLE_PAYLOAD.replace("FEFF0F", "FE0000")
+        result = decode_htv213frf_valve(raw)
+        assert "battery_percent" not in result
 
     def test_ascii_payload_has_no_battery_percent(self):
         """The ASCII firmware format carries no battery word, so the key is absent."""

@@ -181,10 +181,11 @@ def _extract_htv213_rssi(b: bytes) -> int | None:
     stream, not at a fixed offset (dp records can be reordered). Locate that
     record and return the signed dBm byte. Reading b[1] here would instead
     return the constant 0xE1 header byte (a bogus -31), which was the bug this
-    replaces.
+    replaces. The trailing 0x00 is part of the match so a 0x17/0xE1 pair that
+    lands inside another record's value bytes cannot be mistaken for the header.
     """
-    for i in range(len(b) - 2):
-        if b[i] == 0x17 and b[i + 1] == 0xE1:
+    for i in range(len(b) - 3):
+        if b[i] == 0x17 and b[i + 1] == 0xE1 and b[i + 3] == 0x00:
             raw = b[i + 2]
             return raw if raw < 128 else raw - 256
     return None
@@ -193,14 +194,15 @@ def _extract_htv213_rssi(b: bytes) -> int | None:
 def _extract_htv213_battery(b: bytes) -> int | None:
     """Return the battery percentage from an HTV213/245 hex frame, or None.
 
-    These frames end with a [marker][battery:2][timestamp:4] tail that the
+    These frames end with a [0xFE marker][battery:2][timestamp:4] tail that the
     dp_id/type scan skips (its bytes are not valid type records). The battery
     word is little-endian and uses the shared 0x0FF6..0x0FFF scale
-    (0x0FFF = 100%, one 10% step per decrement). A word outside that band means
-    there is no battery tail (short, ASCII, or misaligned frame), so None is
-    returned rather than a false 0%.
+    (0x0FFF = 100%, one 10% step per decrement). The 0xFE marker at b[-7] is
+    required so a frame with no battery tail cannot have a coincidentally-mapped
+    word six bytes from the end read as a false battery state; a word outside
+    the band (short, ASCII, or misaligned frame) also yields None.
     """
-    if len(b) < 6:
+    if len(b) < 7 or b[-7] != 0xFE:
         return None
     status_word = _extract_status_code(b, len(b) - 6, len(b) - 5)
     if status_word not in _BATTERY_MAP:
