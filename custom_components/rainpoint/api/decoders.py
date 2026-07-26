@@ -172,6 +172,24 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
         raise
 
 
+def _extract_htv213_rssi(b: bytes) -> int | None:
+    """Find the signed-dBm RSSI in an HTV213/245 hex (11#) frame, or None.
+
+    The 10# frames put the 0xE1 header at offset 0, so _extract_rssi reads its
+    RSSI from b[1]. The 11# frame prefixes every record with a dp_id, so the
+    header appears as [dp_id 0x17][type 0xE1][signed dBm][0x00] somewhere in the
+    stream, not at a fixed offset (dp records can be reordered). Locate that
+    record and return the signed dBm byte. Reading b[1] here would instead
+    return the constant 0xE1 header byte (a bogus -31), which was the bug this
+    replaces.
+    """
+    for i in range(len(b) - 2):
+        if b[i] == 0x17 and b[i + 1] == 0xE1:
+            raw = b[i + 2]
+            return raw if raw < 128 else raw - 256
+    return None
+
+
 def _extract_htv213_battery(b: bytes) -> int | None:
     """Return the battery percentage from an HTV213/245 hex frame, or None.
 
@@ -337,7 +355,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         )
         result = {
             "type": "valve_hub",
-            "rssi_dbm": _extract_rssi(b) if len(b) > 1 else 0,
+            "rssi_dbm": _extract_htv213_rssi(b),
             "raw_bytes": b,
             "zones": zones,
             "tlv_raw": {},

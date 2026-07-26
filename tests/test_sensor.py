@@ -71,6 +71,7 @@ from custom_components.rainpoint.sensor import (
     RainPointPoolPlusPoolLowTempSensor,
     RainPointRainSensor,
     RainPointRawPayloadSensor,
+    RainPointRSSISensor,
     RainPointTemperatureSensor,
     RainPointTempHumCurrentSensor,
     RainPointTempHumHighSensor,
@@ -1432,13 +1433,13 @@ class TestHCSSensorDispatch:
         assert len(captured) == 5
 
 
-class TestHtvValveBatteryDispatch:
-    """The HTV213/245 valve family gets a battery sensor from the sensor platform."""
+class TestHtvValveDiagnosticDispatch:
+    """The HTV213/245 valve family gets battery + signal sensors from the sensor platform."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("model", [MODEL_VALVE_213, MODEL_VALVE_245])
-    async def test_valve_family_creates_battery_sensor(self, model):
-        """A valve entry yields exactly one battery sensor plus the raw payload sensor."""
+    async def test_valve_family_creates_battery_and_rssi_sensors(self, model):
+        """A valve entry yields a battery + RSSI sensor plus the raw payload sensor."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
@@ -1446,7 +1447,7 @@ class TestHtvValveBatteryDispatch:
             addr=1,
             model=model,
             sub_name="Valve",
-            data={"type": "valve_hub", "zones": {}, "rssi_dbm": -31, "battery_percent": 100},
+            data={"type": "valve_hub", "zones": {}, "rssi_dbm": -37, "battery_percent": 100},
         )
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
         hass, entry = _make_hass(coordinator)
@@ -1455,7 +1456,10 @@ class TestHtvValveBatteryDispatch:
         await async_setup_entry(hass, entry, async_add_entities)
 
         battery = [e for e in captured if isinstance(e, RainPointBatterySensor)]
+        rssi = [e for e in captured if isinstance(e, RainPointRSSISensor)]
         assert len(battery) == 1
         assert battery[0].native_value == 100
-        # 1 battery + 1 raw payload sensor, nothing else from this platform.
-        assert len(captured) == 2
+        assert len(rssi) == 1
+        assert rssi[0].native_value == -37
+        # 1 battery + 1 RSSI + 1 raw payload sensor, nothing else from this platform.
+        assert len(captured) == 3

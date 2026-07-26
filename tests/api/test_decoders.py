@@ -199,6 +199,33 @@ class TestDecodeHtv213frfValve:
         assert result["zones"][2]["open"] is False
         assert result["zones"][3]["open"] is False
 
+    # --- RSSI (0x17/0xE1 header record, not at a fixed offset) ---
+
+    def test_full_frame_reports_real_rssi_from_header_record(self):
+        """RSSI comes from the byte after the 0x17/0xE1 header, not the constant header byte.
+
+        The two real captures differ only in signal (byte after 0xE1): 0xDB=-37 and
+        0xD9=-39. Reading b[1] would return the constant 0xE1 header (a bogus -31).
+        """
+        assert decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)["rssi_dbm"] == -37
+        assert decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)["rssi_dbm"] == -39
+
+    def test_rssi_found_when_header_record_is_not_first(self):
+        """The header record is located by signature, so a reordered stream still resolves RSSI."""
+        # HTV345FRF frame whose leading records precede the 0x17/0xE1 header (0xCA -> -54).
+        raw = (
+            "11#"
+            "2A9F00000000299F0000000017E1CA0019D8001AD8001BD8001D201E201F2018DC01"
+            "21B70000000022B70000000023B70000000025AD000026AD000027AD00002B9F00000000"
+            "FEFF0FEC4BCB19"
+        )
+        assert decode_htv213frf_valve(raw)["rssi_dbm"] == -54
+
+    def test_rssi_absent_when_no_header_record(self):
+        """A frame with no 0x17/0xE1 header yields rssi_dbm None rather than a garbage value."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)
+        assert result["rssi_dbm"] is None
+
     # --- Battery (trailing 0xFF0F status word on real hex frames) ---
 
     def test_full_frame_reports_battery_percent(self):
