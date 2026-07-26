@@ -64,6 +64,7 @@ from .hub_entities import (
     RainPointHubDeviceIDSensor,
     RainPointHubFirmwareSensor,
     RainPointHubMACSensor,
+    RainPointHubRSSISensor,
     RainPointPushLastMessageSensor,
     resolve_push_diagnostic_hubs,
 )
@@ -269,6 +270,7 @@ def _create_hub_entities(coordinator, hubs_cfg):
         entities.append(RainPointHubDeviceIDSensor(coordinator, hub_info))
         entities.append(RainPointHubFirmwareSensor(coordinator, hub_info))
         entities.append(RainPointHubMACSensor(coordinator, hub_info))
+        entities.append(RainPointHubRSSISensor(coordinator, hub_info))
     return entities
 
 

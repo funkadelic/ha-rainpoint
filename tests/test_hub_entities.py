@@ -83,18 +83,75 @@ class TestResolvePushDiagnosticHubs:
 class TestRainPointHubRSSISensor:
     """Tests for hub RSSI sensor."""
 
-    def _make(self):
-        """Make helper."""
-        coord = _make_coordinator()
-        hub_info = _make_hub_info()
+    def _make(self, coord=None, hub_info=None):
+        """Make helper. Defaults to an empty-status coordinator and a mid-less hub."""
+        coord = _make_coordinator() if coord is None else coord
+        hub_info = _make_hub_info() if hub_info is None else hub_info
         sensor = RainPointHubRSSISensor.__new__(RainPointHubRSSISensor)
         RainPointHubRSSISensor.__init__(sensor, coord, hub_info)
         return sensor
 
-    def test_native_value_is_none(self):
-        """Hub RSSI sensor always returns None (not yet available from API)."""
+    def _make_with_state(self, mid, state_value):
+        """Build a sensor whose coordinator carries a `state` status entry for mid."""
+        coord = _make_coordinator()
+        coord.data["status"] = {mid: {"subDeviceStatus": [{"id": "state", "value": state_value}]}}
+        hub_info = _make_hub_info()
+        hub_info["mid"] = mid
+        return self._make(coord=coord, hub_info=hub_info)
+
+    def test_native_value_none_when_status_missing(self):
+        """With no matching status entry, the hub RSSI reads None rather than erroring."""
         sensor = self._make()
         assert sensor.native_value is None
+
+    def test_native_value_reads_hub_rssi_from_state(self):
+        """The second field of the `state` value (e.g. '0,-52') is the hub RSSI."""
+        sensor = self._make_with_state(236547, "0,-52")
+        assert sensor.native_value == -52
+
+    def test_native_value_none_for_malformed_state(self):
+        """A `state` value without a parseable RSSI field yields None."""
+        sensor = self._make_with_state(236547, "0,notanumber")
+        assert sensor.native_value is None
+
+    def test_native_value_none_when_state_value_is_not_a_string(self):
+        """A `state` entry whose value is not a string (e.g. None) yields None."""
+        sensor = self._make_with_state(236547, None)
+        assert sensor.native_value is None
+
+    def test_native_value_none_when_state_has_no_rssi_field(self):
+        """A `state` value with no comma-separated RSSI field yields None."""
+        sensor = self._make_with_state(236547, "1")
+        assert sensor.native_value is None
+
+    def test_native_value_none_when_status_entry_is_explicitly_none(self):
+        """An explicit None for the mid's status (not just a missing key) yields None, not a crash."""
+        coord = _make_coordinator()
+        coord.data["status"] = {236547: None}
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 236547
+        sensor = self._make(coord=coord, hub_info=hub_info)
+        assert sensor.native_value is None
+
+    def test_native_value_none_when_subdevicestatus_is_explicitly_none(self):
+        """An explicit None subDeviceStatus yields None rather than iterating None."""
+        coord = _make_coordinator()
+        coord.data["status"] = {236547: {"subDeviceStatus": None}}
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 236547
+        sensor = self._make(coord=coord, hub_info=hub_info)
+        assert sensor.native_value is None
+
+    def test_native_value_skips_non_state_entries(self):
+        """Non-`state` status entries are skipped before the `state` entry is read."""
+        coord = _make_coordinator()
+        coord.data["status"] = {
+            236547: {"subDeviceStatus": [{"id": "connected", "value": "1"}, {"id": "state", "value": "0,-40"}]}
+        }
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 236547
+        sensor = self._make(coord=coord, hub_info=hub_info)
+        assert sensor.native_value == -40
 
     def test_available_is_true(self):
         """Hub sensors are always available."""
@@ -115,16 +172,23 @@ class TestRainPointHubRSSISensor:
 class TestRainPointHubDeviceIDSensor:
     """Tests for hub device ID sensor."""
 
-    def _make(self, hid=100):
+    def _make(self, hid=100, did=None):
         """Make helper."""
         coord = _make_coordinator()
         hub_info = _make_hub_info(hid=hid)
+        if did is not None:
+            hub_info["did"] = did
         sensor = RainPointHubDeviceIDSensor.__new__(RainPointHubDeviceIDSensor)
         RainPointHubDeviceIDSensor.__init__(sensor, coord, hub_info)
         return sensor
 
-    def test_native_value_returns_hid(self):
-        """native_value should return the hub hid."""
+    def test_native_value_returns_did(self):
+        """native_value should return the device id (did), matching the vendor app."""
+        sensor = self._make(hid=100, did="17053410")
+        assert sensor.native_value == "17053410"
+
+    def test_native_value_falls_back_to_hid_without_did(self):
+        """When the hub record omits did, native_value falls back to the home id."""
         sensor = self._make(hid=100)
         assert sensor.native_value == 100
 
@@ -189,29 +253,61 @@ class TestRainPointHubMACSensor:
 class TestRainPointHubChannelSelect:
     """Tests for hub RF channel select entity."""
 
-    def _make(self):
-        """Make helper."""
+    def _make(self, hub_info=None):
+        """Make helper. Defaults to a hub record without the RF fields."""
         coord = _make_coordinator()
-        hub_info = _make_hub_info()
+        hub_info = _make_hub_info() if hub_info is None else hub_info
         select = RainPointHubChannelSelect.__new__(RainPointHubChannelSelect)
         RainPointHubChannelSelect.__init__(select, coord, hub_info)
         return select
 
-    def test_options_has_16_items(self):
-        """Channel select should offer channels 1 through 16."""
+    def test_options_fallback_has_16_items(self):
+        """With no function.RF field, options fall back to channels 1 through 16."""
         select = self._make()
         assert len(select._attr_options) == 16
 
-    def test_options_include_all_channels(self):
-        """Options should be '1' through '16' as strings."""
+    def test_options_fallback_include_all_channels(self):
+        """Fallback options should be '1' through '16' as strings."""
         select = self._make()
         for i in range(1, 17):
             assert str(i) in select._attr_options
 
-    def test_current_option_initially_none(self):
-        """Current option should be None initially (API doesn't read it)."""
+    def test_current_option_none_when_recich_absent(self):
+        """Current option is None when the hub record has no recich field."""
         select = self._make()
         assert select.current_option is None
+
+    def test_current_and_options_from_hub_record(self):
+        """recich sets the current channel and function.RF (a bitmask) sets the options."""
+        hub_info = _make_hub_info()
+        hub_info["recich"] = 1
+        hub_info["function"] = '{"model":"HWG023WBRF-V2","childMax":40,"RF":7,"SM":7,"rst":3,"SW":1}'
+        select = self._make(hub_info)
+        assert select.current_option == "1"
+        assert select._attr_options == ["1", "2", "3"]
+
+    def test_options_from_non_contiguous_rf_bitmask(self):
+        """A non-contiguous RF bitmask maps each set bit to its channel number."""
+        hub_info = _make_hub_info()
+        hub_info["function"] = '{"RF":13}'  # 0b1101 -> channels 1, 3, 4
+        select = self._make(hub_info)
+        assert select._attr_options == ["1", "3", "4"]
+
+    def test_current_channel_outside_mask_is_still_offered(self):
+        """A current channel not present in the RF mask is added to the options."""
+        hub_info = _make_hub_info()
+        hub_info["recich"] = 9
+        hub_info["function"] = '{"RF":7}'  # channels 1, 2, 3
+        select = self._make(hub_info)
+        assert select.current_option == "9"
+        assert select._attr_options == ["1", "2", "3", "9"]
+
+    def test_malformed_function_blob_falls_back_to_16(self):
+        """An unparseable function blob degrades to the 1-16 fallback, not an error."""
+        hub_info = _make_hub_info()
+        hub_info["function"] = "not-json"
+        select = self._make(hub_info)
+        assert len(select._attr_options) == 16
 
     def test_available_is_true(self):
         """Channel select should always be available."""

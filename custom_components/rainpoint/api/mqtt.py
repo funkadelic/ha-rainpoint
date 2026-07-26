@@ -89,6 +89,24 @@ def _subdevice_updates(inner) -> list[tuple[str, str, int]]:
     return updates
 
 
+def _payload_preview(payload: bytes, limit: int = 1024) -> str:
+    """Decode a push payload to text for diagnostics, truncated to `limit` chars.
+
+    Only used on the drop path (a message that carried no decodable sub-device
+    update) and only when debug logging is on, so ordinary sub-device pushes are
+    never dumped. Surfaces unrecognized downlinks (e.g. the hub property/set that
+    a broadcast toggle triggers) so their shape can be reverse-engineered.
+    """
+    # Decode only a bounded prefix so a large rejected payload never forces a
+    # full decode on the event loop. UTF-8 uses at most 4 bytes per code point,
+    # and the extra byte lets us detect that more payload followed.
+    prefix = payload[: limit * 4 + 1]
+    text = prefix.decode("utf-8", "replace")
+    if len(text) > limit or len(payload) > len(prefix):
+        return text[:limit] + "...(truncated)"
+    return text
+
+
 def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
     """Parse an inbound push payload into a list of (sid, raw_value, device_ts).
 
@@ -595,11 +613,18 @@ class RainPointMqttClient:
         A payload that carries no decodable sub-device update is dropped quietly.
         apply_push_update is the only coordinator method this client ever calls,
         and the per-hub mid is supplied from construction (never parsed from the
-        payload or the ephemeral observer topic).
+        payload or the ephemeral observer topic). The drop path logs a truncated
+        payload preview at DEBUG so unrecognized downlinks can be diagnosed;
+        handled sub-device pushes never have their contents logged.
         """
         updates = _parse_push_envelope(payload)
         if not updates:
-            _LOGGER.debug("RainPoint MQTT push carried no sub-device update: topic=%s", topic)
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "RainPoint MQTT push carried no sub-device update: topic=%s payload=%s",
+                    topic,
+                    _payload_preview(payload),
+                )
             return
         if self._coordinator is None:
             _LOGGER.debug("RainPoint MQTT push received before coordinator wiring; dropping")
