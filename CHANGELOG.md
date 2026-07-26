@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.10.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.10.0...v1.10.1) (2026-07-26)
+
+
+### Fixed
+
+* reload the entry through Home Assistant instead of unload plus setup ([#116](https://github.com/funkadelic/ha-rainpoint/issues/116)) ([5ca8cb1](https://github.com/funkadelic/ha-rainpoint/commit/5ca8cb1a673b7e3220070aee50d3ffbead41d6a1))
+
 ## [1.10.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.9.0...v1.10.0) (2026-07-26)
 
 
