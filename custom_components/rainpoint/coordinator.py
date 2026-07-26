@@ -381,6 +381,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             name="RainPoint coordinator",
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         )
