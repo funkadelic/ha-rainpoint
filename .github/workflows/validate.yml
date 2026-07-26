@@ -13,7 +13,11 @@ jobs:
   validate-hacs:
     runs-on: "ubuntu-latest"
     steps:
+      # Pinned to a commit rather than @main so a repointed branch cannot change
+      # what runs here. Upstream's newest tag is 22.5.0 from 2022, far behind
+      # main, so there is no usable release to track and Dependabot cannot bump
+      # this. Refresh it by hand when HACS validation needs to move.
       - name: HACS validation
-        uses: "hacs/action@main"
+        uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main as of 2026-06-08
         with:
           category: "integration"

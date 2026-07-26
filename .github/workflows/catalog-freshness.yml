@@ -22,10 +22,16 @@ jobs:
         with:
           python-version: "3.13"
 
+      # Pinned to a commit SHA rather than a tag: this job feeds RAINPOINT_*
+      # secrets to a later step, and a tag can be repointed. Dependabot bumps
+      # the pin from the trailing version comment.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: false
+
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-test.txt aiohttp
+        run: uv pip install --system -r requirements-test.txt aiohttp
 
       - name: Check RainPoint credentials are present
         id: creds
