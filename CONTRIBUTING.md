@@ -6,14 +6,16 @@ Thanks for your interest in improving `ha-rainpoint`. Bug reports, payload captu
 
 The project targets **Python 3.13** (matches CI).
 
+Install [uv](https://docs.astral.sh/uv/) if you don't have it, then:
+
 ```bash
 # From the repo root
-python3 -m venv .venv
+uv venv                                        # reads .python-version
 source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements-test.txt
-pip install ruff
+uv pip install -r requirements-test.txt ruff
 ```
+
+uv installs this dependency tree in a fraction of pip's time (seconds rather than a minute), which is why CI uses it too. If you'd rather stick with pip, `python3 -m venv .venv` and `pip install -r requirements-test.txt ruff` produce the same environment — nothing else in this guide changes.
 
 `requirements-test.txt` pulls in `pytest-homeassistant-custom-component`, which in turn installs a pinned `homeassistant` — do not add `homeassistant` as a separate dependency.
 
