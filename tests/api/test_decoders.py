@@ -33,6 +33,8 @@ from tests.payload_samples import (
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
+    SAMPLE_HTV245_FULL_IDLE_PAYLOAD,
+    SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
     VALVE_HUB_TLV_PAYLOAD,
@@ -196,6 +198,80 @@ class TestDecodeHtv213frfValve:
         assert result["zones"][1]["open"] is False
         assert result["zones"][2]["open"] is False
         assert result["zones"][3]["open"] is False
+
+    # --- RSSI (0x17/0xE1 header record, not at a fixed offset) ---
+
+    def test_full_frame_reports_real_rssi_from_header_record(self):
+        """RSSI comes from the byte after the 0x17/0xE1 header, not the constant header byte.
+
+        The two real captures differ only in signal (byte after 0xE1): 0xDB=-37 and
+        0xD9=-39. Reading b[1] would return the constant 0xE1 header (a bogus -31).
+        """
+        assert decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)["rssi_dbm"] == -37
+        assert decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)["rssi_dbm"] == -39
+
+    def test_rssi_found_when_header_record_is_not_first(self):
+        """The header record is located by signature, so a reordered stream still resolves RSSI."""
+        # HTV345FRF frame whose leading records precede the 0x17/0xE1 header (0xCA -> -54).
+        raw = (
+            "11#"
+            "2A9F00000000299F0000000017E1CA0019D8001AD8001BD8001D201E201F2018DC01"
+            "21B70000000022B70000000023B70000000025AD000026AD000027AD00002B9F00000000"
+            "FEFF0FEC4BCB19"
+        )
+        assert decode_htv213frf_valve(raw)["rssi_dbm"] == -54
+
+    def test_rssi_absent_when_no_header_record(self):
+        """A frame with no 0x17/0xE1 header yields rssi_dbm None rather than a garbage value."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)
+        assert result["rssi_dbm"] is None
+
+    def test_rssi_ignores_0x17e1_collision_inside_value_bytes(self):
+        """A 0x17/0xE1 pair inside a value (not followed by 0x00) is skipped for the real header.
+
+        The leading 0x9F record carries value bytes 17 E1 05 42: a false 0x17/0xE1
+        pair whose fourth byte is 0x42, not the header's trailing 0x00. The decoder
+        must skip it and resolve RSSI from the genuine 17E1CA00 header (0xCA -> -54).
+        """
+        raw = "11#2B9F17E1054217E1CA0018DC0119D800FEFF0FEC4BCB19"
+        assert decode_htv213frf_valve(raw)["rssi_dbm"] == -54
+
+    # --- Battery (trailing 0xFF0F status word on real hex frames) ---
+
+    def test_full_frame_reports_battery_percent(self):
+        """A real full HTV245FRF hex frame surfaces battery_percent from the tail word."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)
+        assert result["battery_percent"] == 100
+
+    def test_full_frame_zone2_active_still_reports_full_battery(self):
+        """The July 4 capture (zone 2 mid-run) reads 100% battery and a running zone 2."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)
+        assert result["battery_percent"] == 100
+        assert result["zones"][2]["duration_seconds"] == 2940
+
+    def test_low_battery_word_maps_to_percent(self):
+        """A frame whose tail word is 0x0FFA decodes to 50% (shared battery scale)."""
+        # Swap the trailing battery word FF0F (0x0FFF=100%) for FA0F (0x0FFA=50%).
+        raw = SAMPLE_HTV245_FULL_IDLE_PAYLOAD.replace("FEFF0F", "FEFA0F")
+        result = decode_htv213frf_valve(raw)
+        assert result["battery_percent"] == 50
+
+    def test_marker_present_but_word_not_a_battery_code_is_omitted(self):
+        """A 0xFE tail marker with an out-of-band word (0x0000) yields no battery_percent."""
+        # Keep the 0xFE marker but blank the battery word so it is not in _BATTERY_MAP.
+        raw = SAMPLE_HTV245_FULL_IDLE_PAYLOAD.replace("FEFF0F", "FE0000")
+        result = decode_htv213frf_valve(raw)
+        assert "battery_percent" not in result
+
+    def test_ascii_payload_has_no_battery_percent(self):
+        """The ASCII firmware format carries no battery word, so the key is absent."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_ASCII_PAYLOAD)
+        assert "battery_percent" not in result
+
+    def test_short_frame_has_no_battery_percent(self):
+        """A frame without the battery tail does not fabricate a battery reading."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)
+        assert "battery_percent" not in result
 
 
 class TestDecodeHtv145frf:
