@@ -7,6 +7,11 @@ on:
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
+    inputs:
+      regenerate:
+        description: "Regenerate the catalog and upload it as an artifact instead of only reporting drift. Nothing is committed either way."
+        type: boolean
+        default: false
 
 jobs:
   freshness-check:
@@ -46,9 +51,31 @@ jobs:
           fi
 
       - name: Run catalog freshness check
-        if: steps.creds.outputs.skip == 'false'
+        if: steps.creds.outputs.skip == 'false' && !inputs.regenerate
         env:
           RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
           RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
           RAINPOINT_AREA_CODE: ${{ secrets.RAINPOINT_AREA_CODE }}
         run: python scripts/refresh_product_catalog.py --check
+
+      # Regenerate-and-upload exists because the vendor endpoint is not reliably
+      # reachable from every maintainer network, and the credentials are already
+      # here as secrets. The job still only has contents: read, so the result is
+      # an artifact to download and commit deliberately, never a push.
+      - name: Regenerate catalog
+        if: steps.creds.outputs.skip == 'false' && inputs.regenerate
+        env:
+          RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
+          RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
+          RAINPOINT_AREA_CODE: ${{ secrets.RAINPOINT_AREA_CODE }}
+        run: |
+          python scripts/refresh_product_catalog.py
+          git --no-pager diff --stat -- custom_components/rainpoint/api/data/product_catalog.json
+
+      - name: Upload regenerated catalog
+        if: steps.creds.outputs.skip == 'false' && inputs.regenerate
+        uses: actions/upload-artifact@v7
+        with:
+          name: product-catalog
+          path: custom_components/rainpoint/api/data/product_catalog.json
+          if-no-files-found: error

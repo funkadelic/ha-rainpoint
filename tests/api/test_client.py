@@ -1199,10 +1199,17 @@ class TestRefreshScriptMain:
             asyncio.set_event_loop(loop)
 
     @staticmethod
-    def _stub_fetch(monkeypatch, trimmed):
-        """Replace the script's network fetch with one returning trimmed."""
+    def _stub_fetch(monkeypatch, trimmed, captured: dict | None = None):
+        """Replace the script's network fetch with one returning trimmed.
 
-        async def _fake_fetch(email, password, area_code):
+        Mirrors the real signature including timeout_seconds, so a caller that
+        stops threading the timeout through fails here rather than only against
+        the live endpoint. Pass captured to inspect the arguments main() used.
+        """
+
+        async def _fake_fetch(email, password, area_code, timeout_seconds):
+            if captured is not None:
+                captured.update(email=email, password=password, area_code=area_code, timeout_seconds=timeout_seconds)
             return trimmed
 
         monkeypatch.setattr(refresh_product_catalog, "_fetch_trimmed_catalog", _fake_fetch)
@@ -1270,6 +1277,26 @@ class TestRefreshScriptMain:
 
         assert refresh_product_catalog.main(["--check"]) == 1
         assert "treating as a fetch failure, not drift" in capsys.readouterr().err
+
+    def test_timeout_defaults_and_is_overridable(self, monkeypatch):
+        """The fetch is always given an explicit deadline, and --timeout overrides it.
+
+        Without one the session inherits aiohttp's five-minute default, which is
+        long enough that a stalled pull looks like a wedged process and gets
+        killed by hand before it ever fails.
+        """
+        self._stub_credentials(monkeypatch)
+        monkeypatch.setattr(refresh_product_catalog, "_load_committed_catalog", lambda path: {"HTV245FRF": []})
+
+        captured: dict = {}
+        self._stub_fetch(monkeypatch, {"HTV245FRF": []}, captured)
+        refresh_product_catalog.main(["--check"])
+        assert captured["timeout_seconds"] == refresh_product_catalog._DEFAULT_TIMEOUT_SECONDS
+
+        captured.clear()
+        self._stub_fetch(monkeypatch, {"HTV245FRF": []}, captured)
+        refresh_product_catalog.main(["--check", "--timeout", "5"])
+        assert captured["timeout_seconds"] == 5.0
 
     def test_check_reports_drift_on_a_non_empty_pull(self, monkeypatch):
         """A non-empty pull still routes through the normal drift report."""

@@ -78,6 +78,11 @@ _KEPT_IDENTITY_PREFIXES = ("STA_", "CTL_")
 # are several models this integration genuinely supports.
 _KEPT_PROVENANCE_FIELDS = ("hasDistribution", "isMainDevice", "accessoryFlag")
 
+# Total seconds allowed for login plus the catalog fetch. Well above the
+# fraction of a second the endpoint normally takes, and far below aiohttp's
+# five-minute default, which is long enough that a stalled run looks wedged.
+_DEFAULT_TIMEOUT_SECONDS = 90.0
+
 # Bucket key for vendor entries carrying no modelCode. Duplicated from
 # custom_components/rainpoint/api/product_catalog.py rather than imported,
 # because this script is standalone and only puts the component on sys.path
@@ -202,6 +207,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("RAINPOINT_AREA_CODE") or "1",
         help="Phone-dial-style area code the RainPoint login expects, e.g. 1 for US (or RAINPOINT_AREA_CODE)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=_DEFAULT_TIMEOUT_SECONDS,
+        help=f"Seconds to wait for login plus catalog fetch before giving up (default {_DEFAULT_TIMEOUT_SECONDS:g})",
+    )
     return parser.parse_args(argv)
 
 
@@ -220,21 +231,40 @@ def _resolve_password() -> str | None:
     return getpass.getpass("RainPoint account password: ") or None
 
 
-async def _fetch_trimmed_catalog(email: str, password: str, area_code: str) -> dict:
+async def _fetch_trimmed_catalog(email: str, password: str, area_code: str, timeout_seconds: float) -> dict:
     """Log in, pull the vendor product catalog, and return it trimmed.
 
     aiohttp and the component client are imported here rather than at module
     scope: this is the only code path that needs them, and main() does not put
     the component on sys.path until it is about to fetch. That keeps
     trim_catalog importable on its own for tests.
+
+    The session carries an explicit timeout because the component's client sets
+    none, so a bare session would inherit aiohttp's five-minute default. The
+    catalog is around half a megabyte and normally arrives in under a second;
+    five silent minutes reads as a wedged process and gets killed by hand long
+    before it would ever fail on its own. The progress lines exist for the same
+    reason: without them, login, fetch, and diff are indistinguishable from a
+    hang. Both go to stderr so --check output stays pipeable.
     """
     import aiohttp
 
     from custom_components.rainpoint.api.client import RainPointClient
 
-    async with aiohttp.ClientSession() as session:
+    print(f"Logging in as {email} and fetching the vendor catalog (timeout {timeout_seconds:g}s)...", file=sys.stderr)
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         client = RainPointClient(area_code, email, password, session)
-        raw = await client.get_product_catalog()
+        try:
+            raw = await client.get_product_catalog()
+        except TimeoutError:
+            print(
+                f"Timed out after {timeout_seconds:g}s. The vendor endpoint accepted the request but did not "
+                f"finish responding; retry, or raise the limit with --timeout.",
+                file=sys.stderr,
+            )
+            raise
+    print(f"Fetched {len(raw)} vendor model entries.", file=sys.stderr)
     return trim_catalog(raw)
 
 
@@ -252,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     sys.path.insert(0, str(_REPO_ROOT))
-    trimmed = asyncio.run(_fetch_trimmed_catalog(args.email, password, args.area_code))
+    trimmed = asyncio.run(_fetch_trimmed_catalog(args.email, password, args.area_code, args.timeout))
 
     if args.check:
         # An empty pull means the fetch failed, not that the vendor dropped
