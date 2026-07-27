@@ -163,6 +163,14 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
             if dur is not None:
                 attrs["duration_seconds"] = dur
             attrs["state_raw"] = zone.get("state_raw")
+            # Naive local wall time, and only present on frames that carry it:
+            # on every capture so far it is the moment this run ends, and it is
+            # absent for an idle zone. Water usage is a sensor entity of its
+            # own rather than an attribute here; only the timestamp, which has
+            # no natural entity of its own, rides along on the valve.
+            event_time = zone.get("event_time")
+            if event_time is not None:
+                attrs["event_time"] = event_time
 
         # Add firmware version from sensor info
         sensors = self.coordinator.data.get("sensors", {})

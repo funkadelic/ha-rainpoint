@@ -36,6 +36,7 @@ from tests.payload_samples import (
     SAMPLE_HTV245_FULL_IDLE_PAYLOAD,
     SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
+    SAMPLE_HTV345_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
     VALVE_HUB_TLV_PAYLOAD,
 )
@@ -184,13 +185,7 @@ class TestDecodeHtv213frfValve:
 
     def test_htv345_payload_with_zone_dp_is_online(self):
         """HTV345FRF payloads with DP 0x19 but no hub DP are treated as online."""
-        raw = (
-            "11#"
-            "2A9F00000000299F0000000017E1CA0019D8001AD8001BD8001D201E201F2018DC01"
-            "21B70000000022B70000000023B70000000025AD000026AD000027AD00002B9F00000000"
-            "FEFF0FEC4BCB19"
-        )
-        result = decode_htv213frf_valve(raw)
+        result = decode_htv213frf_valve(SAMPLE_HTV345_TLV_PAYLOAD)
 
         assert result["decoder"] == "htv213frf_hex"
         assert result["hub_online"] is True
@@ -213,13 +208,7 @@ class TestDecodeHtv213frfValve:
     def test_rssi_found_when_header_record_is_not_first(self):
         """The header record is located by signature, so a reordered stream still resolves RSSI."""
         # HTV345FRF frame whose leading records precede the 0x17/0xE1 header (0xCA -> -54).
-        raw = (
-            "11#"
-            "2A9F00000000299F0000000017E1CA0019D8001AD8001BD8001D201E201F2018DC01"
-            "21B70000000022B70000000023B70000000025AD000026AD000027AD00002B9F00000000"
-            "FEFF0FEC4BCB19"
-        )
-        assert decode_htv213frf_valve(raw)["rssi_dbm"] == -54
+        assert decode_htv213frf_valve(SAMPLE_HTV345_TLV_PAYLOAD)["rssi_dbm"] == -54
 
     def test_rssi_absent_when_no_header_record(self):
         """A frame with no 0x17/0xE1 header yields rssi_dbm None rather than a garbage value."""
@@ -1221,3 +1210,112 @@ class TestBasicDecoderLogAndSwallowBranches:
         result = decode_pool("garbage_no_separator")
         assert result["type"] == "pool"
         assert result["rssi"] is None
+
+
+class TestHtv213ZoneUsageAndEventTime:
+    """Per-zone water usage and event time, decoded from the maintainer's real frames."""
+
+    def test_idle_frame_reports_per_zone_usage_counts(self):
+        """Both zones carry their last run's raw flow count in the 0x29/0x2A records.
+
+        Little-endian is load-bearing here: a5010000 reads as 421 little-endian
+        and as 2,768,306,176 big-endian.
+        """
+        zones = decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)["zones"]
+        assert zones[1]["last_usage_counts"] == 421
+        assert zones[2]["last_usage_counts"] == 48
+
+    def test_usage_counts_convert_to_gallons(self):
+        """421 counts is the calibration point: it showed as 0.8 gal in the vendor app."""
+        zones = decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)["zones"]
+        assert zones[1]["last_usage_gallons"] == 0.842
+        assert round(zones[1]["last_usage_gallons"], 1) == 0.8
+        assert zones[2]["last_usage_gallons"] == 0.096
+
+    def test_running_zone_reports_zero_usage(self):
+        """A zone reports no usage while it is mid-run; the idle zone still reports its last."""
+        zones = decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)["zones"]
+        assert zones[2]["open"] is True
+        assert zones[2]["last_usage_counts"] == 0
+        assert zones[2]["last_usage_gallons"] == 0.0
+        assert zones[1]["last_usage_counts"] == 276
+
+    def test_usage_absent_rather_than_zero_when_frame_omits_the_record(self):
+        """No 0x9F record yields None, so "not reported" stays distinct from "none used"."""
+        zones = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)["zones"]
+        assert zones[1]["last_usage_counts"] is None
+        assert zones[1]["last_usage_gallons"] is None
+
+    def test_usage_record_of_the_wrong_type_is_refused(self):
+        """A 0x29 record that is not type 0x9F leaves usage empty rather than misread."""
+        # Zone 1 state, then a 0x29 record carrying the duration type byte.
+        raw = "11#18dc0119d80029ad3c00"
+        zones = decode_htv213frf_valve(raw)["zones"]
+        assert zones[1]["last_usage_counts"] is None
+
+    def test_running_zone_event_time_is_report_time_plus_duration(self):
+        """The mid-run frame's zone 2 event time lands exactly one duration after the report time.
+
+        Report stamp 0x19C91A33 decodes to 17:40:51 and the zone has 2940s
+        (49 minutes) left, which is the 18:29:51 asserted here. That agreement
+        is what fixes the bit layout and the 2020 year base.
+        """
+        zones = decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)["zones"]
+        assert zones[2]["duration_seconds"] == 2940
+        assert zones[2]["event_time"] == "2026-07-04T18:29:51"
+
+    def test_idle_zones_report_no_event_time(self):
+        """A zero stamp means "no event" and yields None rather than a 2020 epoch date."""
+        zones = decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)["zones"]
+        assert zones[1]["event_time"] is None
+        assert zones[2]["event_time"] is None
+
+    def test_event_time_record_of_the_wrong_type_is_refused(self):
+        """A 0x21 record that is not type 0xB7 leaves the event time empty."""
+        raw = "11#18dc0119d80021ad3c00"
+        zones = decode_htv213frf_valve(raw)["zones"]
+        assert zones[1]["event_time"] is None
+
+    def test_impossible_packed_date_yields_none(self):
+        """A word whose fields are not a real date is dropped, not clamped into one."""
+        from custom_components.rainpoint.api.decoders import _decode_packed_timestamp
+
+        # Month field 0 and day field 0: structurally parseable, not a date.
+        assert _decode_packed_timestamp(0x18000000) is None
+
+    def test_packed_timestamp_covers_the_full_field_range(self):
+        """Each bit field lands in its own component rather than bleeding into a neighbour."""
+        from custom_components.rainpoint.api.decoders import _decode_packed_timestamp
+
+        # year 5 (2025), month 12, day 31, hour 23, minute 59, second 59.
+        packed = (5 << 26) | (12 << 22) | (31 << 17) | (23 << 12) | (59 << 6) | 59
+        assert _decode_packed_timestamp(packed) == "2025-12-31T23:59:59"
+
+
+class TestHtvWiderFamilyUsageRecords:
+    """The 3- and 4-zone family members decode through the same dp_id blocks."""
+
+    def test_htv345_reports_usage_for_every_zone(self):
+        """Three zones, three 0x9F records at 0x29/0x2A/0x2B, paired to zones 1/2/3."""
+        zones = decode_htv213frf_valve(SAMPLE_HTV345_TLV_PAYLOAD)["zones"]
+        assert sorted(zones) == [1, 2, 3]
+        assert [zones[n]["last_usage_counts"] for n in (1, 2, 3)] == [0, 0, 0]
+
+    def test_htv405_frame_carries_no_usage_records(self):
+        """Four zones and no 0x9F records at all: usage is absent, not zero.
+
+        This is the captured behaviour of that model, and the distinction is
+        the reason the decoder returns None instead of defaulting to 0: a hub
+        that never reports usage must not look like one that reported none
+        used.
+        """
+        zones = decode_htv213frf_valve(SAMPLE_HTV405_TLV_PAYLOAD)["zones"]
+        assert sorted(zones) == [1, 2, 3, 4]
+        assert all(zones[n]["last_usage_counts"] is None for n in zones)
+        assert all(zones[n]["last_usage_gallons"] is None for n in zones)
+
+    def test_four_zones_fill_the_dp_id_blocks_without_colliding(self):
+        """Zone 4's duration (0x28) and zone 1's usage (0x29) are adjacent but distinct."""
+        zones = decode_htv213frf_valve(SAMPLE_HTV405_TLV_PAYLOAD)["zones"]
+        assert zones[4]["duration_seconds"] == 0
+        assert zones[4]["event_time"] is None

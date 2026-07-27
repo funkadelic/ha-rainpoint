@@ -97,6 +97,18 @@ class TestValveProperties:
         attrs = valve.extra_state_attributes
         assert attrs["duration_seconds"] == 300
 
+    def test_extra_state_attributes_includes_event_time_when_running(self):
+        """A running zone surfaces the moment its run ends."""
+        valve = _make_valve(
+            zone_data={"open": True, "duration_seconds": 2940, "state_raw": 0x21, "event_time": "2026-07-04T18:29:51"}
+        )
+        assert valve.extra_state_attributes["event_time"] == "2026-07-04T18:29:51"
+
+    def test_event_time_omitted_when_the_zone_reports_none(self):
+        """An idle zone omits the attribute rather than publishing a null one."""
+        valve = _make_valve(zone_data={"open": False, "duration_seconds": 0, "state_raw": 0, "event_time": None})
+        assert "event_time" not in valve.extra_state_attributes
+
     def test_device_info_identifiers(self):
         """device_info should contain the correct identifier tuple."""
         valve = _make_valve()

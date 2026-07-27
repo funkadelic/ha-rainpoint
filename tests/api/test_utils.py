@@ -46,15 +46,15 @@ class TestParseTlvPayload:
     """Tests for _parse_tlv_payload."""
 
     def test_tlv_known_type_widths(self):
-        """All known type bytes decode with correct value widths."""
+        """All known type bytes decode with correct value widths, little-endian throughout."""
         # Build a payload with one record per known type:
         # dp_id=0x01 type=0xD8 val=0xFF (1 byte)
         # dp_id=0x02 type=0xDC val=0x01 (1 byte)
         # dp_id=0x03 type=0xAD val=E803 (2 bytes, LE=1000)
-        # dp_id=0x04 type=0x20 val=000A (2 bytes, BE=10)
-        # dp_id=0x05 type=0xE1 val=0014 (2 bytes, BE=20)
-        # dp_id=0x06 type=0xB7 val=00000064 (4 bytes, BE=100)
-        # dp_id=0x07 type=0x9F val=000000C8 (4 bytes, BE=200)
+        # dp_id=0x04 type=0x20 val=000A (2 bytes, LE=2560)
+        # dp_id=0x05 type=0xE1 val=0014 (2 bytes, LE=5120)
+        # dp_id=0x06 type=0xB7 val=00000064 (4 bytes, LE=1677721600)
+        # dp_id=0x07 type=0x9F val=000000C8 (4 bytes, LE=3355443200)
         # dp_id=0x08 type=0xC4 val=0x0A (1 byte)
         # dp_id=0x09 type=0xC5 val=0x0B (1 byte)
         # dp_id=0x0A type=0xC6 val=0x0C (1 byte)
@@ -106,11 +106,14 @@ class TestParseTlvPayload:
 
         assert result[0x01] == (0xD8, 0xFF, b"\xff")
         assert result[0x02] == (0xDC, 0x01, b"\x01")
-        assert result[0x03] == (0xAD, 1000, b"\xe8\x03")  # LE
-        assert result[0x04] == (0x20, 10, b"\x00\x0a")  # BE
-        assert result[0x05] == (0xE1, 20, b"\x00\x14")  # BE
-        assert result[0x06] == (0xB7, 100, bytes.fromhex("00000064"))  # BE
-        assert result[0x07] == (0x9F, 200, bytes.fromhex("000000C8"))  # BE
+        # Every multi-byte value is little-endian; these byte patterns were
+        # chosen to read as round numbers big-endian, so the values below are
+        # what a big-endian regression would visibly break.
+        assert result[0x03] == (0xAD, 1000, b"\xe8\x03")
+        assert result[0x04] == (0x20, 2560, b"\x00\x0a")
+        assert result[0x05] == (0xE1, 5120, b"\x00\x14")
+        assert result[0x06] == (0xB7, 1677721600, bytes.fromhex("00000064"))
+        assert result[0x07] == (0x9F, 3355443200, bytes.fromhex("000000C8"))
         assert result[0x08] == (0xC4, 0x0A, b"\x0a")
         assert result[0x09] == (0xC5, 0x0B, b"\x0b")
         assert result[0x0A] == (0xC6, 0x0C, b"\x0c")
@@ -122,12 +125,16 @@ class TestParseTlvPayload:
         _, value, _ = result[0x25]
         assert value == 1000  # LE: 0x03E8 = 1000; BE would give 59395
 
-    def test_non_0xad_big_endian(self):
-        """Non-0xAD 2-byte types decode as big-endian."""
+    def test_non_0xad_types_are_little_endian_too(self):
+        """Endianness is a property of the framing, not of the 0xAD type byte.
+
+        Captured frames decode correctly as little-endian for the 4-byte usage
+        and timestamp records as well, so no type byte is exempt.
+        """
         payload = bytes([0x04, 0x20, 0x00, 0x0A])
         result = _parse_tlv_payload("11#" + payload.hex())
         _, value, _ = result[0x04]
-        assert value == 10  # BE: 0x000A = 10
+        assert value == 2560  # LE: 0x0A00 = 2560; BE would give 10
 
     def test_unknown_type_skips_2_bytes(self):
         """Unknown type byte causes a 2-byte skip (dp_id + type), then parsing continues."""

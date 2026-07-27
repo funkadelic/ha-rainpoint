@@ -69,10 +69,13 @@ _STATUS_FIELDS: dict[int, str] = {
     60: "STA_OTHER_TOTAL2",
 }
 
-# Duration values are little-endian on the wire; everything else is big-endian.
-# This is the same quirk our valve decoders guard against (type byte 0xAD,
-# field index 19 = STA_DURATION).
-_LITTLE_ENDIAN_FIELDS = frozenset({19})  # STA_DURATION
+# Every multi-byte value in these framings is little-endian. This used to
+# single out STA_DURATION (field index 19), the one multi-byte field a
+# hand-written decoder read at the time; captured frames since then decode
+# correctly as little-endian for STA_LASTUSAGE (index 15, a raw flow count)
+# and STA_EVTIME (index 21, a packed timestamp) as well, and big-endian reads
+# of those same records yield nine- and ten-digit nonsense. No captured record
+# is known to be big-endian.
 
 
 def _hex_to_bytes(hex_str: str) -> list[int]:
@@ -151,12 +154,11 @@ def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
     return entries
 
 
-def _int_from_bytes(value_bytes: list[int], field: int) -> int | None:
-    """Interpret value bytes as an int, honouring per-field endianness."""
+def _int_from_bytes(value_bytes: list[int]) -> int | None:
+    """Interpret value bytes as a little-endian int, or None when there are none."""
     if not value_bytes:
         return None
-    order = "little" if field in _LITTLE_ENDIAN_FIELDS else "big"
-    return int.from_bytes(bytes(value_bytes), order)
+    return int.from_bytes(bytes(value_bytes), "little")
 
 
 # The vendor's dpDataType vocabulary is "U8" / "S16" / "U32" style: a
@@ -435,7 +437,7 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
                 "index": index,
                 "dp_id": e["dp_id"],
                 "raw": bytes(value_bytes).hex(),
-                "value": _int_from_bytes(value_bytes, index),
+                "value": _int_from_bytes(value_bytes),
             }
         )
 

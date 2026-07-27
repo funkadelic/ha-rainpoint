@@ -8,6 +8,7 @@ import pytest
 
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
+from custom_components.rainpoint.api import decode_htv213frf_valve
 from custom_components.rainpoint.const import (
     DOMAIN,
     MODEL_DISPLAY_HUB,
@@ -37,6 +38,8 @@ from custom_components.rainpoint.const import (
     MODEL_RAIN,
     MODEL_VALVE_213,
     MODEL_VALVE_245,
+    MODEL_VALVE_345,
+    MODEL_VALVE_405,
 )
 from custom_components.rainpoint.sensor import (
     DisplayHubReadingSensor,
@@ -80,10 +83,12 @@ from custom_components.rainpoint.sensor import (
     RainPointTempHumHumidityLowSensor,
     RainPointTempHumLowSensor,
     RainPointUnknownSensor,
+    RainPointZoneWaterUsageSensor,
     _slugify,
     async_setup_entry,
 )
 from tests.helpers import make_coordinator_data, make_hub_info, make_sensor_entry
+from tests.payload_samples import SAMPLE_HTV345_TLV_PAYLOAD, SAMPLE_HTV405_TLV_PAYLOAD
 
 # ---------------------------------------------------------------------------
 # _slugify helper
@@ -1439,7 +1444,7 @@ class TestHtvValveDiagnosticDispatch:
     """The HTV213/245 valve family gets battery + signal sensors from the sensor platform."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [MODEL_VALVE_213, MODEL_VALVE_245])
+    @pytest.mark.parametrize("model", [MODEL_VALVE_213, MODEL_VALVE_245, MODEL_VALVE_345, MODEL_VALVE_405])
     async def test_valve_family_creates_battery_and_rssi_sensors(self, model):
         """A valve entry yields a battery + RSSI sensor plus the raw payload sensor."""
         sensor_key = "100_200_1"
@@ -1465,3 +1470,152 @@ class TestHtvValveDiagnosticDispatch:
         assert rssi[0].native_value == -37
         # 1 battery + 1 RSSI + 1 raw payload sensor, nothing else from this platform.
         assert len(captured) == 3
+
+
+class TestZoneWaterUsageSensor:
+    """One water-usage entity per reported zone on the HTV213/245 valve family."""
+
+    @staticmethod
+    def _valve_entry(zones):
+        return make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=MODEL_VALVE_245,
+            sub_name="Valve",
+            data={"type": "valve_hub", "zones": zones, "rssi_dbm": -37, "battery_percent": 100},
+        )
+
+    @staticmethod
+    def _first_usage(entities):
+        return next(e for e in entities if isinstance(e, RainPointZoneWaterUsageSensor))
+
+    async def _setup(self, zones):
+        sensor_key = "100_200_1"
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: self._valve_entry(zones)}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_one_usage_entity_per_reported_zone(self):
+        """Two reported zones yield two usage entities, named and keyed per zone."""
+        zones = {
+            1: {"open": False, "last_usage_counts": 421, "last_usage_gallons": 0.842},
+            2: {"open": False, "last_usage_counts": 48, "last_usage_gallons": 0.096},
+        }
+        usage = [e for e in await self._setup(zones) if isinstance(e, RainPointZoneWaterUsageSensor)]
+        assert len(usage) == 2
+        assert [e.native_value for e in usage] == [0.842, 0.096]
+        assert usage[0]._attr_unique_id == "rainpoint_100_200_1_zone1_water_used"
+        assert usage[0]._attr_name == "Valve Zone 1 Water Used"
+
+    @pytest.mark.asyncio
+    async def test_no_usage_entities_when_no_zones_reported(self):
+        """A frame reporting no zones grows no phantom usage entities."""
+        usage = [e for e in await self._setup({}) if isinstance(e, RainPointZoneWaterUsageSensor)]
+        assert usage == []
+
+    @pytest.mark.asyncio
+    async def test_no_usage_entities_when_zones_are_malformed(self):
+        """A decode that yields no usable zones dict still produces the battery and signal pair."""
+        sensor_key = "100_200_1"
+        sensor_info = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=MODEL_VALVE_245,
+            sub_name="Valve",
+            data={"type": "valve_hub", "rssi_dbm": -37, "battery_percent": 100},
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)] == []
+        assert len(captured) == 3
+
+    @pytest.mark.asyncio
+    async def test_stays_out_of_long_term_statistics(self):
+        """No state class and no device class: the conversion factor is not settled enough for either."""
+        zones = {1: {"open": False, "last_usage_counts": 421, "last_usage_gallons": 0.842}}
+        usage = self._first_usage(await self._setup(zones))
+        # Asserted through the _attr_ declarations rather than the public
+        # properties: the entity is never added to hass here, and the test
+        # harness leaves the cached-property side of that pair unresolvable.
+        assert usage._attr_state_class is None
+        assert getattr(usage, "_attr_device_class", None) is None
+        assert usage._attr_native_unit_of_measurement == "gal"
+
+    @pytest.mark.asyncio
+    async def test_raw_count_is_exposed_for_auditing(self):
+        """The count and the factor ride along so the conversion can be checked against the app."""
+        zones = {1: {"open": False, "last_usage_counts": 421, "last_usage_gallons": 0.842}}
+        usage = self._first_usage(await self._setup(zones))
+        attrs = usage.extra_state_attributes
+        assert attrs["zone"] == 1
+        assert attrs["last_usage_counts"] == 421
+        assert attrs["gallons_per_count"] == 1 / 500
+
+    @pytest.mark.asyncio
+    async def test_missing_zone_record_reads_unknown(self):
+        """A zone that drops out of a later frame reads unknown rather than stale or zero."""
+        zones = {1: {"open": False, "last_usage_counts": 421, "last_usage_gallons": 0.842}}
+        usage = self._first_usage(await self._setup(zones))
+        usage.coordinator.data["sensors"]["100_200_1"]["data"]["zones"] = {}
+        assert usage.native_value is None
+        assert usage.extra_state_attributes["last_usage_counts"] is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_zones_payload_reads_unknown(self):
+        """A non-dict zones value degrades to unknown instead of raising into the state machine."""
+        zones = {1: {"open": False, "last_usage_counts": 421, "last_usage_gallons": 0.842}}
+        usage = self._first_usage(await self._setup(zones))
+        usage.coordinator.data["sensors"]["100_200_1"]["data"]["zones"] = ["not", "a", "dict"]
+        assert usage.native_value is None
+
+
+class TestWiderValveFamilyUsageEntities:
+    """The 3- and 4-zone family members get the same per-zone usage entities."""
+
+    @staticmethod
+    async def _setup(model, payload):
+        sensor_key = "100_200_1"
+        sensor_info = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=model,
+            sub_name="Valve",
+            data=decode_htv213frf_valve(payload),
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        return [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)]
+
+    @pytest.mark.asyncio
+    async def test_htv345_gets_one_usage_entity_per_zone(self):
+        """The 3-zone capture carries usage records, so all three read a value."""
+        usage = await self._setup(MODEL_VALVE_345, SAMPLE_HTV345_TLV_PAYLOAD)
+        assert len(usage) == 3
+        assert [e.native_value for e in usage] == [0.0, 0.0, 0.0]
+
+    @pytest.mark.asyncio
+    async def test_htv405_zones_read_unknown_when_the_frame_omits_usage(self):
+        """The 4-zone capture carries no usage records: four entities, all unknown.
+
+        Creating them anyway is the deliberate choice - an entity reading
+        unknown says "this zone reports no usage", where a missing entity
+        would read as "this zone was not reported at all".
+        """
+        usage = await self._setup(MODEL_VALVE_405, SAMPLE_HTV405_TLV_PAYLOAD)
+        assert len(usage) == 4
+        assert all(e.native_value is None for e in usage)
+        assert all(e.extra_state_attributes["last_usage_counts"] is None for e in usage)

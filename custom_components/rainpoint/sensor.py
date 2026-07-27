@@ -12,11 +12,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory
+from homeassistant.const import EntityCategory, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .api import _USAGE_GALLONS_PER_COUNT
 from .const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
@@ -52,6 +53,8 @@ from .const import (
     MODEL_TEMPHUM,
     MODEL_VALVE_213,
     MODEL_VALVE_245,
+    MODEL_VALVE_345,
+    MODEL_VALVE_405,
 )
 from .coordinator import RainPointCoordinator, _build_new_device_issue_url
 from .diagnostic_sensors import (
@@ -197,17 +200,33 @@ def _make_pool_plus_entities(coordinator, key, info, base_slug):
 
 
 def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
-    """Battery + signal diagnostics for the HTV213/245 valve family.
+    """Battery, signal, and per-zone water usage for the HTV213/245/345/405 valve family.
 
-    Zone control lives on the valve/number platforms; the sensor platform only
+    All four models share decode_htv213frf_valve and declare the same catalog
+    identities, differing only in port count, so they share this factory too.
+
+    Zone control lives on the valve/number platforms; the sensor platform
     surfaces the battery status word and RSSI these hubs carry in their status
-    frame. The decoder leaves battery_percent/rssi_dbm absent when the frame
-    lacks them, so the entities read unknown rather than a false value.
+    frame, plus one water-usage entity per zone the frame actually reports.
+    The decoder leaves battery_percent/rssi_dbm absent when the frame lacks
+    them, so the entities read unknown rather than a false value.
+
+    Zones come from the decoded payload rather than the model name, mirroring
+    valve.py and number.py, so a hub that reports fewer zones than its model
+    implies grows no phantom entities. A zone the frame reports but carries no
+    usage record for still gets its entity, reading unknown: the only captured
+    HTV405FRF frame omits the usage records entirely, and an entity that reads
+    unknown states that plainly, where a missing entity would look like the
+    zone itself was not reported.
     """
-    return [
+    entities = [
         RainPointBatterySensor(coordinator, key, info, base_slug),
         RainPointRSSISensor(coordinator, key, info, base_slug),
     ]
+    zones = (info.get("data") or {}).get("zones")
+    if isinstance(zones, dict):
+        entities.extend(RainPointZoneWaterUsageSensor(coordinator, key, info, base_slug, zone_num) for zone_num in sorted(zones))
+    return entities
 
 
 def _make_hcs_moisture_only_entities(coordinator, key, info, base_slug):
@@ -259,6 +278,8 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     MODEL_HCS666FRF_X: _make_hcs_multisensor_entities,
     MODEL_VALVE_213: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_245: _make_htv_valve_diagnostic_entities,
+    MODEL_VALVE_345: _make_htv_valve_diagnostic_entities,
+    MODEL_VALVE_405: _make_htv_valve_diagnostic_entities,
 }
 
 
@@ -1221,3 +1242,68 @@ class RainPointRawPayloadSensor(RainPointSensorBase):
         value = raw_status.get("value")
         _LOGGER.debug("native_value for %s (raw_payload): %s", self._sensor_key, value)
         return value
+
+
+class RainPointZoneWaterUsageSensor(RainPointSensorBase):
+    """Water used by one valve zone during its last completed run.
+
+    The value is a converted flow count, not a metered volume: the device
+    reports a raw count and the gallons-per-count factor is calibrated from a
+    single vendor-app reading (see _USAGE_GALLONS_PER_COUNT in api/decoders.py).
+    Two consequences follow, and both are deliberate.
+
+    There is no device_class. SensorDeviceClass.WATER accepts only the TOTAL
+    and TOTAL_INCREASING state classes, and this reading is neither: it is a
+    per-run value that returns to zero while the zone is running, so it would
+    corrupt any meter built on it.
+
+    _attr_state_class is None, so the reading stays out of long-term
+    statistics. A finer calibration from a longer run would rescale every past
+    value, which recorded statistics cannot retroactively absorb; recent-state
+    history and graphs are unaffected. The raw count is exposed as an
+    attribute so the conversion stays auditable against the app.
+    """
+
+    _attr_native_unit_of_measurement = UnitOfVolume.GALLONS
+    _attr_state_class = None
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:water"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+        zone_num: int,
+    ) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._zone_num = zone_num
+        sub_name = sensor_info.get("sub_name") or "Valve Hub"
+        self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_water_used"
+        self._attr_name = f"{sub_name} Zone {zone_num} Water Used"
+
+    @property
+    def _zone_data(self) -> dict | None:
+        """Return this zone's decoded record, or None when the frame omits it."""
+        data = self._sensor_data or {}
+        zones = data.get("zones")
+        if not isinstance(zones, dict):
+            return None
+        return zones.get(self._zone_num)
+
+    @property
+    def native_value(self) -> float | None:
+        zone = self._zone_data
+        if not zone:
+            return None
+        return zone.get("last_usage_gallons")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs = dict(super().extra_state_attributes)
+        zone = self._zone_data or {}
+        attrs["zone"] = self._zone_num
+        attrs["last_usage_counts"] = zone.get("last_usage_counts")
+        attrs["gallons_per_count"] = _USAGE_GALLONS_PER_COUNT
+        return attrs

@@ -13,7 +13,20 @@ SAMPLE_HTV245_ASCII_PAYLOAD = "1,-84,1;0,149,0,0,0,0|0,6,0,0,0,0"
 #   DP 0x26 type 0xAD value 0x0000 (zone 2 duration = 0s)
 SAMPLE_HTV245_TLV_PAYLOAD = "11#18dc0119d8011ad80025ad3c0026ad0000"
 
+# Real hex (11#) payload from a reporter's HTV345FRF (3-zone valve), all zones idle.
+# Records are reordered: the two leading 0x9F usage records precede the 0x17/0xE1
+# header. Unlike the HTV405FRF frame below it does carry usage records, at dp
+# 0x29/0x2A/0x2B for zones 1/2/3.
+SAMPLE_HTV345_TLV_PAYLOAD = (
+    "11#"
+    "2A9F00000000299F0000000017E1CA0019D8001AD8001BD8001D201E201F2018DC01"
+    "21B70000000022B70000000023B70000000025AD000026AD000027AD00002B9F00000000"
+    "FEFF0FEC4BCB19"
+)
+
 # Real hex (11#) payload from a reporter's HTV405FRF (4-zone valve), all zones idle.
+# This frame carries no 0x9F usage records at all, so its zones decode with usage
+# absent rather than zero.
 #   DP 0x18 type 0xDC value 0x01 (hub online)
 #   DP 0x19-0x1C type 0xD8 value 0x00 (zones 1-4 closed)
 #   DP 0x25-0x28 type 0xAD value 0x0000 (zone 1-4 durations = 0s)
