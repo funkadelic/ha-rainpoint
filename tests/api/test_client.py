@@ -1099,6 +1099,47 @@ class TestTrimCatalog:
 
         assert result["HIC801W"]["278"] == {"portNumber": 0, "dp": []}
 
+    def test_provenance_flags_are_carried_onto_the_variant_record(self):
+        """hasDistribution and friends survive the trim so a maintainer can triage
+        an unfamiliar model without re-fetching the raw vendor response.
+
+        This is what would have answered "is HCS003FRF a real product?" directly:
+        it is the only kind of record that is unpairable in the app.
+        """
+        raw = [
+            {
+                "model": "HCS003FRF",
+                "modelCode": 35,
+                "portNumber": 1,
+                "hasDistribution": False,
+                "isMainDevice": False,
+                "accessoryFlag": False,
+                "dp": [{"dpCode": 2, "identity": "CTL_SOCK", "dpDataType": "", "dpLen": 2}],
+            }
+        ]
+
+        record = trim_catalog(raw)["HCS003FRF"]["35"]
+
+        assert record["hasDistribution"] is False
+        assert record["isMainDevice"] is False
+        assert record["accessoryFlag"] is False
+
+    def test_non_boolean_provenance_flags_are_dropped(self):
+        """A vendor field that is not a bool is omitted rather than committed as junk,
+        matching how a non-integer portNumber degrades.
+        """
+        raw = [
+            {
+                "model": "HCS021FRF",
+                "hasDistribution": "yes",
+                "dp": [{"dpCode": 10, "identity": "STA_RH"}],
+            }
+        ]
+
+        record = trim_catalog(raw)["HCS021FRF"]["*"]
+
+        assert "hasDistribution" not in record
+
     def test_non_integer_port_number_degrades_to_none(self):
         """A junk model-level portNumber is dropped rather than committed."""
         raw = [{"model": "HCS021FRF", "portNumber": "four", "dp": [{"dpCode": 10, "identity": "STA_RH"}]}]

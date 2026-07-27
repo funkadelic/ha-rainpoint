@@ -62,6 +62,22 @@ _KEPT_DP_FIELDS = ("dpCode", "identity", "dpPort", "dpDataType", "dpLen")
 # integration reads, so it is dropped rather than shipped to every user.
 _KEPT_IDENTITY_PREFIXES = ("STA_", "CTL_")
 
+# Per-variant provenance flags copied straight from the vendor entry. No code
+# path decodes with them; they exist so a maintainer triaging an unfamiliar
+# model can tell what kind of catalog record it is without re-fetching the raw
+# vendor response.
+#
+# hasDistribution marks a record the app can actually pair, which is the
+# closest thing the catalog has to "this product exists." HCS003FRF is the
+# worked example: false here, absent from RainPoint's manual index and from the
+# app's add-device list, yet it carried a hand-written decoder claiming
+# moisture support for a device with no moisture datapoint.
+#
+# Read them as triage signals, not verdicts. false does not mean discontinued:
+# accessory and sub-device records (accessoryFlag true) are false too, and so
+# are several models this integration genuinely supports.
+_KEPT_PROVENANCE_FIELDS = ("hasDistribution", "isMainDevice", "accessoryFlag")
+
 # Bucket key for vendor entries carrying no modelCode. Duplicated from
 # custom_components/rainpoint/api/product_catalog.py rather than imported,
 # because this script is standalone and only puts the component on sys.path
@@ -76,7 +92,8 @@ def trim_catalog(raw: list[dict]) -> dict:
     entry per vendor model, each carrying a "model" name, an optional
     "modelCode", a model-level "portNumber", and a "dp" list of per-datapoint
     metadata dicts. Returns an object keyed by model string then by modelCode,
-    whose values are {"portNumber": ..., "dp": [...]} records. RainPoint-prefixed
+    whose values are {"portNumber": ..., "dp": [...]} records carrying whichever
+    of _KEPT_PROVENANCE_FIELDS the vendor supplied as booleans. RainPoint-prefixed
     models keep only their STA_/CTL_ dp entries, trimmed to _KEPT_DP_FIELDS;
     every other model, and every other identity namespace, is dropped.
 
@@ -97,6 +114,7 @@ def trim_catalog(raw: list[dict]) -> dict:
         port_number = entry.get("portNumber")
         trimmed.setdefault(model, {})[variant] = {
             "portNumber": port_number if isinstance(port_number, int) and not isinstance(port_number, bool) else None,
+            **{field: entry[field] for field in _KEPT_PROVENANCE_FIELDS if isinstance(entry.get(field), bool)},
             # Sort by dpCode so re-running against an unchanged vendor catalog
             # is deterministic, even if the vendor API does not guarantee a
             # stable dp array order across calls. Entries missing dpCode sort
