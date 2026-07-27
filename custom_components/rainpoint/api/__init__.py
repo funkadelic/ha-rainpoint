@@ -6,6 +6,7 @@ This module provides a clean, organized interface to the RainPoint API functiona
 
 from .client import RainPointApiError, RainPointClient, RainPointThrottledError
 from .decoders import (
+    _USAGE_GALLONS_PER_COUNT,
     decode_co2,
     decode_display,
     decode_flow_meter,
@@ -66,6 +67,8 @@ from .validators import (
 )
 
 __all__ = [
+    # Decoder constants
+    "_USAGE_GALLONS_PER_COUNT",
     # Client
     "RainPointApiError",
     "RainPointClient",

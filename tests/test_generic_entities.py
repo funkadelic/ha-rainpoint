@@ -15,8 +15,8 @@ from custom_components.rainpoint.const import (
     GENERIC_UNIQUE_ID_MARKER,
     HAND_WRITTEN_MODELS,
     MODEL_MOISTURE_SIMPLE,
+    MODEL_VALVE_145,
     MODEL_VALVE_245,
-    MODEL_VALVE_405,
 )
 from custom_components.rainpoint.generic_entities import (
     _IDENTITY_SPECS,
@@ -151,11 +151,17 @@ class TestBuildGenericEntitiesGate:
         return coordinator
 
     def test_hand_written_model_yields_nothing_even_when_catalog_is_curated(self, monkeypatch):
-        """A hand-written valve model absent from _MODEL_FACTORIES still yields zero generic sensors."""
-        assert MODEL_VALVE_405 not in _MODEL_FACTORIES
+        """A hand-written valve model absent from _MODEL_FACTORIES still yields zero generic sensors.
+
+        HTV145FRF is the stand-in for that shape: it has a hand-written
+        decoder and gets its entities from the valve and number platforms, so
+        it never appears in the sensor factory map. The trust check, not the
+        map, is what keeps it out of the generic path.
+        """
+        assert MODEL_VALVE_145 not in _MODEL_FACTORIES
         dp_entries = [_dp("STA_TEM", dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
-        sensor_info = make_sensor_entry(model=MODEL_VALVE_405, data=_unknown_data(model=MODEL_VALVE_405))
+        sensor_info = make_sensor_entry(model=MODEL_VALVE_145, data=_unknown_data(model=MODEL_VALVE_145))
         coordinator = self._coordinator_for("100_200_1", sensor_info)
 
         assert build_generic_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []

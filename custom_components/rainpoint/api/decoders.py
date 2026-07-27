@@ -7,6 +7,7 @@ RainPoint device types.
 
 import logging
 import re
+from datetime import datetime
 
 from .utils import _base_decoder_dict, _f10_to_c, _le16, _parse_rainpoint_payload, _parse_tlv_payload
 from .validators import (
@@ -23,6 +24,31 @@ _LOGGER = logging.getLogger(__name__)
 # Type byte → value byte count for HTV213FRF/HTV245FRF.
 # Subset of types relevant to these models; see _TYPE_WIDTHS in utils.py for the full set.
 _HTV213_TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
+
+# dp_id block bases for the HTV213FRF/HTV245FRF family. Each per-zone reading
+# owns a block of consecutive dp_ids, so zone N is <base> + N: state 0x19..,
+# event time 0x21.., duration 0x25.., usage 0x29.. on a 2-zone hub. The blocks
+# are four wide, so a fifth zone's dp_id would land on the next block's first
+# record; the type-byte check on every read below is what keeps that from being
+# misread as the zone's own value rather than an assumption that it cannot
+# happen.
+_HTV213_DP_BASE_STATE = 0x18
+_HTV213_DP_BASE_EVENT_TIME = 0x20
+_HTV213_DP_BASE_DURATION = 0x24
+_HTV213_DP_BASE_USAGE = 0x28
+
+# Gallons per raw usage count. Calibrated against a single maintainer reading:
+# a run the frame reported as 421 counts showed as 0.8 gal in the vendor app,
+# which fits a 500-count-per-gallon flow sensor to well inside the one decimal
+# the app displays. Two other candidate factors (1/512 gal, 7.5 mL) also round
+# to that same 0.8, so the raw count is preserved next to the converted value:
+# a finer calibration from a larger run can be applied later without
+# re-capturing anything, and without invalidating stored history, since the
+# usage entity deliberately stays out of long-term statistics.
+_USAGE_GALLONS_PER_COUNT = 1 / 500
+
+# Year offset for the packed timestamps carried by the 4-byte 0xB7 records.
+_TIMESTAMP_YEAR_BASE = 2020
 
 # Type byte → value byte count for the HTV145FRF single-outlet timer.
 # Unlike HTV213FRF (11# dp_id/type/value stream), this model ships a 10#-prefixed
@@ -216,8 +242,9 @@ def _scan_htv213_dp_map(b: bytes) -> dict[int, tuple[int, int]]:
     Unknown type bytes cause a 1-byte advance so parsing can re-align on the
     next potential DP record. A misaligned multi-byte-value skip can still
     bypass trailing records; re-alignment is best-effort only. Duplicate
-    dp_ids are last-write-wins (intentional, not an oversight). Endianness
-    depends on type (0xAD=LE, others=BE).
+    dp_ids are last-write-wins (intentional, not an oversight). Every
+    multi-byte value is little-endian; see _parse_tlv_payload in utils.py for
+    why that is now unconditional.
     """
     dp_map: dict[int, tuple[int, int]] = {}
     i = 0
@@ -243,8 +270,7 @@ def _scan_htv213_dp_map(b: bytes) -> dict[int, tuple[int, int]]:
             i += 1
         else:
             val_bytes = b[i + 2 : i + 2 + val_len]
-            endian = "little" if type_byte == 0xAD else "big"
-            dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, endian))
+            dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, "little"))
             i += 2 + val_len
     return dp_map
 
@@ -283,17 +309,52 @@ def _extract_htv213_hub_state(dp_map: dict[int, tuple[int, int]], raw: str) -> t
     return hub_state_raw == 0x01, hub_state_raw
 
 
+def _decode_packed_timestamp(value: int) -> str | None:
+    """Decode a packed wall-clock stamp into an ISO string, or None if unusable.
+
+    The 4-byte 0xB7 records hold a little-endian word whose bit fields are,
+    from the top: year (offset from 2020), month, day, hour, minute, second.
+    Two independent captures confirm the layout - one frame's trailing stamp
+    decodes to the day that capture was taken, and a mid-run frame's zone
+    event time is exactly that frame's report time plus the zone's remaining
+    duration.
+
+    The stamp carries no timezone and the device appears to report local wall
+    time, so the returned string is deliberately naive: labelling it UTC would
+    shift every reading by the viewer's offset. A zero value means "no event"
+    and yields None, as does any word whose fields do not form a real date.
+    """
+    if not value:
+        return None
+    year = _TIMESTAMP_YEAR_BASE + ((value >> 26) & 0x3F)
+    month = (value >> 22) & 0x0F
+    day = (value >> 17) & 0x1F
+    hour = (value >> 12) & 0x1F
+    minute = (value >> 6) & 0x3F
+    second = value & 0x3F
+    try:
+        return datetime(year, month, day, hour, minute, second).isoformat()
+    except ValueError:
+        _LOGGER.debug("HTV213FRF: packed timestamp 0x%08X is not a valid date", value)
+        return None
+
+
 def _extract_htv213_zones(dp_map: dict[int, tuple[int, int]]) -> dict[int, dict]:
-    """Pull per-zone open state and duration from the dp_map.
+    """Pull per-zone open state, duration, event time, and water usage from the dp_map.
 
     Zone states are DP 0x18+N with type 0xD8 only; other types on zone-range
     IDs are schedule/timer fields, not zone states. Zone durations are DP
-    0x24+N with type 0xAD (2-byte little-endian seconds).
+    0x24+N with type 0xAD (2-byte seconds), event times are DP 0x20+N with
+    type 0xB7 (4-byte packed stamp), and water usage is DP 0x28+N with type
+    0x9F (4-byte raw count).
+
+    Every one of those reads is guarded on its own type byte, so a record that
+    is absent, or that belongs to a neighbouring dp_id block, leaves the field
+    empty instead of contributing a plausible wrong number.
     """
     zones: dict[int, dict] = {}
     for zone_num in range(1, 9):
-        state_dp = 0x18 + zone_num
-        dur_dp = 0x24 + zone_num
+        state_dp = _HTV213_DP_BASE_STATE + zone_num
         if state_dp not in dp_map:
             continue
         state_type, state_val = dp_map[state_dp]
@@ -303,21 +364,49 @@ def _extract_htv213_zones(dp_map: dict[int, tuple[int, int]]) -> dict[int, dict]
         # at this DP (or a missing DP) defaults to 0 rather than misinterpreting a
         # differently-typed value as seconds.
         duration_seconds = 0
-        dur_entry = dp_map.get(dur_dp)
+        dur_entry = dp_map.get(_HTV213_DP_BASE_DURATION + zone_num)
         if dur_entry is not None and dur_entry[0] == 0xAD:
             duration_seconds = dur_entry[1]
+
+        # On every frame captured so far this is the moment the zone's current
+        # run ends (the frame's own report time plus the duration above), and
+        # it reads zero for an idle zone. It is named for the vendor's own
+        # STA_EVTIME identity rather than for that observed meaning, so a
+        # firmware that later populates it while idle does not make the name a
+        # lie.
+        event_time = None
+        event_entry = dp_map.get(_HTV213_DP_BASE_EVENT_TIME + zone_num)
+        if event_entry is not None and event_entry[0] == 0xB7:
+            event_time = _decode_packed_timestamp(event_entry[1])
+
+        # Raw flow count for the zone's last completed run; it reads zero
+        # while that zone is running. None (rather than 0) when the frame
+        # carries no usable record, so "not reported" stays distinguishable
+        # from "reported as none used".
+        usage_counts = None
+        usage_gallons = None
+        usage_entry = dp_map.get(_HTV213_DP_BASE_USAGE + zone_num)
+        if usage_entry is not None and usage_entry[0] == 0x9F:
+            usage_counts = usage_entry[1]
+            usage_gallons = round(usage_counts * _USAGE_GALLONS_PER_COUNT, 3)
+
         is_open = bool(state_val & 0x01)  # LSB: 1=open, 0=closed (device uses 0x21/0x20, not 0x01/0x00)
         zones[zone_num] = {
             "open": is_open,
             "duration_seconds": duration_seconds,
             "state_raw": state_val,
+            "event_time": event_time,
+            "last_usage_counts": usage_counts,
+            "last_usage_gallons": usage_gallons,
         }
         _LOGGER.info(
-            "HTV213FRF Zone %d: open=%s duration=%ds state_raw=0x%02X",
+            "HTV213FRF Zone %d: open=%s duration=%ds state_raw=0x%02X event_time=%s usage=%s counts",
             zone_num,
             is_open,
             duration_seconds,
             state_val,
+            event_time,
+            usage_counts,
         )
     return zones
 
@@ -377,8 +466,8 @@ def _decode_htv213frf_hex(raw: str) -> dict:
 def _scan_htv145_markers(b: bytes) -> dict[int, int]:
     """Scan the HTV145FRF [type_byte][value...] stream into {type_byte: value_int}.
 
-    Value width comes from _HTV145_TYPE_WIDTHS; the 0xAD duration value is
-    little-endian, all others big-endian. Parsing stops at the first 0xFF byte
+    Value width comes from _HTV145_TYPE_WIDTHS; every multi-byte value is
+    little-endian, as in the other framings. Parsing stops at the first 0xFF byte
     (stream terminator followed by a trailing device timestamp). Unknown type
     bytes advance 1 byte to attempt re-alignment. Duplicate type bytes are
     last-write-wins; the single-outlet payload carries one of each.
@@ -406,8 +495,7 @@ def _scan_htv145_markers(b: bytes) -> dict[int, int]:
             )
             break
         val_bytes = b[i + 1 : i + 1 + width]
-        endian = "little" if type_byte == 0xAD else "big"
-        markers[type_byte] = int.from_bytes(val_bytes, endian)
+        markers[type_byte] = int.from_bytes(val_bytes, "little")
         i += 1 + width
     return markers
 

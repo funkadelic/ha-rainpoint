@@ -73,9 +73,14 @@ def _parse_tlv_payload(raw: str) -> dict:
             break
 
         raw_bytes = bytes(b[i + 2 : i + 2 + width])
-        # Duration DPs (0xAD type) are little-endian; all others big-endian
-        endian = "little" if type_byte == 0xAD else "big"
-        value_int = int.from_bytes(raw_bytes, endian)
+        # Every multi-byte value in this framing is little-endian. The rule
+        # used to single out the 0xAD duration DP, which was the only
+        # multi-byte value any decoder read at the time; the wider set now
+        # decoded from captured frames (0x9F usage counts, 0xB7 packed
+        # timestamps, and the 0xE1 header whose low byte is the signed RSSI)
+        # is little-endian too, and no captured record reads correctly as
+        # big-endian.
+        value_int = int.from_bytes(raw_bytes, "little")
         tlv[dp_id] = (type_byte, value_int, raw_bytes)
         i += 2 + width
 
