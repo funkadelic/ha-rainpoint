@@ -1173,6 +1173,55 @@ class TestTrimCatalog:
         assert refresh_product_catalog.UNCODED_VARIANT == product_catalog.UNCODED_VARIANT
 
 
+class TestRefreshScriptDrift:
+    """Tests for the --check drift report.
+
+    Reporting every model as changed whenever the trim starts keeping a new
+    record key would drown the one thing --check exists to surface: a vendor
+    datapoint that actually moved.
+    """
+
+    def test_provenance_only_changes_are_reported_separately(self, capsys):
+        """A snapshot that only gains vendor metadata is called out as such."""
+        committed = {"HTV245FRF": {"303": {"portNumber": 2, "dp": [{"dpCode": 1}]}}}
+        fresh = {"HTV245FRF": {"303": {"portNumber": 2, "hasDistribution": True, "dp": [{"dpCode": 1}]}}}
+
+        assert refresh_product_catalog._print_drift(committed, fresh) is True
+        out = capsys.readouterr().out
+        assert "changed only in vendor metadata (1): HTV245FRF" in out
+        assert "changed datapoints or ports" not in out
+
+    def test_datapoint_drift_is_reported_with_the_fields_that_moved(self, capsys):
+        """Real drift names the keys, so metadata noise never hides it."""
+        committed = {"HTV245FRF": {"303": {"portNumber": 2, "dp": [{"dpCode": 1}]}}}
+        fresh = {"HTV245FRF": {"303": {"portNumber": 4, "hasDistribution": True, "dp": [{"dpCode": 1}, {"dpCode": 2}]}}}
+
+        assert refresh_product_catalog._print_drift(committed, fresh) is True
+        out = capsys.readouterr().out
+        assert "HTV245FRF (dp, hasDistribution, portNumber)" in out
+        assert "changed only in vendor metadata" not in out
+
+    def test_a_variant_present_on_one_side_only_counts_as_drift(self, capsys):
+        """An added modelCode must not report as a change with no fields."""
+        committed = {"HIC801W": {"278": {"portNumber": 0, "dp": []}}}
+        fresh = {
+            "HIC801W": {
+                "278": {"portNumber": 0, "dp": []},
+                "279": {"portNumber": 8, "dp": [{"dpCode": 7}]},
+            }
+        }
+
+        assert refresh_product_catalog._print_drift(committed, fresh) is True
+        assert "HIC801W (dp, portNumber)" in capsys.readouterr().out
+
+    def test_identical_catalogs_report_no_drift(self, capsys):
+        """The clean path still says so and returns False."""
+        catalog = {"HTV245FRF": {"303": {"portNumber": 2, "dp": []}}}
+
+        assert refresh_product_catalog._print_drift(catalog, dict(catalog)) is False
+        assert "No drift" in capsys.readouterr().out
+
+
 class TestRefreshScriptMain:
     """Tests for scripts/refresh_product_catalog.py::main safety guards.
 

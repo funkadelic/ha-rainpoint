@@ -160,14 +160,39 @@ def _load_committed_catalog(path: Path) -> dict:
         return json.load(handle)
 
 
+def _changed_fields(committed_variants: dict, fresh_variants: dict) -> set[str]:
+    """Return the record keys that differ between two models' variant maps.
+
+    Variants present on only one side count as a difference in every key that
+    side declares, so an added or dropped modelCode is never reported as an
+    empty change.
+    """
+    fields: set[str] = set()
+    for variant in set(committed_variants) | set(fresh_variants):
+        before = committed_variants.get(variant) or {}
+        after = fresh_variants.get(variant) or {}
+        fields |= {key for key in set(before) | set(after) if before.get(key) != after.get(key)}
+    return fields
+
+
 def _print_drift(committed: dict, fresh: dict) -> bool:
-    """Print a human-readable drift summary. Returns True if any drift was found."""
+    """Print a human-readable drift summary. Returns True if any drift was found.
+
+    Changed models are split by what actually moved. A snapshot regenerated
+    after the trim starts keeping a new record key would otherwise report every
+    model as changed with no way to tell that from real vendor drift, which is
+    the difference between "commit this" and "read this carefully."
+    """
     committed_models = set(committed)
     fresh_models = set(fresh)
 
     added = sorted(fresh_models - committed_models)
     removed = sorted(committed_models - fresh_models)
-    changed = sorted(model for model in committed_models & fresh_models if committed[model] != fresh[model])
+    changed = {
+        model: _changed_fields(committed[model], fresh[model])
+        for model in sorted(committed_models & fresh_models)
+        if committed[model] != fresh[model]
+    }
 
     if not added and not removed and not changed:
         print("No drift: the committed catalog matches a fresh pull.")
@@ -177,8 +202,14 @@ def _print_drift(committed: dict, fresh: dict) -> bool:
         print(f"Models added upstream ({len(added)}): {', '.join(added)}")
     if removed:
         print(f"Models removed upstream ({len(removed)}): {', '.join(removed)}")
-    if changed:
-        print(f"Models with changed dp entries ({len(changed)}): {', '.join(changed)}")
+
+    substantive = sorted(model for model, fields in changed.items() if fields - set(_KEPT_PROVENANCE_FIELDS))
+    metadata_only = sorted(model for model, fields in changed.items() if not fields - set(_KEPT_PROVENANCE_FIELDS))
+    if substantive:
+        detail = ", ".join(f"{model} ({', '.join(sorted(changed[model]))})" for model in substantive)
+        print(f"Models with changed datapoints or ports ({len(substantive)}): {detail}")
+    if metadata_only:
+        print(f"Models changed only in vendor metadata ({len(metadata_only)}): {', '.join(metadata_only)}")
     return True
 
 
