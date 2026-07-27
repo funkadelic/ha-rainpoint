@@ -182,28 +182,11 @@ MODEL_DISPLAY_HUB = MODEL_HWS019WRF_V2
 
 # Moisture-only sensors
 MODEL_HCS005FRF = "HCS005FRF"  # Moisture-only sensor
-MODEL_HCS003FRF = "HCS003FRF"  # Moisture-only sensor
 
 # Multi-sensors (temp + moisture + lux)
 MODEL_HCS024FRF_V1 = "HCS024FRF-V1"  # Multi-sensor (temp+moisture+lux)
-MODEL_HCS044FRF = "HCS044FRF"  # Multi-sensor device
-MODEL_HCS666FRF = "HCS666FRF"  # Sensor variant (similar to HCS021FRF)
-MODEL_HCS666RFR_P = "HCS666RFR-P"  # Sensor variant with plus features
-MODEL_HCS999FRF = "HCS999FRF"  # Advanced sensor variant
-MODEL_HCS999FRF_P = "HCS999FRF-P"  # Advanced sensor variant with plus features
-MODEL_HCS666FRF_X = "HCS666FRF-X"  # Extended sensor variant
 
 # Temperature/Humidity sensors
-MODEL_HCS027ARF = "HCS027ARF"  # Temperature/humidity sensor
-MODEL_HCS016ARF = "HCS016ARF"  # Temperature/humidity sensor
-MODEL_HCS701B = "HCS701B"  # Wall-mounted sensor
-MODEL_HCS596WB = "HCS596WB"  # Weather station base
-MODEL_HCS596WB_V4 = "HCS596WB-V4"  # Weather station base v4
-MODEL_HCS706ARF = "HCS706ARF"  # Environmental sensor
-MODEL_HCS802ARF = "HCS802ARF"  # Environmental sensor
-MODEL_HCS048B = "HCS048B"  # Compact sensor device
-MODEL_HCS888ARF_V1 = "HCS888ARF-V1"  # Multi-function sensor v1
-MODEL_HCS0600ARF = "HCS0600ARF"  # Advanced environmental sensor
 
 # Pool temperature sensors
 MODEL_HCS015ARF = "HCS015ARF"  # Pool temperature sensor
@@ -263,26 +246,9 @@ HAND_WRITTEN_MODELS: frozenset[str] = frozenset(
         MODEL_VALVE_345,
         MODEL_VALVE_405,
         MODEL_HCS005FRF,
-        MODEL_HCS003FRF,
         MODEL_HCS024FRF_V1,
         MODEL_HCS015ARF,
         MODEL_HCS0528ARF,
-        MODEL_HCS027ARF,
-        MODEL_HCS016ARF,
-        MODEL_HCS044FRF,
-        MODEL_HCS666FRF,
-        MODEL_HCS666RFR_P,
-        MODEL_HCS999FRF,
-        MODEL_HCS999FRF_P,
-        MODEL_HCS666FRF_X,
-        MODEL_HCS701B,
-        MODEL_HCS596WB,
-        MODEL_HCS596WB_V4,
-        MODEL_HCS706ARF,
-        MODEL_HCS802ARF,
-        MODEL_HCS048B,
-        MODEL_HCS888ARF_V1,
-        MODEL_HCS0600ARF,
         MODEL_DISPLAY_HUB,
     }
 )

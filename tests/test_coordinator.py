@@ -977,6 +977,38 @@ class TestDecoderRegistry:
         missing = required - DECODER_REGISTRY.keys()
         assert not missing, f"DECODER_REGISTRY missing required models: {missing}"
 
+    def test_no_registered_decoder_delegates_to_decode_unknown(self):
+        """A registered model is a claim of real support, so no decoder may be a
+        passthrough to decode_unknown.
+
+        Registering a stub is worse than registering nothing: the model lands in
+        HAND_WRITTEN_MODELS, which makes is_hand_written_model keep it out of both
+        generic paths, so its owner gets neither a real decode nor the opt-in
+        catalog-driven one. Unregistered models already fall through to the
+        unknown-model notification with the pre-filled report link.
+        """
+        import ast
+        from pathlib import Path
+
+        source = Path(_coord_module.__file__).parent / "api" / "decoders.py"
+        tree = ast.parse(source.read_text())
+        passthrough = set()
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            body = [n for n in node.body if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))]
+            if (
+                len(body) == 1
+                and isinstance(body[0], ast.Return)
+                and isinstance(body[0].value, ast.Call)
+                and isinstance(body[0].value.func, ast.Name)
+                and body[0].value.func.id == "decode_unknown"
+            ):
+                passthrough.add(node.name)
+
+        offenders = {model: fn.__name__ for model, fn in DECODER_REGISTRY.items() if fn.__name__ in passthrough}
+        assert not offenders, f"registered models decode nothing: {offenders}"
+
     def test_valve_113_dispatches_through_registry_to_htv145_decoder(self):
         """HTV113FRF is decoded by reusing the HTV145FRF decoder. Assert the wiring
         via the registry/dispatch path, not by calling decode_htv145frf directly, so
