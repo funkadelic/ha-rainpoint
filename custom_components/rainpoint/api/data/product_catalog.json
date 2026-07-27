@@ -1,12 +1,16 @@
 {
   "HCS003ARF-V1": {
     "285": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS003FRF": {
     "35": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 2,
@@ -37,11 +41,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS005FRF": {
     "71": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -72,11 +79,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS008FRF": {
     "80": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 14,
@@ -156,11 +166,14 @@
           "identity": "STA_OTHER_TOTAL"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS012ARF": {
     "87": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 13,
@@ -205,11 +218,14 @@
           "identity": "STA_7DAY_RAIN"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS014ARF": {
     "262": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -240,11 +256,14 @@
           "identity": "STA_BAT"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS015ARF": {
     "263": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -275,11 +294,14 @@
           "identity": "STA_BAT"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS015ARF+": {
     "305": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -317,11 +339,14 @@
           "identity": "STA_BAT"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 2
     }
   },
   "HCS016ARF": {
     "91": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 2,
@@ -345,11 +370,14 @@
           "identity": "STA_BAT"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS021FRF": {
     "72": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -387,11 +415,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS024FRF": {
     "295": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 10,
@@ -415,11 +446,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS026FRF": {
     "317": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 10,
@@ -450,17 +484,23 @@
           "identity": "STA_REPTIME"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS027ARF": {
     "90": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS030FRF": {
     "277": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 14,
@@ -540,11 +580,14 @@
           "identity": "STA_OTHER_TOTAL"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS044FRF": {
     "342": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -589,11 +632,14 @@
           "identity": "STA_REPTIME"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS048B": {
     "283": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -694,11 +740,14 @@
           "identity": "STA_OTHER_TOTAL2"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS0528ARF": {
     "268": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -722,11 +771,14 @@
           "identity": "STA_BAT"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS0530THO": {
     "89": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -764,11 +816,14 @@
           "identity": "STA_BAT"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS596WB": {
     "328": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -827,11 +882,14 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HCS596WB-V4": {
     "371": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -890,11 +948,14 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 1
     }
   },
   "HCS666FRF-X": {
     "86": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -925,11 +986,14 @@
           "identity": "STA_BAT"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS701B": {
     "326": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -981,11 +1045,14 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS702B": {
     "327": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -1037,11 +1104,14 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS702B-V1": {
     "341": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -1093,11 +1163,14 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS706ARF": {
     "335": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -1121,11 +1194,14 @@
           "identity": "STA_BAT"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS802ARF": {
     "325": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -1156,11 +1232,14 @@
           "identity": "STA_BAT"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HCS888ARF-V1": {
     "275": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -1198,15 +1277,21 @@
           "identity": "STA_REPTIME"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HIC1200W": {
     "350": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 0
     },
     "355": {
+      "accessoryFlag": true,
       "dp": [
         {
           "dpCode": 1,
@@ -1314,15 +1399,21 @@
           "identity": "STA_REPTIME"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 12
     }
   },
   "HIC1204W": {
     "352": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     },
     "357": {
+      "accessoryFlag": true,
       "dp": [
         {
           "dpCode": 1,
@@ -1423,15 +1514,21 @@
           "identity": "STA_REPTIME"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 4
     }
   },
   "HIC1208W": {
     "351": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 0
     },
     "356": {
+      "accessoryFlag": true,
       "dp": [
         {
           "dpCode": 1,
@@ -1532,29 +1629,41 @@
           "identity": "STA_REPTIME"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 8
     }
   },
   "HIC1604W": {
     "372": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HIC1608W": {
     "373": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HIC1612W": {
     "374": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HIC406B": {
     "40": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -1634,15 +1743,21 @@
           "identity": "STA_TS_DET"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 4
     }
   },
   "HIC801W": {
     "278": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 0
     },
     "279": {
+      "accessoryFlag": true,
       "dp": [
         {
           "dpCode": 1,
@@ -1708,15 +1823,21 @@
           "identity": "STA_TS_DET"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 8
     }
   },
   "HIC819W-4": {
     "298": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     },
     "300": {
+      "accessoryFlag": true,
       "dp": [
         {
           "dpCode": 1,
@@ -1789,15 +1910,21 @@
           "identity": "STA_REPTIME"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 4
     }
   },
   "HIC819W-6": {
     "297": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     },
     "299": {
+      "accessoryFlag": true,
       "dp": [
         {
           "dpCode": 1,
@@ -1870,17 +1997,23 @@
           "identity": "STA_REPTIME"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 6
     }
   },
   "HIC819W-8": {
     "296": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HTV0535FRF": {
     "269": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -1939,11 +2072,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV0537FRF": {
     "270": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -2037,11 +2173,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 2
     }
   },
   "HTV0540FRF": {
     "271": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -2177,11 +2316,14 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 3
     }
   },
   "HTV0542FRF": {
     "272": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -2352,11 +2494,14 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 4
     }
   },
   "HTV102B": {
     "319": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -2436,11 +2581,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV103FRF": {
     "31": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -2506,11 +2654,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV107B": {
     "291": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -2590,11 +2741,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV107FRF": {
     "276": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -2660,11 +2814,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV113FRF": {
     "259": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -2744,11 +2901,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV113FRF-V4": {
     "301": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -2800,11 +2960,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV124B": {
     "39": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -2884,11 +3047,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV124FRF": {
     "286": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -2954,11 +3120,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV124LT": {
     "318": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -3038,11 +3207,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HTV143WRFE": {
     "311": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -3122,11 +3294,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 1
     }
   },
   "HTV145FRF": {
     "302": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -3206,11 +3381,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV157B": {
     "343": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -3290,11 +3468,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HTV203FRF": {
     "32": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -3402,11 +3583,14 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 2
     }
   },
   "HTV210B": {
     "41": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -3535,11 +3719,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 2
     }
   },
   "HTV213FRF": {
     "261": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -3668,11 +3855,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 2
     }
   },
   "HTV214FRF": {
     "288": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -3787,11 +3977,14 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 2
     }
   },
   "HTV224B": {
     "292": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -3920,11 +4113,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 2
     }
   },
   "HTV245FRF": {
     "303": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -4053,11 +4249,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 2
     }
   },
   "HTV345FRF": {
     "37": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -4242,11 +4441,14 @@
           "identity": "STA_REPTIME"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 3
     }
   },
   "HTV405FRF": {
     "38": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -4445,11 +4647,14 @@
           "identity": "STA_EVTIME2"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 4
     }
   },
   "HTV445FRF": {
     "360": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 1,
@@ -4683,21 +4888,30 @@
           "identity": "STA_REPTIME"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": false,
       "portNumber": 4
     }
   },
   "HWG004WBRF-V2": {
     "290": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 1
     }
   },
   "HWG004WRF": {
     "267": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 0
     },
     "34": {
+      "accessoryFlag": true,
       "dp": [
         {
           "dpCode": 2,
@@ -4728,99 +4942,147 @@
           "identity": "STA_RSSI"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HWG007WRF": {
     "260": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWG009WB": {
     "280": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWG023WBRF-V2": {
     "289": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWG023WRF": {
     "273": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWG023WRF-V6": {
     "332": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWG023WRF-V8": {
     "369": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWG040WLBRF": {
     "307": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWG043WB": {
     "338": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWG0538WRF": {
     "256": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWS019WRF-V2": {
     "78": {
+      "accessoryFlag": true,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HWS388WRF-V13": {
     "258": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWS388WRF-V7": {
     "257": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 0
     },
     "85": {
+      "accessoryFlag": true,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": false,
       "portNumber": 1
     }
   },
   "HWS397WRF-V12": {
     "274": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWS397WRF-V8": {
     "265": {
+      "accessoryFlag": false,
       "dp": [],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 0
     }
   },
   "HWS578WRF": {
     "330": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 9,
@@ -4956,11 +5218,14 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": false,
+      "isMainDevice": true,
       "portNumber": 4
     }
   },
   "HWS616WB-V1": {
     "334": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -5019,11 +5284,14 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 1
     }
   },
   "HWS616WB-V2": {
     "384": {
+      "accessoryFlag": false,
       "dp": [
         {
           "dpCode": 0,
@@ -5082,6 +5350,8 @@
           "identity": "STA_RSRP"
         }
       ],
+      "hasDistribution": true,
+      "isMainDevice": true,
       "portNumber": 1
     }
   }
