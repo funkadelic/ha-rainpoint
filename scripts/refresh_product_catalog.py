@@ -270,13 +270,22 @@ async def _fetch_trimmed_catalog(email: str, password: str, area_code: str, time
     the component on sys.path until it is about to fetch. That keeps
     trim_catalog importable on its own for tests.
 
-    The session carries an explicit timeout because the component's client sets
-    none, so a bare session would inherit aiohttp's five-minute default. The
+    The fetch carries two deadlines because they bound different things. The
+    session timeout caps a single request, since the component's client sets
+    none and a bare session would inherit aiohttp's five-minute default. The
     catalog is around half a megabyte and normally arrives in under a second;
     five silent minutes reads as a wedged process and gets killed by hand long
-    before it would ever fail on its own. The progress lines exist for the same
-    reason: without them, login, fetch, and diff are indistinguishable from a
-    hang. Both go to stderr so --check output stays pipeable.
+    before it would ever fail on its own.
+
+    That cap alone is not what --timeout promises. get_product_catalog issues
+    two requests, the login and the catalog GET, and a per-request budget lets
+    each of them spend the full value, so a slow login plus a slow fetch runs
+    past the stated limit and then reports the wrong number. The outer wait_for
+    makes --timeout the end-to-end deadline its help text describes.
+
+    The progress lines exist for the same reason as the deadlines: without
+    them, login, fetch, and diff are indistinguishable from a hang. Both go to
+    stderr so --check output stays pipeable.
     """
     import aiohttp
 
@@ -287,11 +296,11 @@ async def _fetch_trimmed_catalog(email: str, password: str, area_code: str, time
     async with aiohttp.ClientSession(timeout=timeout) as session:
         client = RainPointClient(area_code, email, password, session)
         try:
-            raw = await client.get_product_catalog()
+            raw = await asyncio.wait_for(client.get_product_catalog(), timeout_seconds)
         except TimeoutError:
             print(
-                f"Timed out after {timeout_seconds:g}s. The vendor endpoint accepted the request but did not "
-                f"finish responding; retry, or raise the limit with --timeout.",
+                f"Timed out after {timeout_seconds:g}s. Login or the catalog fetch did not finish in that "
+                f"budget; retry, or raise the limit with --timeout.",
                 file=sys.stderr,
             )
             raise

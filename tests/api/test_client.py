@@ -1347,6 +1347,30 @@ class TestRefreshScriptMain:
         refresh_product_catalog.main(["--check", "--timeout", "5"])
         assert captured["timeout_seconds"] == 5.0
 
+    def test_timeout_bounds_the_whole_fetch_not_each_request(self, monkeypatch, capsys):
+        """--timeout is an end-to-end deadline, not a per-request one.
+
+        get_product_catalog logs in and then fetches, so the session's
+        per-request cap would let a slow login and a slow fetch together run
+        well past the stated limit. The stub never returns, so only an outer
+        deadline can end this.
+        """
+        import custom_components.rainpoint.api.client as client_module
+
+        class _StalledClient:
+            def __init__(self, area_code, email, password, session):
+                pass
+
+            async def get_product_catalog(self):
+                await asyncio.sleep(30)
+                raise AssertionError("the outer deadline never fired")
+
+        monkeypatch.setattr(client_module, "RainPointClient", _StalledClient)
+
+        with pytest.raises(TimeoutError):
+            asyncio.run(refresh_product_catalog._fetch_trimmed_catalog("user@example.com", "secret", "1", 0.05))
+        assert "Timed out after 0.05s" in capsys.readouterr().err
+
     def test_check_reports_drift_on_a_non_empty_pull(self, monkeypatch):
         """A non-empty pull still routes through the normal drift report."""
         self._stub_credentials(monkeypatch)
