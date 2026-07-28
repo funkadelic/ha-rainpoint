@@ -18,18 +18,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python 3.13
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      # Pinned to a commit SHA rather than a tag: this job feeds RAINPOINT_*
-      # secrets to a later step, and a tag can be repointed. Dependabot bumps
-      # the pin from the trailing version comment.
       - name: Set up uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
@@ -74,7 +71,7 @@ jobs:
 
       - name: Upload regenerated catalog
         if: steps.creds.outputs.skip == 'false' && inputs.regenerate
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: product-catalog
           path: custom_components/rainpoint/api/data/product_catalog.json

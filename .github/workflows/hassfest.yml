@@ -12,7 +12,7 @@ jobs:
   validate:
     runs-on: "ubuntu-latest"
     steps:
-      - uses: "actions/checkout@v7"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Pinned to a commit rather than @master so a repointed branch cannot
       # change what runs here. Upstream's only tag is 1.0.0 from 2020, 157
       # commits behind master, so there is no usable release to track and
