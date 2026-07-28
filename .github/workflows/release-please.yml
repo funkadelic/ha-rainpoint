@@ -18,6 +18,15 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          # Without these the token inherits every grant the app installation
+          # holds. These two are what this workflow actually uses: contents for
+          # the version-bump commit, the tag, the release, and the asset
+          # upload; pull-requests for the release PR and its labels. Requesting
+          # a permission the installation lacks fails the token request, so a
+          # release that starts erroring here wants the specific scope added
+          # back rather than this block removed.
+          permission-contents: write
+          permission-pull-requests: write
 
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
@@ -26,6 +35,8 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ steps.release.outputs.release_created }}
+        with:
+          persist-credentials: false
 
       - name: Package integration
         if: ${{ steps.release.outputs.release_created }}
