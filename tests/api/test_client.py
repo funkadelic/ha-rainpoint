@@ -1367,8 +1367,9 @@ class TestRefreshScriptMain:
 
         monkeypatch.setattr(client_module, "RainPointClient", _StalledClient)
 
+        fetch = refresh_product_catalog._fetch_trimmed_catalog("user@example.com", "secret", "1", 0.05)
         with pytest.raises(TimeoutError):
-            asyncio.run(refresh_product_catalog._fetch_trimmed_catalog("user@example.com", "secret", "1", 0.05))
+            asyncio.run(fetch)
         assert "Timed out after 0.05s" in capsys.readouterr().err
 
     def test_check_reports_drift_on_a_non_empty_pull(self, monkeypatch):
