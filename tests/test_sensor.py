@@ -12,27 +12,10 @@ from custom_components.rainpoint.api import decode_htv213frf_valve
 from custom_components.rainpoint.const import (
     DOMAIN,
     MODEL_DISPLAY_HUB,
-    MODEL_HCS003FRF,
     MODEL_HCS005FRF,
     MODEL_HCS015ARF,
-    MODEL_HCS016ARF,
     MODEL_HCS024FRF_V1,
-    MODEL_HCS027ARF,
-    MODEL_HCS044FRF,
-    MODEL_HCS048B,
     MODEL_HCS0528ARF,
-    MODEL_HCS0600ARF,
-    MODEL_HCS596WB,
-    MODEL_HCS596WB_V4,
-    MODEL_HCS666FRF,
-    MODEL_HCS666FRF_X,
-    MODEL_HCS666RFR_P,
-    MODEL_HCS701B,
-    MODEL_HCS706ARF,
-    MODEL_HCS802ARF,
-    MODEL_HCS888ARF_V1,
-    MODEL_HCS999FRF,
-    MODEL_HCS999FRF_P,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
     MODEL_RAIN,
@@ -1243,14 +1226,7 @@ class TestHCSSensorDispatch:
         ("model", "data", "expected_moisture_like"),
         [
             (MODEL_HCS005FRF, {"moisture_percent": 50}, 1),
-            (MODEL_HCS003FRF, {"moisture_percent": 50}, 1),
             (MODEL_HCS024FRF_V1, {"moisture_percent": 50, "temperature_c": 20, "illuminance_lux": 1000}, 3),
-            (MODEL_HCS044FRF, {"moisture_percent": 50, "temperature_c": 20, "illuminance_lux": 1000}, 3),
-            (MODEL_HCS666FRF, {"moisture_percent": 50, "temperature_c": 20, "illuminance_lux": 1000}, 3),
-            (MODEL_HCS666RFR_P, {"moisture_percent": 50, "temperature_c": 20, "illuminance_lux": 1000}, 3),
-            (MODEL_HCS999FRF, {"moisture_percent": 50, "temperature_c": 20, "illuminance_lux": 1000}, 3),
-            (MODEL_HCS999FRF_P, {"moisture_percent": 50, "temperature_c": 20, "illuminance_lux": 1000}, 3),
-            (MODEL_HCS666FRF_X, {"moisture_percent": 50, "temperature_c": 20, "illuminance_lux": 1000}, 3),
         ],
     )
     async def test_hcs_moisture_like_models(self, model, data, expected_moisture_like):
@@ -1289,47 +1265,6 @@ class TestHCSSensorDispatch:
         await async_setup_entry(hass, entry, async_add_entities)
         # 4 pool entities + 1 raw payload sensor
         assert len(captured) == 5
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "model",
-        [
-            MODEL_HCS027ARF,
-            MODEL_HCS016ARF,
-            MODEL_HCS701B,
-            MODEL_HCS596WB,
-            MODEL_HCS596WB_V4,
-            MODEL_HCS706ARF,
-            MODEL_HCS802ARF,
-            MODEL_HCS048B,
-            MODEL_HCS888ARF_V1,
-            MODEL_HCS0600ARF,
-        ],
-    )
-    async def test_hcs_temphum_like_models(self, model):
-        sensor_key = "100_200_1"
-        sensor_info = make_sensor_entry(
-            hid=100,
-            mid=200,
-            addr=1,
-            model=model,
-            sub_name="TempHum",
-            data={
-                "tempcurrent": 21,
-                "temphigh": 29,
-                "templow": 10,
-                "humiditycurrent": 50,
-                "humidityhigh": 80,
-                "humiditylow": 30,
-            },
-        )
-        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
-        hass, entry = _make_hass(coordinator)
-        captured = []
-        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
-        await async_setup_entry(hass, entry, async_add_entities)
-        # 6 temphum entities + 1 raw payload
-        assert len(captured) == 7
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

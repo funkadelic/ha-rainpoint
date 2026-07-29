@@ -17,15 +17,17 @@ This integration supports RainPoint Smart+ device families, including:
 | Family | Examples | Entities Created |
 | ------ | -------- | ---------------- |
 | Valve hubs | HTV245FRF (primary tested device), HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV0540FRF | Valve per zone, duration number per zone |
-| Soil sensors | HCS021FRF, HCS026FRF, HCS003FRF, HCS005FRF | Moisture, temperature, illuminance |
+| Soil sensors | HCS021FRF, HCS026FRF, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
-| Temperature & humidity | HCS014ARF, HCS027ARF, HCS016ARF | Temperature, humidity |
+| Temperature & humidity | HCS014ARF | Temperature, humidity |
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
-| Pool sensors | HCS0528ARF, HCS015ARF | Pool temperature, ambient |
+| Pool sensors | HCS0528ARF, HCS015ARF, HCS015ARF+ | Pool temperature, ambient |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
 | Flow meters | HCS008FRF | Flow reading |
 
 The **HTV245FRF** wifi valve is the primary tested device and the integration's core-value target. Other models are supported opportunistically from captured payloads.
+
+Every model listed above has a decoder written against a real payload. A model that is absent is not necessarily unusable: the opt-in generic sensors described under [Configuration](#configuration) can often surface readings for it from the product catalog, clearly labeled unverified.
 
 All devices communicate via the RainPoint cloud backend. There is no local LAN protocol.
 

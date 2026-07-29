@@ -62,6 +62,27 @@ _KEPT_DP_FIELDS = ("dpCode", "identity", "dpPort", "dpDataType", "dpLen")
 # integration reads, so it is dropped rather than shipped to every user.
 _KEPT_IDENTITY_PREFIXES = ("STA_", "CTL_")
 
+# Per-variant provenance flags copied straight from the vendor entry. No code
+# path decodes with them; they exist so a maintainer triaging an unfamiliar
+# model can tell what kind of catalog record it is without re-fetching the raw
+# vendor response.
+#
+# hasDistribution marks a record the app can actually pair, which is the
+# closest thing the catalog has to "this product exists." HCS003FRF is the
+# worked example: false here, absent from RainPoint's manual index and from the
+# app's add-device list, yet it carried a hand-written decoder claiming
+# moisture support for a device with no moisture datapoint.
+#
+# Read them as triage signals, not verdicts. false does not mean discontinued:
+# accessory and sub-device records (accessoryFlag true) are false too, and so
+# are several models this integration genuinely supports.
+_KEPT_PROVENANCE_FIELDS = ("hasDistribution", "isMainDevice", "accessoryFlag")
+
+# Total seconds allowed for login plus the catalog fetch. Well above the
+# fraction of a second the endpoint normally takes, and far below aiohttp's
+# five-minute default, which is long enough that a stalled run looks wedged.
+_DEFAULT_TIMEOUT_SECONDS = 90.0
+
 # Bucket key for vendor entries carrying no modelCode. Duplicated from
 # custom_components/rainpoint/api/product_catalog.py rather than imported,
 # because this script is standalone and only puts the component on sys.path
@@ -76,7 +97,8 @@ def trim_catalog(raw: list[dict]) -> dict:
     entry per vendor model, each carrying a "model" name, an optional
     "modelCode", a model-level "portNumber", and a "dp" list of per-datapoint
     metadata dicts. Returns an object keyed by model string then by modelCode,
-    whose values are {"portNumber": ..., "dp": [...]} records. RainPoint-prefixed
+    whose values are {"portNumber": ..., "dp": [...]} records carrying whichever
+    of _KEPT_PROVENANCE_FIELDS the vendor supplied as booleans. RainPoint-prefixed
     models keep only their STA_/CTL_ dp entries, trimmed to _KEPT_DP_FIELDS;
     every other model, and every other identity namespace, is dropped.
 
@@ -97,6 +119,7 @@ def trim_catalog(raw: list[dict]) -> dict:
         port_number = entry.get("portNumber")
         trimmed.setdefault(model, {})[variant] = {
             "portNumber": port_number if isinstance(port_number, int) and not isinstance(port_number, bool) else None,
+            **{field: entry[field] for field in _KEPT_PROVENANCE_FIELDS if isinstance(entry.get(field), bool)},
             # Sort by dpCode so re-running against an unchanged vendor catalog
             # is deterministic, even if the vendor API does not guarantee a
             # stable dp array order across calls. Entries missing dpCode sort
@@ -137,14 +160,39 @@ def _load_committed_catalog(path: Path) -> dict:
         return json.load(handle)
 
 
+def _changed_fields(committed_variants: dict, fresh_variants: dict) -> set[str]:
+    """Return the record keys that differ between two models' variant maps.
+
+    Variants present on only one side count as a difference in every key that
+    side declares, so an added or dropped modelCode is never reported as an
+    empty change.
+    """
+    fields: set[str] = set()
+    for variant in set(committed_variants) | set(fresh_variants):
+        before = committed_variants.get(variant) or {}
+        after = fresh_variants.get(variant) or {}
+        fields |= {key for key in set(before) | set(after) if before.get(key) != after.get(key)}
+    return fields
+
+
 def _print_drift(committed: dict, fresh: dict) -> bool:
-    """Print a human-readable drift summary. Returns True if any drift was found."""
+    """Print a human-readable drift summary. Returns True if any drift was found.
+
+    Changed models are split by what actually moved. A snapshot regenerated
+    after the trim starts keeping a new record key would otherwise report every
+    model as changed with no way to tell that from real vendor drift, which is
+    the difference between "commit this" and "read this carefully."
+    """
     committed_models = set(committed)
     fresh_models = set(fresh)
 
     added = sorted(fresh_models - committed_models)
     removed = sorted(committed_models - fresh_models)
-    changed = sorted(model for model in committed_models & fresh_models if committed[model] != fresh[model])
+    changed = {
+        model: _changed_fields(committed[model], fresh[model])
+        for model in sorted(committed_models & fresh_models)
+        if committed[model] != fresh[model]
+    }
 
     if not added and not removed and not changed:
         print("No drift: the committed catalog matches a fresh pull.")
@@ -154,8 +202,14 @@ def _print_drift(committed: dict, fresh: dict) -> bool:
         print(f"Models added upstream ({len(added)}): {', '.join(added)}")
     if removed:
         print(f"Models removed upstream ({len(removed)}): {', '.join(removed)}")
-    if changed:
-        print(f"Models with changed dp entries ({len(changed)}): {', '.join(changed)}")
+
+    substantive = sorted(model for model, fields in changed.items() if fields - set(_KEPT_PROVENANCE_FIELDS))
+    metadata_only = sorted(model for model, fields in changed.items() if not fields - set(_KEPT_PROVENANCE_FIELDS))
+    if substantive:
+        detail = ", ".join(f"{model} ({', '.join(sorted(changed[model]))})" for model in substantive)
+        print(f"Models with changed datapoints or ports ({len(substantive)}): {detail}")
+    if metadata_only:
+        print(f"Models changed only in vendor metadata ({len(metadata_only)}): {', '.join(metadata_only)}")
     return True
 
 
@@ -184,6 +238,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("RAINPOINT_AREA_CODE") or "1",
         help="Phone-dial-style area code the RainPoint login expects, e.g. 1 for US (or RAINPOINT_AREA_CODE)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=_DEFAULT_TIMEOUT_SECONDS,
+        help=f"Seconds to wait for login plus catalog fetch before giving up (default {_DEFAULT_TIMEOUT_SECONDS:g})",
+    )
     return parser.parse_args(argv)
 
 
@@ -202,21 +262,49 @@ def _resolve_password() -> str | None:
     return getpass.getpass("RainPoint account password: ") or None
 
 
-async def _fetch_trimmed_catalog(email: str, password: str, area_code: str) -> dict:
+async def _fetch_trimmed_catalog(email: str, password: str, area_code: str, timeout_seconds: float) -> dict:
     """Log in, pull the vendor product catalog, and return it trimmed.
 
     aiohttp and the component client are imported here rather than at module
     scope: this is the only code path that needs them, and main() does not put
     the component on sys.path until it is about to fetch. That keeps
     trim_catalog importable on its own for tests.
+
+    The fetch carries two deadlines because they bound different things. The
+    session timeout caps a single request, since the component's client sets
+    none and a bare session would inherit aiohttp's five-minute default. The
+    catalog is around half a megabyte and normally arrives in under a second;
+    five silent minutes reads as a wedged process and gets killed by hand long
+    before it would ever fail on its own.
+
+    That cap alone is not what --timeout promises. get_product_catalog issues
+    two requests, the login and the catalog GET, and a per-request budget lets
+    each of them spend the full value, so a slow login plus a slow fetch runs
+    past the stated limit and then reports the wrong number. The outer wait_for
+    makes --timeout the end-to-end deadline its help text describes.
+
+    The progress lines exist for the same reason as the deadlines: without
+    them, login, fetch, and diff are indistinguishable from a hang. Both go to
+    stderr so --check output stays pipeable.
     """
     import aiohttp
 
     from custom_components.rainpoint.api.client import RainPointClient
 
-    async with aiohttp.ClientSession() as session:
+    print(f"Logging in as {email} and fetching the vendor catalog (timeout {timeout_seconds:g}s)...", file=sys.stderr)
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         client = RainPointClient(area_code, email, password, session)
-        raw = await client.get_product_catalog()
+        try:
+            raw = await asyncio.wait_for(client.get_product_catalog(), timeout_seconds)
+        except TimeoutError:
+            print(
+                f"Timed out after {timeout_seconds:g}s. Login or the catalog fetch did not finish in that "
+                f"budget; retry, or raise the limit with --timeout.",
+                file=sys.stderr,
+            )
+            raise
+    print(f"Fetched {len(raw)} vendor model entries.", file=sys.stderr)
     return trim_catalog(raw)
 
 
@@ -234,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     sys.path.insert(0, str(_REPO_ROOT))
-    trimmed = asyncio.run(_fetch_trimmed_catalog(args.email, password, args.area_code))
+    trimmed = asyncio.run(_fetch_trimmed_catalog(args.email, password, args.area_code, args.timeout))
 
     if args.check:
         # An empty pull means the fetch failed, not that the vendor dropped

@@ -7,24 +7,26 @@ on:
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
+    inputs:
+      regenerate:
+        description: "Regenerate the catalog and upload it as an artifact instead of only reporting drift. Nothing is committed either way."
+        type: boolean
+        default: false
 
 jobs:
   freshness-check:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Python 3.13
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      # Pinned to a commit SHA rather than a tag: this job feeds RAINPOINT_*
-      # secrets to a later step, and a tag can be repointed. Dependabot bumps
-      # the pin from the trailing version comment.
       - name: Set up uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -46,9 +48,31 @@ jobs:
           fi
 
       - name: Run catalog freshness check
-        if: steps.creds.outputs.skip == 'false'
+        if: steps.creds.outputs.skip == 'false' && !inputs.regenerate
         env:
           RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
           RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
           RAINPOINT_AREA_CODE: ${{ secrets.RAINPOINT_AREA_CODE }}
         run: python scripts/refresh_product_catalog.py --check
+
+      # Regenerate-and-upload exists because the vendor endpoint is not reliably
+      # reachable from every maintainer network, and the credentials are already
+      # here as secrets. The job still only has contents: read, so the result is
+      # an artifact to download and commit deliberately, never a push.
+      - name: Regenerate catalog
+        if: steps.creds.outputs.skip == 'false' && inputs.regenerate
+        env:
+          RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
+          RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
+          RAINPOINT_AREA_CODE: ${{ secrets.RAINPOINT_AREA_CODE }}
+        run: |
+          python scripts/refresh_product_catalog.py
+          git --no-pager diff --stat -- custom_components/rainpoint/api/data/product_catalog.json
+
+      - name: Upload regenerated catalog
+        if: steps.creds.outputs.skip == 'false' && inputs.regenerate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: product-catalog
+          path: custom_components/rainpoint/api/data/product_catalog.json
+          if-no-files-found: error

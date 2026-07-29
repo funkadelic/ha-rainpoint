@@ -1099,6 +1099,47 @@ class TestTrimCatalog:
 
         assert result["HIC801W"]["278"] == {"portNumber": 0, "dp": []}
 
+    def test_provenance_flags_are_carried_onto_the_variant_record(self):
+        """hasDistribution and friends survive the trim so a maintainer can triage
+        an unfamiliar model without re-fetching the raw vendor response.
+
+        This is what would have answered "is HCS003FRF a real product?" directly:
+        it is the only kind of record that is unpairable in the app.
+        """
+        raw = [
+            {
+                "model": "HCS003FRF",
+                "modelCode": 35,
+                "portNumber": 1,
+                "hasDistribution": False,
+                "isMainDevice": False,
+                "accessoryFlag": False,
+                "dp": [{"dpCode": 2, "identity": "CTL_SOCK", "dpDataType": "", "dpLen": 2}],
+            }
+        ]
+
+        record = trim_catalog(raw)["HCS003FRF"]["35"]
+
+        assert record["hasDistribution"] is False
+        assert record["isMainDevice"] is False
+        assert record["accessoryFlag"] is False
+
+    def test_non_boolean_provenance_flags_are_dropped(self):
+        """A vendor field that is not a bool is omitted rather than committed as junk,
+        matching how a non-integer portNumber degrades.
+        """
+        raw = [
+            {
+                "model": "HCS021FRF",
+                "hasDistribution": "yes",
+                "dp": [{"dpCode": 10, "identity": "STA_RH"}],
+            }
+        ]
+
+        record = trim_catalog(raw)["HCS021FRF"]["*"]
+
+        assert "hasDistribution" not in record
+
     def test_non_integer_port_number_degrades_to_none(self):
         """A junk model-level portNumber is dropped rather than committed."""
         raw = [{"model": "HCS021FRF", "portNumber": "four", "dp": [{"dpCode": 10, "identity": "STA_RH"}]}]
@@ -1132,6 +1173,55 @@ class TestTrimCatalog:
         assert refresh_product_catalog.UNCODED_VARIANT == product_catalog.UNCODED_VARIANT
 
 
+class TestRefreshScriptDrift:
+    """Tests for the --check drift report.
+
+    Reporting every model as changed whenever the trim starts keeping a new
+    record key would drown the one thing --check exists to surface: a vendor
+    datapoint that actually moved.
+    """
+
+    def test_provenance_only_changes_are_reported_separately(self, capsys):
+        """A snapshot that only gains vendor metadata is called out as such."""
+        committed = {"HTV245FRF": {"303": {"portNumber": 2, "dp": [{"dpCode": 1}]}}}
+        fresh = {"HTV245FRF": {"303": {"portNumber": 2, "hasDistribution": True, "dp": [{"dpCode": 1}]}}}
+
+        assert refresh_product_catalog._print_drift(committed, fresh) is True
+        out = capsys.readouterr().out
+        assert "changed only in vendor metadata (1): HTV245FRF" in out
+        assert "changed datapoints or ports" not in out
+
+    def test_datapoint_drift_is_reported_with_the_fields_that_moved(self, capsys):
+        """Real drift names the keys, so metadata noise never hides it."""
+        committed = {"HTV245FRF": {"303": {"portNumber": 2, "dp": [{"dpCode": 1}]}}}
+        fresh = {"HTV245FRF": {"303": {"portNumber": 4, "hasDistribution": True, "dp": [{"dpCode": 1}, {"dpCode": 2}]}}}
+
+        assert refresh_product_catalog._print_drift(committed, fresh) is True
+        out = capsys.readouterr().out
+        assert "HTV245FRF (dp, hasDistribution, portNumber)" in out
+        assert "changed only in vendor metadata" not in out
+
+    def test_a_variant_present_on_one_side_only_counts_as_drift(self, capsys):
+        """An added modelCode must not report as a change with no fields."""
+        committed = {"HIC801W": {"278": {"portNumber": 0, "dp": []}}}
+        fresh = {
+            "HIC801W": {
+                "278": {"portNumber": 0, "dp": []},
+                "279": {"portNumber": 8, "dp": [{"dpCode": 7}]},
+            }
+        }
+
+        assert refresh_product_catalog._print_drift(committed, fresh) is True
+        assert "HIC801W (dp, portNumber)" in capsys.readouterr().out
+
+    def test_identical_catalogs_report_no_drift(self, capsys):
+        """The clean path still says so and returns False."""
+        catalog = {"HTV245FRF": {"303": {"portNumber": 2, "dp": []}}}
+
+        assert refresh_product_catalog._print_drift(catalog, dict(catalog)) is False
+        assert "No drift" in capsys.readouterr().out
+
+
 class TestRefreshScriptMain:
     """Tests for scripts/refresh_product_catalog.py::main safety guards.
 
@@ -1158,10 +1248,17 @@ class TestRefreshScriptMain:
             asyncio.set_event_loop(loop)
 
     @staticmethod
-    def _stub_fetch(monkeypatch, trimmed):
-        """Replace the script's network fetch with one returning trimmed."""
+    def _stub_fetch(monkeypatch, trimmed, captured: dict | None = None):
+        """Replace the script's network fetch with one returning trimmed.
 
-        async def _fake_fetch(email, password, area_code):
+        Mirrors the real signature including timeout_seconds, so a caller that
+        stops threading the timeout through fails here rather than only against
+        the live endpoint. Pass captured to inspect the arguments main() used.
+        """
+
+        async def _fake_fetch(email, password, area_code, timeout_seconds):
+            if captured is not None:
+                captured.update(email=email, password=password, area_code=area_code, timeout_seconds=timeout_seconds)
             return trimmed
 
         monkeypatch.setattr(refresh_product_catalog, "_fetch_trimmed_catalog", _fake_fetch)
@@ -1229,6 +1326,51 @@ class TestRefreshScriptMain:
 
         assert refresh_product_catalog.main(["--check"]) == 1
         assert "treating as a fetch failure, not drift" in capsys.readouterr().err
+
+    def test_timeout_defaults_and_is_overridable(self, monkeypatch):
+        """The fetch is always given an explicit deadline, and --timeout overrides it.
+
+        Without one the session inherits aiohttp's five-minute default, which is
+        long enough that a stalled pull looks like a wedged process and gets
+        killed by hand before it ever fails.
+        """
+        self._stub_credentials(monkeypatch)
+        monkeypatch.setattr(refresh_product_catalog, "_load_committed_catalog", lambda path: {"HTV245FRF": []})
+
+        captured: dict = {}
+        self._stub_fetch(monkeypatch, {"HTV245FRF": []}, captured)
+        refresh_product_catalog.main(["--check"])
+        assert captured["timeout_seconds"] == refresh_product_catalog._DEFAULT_TIMEOUT_SECONDS
+
+        captured.clear()
+        self._stub_fetch(monkeypatch, {"HTV245FRF": []}, captured)
+        refresh_product_catalog.main(["--check", "--timeout", "5"])
+        assert captured["timeout_seconds"] == 5.0
+
+    def test_timeout_bounds_the_whole_fetch_not_each_request(self, monkeypatch, capsys):
+        """--timeout is an end-to-end deadline, not a per-request one.
+
+        get_product_catalog logs in and then fetches, so the session's
+        per-request cap would let a slow login and a slow fetch together run
+        well past the stated limit. The stub never returns, so only an outer
+        deadline can end this.
+        """
+        import custom_components.rainpoint.api.client as client_module
+
+        class _StalledClient:
+            def __init__(self, area_code, email, password, session):
+                pass
+
+            async def get_product_catalog(self):
+                await asyncio.sleep(30)
+                raise AssertionError("the outer deadline never fired")
+
+        monkeypatch.setattr(client_module, "RainPointClient", _StalledClient)
+
+        fetch = refresh_product_catalog._fetch_trimmed_catalog("user@example.com", "secret", "1", 0.05)
+        with pytest.raises(TimeoutError):
+            asyncio.run(fetch)
+        assert "Timed out after 0.05s" in capsys.readouterr().err
 
     def test_check_reports_drift_on_a_non_empty_pull(self, monkeypatch):
         """A non-empty pull still routes through the normal drift report."""

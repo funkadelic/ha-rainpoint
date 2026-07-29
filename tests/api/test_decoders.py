@@ -6,7 +6,6 @@ from custom_components.rainpoint.api import (
     decode_flow_meter,
     decode_flowmeter,
     decode_hcs005frf,
-    decode_hcs027arf,
     decode_htv145frf,
     decode_htv213frf_valve,
     decode_hws019wrf_v2,
@@ -712,12 +711,6 @@ class TestHcsDelegation:
         """decode_hcs005frf should produce the same output as decode_moisture_simple."""
         delegated = decode_hcs005frf(MOISTURE_SIMPLE_HEX_PAYLOAD)
         real = decode_moisture_simple(MOISTURE_SIMPLE_HEX_PAYLOAD)
-        assert delegated == real
-
-    def test_hcs027arf_matches_unknown(self):
-        """decode_hcs027arf should produce the same output as decode_unknown."""
-        delegated = decode_hcs027arf(BASIC_HEX_PAYLOAD)
-        real = decode_unknown(BASIC_HEX_PAYLOAD)
         assert delegated == real
 
 

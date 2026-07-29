@@ -48,6 +48,8 @@ ruff format .       # format
 
 CI runs the same `pytest` invocation plus `hassfest` and HACS validation on every PR. Coverage is uploaded to Codecov and a SonarQube scan runs on PRs (skipped for Dependabot).
 
+Every action in `.github/workflows/` is pinned to a full commit SHA with the version in a trailing comment, e.g. `uses: actions/checkout@3d3c42e... # v7.0.1`. A tag can be repointed at new code without review, so a new `uses:` line needs a SHA rather than `@v4`. Dependabot reads the trailing comment and bumps both parts together. Two actions have no usable release and track a branch commit instead, `hacs/action` and `home-assistant/actions/hassfest`; Dependabot cannot bump those, so refresh them by hand.
+
 ## Adding a new device model
 
 Follow the pattern in `custom_components/rainpoint/api/decoders.py`:

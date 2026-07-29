@@ -61,8 +61,20 @@ DEFAULT_CONTROL_DURATION_SECONDS = 600  # 10 minutes
 # Never widened by inference -- this is a closed literal set in source, so
 # "generic control is never a wildcard" is a structural property provable by
 # reading it, not a runtime edge case.
-CONTROL_IDENTITY_ALLOWLIST = frozenset({"CTL_WATER", "CTL_BT_WATER", "CTL_SOCK"})
-VALVE_CONTROL_IDENTITIES = frozenset({"CTL_WATER", "CTL_BT_WATER"})
+#
+# CTL_BT_WATER is deliberately absent. Every entity built here commands through
+# client.control_work_mode, and a Bluetooth-backed valve does not appear to
+# accept that call: the models declaring this identity (HTV102B, HTV107B,
+# HTV124LT, HTV210B, HTV224B) carry no CTL_WATER datapoint at all, and the
+# vendor app is understood to drive them through a separate endpoint carrying
+# the datapoint code. Admitting the identity without that endpoint yields a
+# valve entity that accepts a command, reports no state change (this module
+# never assumes an outcome), and leaves the user to conclude the hardware is
+# slow rather than uncommanded. Producing no entity is the honest answer until
+# a capture confirms the endpoint and payload. See the corresponding backlog
+# item before widening this set.
+CONTROL_IDENTITY_ALLOWLIST = frozenset({"CTL_WATER", "CTL_SOCK"})
+VALVE_CONTROL_IDENTITIES = frozenset({"CTL_WATER"})
 SWITCH_CONTROL_IDENTITIES = frozenset({"CTL_SOCK"})
 
 # The single curated row (generic_entities._IDENTITY_SPECS) both the sensor
@@ -408,7 +420,7 @@ def _build_generic_entities(
 
 
 def build_generic_valve_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
-    """Return the generic valve entities (CTL_WATER / CTL_BT_WATER) for one sub-device, or []."""
+    """Return the generic valve entities (CTL_WATER) for one sub-device, or []."""
     return _build_generic_entities(
         coordinator, sensor_key, sensor_info, base_slug, VALVE_CONTROL_IDENTITIES, RainPointGenericValve
     )
