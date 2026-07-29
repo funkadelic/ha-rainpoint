@@ -36,9 +36,12 @@ SAMPLE_HTV405_TLV_PAYLOAD = (
 )
 
 # Real full hex (11#) status frames from the maintainer's HTV245FRF (2-zone valve).
-# Both carry the trailing [marker 0xFE][battery 0xFF0F -> 0x0FFF = 100%][4-byte
-# timestamp] tail that the dp_id/type scan skips. The second capture (July 4) has
-# zone 2 mid-run: nonzero last-event time (dp 0x22) and duration (dp 0x26).
+# Both end with a [dp_id 0xFE][STA_REPTIME header 0xFF 0x0F][4-byte packed wall
+# clock] record that the dp_id/type scan skips; the 0xFF 0x0F pair is that
+# record's extended-type header, not a battery word. Battery is the 0x18 0xDC
+# record near the front. The second capture (July 4) has zone 2 mid-run: nonzero
+# last-event time (dp 0x22) and duration (dp 0x26), and its report time unpacks
+# to July 4.
 SAMPLE_HTV245_FULL_IDLE_PAYLOAD = (
     "11#17E1DB0018DC0119D8001AD8001D201E2021B70000000022B70000000025AD000026AD0000299FA50100002A9F30000000FEFF0F0270F219"
 )
@@ -81,8 +84,15 @@ RAIN_HEX_PAYLOAD = "10#E10000FD040000FD054E07FD064E07DC01974E070000FF0F0410F718"
 
 # HCS026FRF (moisture_simple) hex payload from docstring.
 # E1 C6 00 DC 01 88 1A FF 0F 5E 21 F7 18
-# b[1]=0xC6=198-256=-58 RSSI; b[6]=0x1A=26% moisture
+# b[1]=0xC6=198-256=-58 RSSI; b[4]=0x01 STA_BAT; b[6]=0x1A=26% moisture
 MOISTURE_SIMPLE_HEX_PAYLOAD = "10#E1C600DC01881AFF0F5E21F718"
+
+# Second HCS026FRF capture, from a device added on 2026-07-29. Its STA_REPTIME
+# record unpacks to the moment it was pulled, which is what pins the packed
+# format's year base at 2020.
+# E1 C4 00 DC 01 88 25 FF 0F E1 C4 FA 19
+# b[1]=0xC4=196-256=-60 RSSI; b[4]=0x01 STA_BAT; b[6]=0x25=37% moisture
+MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD = "10#E1C400DC018825FF0FE1C4FA19"
 
 # Minimal hex payload for basic decoder smoke tests (2+ bytes: RSSI extractable).
 # E1=preamble, B0=rssi raw (176-256=-80), DC=tag, 01=value

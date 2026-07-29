@@ -36,15 +36,16 @@ from .product_catalog import get_catalog_entry, get_catalog_port_number, get_cat
 from .trust import is_hand_written_model
 from .utils import (
     _base_decoder_dict,
+    _extract_report_time,
     _f10_to_c,
     _le16,
     _parse_rainpoint_payload,
     _parse_tlv_payload,
 )
 from .validators import (
-    _battery_status_to_percent,
+    _battery_flag_to_percent,
+    _extract_battery_flag,
     _extract_rssi,
-    _extract_status_code,
     _validate_payload,
     _validate_tag,
 )
@@ -59,9 +60,10 @@ __all__ = [
     # Utils
     "_base_decoder_dict",
     # Validators
-    "_battery_status_to_percent",
+    "_battery_flag_to_percent",
+    "_extract_battery_flag",
+    "_extract_report_time",
     "_extract_rssi",
-    "_extract_status_code",
     "_f10_to_c",
     "_le16",
     "_parse_rainpoint_payload",
