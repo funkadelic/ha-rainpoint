@@ -13,9 +13,11 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import PERCENTAGE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT, EntityCategory
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import RainPointCoordinator
+from .device import build_sub_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,21 +114,9 @@ class RainPointDiagnosticSensorBase(CoordinatorEntity, SensorEntity):
         return self._sensor_data is not None
 
     @property
-    def device_info(self) -> dict[str, Any]:
+    def device_info(self) -> DeviceInfo:
         """Represent each subDevice as its own HA device."""
-        from .const import DOMAIN
-
-        hid = self._sensor_info["hid"]
-        mid = self._sensor_info["mid"]
-        addr = self._sensor_info["addr"]
-        sub_name = self._sensor_info.get("sub_name") or f"Sensor {addr}"
-        model = self._sensor_info.get("model") or "Unknown"
-        return {
-            "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},
-            "name": sub_name,
-            "manufacturer": "RainPoint",
-            "model": model,
-        }
+        return build_sub_device_info(self._sensor_info, name_fallback=f"Sensor {self._sensor_info['addr']}")
 
 
 class RainPointDeviceIDSensor(RainPointDiagnosticSensorBase):

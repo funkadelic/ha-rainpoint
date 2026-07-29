@@ -14,6 +14,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfVolume
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -40,6 +41,7 @@ from .const import (
     MODEL_VALVE_405,
 )
 from .coordinator import RainPointCoordinator, _build_new_device_issue_url
+from .device import build_sub_device_info
 from .diagnostic_sensors import (
     RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
@@ -359,24 +361,9 @@ class RainPointSensorBase(CoordinatorEntity, SensorEntity):
         return self._sensor_data is not None
 
     @property
-    def device_info(self) -> dict[str, Any]:
+    def device_info(self) -> DeviceInfo:
         """Represent each subDevice as its own HA device, child of hub."""
-        from .const import DOMAIN
-
-        hid = self._sensor_info["hid"]
-        mid = self._sensor_info["mid"]
-        addr = self._sensor_info["addr"]
-        sub_name = self._sensor_info.get("sub_name") or f"Sensor {addr}"
-        model = self._sensor_info.get("model") or "Unknown"
-
-        return {
-            # Unique per subdevice
-            "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},
-            "name": f"{sub_name}",
-            "manufacturer": "RainPoint",  # RainPoint is the actual device manufacturer
-            "model": model,
-            "via_device": (DOMAIN, f"hub_{hid}"),  # Link to parent hub
-        }
+        return build_sub_device_info(self._sensor_info, name_fallback=f"Sensor {self._sensor_info['addr']}")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

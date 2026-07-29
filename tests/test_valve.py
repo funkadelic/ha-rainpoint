@@ -52,6 +52,14 @@ def _make_valve(zone_data=None, hub_online=True, model="HTV245FRF"):
 
 
 class TestValveProperties:
+    def test_device_info_carries_firmware_and_identity(self):
+        """The valve's device page shows firmware and a stable device id."""
+        valve = _make_valve()
+        info = valve.device_info
+        assert info["sw_version"] == "1.0"
+        assert info["serial_number"] == "200_1"
+        assert info["via_device"] == (DOMAIN, "hub_100")
+
     """Tests for RainPointValveEntity properties."""
 
     def test_is_closed_when_open(self):

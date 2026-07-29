@@ -28,6 +28,7 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.valve import ValveEntity, ValveEntityFeature
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -43,6 +44,7 @@ from .const import (
     GENERIC_CONTROL_UNIQUE_ID_MARKER,
     UNIQUE_ID_PREFIX,
 )
+from .device import build_sub_device_info
 from .generic_entities import (
     _IDENTITY_SPECS,
     _matching_field,
@@ -486,18 +488,8 @@ class RainPointGenericControlBase(CoordinatorEntity):
         self._attr_icon = GENERIC_CONTROL_MARKER_ICON
 
     @property
-    def device_info(self) -> dict[str, Any]:
-        hid = self._sensor_info["hid"]
-        mid = self._sensor_info["mid"]
-        addr = self._sensor_info["addr"]
-        sub_name = self._sensor_info.get("sub_name") or f"Device {addr}"
-        model = self._sensor_info.get("model") or "Unknown"
-        return {
-            "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},
-            "name": sub_name,
-            "manufacturer": "RainPoint",
-            "model": model,
-        }
+    def device_info(self) -> DeviceInfo:
+        return build_sub_device_info(self._sensor_info, name_fallback=f"Device {self._sensor_info['addr']}")
 
     @property
     def _run_state_open(self) -> bool | None:

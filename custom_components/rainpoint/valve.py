@@ -9,6 +9,7 @@ from homeassistant.components.valve import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -25,6 +26,7 @@ from .const import (
     VALVE_MODELS,
 )
 from .coordinator import RainPointCoordinator
+from .device import build_sub_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -192,18 +194,8 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
         return attrs
 
     @property
-    def device_info(self) -> dict[str, Any]:
-        hid = self._sensor_info["hid"]
-        mid = self._sensor_info["mid"]
-        addr = self._sensor_info["addr"]
-        sub_name = self._sensor_info.get("sub_name") or f"Valve Hub {addr}"
-        model = self._sensor_info.get("model") or "Unknown"
-        return {
-            "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},
-            "name": sub_name,
-            "manufacturer": "RainPoint",
-            "model": model,
-        }
+    def device_info(self) -> DeviceInfo:
+        return build_sub_device_info(self._sensor_info, name_fallback=f"Valve Hub {self._sensor_info['addr']}")
 
     # ------------------------------------------------------------------
     # Control
