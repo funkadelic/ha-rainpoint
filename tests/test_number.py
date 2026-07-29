@@ -75,6 +75,13 @@ def _make_number(current_value=10.0, firmware_version="1.0"):
 class TestNumberEntity:
     """Tests for RainPointZoneDurationNumber."""
 
+    def test_device_info_carries_identity_and_hub_link(self):
+        """The duration entity resolves to the same device card as its valve."""
+        number = _make_number()
+        info = number.device_info
+        assert info["serial_number"] == "200_1"
+        assert info["via_device"] == (DOMAIN, "hub_100")
+
     def test_native_value_returns_current(self):
         """native_value should return _current_value."""
         num = _make_number(current_value=10.0)
@@ -239,7 +246,7 @@ class TestNumberAsyncAddedToHass:
 
         import custom_components.rainpoint.number as num_mod
 
-        real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
+        real_fn = num_mod.RainPointZoneDurationNumber.async_added_to_hass
         await real_fn(num)
 
         assert num._current_value == 25.0
@@ -256,7 +263,7 @@ class TestNumberAsyncAddedToHass:
 
         import custom_components.rainpoint.number as num_mod
 
-        real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
+        real_fn = num_mod.RainPointZoneDurationNumber.async_added_to_hass
         await real_fn(num)
 
         assert num._current_value == 10.0  # unchanged
@@ -273,7 +280,7 @@ class TestNumberAsyncAddedToHass:
 
         import custom_components.rainpoint.number as num_mod
 
-        real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
+        real_fn = num_mod.RainPointZoneDurationNumber.async_added_to_hass
         await real_fn(num)
 
         assert num._current_value == 10.0
@@ -288,7 +295,7 @@ class TestNumberAsyncAddedToHass:
 
         import custom_components.rainpoint.number as num_mod
 
-        real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
+        real_fn = num_mod.RainPointZoneDurationNumber.async_added_to_hass
         await real_fn(num)
 
         assert num._current_value == 10.0

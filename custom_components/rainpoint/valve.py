@@ -9,6 +9,7 @@ from homeassistant.components.valve import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -25,6 +26,8 @@ from .const import (
     VALVE_MODELS,
 )
 from .coordinator import RainPointCoordinator
+from .device import build_sub_device_info
+from .entity import sub_device_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -172,38 +175,12 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
             if event_time is not None:
                 attrs["event_time"] = event_time
 
-        # Add firmware version from sensor info
-        sensors = self.coordinator.data.get("sensors", {})
-        info = sensors.get(self._sensor_key) or {}
-        firmware_version = info.get("firmware_version")
-        if firmware_version:
-            attrs["firmware_version"] = firmware_version
-
-        # Add device timestamp from decoded data
-        data = self.coordinator.data.get("sensors", {}).get(self._sensor_key, {}).get("data", {})
-        if "device_timestamp" in data:
-            attrs["device_timestamp"] = data["device_timestamp"]
-            attrs["timestamp_method"] = data.get("timestamp_method")
-            attrs["timestamp_source"] = data.get("timestamp_source", "server")
-        elif "server_timestamp" in data:
-            attrs["device_timestamp"] = data["server_timestamp"]
-            attrs["timestamp_source"] = data.get("timestamp_source", "server")
-
+        attrs.update(sub_device_attributes(self.coordinator, self._sensor_key))
         return attrs
 
     @property
-    def device_info(self) -> dict[str, Any]:
-        hid = self._sensor_info["hid"]
-        mid = self._sensor_info["mid"]
-        addr = self._sensor_info["addr"]
-        sub_name = self._sensor_info.get("sub_name") or f"Valve Hub {addr}"
-        model = self._sensor_info.get("model") or "Unknown"
-        return {
-            "identifiers": {(DOMAIN, f"{hid}_{mid}_{addr}")},
-            "name": sub_name,
-            "manufacturer": "RainPoint",
-            "model": model,
-        }
+    def device_info(self) -> DeviceInfo:
+        return build_sub_device_info(self._sensor_info, name_fallback=f"Valve Hub {self._sensor_info['addr']}")
 
     # ------------------------------------------------------------------
     # Control

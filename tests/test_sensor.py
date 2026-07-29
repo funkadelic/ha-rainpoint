@@ -672,6 +672,13 @@ class TestSensorBaseProperties:
         identifiers = sensor.device_info["identifiers"]
         assert (DOMAIN, "100_200_1") in identifiers
 
+    def test_device_info_carries_firmware_and_serial(self):
+        """Firmware and a stable device id reach the sensor's device page."""
+        sensor = self._make_base()
+        info = sensor.device_info
+        assert info["sw_version"] == "1.0.0"
+        assert info["serial_number"] == "200_1"
+
     def test_device_info_via_device(self):
         """Device info via device."""
         sensor = self._make_base()

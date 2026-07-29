@@ -88,6 +88,12 @@ class TestRainPointRSSISensor:
         sensor = self._make()
         assert sensor.device_info["manufacturer"] == "RainPoint"
 
+    def test_device_info_carries_identity_and_hub_link(self):
+        """Diagnostic entities resolve to the same device card as the sensors."""
+        info = self._make().device_info
+        assert info["serial_number"] == "200_1"
+        assert info["via_device"] == (DOMAIN, "hub_100")
+
 
 class TestRainPointBatterySensor:
     """Tests for RainPointBatterySensor."""
