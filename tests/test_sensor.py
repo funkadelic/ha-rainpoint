@@ -690,12 +690,18 @@ class TestSensorBaseProperties:
         attrs = sensor.extra_state_attributes
         assert attrs.get("battery_percent") == 75
 
-    def test_extra_state_attributes_battery_status_code_fallback(self):
-        """battery_status_code is used when battery_percent is absent."""
-        sensor = self._make_base(data={"type": "x", "battery_status_code": 2})
+    def test_extra_state_attributes_battery_flag_without_percent(self):
+        """An uncorroborated flag is still surfaced when no percentage is derived."""
+        sensor = self._make_base(data={"type": "x", "battery_flag": 3, "battery_percent": None})
         attrs = sensor.extra_state_attributes
-        assert attrs.get("battery_status_code") == 2
+        assert attrs.get("battery_flag") == 3
         assert "battery_percent" not in attrs
+
+    def test_extra_state_attributes_report_time(self):
+        """The device's own wall clock is surfaced when the frame carries it."""
+        sensor = self._make_base(data={"type": "x", "report_time": "2026-07-29T12:19:33"})
+        attrs = sensor.extra_state_attributes
+        assert attrs.get("report_time") == "2026-07-29T12:19:33"
 
     def test_extra_state_attributes_server_timestamp_fallback(self):
         """server_timestamp is reported as device_timestamp when device_timestamp missing."""

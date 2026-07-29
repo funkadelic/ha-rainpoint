@@ -16,6 +16,7 @@ import logging
 import re
 
 from .product_catalog import get_catalog_entry, get_catalog_port_number
+from .utils import _parse_entries, _split_prefix
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -82,76 +83,6 @@ def _hex_to_bytes(hex_str: str) -> list[int]:
     """Return a list of byte values from an even-length hex string."""
     n = len(hex_str) // 2
     return [int(hex_str[i * 2 : i * 2 + 2], 16) & 0xFF for i in range(n)]
-
-
-def _split_prefix(raw: str) -> tuple[str, bool]:
-    """Return (hex_body, dp_id_prefixed) from a ``NN#...`` payload.
-
-    ``dp_id_prefixed`` is true for the ``11#`` framing, where each entry starts
-    with a one-byte dp_id. The ``10#`` framing has no per-entry dp_id.
-    """
-    dp_id_prefixed = False
-    body = raw
-    if "#" in raw:
-        dp_id_prefixed = raw[1:2] == "1"
-        body = raw.split("#", 1)[1]
-    # Some firmwares append a comma-separated ASCII tail after the hex block.
-    comma = body.find(",")
-    if comma != -1:
-        body = body[:comma]
-    return body.strip().upper(), dp_id_prefixed
-
-
-def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
-    """Walk the self-describing byte stream into structural entries.
-
-    Header byte layout, derived from our captured payloads:
-      - bit 7 selects the form.
-      - Compact form (bit 7 clear): the whole field is this one byte; the field
-        index is ``(byte >> 4) & 7`` and the byte is its own value.
-      - Wide form (bit 7 set): bits 0-1 give ``extra_len`` so the value spans
-        ``extra_len + 1`` bytes after the header; bits 2-6 give ``index5``.
-        ``index5 <= 30`` means field index ``index5 + 8``; ``index5 == 31`` is
-        the extended escape where the real index lives in the next byte.
-
-    Returns ``{"dp_id", "field", "value_bytes"}`` dicts (value_bytes excludes
-    the header byte).
-    """
-    entries: list[dict] = []
-    i = 0
-    n = len(data)
-    while i < n:
-        dp_id = 0
-        if dp_id_prefixed:
-            dp_id = data[i]
-            i += 1
-            if i >= n:
-                break
-
-        header = data[i]
-        if not header & 0x80:
-            # Compact form: header is both index and value.
-            entries.append({"dp_id": dp_id, "field": (header >> 4) & 7, "value_bytes": [header]})
-            i += 1
-            continue
-
-        extra_len = header & 3
-        span = extra_len + 2  # header byte + (extra_len + 1) value bytes
-        index5 = (header >> 2) & 31
-        if index5 <= 30:
-            field = index5 + 8
-            chunk = data[i : i + span]
-            i += span
-        else:
-            # Extended escape: the field index is carried in the following byte.
-            i += 1
-            if i >= n:
-                break
-            field = (data[i] & 0xFF) + 39
-            chunk = data[i : i + span]
-            i += span
-        entries.append({"dp_id": dp_id, "field": field, "value_bytes": chunk[1:]})
-    return entries
 
 
 def _int_from_bytes(value_bytes: list[int]) -> int | None:

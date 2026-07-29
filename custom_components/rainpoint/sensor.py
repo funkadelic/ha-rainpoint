@@ -384,10 +384,15 @@ class RainPointSensorBase(CoordinatorEntity, SensorEntity):
         attrs: dict[str, Any] = {}
         if "rssi_dbm" in data:
             attrs["rssi_dbm"] = data["rssi_dbm"]
-        if "battery_percent" in data:
+        if data.get("battery_percent") is not None:
             attrs["battery_percent"] = data["battery_percent"]
-        elif "battery_status_code" in data:
-            attrs["battery_status_code"] = data["battery_status_code"]
+        if data.get("battery_flag") is not None:
+            # Surfaced alongside the percentage rather than only as a fallback:
+            # it is the raw reading, and it is the only thing to look at when a
+            # flag we have no charge level for leaves battery_percent unset.
+            attrs["battery_flag"] = data["battery_flag"]
+        if data.get("report_time") is not None:
+            attrs["report_time"] = data["report_time"]
 
         # Add firmware version from sensor info
         sensors = self.coordinator.data.get("sensors", {})

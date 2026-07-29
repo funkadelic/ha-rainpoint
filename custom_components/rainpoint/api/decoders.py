@@ -9,17 +9,36 @@ import logging
 import re
 from datetime import datetime
 
-from .utils import _base_decoder_dict, _f10_to_c, _le16, _parse_rainpoint_payload, _parse_tlv_payload
+from .utils import (
+    _base_decoder_dict,
+    _extract_report_time,
+    _f10_to_c,
+    _le16,
+    _parse_rainpoint_payload,
+    _parse_tlv_payload,
+)
 from .validators import (
-    _BATTERY_MAP,
-    _battery_status_to_percent,
+    _battery_flag_to_percent,
+    _extract_battery_flag,
     _extract_rssi,
-    _extract_status_code,
     _validate_payload,
     _validate_tag,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _attach_report_time(result: dict, b: bytes, *, dp_id_prefixed: bool = False) -> None:
+    """Add report_time / report_time_raw to result when the frame carries STA_REPTIME.
+
+    Both keys stay absent when the record is missing or unpacks to an
+    impossible date, so a consumer never has to distinguish a real reading from
+    a fabricated fallback.
+    """
+    report = _extract_report_time(b, dp_id_prefixed=dp_id_prefixed)
+    if report is not None:
+        result["report_time"], result["report_time_raw"] = report
+
 
 # Type byte → value byte count for HTV213FRF/HTV245FRF.
 # Subset of types relevant to these models; see _TYPE_WIDTHS in utils.py for the full set.
@@ -217,23 +236,22 @@ def _extract_htv213_rssi(b: bytes) -> int | None:
     return None
 
 
-def _extract_htv213_battery(b: bytes) -> int | None:
-    """Return the battery percentage from an HTV213/245 hex frame, or None.
+def _extract_htv213_battery(b: bytes) -> tuple[int | None, int | None]:
+    """Return (raw STA_BAT flag, battery percentage) for an HTV213/245 hex frame.
 
-    These frames end with a [0xFE marker][battery:2][timestamp:4] tail that the
-    dp_id/type scan skips (its bytes are not valid type records). The battery
-    word is little-endian and uses the shared 0x0FF6..0x0FFF scale
-    (0x0FFF = 100%, one 10% step per decrement). The 0xFE marker at b[-7] is
-    required so a frame with no battery tail cannot have a coincidentally-mapped
-    word six bytes from the end read as a false battery state; a word outside
-    the band (short, ASCII, or misaligned frame) also yields None.
+    Both may be None: no STA_BAT record yields no flag, and a flag no capture
+    pairs with a charge level yields no percentage. The flag is returned
+    alongside so this family reports it like every other decoder does; it is
+    the only thing left to look at when the percentage cannot be derived.
+
+    The frame's STA_BAT record is located structurally, so no tail marker is
+    needed. What the previous version read as a [0xFE marker][battery:2] tail
+    is a dp_id of 0xFE followed by the two-byte extended-type header of the
+    trailing STA_REPTIME record, whose four-byte value is the "timestamp:4"
+    that same comment described.
     """
-    if len(b) < 7 or b[-7] != 0xFE:
-        return None
-    status_word = _extract_status_code(b, len(b) - 6, len(b) - 5)
-    if status_word not in _BATTERY_MAP:
-        return None
-    return _battery_status_to_percent(status_word)
+    flag = _extract_battery_flag(b, dp_id_prefixed=True)
+    return flag, _battery_flag_to_percent(flag)
 
 
 def _scan_htv213_dp_map(b: bytes) -> dict[int, tuple[int, int]]:
@@ -436,13 +454,14 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         hub_online, hub_state_raw = _extract_htv213_hub_state(dp_map, raw)
         zones = _extract_htv213_zones(dp_map)
 
-        battery_percent = _extract_htv213_battery(b)
+        battery_flag, battery_percent = _extract_htv213_battery(b)
 
         _LOGGER.debug(
-            debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s, battery=%s"),
+            debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s, battery=%s (flag %s)"),
             len(zones),
             hub_online,
             battery_percent,
+            battery_flag,
         )
         result = {
             "type": "valve_hub",
@@ -452,10 +471,12 @@ def _decode_htv213frf_hex(raw: str) -> dict:
             "tlv_raw": {},
             "hub_online": hub_online,
             "hub_state_raw": hub_state_raw,
+            "battery_flag": battery_flag,
             "decoder": "htv213frf_hex",
         }
         if battery_percent is not None:
             result["battery_percent"] = battery_percent
+        _attach_report_time(result, b, dp_id_prefixed=True)
         return result
 
     except Exception:
@@ -713,7 +734,11 @@ def _decode_moisture_full_hex(raw: str) -> dict:
     b10    = 0xC6  (lux tag)
     b11,b12= lux_raw * 10 LE
     b13    = 0x00
-    b14,b15= 0xFF,0x0F (status/battery)
+    b14..  = trailing STA_REPTIME record (0xFF 0x0F + 4-byte packed wall clock)
+
+    Battery is the STA_BAT record at b3,b4, read structurally rather than at
+    these offsets; the 0xFF 0x0F pair is that trailing record's extended-type
+    header, not a battery word.
 
     Based on actual payload: 10#E1A200DC0185AB02881FC6600600FF0FFA28F718
     E1 A2 00 DC 01 85 AB 02 88 1F C6 60 06 00 FF 0F FA 28 F7 18
@@ -742,7 +767,7 @@ def _decode_moisture_full_hex(raw: str) -> dict:
     lux_raw10 = _le16(b, 11)
     lux = lux_raw10 / 10.0
 
-    status_code = _extract_status_code(b, 14, 15)
+    battery_flag = _extract_battery_flag(b)
 
     result = _base_decoder_dict("moisture_full", rssi, b)
     result.update(
@@ -752,11 +777,12 @@ def _decode_moisture_full_hex(raw: str) -> dict:
             "temperature_f10": temp_raw_f10,
             "illuminance_lux": lux,
             "illuminance_raw10": lux_raw10,
-            "battery_status_code": status_code,
-            "battery_percent": _battery_status_to_percent(status_code),
+            "battery_flag": battery_flag,
+            "battery_percent": _battery_flag_to_percent(battery_flag),
             "decoder": "hcs021frf_hex",
         }
     )
+    _attach_report_time(result, b)
     return result
 
 
@@ -1051,8 +1077,11 @@ def decode_rain(raw: str) -> dict:
     b15,16 = DC,01
     b17 = 0x97 ; b18,b19 = total raw*10 LE
     b20,b21 = 0x00,0x00
-    b22,b23 = 0xFF,0x0F (status/battery)
-    b24..b27 = tail
+    b22..b27 = trailing STA_REPTIME record (0xFF 0x0F + 4-byte packed wall clock)
+
+    Battery is the STA_BAT record at b15,b16, read structurally rather than at
+    these offsets; the 0xFF 0x0F pair is that trailing record's extended-type
+    header, not a battery word.
 
     Based on actual payload: 10#E10000FD040000FD054E07FD064E07DC01974E070000FF0F0410F718
     E1 00 00 FD 04 00 00 FD 05 4E 07 FD 06 4E 07 DC 01 97 4E 07 00 00 FF 0F 04 10 F7 18
@@ -1077,7 +1106,7 @@ def decode_rain(raw: str) -> dict:
     last_7d_raw10 = _le16(b, 13)
     total_raw10 = _le16(b, 18)
 
-    status_code = _extract_status_code(b, 22, 23)
+    battery_flag = _extract_battery_flag(b)
 
     result = _base_decoder_dict("rain", 0, b)  # Rain gauge doesn't have RSSI in standard position
     result.update(
@@ -1090,10 +1119,11 @@ def decode_rain(raw: str) -> dict:
             "rain_last_24h_raw10": last_24h_raw10,
             "rain_last_7d_raw10": last_7d_raw10,
             "rain_total_raw10": total_raw10,
-            "battery_status_code": status_code,
-            "battery_percent": _battery_status_to_percent(status_code),
+            "battery_flag": battery_flag,
+            "battery_percent": _battery_flag_to_percent(battery_flag),
         }
     )
+    _attach_report_time(result, b)
     return result
 
 
@@ -1108,28 +1138,36 @@ def decode_moisture_simple(raw: str) -> dict:
     b4 = 0x01
     b5 = 0x88  (moisture tag)
     b6 = moisture % (0-100)
-    b7,b8 = status/battery field
+    b7.. = trailing STA_REPTIME record (0xFF 0x0F + 4-byte packed wall clock)
 
     Based on actual payload: 10#E1C600DC01881AFF0F5E21F718
     E1 C6 00 DC 01 88 1A FF 0F 5E 21 F7 18
     b[1]=0xC6=198-256=-58 RSSI
+    b[4]=0x01 STA_BAT flag
     b[6]=0x1A=26% moisture
+
+    The offsets above are the frame's record boundaries: this is the same
+    self-describing encoding the 11# frames use, without the per-record dp_id.
+    Battery and report time are read structurally rather than at these fixed
+    offsets, so a firmware that reorders or omits a record cannot silently
+    shift them onto another datapoint's bytes.
     """
     b = _validate_payload(raw, 9)
     _validate_tag(b, 5, 0x88, "HCS026FRF")
 
     rssi = _extract_rssi(b)
     moisture = b[6]
-    status_code = _extract_status_code(b, 7, 8)
+    battery_flag = _extract_battery_flag(b)
 
     result = _base_decoder_dict("moisture_simple", rssi, b)
     result.update(
         {
             "moisture_percent": moisture,
-            "battery_status_code": status_code,
-            "battery_percent": _battery_status_to_percent(status_code),
+            "battery_flag": battery_flag,
+            "battery_percent": _battery_flag_to_percent(battery_flag),
         }
     )
+    _attach_report_time(result, b)
     return result
 
 

@@ -27,6 +27,7 @@ from tests.payload_samples import (
     MOISTURE_FULL_ASCII_PAYLOAD,
     MOISTURE_FULL_HEX_PAYLOAD,
     MOISTURE_SIMPLE_HEX_PAYLOAD,
+    MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD,
     RAIN_HEX_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
@@ -224,10 +225,10 @@ class TestDecodeHtv213frfValve:
         raw = "11#2B9F17E1054217E1CA0018DC0119D800FEFF0FEC4BCB19"
         assert decode_htv213frf_valve(raw)["rssi_dbm"] == -54
 
-    # --- Battery (trailing 0xFF0F status word on real hex frames) ---
+    # --- Battery (STA_BAT record on real hex frames) ---
 
     def test_full_frame_reports_battery_percent(self):
-        """A real full HTV245FRF hex frame surfaces battery_percent from the tail word."""
+        """A real full HTV245FRF hex frame surfaces battery_percent from its STA_BAT record."""
         result = decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)
         assert result["battery_percent"] == 100
 
@@ -237,29 +238,67 @@ class TestDecodeHtv213frfValve:
         assert result["battery_percent"] == 100
         assert result["zones"][2]["duration_seconds"] == 2940
 
-    def test_low_battery_word_maps_to_percent(self):
-        """A frame whose tail word is 0x0FFA decodes to 50% (shared battery scale)."""
-        # Swap the trailing battery word FF0F (0x0FFF=100%) for FA0F (0x0FFA=50%).
+    def test_trailing_report_time_header_does_not_drive_battery(self):
+        """Rewriting the trailing STA_REPTIME header leaves battery untouched.
+
+        The previous extraction read these two bytes as the battery word, so
+        this edit used to move the reading from 100% to 50%.
+        """
         raw = SAMPLE_HTV245_FULL_IDLE_PAYLOAD.replace("FEFF0F", "FEFA0F")
         result = decode_htv213frf_valve(raw)
-        assert result["battery_percent"] == 50
+        assert result["battery_percent"] == 100
 
-    def test_marker_present_but_word_not_a_battery_code_is_omitted(self):
-        """A 0xFE tail marker with an out-of-band word (0x0000) yields no battery_percent."""
-        # Keep the 0xFE marker but blank the battery word so it is not in _BATTERY_MAP.
-        raw = SAMPLE_HTV245_FULL_IDLE_PAYLOAD.replace("FEFF0F", "FE0000")
+    def test_uncorroborated_flag_yields_no_battery_percent(self):
+        """A STA_BAT flag with no known charge level is reported as no reading.
+
+        The raw flag is still surfaced, as it is on every other decoder: with
+        no percentage to show it is the only remaining evidence of the frame's
+        battery state.
+        """
+        raw = SAMPLE_HTV245_FULL_IDLE_PAYLOAD.replace("18DC01", "18DC03")
         result = decode_htv213frf_valve(raw)
         assert "battery_percent" not in result
+        assert result["battery_flag"] == 3
+        assert result["zones"]
+
+    def test_full_frame_surfaces_the_raw_flag(self):
+        """A healthy frame reports both the flag and the percentage."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
 
     def test_ascii_payload_has_no_battery_percent(self):
-        """The ASCII firmware format carries no battery word, so the key is absent."""
+        """The ASCII firmware format carries no STA_BAT record, so the key is absent."""
         result = decode_htv213frf_valve(SAMPLE_HTV245_ASCII_PAYLOAD)
         assert "battery_percent" not in result
 
-    def test_short_frame_has_no_battery_percent(self):
-        """A frame without the battery tail does not fabricate a battery reading."""
+    def test_short_frame_reads_battery_from_its_sta_bat_record(self):
+        """A frame with no report-time tail still carries STA_BAT and reports it."""
         result = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)
-        assert "battery_percent" not in result
+        assert result["battery_percent"] == 100
+
+    # --- Report time ---
+
+    def test_full_frame_reports_device_wall_clock(self):
+        """The trailing STA_REPTIME record unpacks to the device's wall clock."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)
+        assert result["report_time"] == "2026-07-25T07:00:02"
+        assert result["report_time_raw"] == 0x19F27002
+
+    def test_zone2_capture_unpacks_to_its_known_capture_date(self):
+        """The capture taken on July 4 unpacks to July 4.
+
+        This is the evidence for the 2020 year base: a base of 2000 would put
+        the same frame in 2006.
+        """
+        result = decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)
+        assert result["report_time"] == "2026-07-04T17:40:51"
+
+    def test_frame_without_report_time_omits_the_keys(self):
+        """A frame with no STA_REPTIME record carries neither report-time key."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)
+        assert "report_time" not in result
+        assert "report_time_raw" not in result
 
 
 class TestDecodeHtv145frf:
@@ -535,6 +574,13 @@ class TestDecodeMoistureFull:
         assert abs(result["temperature_c"] - 20.17) < 0.05
         assert result["decoder"] == "hcs021frf_hex"
 
+    def test_hex_battery_and_report_time(self):
+        """Battery reads the STA_BAT record and the frame's own clock is decoded."""
+        result = decode_moisture_full(MOISTURE_FULL_HEX_PAYLOAD)
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
+        assert result["report_time"] == "2026-03-27T18:35:58"
+
     def test_ascii_payload_fields(self):
         """Ascii payload fields."""
         result = decode_moisture_full(MOISTURE_FULL_ASCII_PAYLOAD)
@@ -608,6 +654,17 @@ class TestDecodeRain:
         assert result["rain_last_7d_mm"] == 187.0
         assert result["rain_total_mm"] == 187.0
 
+    def test_battery_and_report_time(self):
+        """Battery reads the STA_BAT record and the frame's own clock is decoded.
+
+        The gauge nests its rain readings in extended-escape records, so this
+        also covers the walk reaching STA_BAT past several of them.
+        """
+        result = decode_rain(RAIN_HEX_PAYLOAD)
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
+        assert result["report_time"] == "2026-03-27T17:00:04"
+
 
 class TestDecodeMoistureSimple:
     """Tests for decode_moisture_simple (HCS026FRF)."""
@@ -618,6 +675,29 @@ class TestDecodeMoistureSimple:
         assert result["type"] == "moisture_simple"
         assert result["rssi_dbm"] == -58
         assert result["moisture_percent"] == 26
+
+    def test_battery_comes_from_the_sta_bat_record(self):
+        """Battery reads the flag byte, not the trailing report-time header."""
+        result = decode_moisture_simple(MOISTURE_SIMPLE_HEX_PAYLOAD)
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
+
+    def test_report_time_from_second_capture(self):
+        """The 2026-07-29 capture unpacks to the moment it was pulled."""
+        result = decode_moisture_simple(MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD)
+        assert result["moisture_percent"] == 37
+        assert result["rssi_dbm"] == -60
+        assert result["report_time"] == "2026-07-29T12:19:33"
+
+    def test_rewritten_report_time_header_leaves_battery_alone(self):
+        """Battery no longer moves when the trailing type header changes.
+
+        Under the previous fixed-offset read this edit moved the reported
+        battery from 100% to 50%.
+        """
+        raw = MOISTURE_SIMPLE_HEX_PAYLOAD.replace("FF0F", "FF0A")
+        result = decode_moisture_simple(raw)
+        assert result["battery_percent"] == 100
 
 
 class TestBasicDecoders:

@@ -3,9 +3,9 @@
 import pytest
 
 from custom_components.rainpoint.api import (
-    _battery_status_to_percent,
+    _battery_flag_to_percent,
+    _extract_battery_flag,
     _extract_rssi,
-    _extract_status_code,
     _validate_payload,
     _validate_tag,
 )
@@ -78,41 +78,55 @@ class TestExtractRssi:
         assert _extract_rssi(b) == -128
 
 
-class TestBatteryStatusToPercent:
-    """Tests for _battery_status_to_percent."""
+class TestExtractBatteryFlag:
+    """Tests for _extract_battery_flag."""
 
-    def test_full_battery(self):
-        """Full battery."""
-        assert _battery_status_to_percent(0x0FFF) == 100
+    def test_reads_sta_bat_record(self):
+        """The byte following the 0xDC header is the flag."""
+        b = bytes.fromhex("E1C600DC01881A")
+        assert _extract_battery_flag(b) == 1
 
-    def test_ninety_percent(self):
-        """Ninety percent."""
-        assert _battery_status_to_percent(0x0FFE) == 90
+    def test_reads_non_normal_flag(self):
+        """A flag other than 1 is returned as-is, not clamped."""
+        b = bytes.fromhex("E1C600DC03881A")
+        assert _extract_battery_flag(b) == 3
 
-    def test_ten_percent(self):
-        """Ten percent."""
-        assert _battery_status_to_percent(0x0FF6) == 10
+    def test_dp_id_prefixed_frame(self):
+        """An 11# frame carries a dp_id ahead of every record header."""
+        b = bytes.fromhex("17E1AE0018DC01")
+        assert _extract_battery_flag(b, dp_id_prefixed=True) == 1
 
-    def test_unknown_code_returns_zero(self):
-        """Unmapped status code returns 0."""
-        assert _battery_status_to_percent(0x0000) == 0
+    def test_frame_without_sta_bat_returns_none(self):
+        """No STA_BAT record means no reading, not a default."""
+        b = bytes.fromhex("E1C600881A")
+        assert _extract_battery_flag(b) is None
 
-    def test_all_mapped_values(self):
-        """Verify all 10 mapped values from 100 down to 10."""
-        expected = {
-            0x0FFF: 100,
-            0x0FFE: 90,
-            0x0FFD: 80,
-            0x0FFC: 70,
-            0x0FFB: 60,
-            0x0FFA: 50,
-            0x0FF9: 40,
-            0x0FF8: 30,
-            0x0FF7: 20,
-            0x0FF6: 10,
-        }
-        for code, pct in expected.items():
-            assert _battery_status_to_percent(code) == pct, f"Code 0x{code:04X} should be {pct}%"
+    def test_value_byte_equal_to_header_is_not_matched(self):
+        """0xDC appearing inside another record's value is not read as STA_BAT.
+
+        The illuminance value below contains a 0xDC byte. A scan for the header
+        byte would return the byte after it; the structural walk skips it.
+        """
+        b = bytes.fromhex("E1C60085DC0000")
+        assert _extract_battery_flag(b) is None
+
+
+class TestBatteryFlagToPercent:
+    """Tests for _battery_flag_to_percent."""
+
+    @pytest.mark.parametrize("flag", [0, 1])
+    def test_normal_flags_map_to_full(self, flag):
+        """The corroborated readings both mean a healthy cell."""
+        assert _battery_flag_to_percent(flag) == 100
+
+    @pytest.mark.parametrize("flag", [2, 3, 4, 255])
+    def test_unproven_flags_map_to_none(self, flag):
+        """No capture pairs these with a charge level, so none is invented."""
+        assert _battery_flag_to_percent(flag) is None
+
+    def test_missing_flag_maps_to_none(self):
+        """A frame with no STA_BAT record yields no percentage."""
+        assert _battery_flag_to_percent(None) is None
 
 
 class TestValidateTag:
@@ -128,22 +142,3 @@ class TestValidateTag:
         b = bytes([0x00, 0xBB, 0x00])
         with pytest.raises(ValueError, match=r"TestDevice.*Expected tag 0xAA.*got 0xBB"):
             _validate_tag(b, 1, 0xAA, "TestDevice")
-
-
-class TestExtractStatusCode:
-    """Tests for _extract_status_code."""
-
-    def test_simple_value(self):
-        """Low byte only."""
-        b = bytes([0x00, 0x00, 0x0A, 0x00])
-        assert _extract_status_code(b, 2, 3) == 0x0A
-
-    def test_high_byte_shifted(self):
-        """High byte is shifted left 8 bits and ORed with low byte."""
-        b = bytes([0x00, 0x00, 0xFF, 0x0F])
-        assert _extract_status_code(b, 2, 3) == 0x0FFF
-
-    def test_both_bytes_contribute(self):
-        """Both bytes assemble into a 16-bit value: 0x12 << 8 | 0x34 = 0x1234."""
-        b = bytes([0x00, 0x00, 0x34, 0x12])
-        assert _extract_status_code(b, 2, 3) == 0x1234
