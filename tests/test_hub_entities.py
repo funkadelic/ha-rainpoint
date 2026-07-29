@@ -62,16 +62,34 @@ class TestResolvePushDiagnosticHubs:
         assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 222}]
 
     def test_falls_back_to_first_hub_when_mid_is_none(self):
-        hubs = [{"mid": 111}, {"mid": 222}]
+        hubs = [{"mid": 111, "did": "d111"}, {"mid": 222, "did": "d222"}]
         client = MagicMock()
         client.hub_mid = None
-        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111}]
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111, "did": "d111"}]
 
     def test_falls_back_to_first_hub_when_no_hub_matches(self):
-        hubs = [{"mid": 111}, {"mid": 222}]
+        hubs = [{"mid": 111, "did": "d111"}, {"mid": 222, "did": "d222"}]
         client = MagicMock()
         client.hub_mid = 999  # no such hub
-        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111}]
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111, "did": "d111"}]
+
+    def test_fallback_skips_a_record_with_no_hub_identity(self):
+        """A Bluetooth wrapper in slot 0 must not be mistaken for the bound hub.
+
+        Pairing a Bluetooth valve adds a parent record whose identity fields are
+        all empty strings. Taking hubs[0] blindly returned that record.
+        """
+        hubs = [{"mid": 346965, "did": "", "mac": "", "productKey": "", "model": ""}, {"mid": 236547, "did": "17053410"}]
+        client = MagicMock()
+        client.hub_mid = None
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 236547, "did": "17053410"}]
+
+    def test_fallback_returns_nothing_when_no_record_is_a_hub(self):
+        """All-wrapper hub list yields no push diagnostics rather than a phantom one."""
+        hubs = [{"mid": 346965, "did": "", "mac": "", "productKey": "", "model": ""}]
+        client = MagicMock()
+        client.hub_mid = None
+        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == []
 
     def test_accepts_dict_shaped_hubs(self):
         hubs = {"a": {"mid": 111}, "b": {"mid": 222}}

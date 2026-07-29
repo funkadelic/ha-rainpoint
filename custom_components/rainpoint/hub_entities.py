@@ -24,7 +24,7 @@ from .const import (
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
     PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
 )
-from .coordinator import RainPointCoordinator
+from .coordinator import RainPointCoordinator, first_hub_record
 from .device import RainPointHubDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,9 +47,11 @@ def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client)
         match = next((hub for hub in hubs if hub.get("mid") == bound_mid), None)
         if match is not None:
             return [match]
-    # No mid to match on (or no matching hub): fall back to the first hub, which
-    # is the one the client was built from.
-    return [hubs[0]]
+    # No mid to match on (or no matching hub): fall back to the first real hub,
+    # which is the one the client was built from. A Bluetooth wrapper record can
+    # occupy slot 0 without being a hub at all.
+    fallback = first_hub_record(hubs)
+    return [fallback] if fallback is not None else []
 
 
 class RainPointHubSensorBase(CoordinatorEntity, SensorEntity, RainPointHubDevice):
@@ -104,7 +106,7 @@ class RainPointHubDeviceIDSensor(RainPointHubSensorBase):
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_device_id"
-        self._attr_name = f"{hub_info.get('name', 'RainPoint Hub')} Device ID"
+        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Device ID"
 
     @property
     def native_value(self) -> str | int | None:
@@ -121,7 +123,7 @@ class RainPointHubFirmwareSensor(RainPointHubSensorBase):
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_firmware"
-        self._attr_name = f"{hub_info.get('name', 'RainPoint Hub')} Firmware Version"
+        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Firmware Version"
 
     @property
     def native_value(self) -> str | None:
@@ -136,7 +138,7 @@ class RainPointHubMACSensor(RainPointHubSensorBase):
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_mac"
-        self._attr_name = f"{hub_info.get('name', 'RainPoint Hub')} MAC Address"
+        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} MAC Address"
 
     @property
     def native_value(self) -> str | None:
@@ -222,7 +224,7 @@ class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDev
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_channel"
-        self._attr_name = f"{hub_info.get('name', 'RainPoint Hub')} RF Channel"
+        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} RF Channel"
         self._attr_options = _hub_rf_channel_options(hub_info)
         # Current channel comes from the hub record; None renders as unknown when
         # the field is absent. Selecting a channel is still unsupported (below).
@@ -336,7 +338,7 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_broadcast"
-        self._attr_name = f"{hub_info.get('name', 'RainPoint Hub')} Automatic Broadcast"
+        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Automatic Broadcast"
         self._attr_is_on = None  # Unknown until API supports reading
 
     @property

@@ -55,7 +55,7 @@ class RainPointHubDevice(Entity):
     ) -> None:
         self._hub_info = hub_info
         self._attr_unique_id = f"{DOMAIN}_hub_{hub_info['hid']}"
-        self._attr_name = hub_info.get("name", "RainPoint Hub")
+        self._attr_name = hub_info.get("name") or "RainPoint Hub"
         self._attr_should_poll = False
 
     @property
@@ -63,9 +63,9 @@ class RainPointHubDevice(Entity):
         """Return device registry information for this hub."""
         return DeviceInfo(
             identifiers={(DOMAIN, f"hub_{self._hub_info['hid']}")},
-            name=self._hub_info.get("name", "RainPoint Hub"),
+            name=self._hub_info.get("name") or "RainPoint Hub",
             manufacturer="RainPoint",  # RainPoint is the actual device manufacturer
-            model=self._hub_info.get("model", "Unknown"),
+            model=self._hub_info.get("model") or "Unknown",
             sw_version=self._hub_info.get("softVer"),
             hw_version=self._hub_info.get("hardwareVersion"),
             serial_number=self._hub_info.get("mac"),

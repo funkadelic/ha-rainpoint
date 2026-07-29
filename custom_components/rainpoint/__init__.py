@@ -21,6 +21,7 @@ from .const import (
     GENERIC_UNIQUE_ID_MARKER,
     UNIQUE_ID_PREFIX,
 )
+from .coordinator import first_hub_record
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,9 +59,9 @@ def _resolve_hub_identity(coordinator) -> tuple[str | None, str | None, int | No
     belongs to at construction.
     """
     hubs = (coordinator.data or {}).get("hubs", [])
-    if not hubs:
+    hub = first_hub_record(hubs)
+    if hub is None:
         return None, None, None, None
-    hub = hubs[0]
     return hub.get("deviceName"), hub.get("productKey"), hub.get("mid"), hub.get("hid")
 
 

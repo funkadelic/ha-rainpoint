@@ -38,7 +38,7 @@ from .const import (
     MODEL_VALVE_345,
     MODEL_VALVE_405,
 )
-from .coordinator import RainPointCoordinator, _build_new_device_issue_url
+from .coordinator import RainPointCoordinator, _build_new_device_issue_url, is_hub_record
 from .diagnostic_sensors import (
     RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
@@ -250,10 +250,17 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
 
 
 def _create_hub_entities(coordinator, hubs_cfg):
-    """Create the per-hub diagnostic entities for every hub returned by the API."""
-    hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
+    """Create the per-hub diagnostic entities for every real hub returned by the API.
+
+    Keyed by mid, not hid: a home has one hid but can hold several top-level
+    records, so keying by hid collapsed them and let the last record win over
+    the real hub. Records that carry no hub identity are skipped outright.
+    """
+    hubs_dict = {str(hub.get("mid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
     entities: list = []
     for hub_info in hubs_dict.values():
+        if not is_hub_record(hub_info):
+            continue
         entities.append(RainPointHubDeviceIDSensor(coordinator, hub_info))
         entities.append(RainPointHubFirmwareSensor(coordinator, hub_info))
         entities.append(RainPointHubMACSensor(coordinator, hub_info))

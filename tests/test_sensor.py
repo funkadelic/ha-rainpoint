@@ -286,6 +286,53 @@ class TestAsyncSetupEntryDispatch:
         assert RainPointHubRSSISensor in types
 
     @pytest.mark.asyncio
+    async def test_bluetooth_wrapper_does_not_displace_the_real_hub(self):
+        """Two top-level records in one home must not collapse onto each other.
+
+        Pairing a Bluetooth valve makes getDeviceByHid return a second parent
+        record under the same hid whose identity fields are all empty strings.
+        Keying the hub map by hid collapsed the two and let the wrapper win, so
+        the real hub's page showed no name and fell back to the home id for its
+        device id. Only the real hub may produce hub entities.
+        """
+        from custom_components.rainpoint.hub_entities import RainPointHubDeviceIDSensor
+
+        real_hub = {
+            "hid": 182509,
+            "mid": 236547,
+            "name": "Hub",
+            "did": "17053410",
+            "mac": "A8:46:74:BB:91:F0",
+            "model": "HWG023WBRF-V2",
+            "productKey": "a3QrDxYPTM2",
+            "softVer": "1.1.1041",
+        }
+        wrapper = {
+            "hid": 182509,
+            "mid": 346965,
+            "name": "",
+            "did": "",
+            "mac": "",
+            "model": "",
+            "productKey": "",
+            "softVer": "",
+        }
+        # Wrapper last, which is the order that used to overwrite the real hub.
+        coordinator = _make_mock_coordinator(make_coordinator_data(hubs=[real_hub, wrapper], sensors={}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        # One hub's worth of entities, not two and not the wrapper's.
+        assert len(captured) == 4
+        device_id = next(e for e in captured if isinstance(e, RainPointHubDeviceIDSensor))
+        assert device_id.native_value == "17053410"
+        assert device_id._attr_name == "Hub Device ID"
+        assert device_id.device_info["name"] == "Hub"
+
+    @pytest.mark.asyncio
     async def test_setup_entry_adds_push_last_message_sensor_when_push_enabled(self):
         """When push is enabled (mqtt_client present), one last-message entity is added per hub."""
         from custom_components.rainpoint.hub_entities import RainPointPushLastMessageSensor

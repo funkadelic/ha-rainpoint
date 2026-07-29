@@ -4,6 +4,7 @@ import json
 import logging
 import types
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -1568,3 +1569,63 @@ class TestIssueUrlLengthBudget:
             fitted = _coord_module._fit_param(params, "gate_diagnostics", "D" * 4000)
 
         assert "gate_diagnostics" not in fitted
+
+
+class TestIsHubRecord:
+    """Tests for is_hub_record and first_hub_record.
+
+    Pairing a Bluetooth valve makes getDeviceByHid return a second top-level
+    record in the same home whose identity fields are all empty strings rather
+    than absent keys, so `.get(key, default)` hands back "" and the default
+    never fires. These two helpers are what keeps such a record from being
+    presented as a hub.
+    """
+
+    # The real captured shapes: a HWG023WBRF-V2 hub and the wrapper the cloud
+    # added to hold an HTV210B, both under hid 182509.
+    REAL_HUB: ClassVar[dict] = {
+        "mid": 236547,
+        "name": "Hub",
+        "did": "17053410",
+        "mac": "A8:46:74:BB:91:F0",
+        "model": "HWG023WBRF-V2",
+        "productKey": "a3QrDxYPTM2",
+        "hid": 182509,
+    }
+    WRAPPER: ClassVar[dict] = {
+        "mid": 346965,
+        "name": "",
+        "did": "",
+        "mac": "",
+        "model": "",
+        "productKey": "",
+        "deviceName": "",
+        "hid": 182509,
+    }
+
+    def test_real_hub_is_a_hub(self):
+        assert _coord_module.is_hub_record(self.REAL_HUB) is True
+
+    def test_wrapper_with_all_empty_identity_is_not_a_hub(self):
+        assert _coord_module.is_hub_record(self.WRAPPER) is False
+
+    def test_empty_record_is_not_a_hub(self):
+        assert _coord_module.is_hub_record({}) is False
+
+    @pytest.mark.parametrize("field", ["did", "mac", "productKey", "model"])
+    def test_any_single_identity_field_is_enough(self, field):
+        """Each identity field on its own qualifies the record as a hub."""
+        assert _coord_module.is_hub_record({field: "x"}) is True
+
+    def test_first_hub_record_skips_a_leading_wrapper(self):
+        assert _coord_module.first_hub_record([self.WRAPPER, self.REAL_HUB]) is self.REAL_HUB
+
+    def test_first_hub_record_keeps_api_order_among_real_hubs(self):
+        second = {"mid": 999, "did": "d999"}
+        assert _coord_module.first_hub_record([self.REAL_HUB, second]) is self.REAL_HUB
+
+    def test_first_hub_record_returns_none_when_only_wrappers(self):
+        assert _coord_module.first_hub_record([self.WRAPPER]) is None
+
+    def test_first_hub_record_returns_none_for_empty_list(self):
+        assert _coord_module.first_hub_record([]) is None

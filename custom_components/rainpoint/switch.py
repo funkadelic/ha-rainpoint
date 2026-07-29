@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_GENERIC_CONTROL_ENABLED, DEBUG_WORKER_URL, DOMAIN
-from .coordinator import RainPointCoordinator
+from .coordinator import RainPointCoordinator, is_hub_record
 from .hub_entities import RainPointHubBroadcastSwitch
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,9 +26,11 @@ async def async_setup_entry(
 
     # Hub broadcast switches
     hubs_cfg = coordinator.data.get("hubs", [])
-    hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
+    hubs_dict = {str(hub.get("mid", i)): hub for i, hub in enumerate(hubs_cfg)} if isinstance(hubs_cfg, list) else hubs_cfg
 
     for _hub_key, hub_info in hubs_dict.items():
+        if not is_hub_record(hub_info):
+            continue
         entities.append(RainPointHubBroadcastSwitch(coordinator, hub_info))
 
     # Only register the debug switch when the worker URL is configured
