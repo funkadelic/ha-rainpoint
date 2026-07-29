@@ -73,14 +73,14 @@ def _make_number(current_value=10.0, firmware_version="1.0"):
 
 
 class TestNumberEntity:
+    """Tests for RainPointZoneDurationNumber."""
+
     def test_device_info_carries_identity_and_hub_link(self):
         """The duration entity resolves to the same device card as its valve."""
         number = _make_number()
         info = number.device_info
         assert info["serial_number"] == "200_1"
         assert info["via_device"] == (DOMAIN, "hub_100")
-
-    """Tests for RainPointZoneDurationNumber."""
 
     def test_native_value_returns_current(self):
         """native_value should return _current_value."""

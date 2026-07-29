@@ -153,7 +153,7 @@ class RainPointZoneDurationNumber(_RainPointDurationNumberBase):
         hid = sensor_info["hid"]
         mid = sensor_info["mid"]
         addr = sensor_info["addr"]
-        sub_name = sensor_info.get("sub_name") or f"Valve Hub {addr}"
+        sub_name = sensor_info.get("sub_name") or f"{self._device_name_prefix} {addr}"
 
         self._attr_unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{zone_num}_duration"
         self._attr_name = f"{sub_name} Zone {zone_num} Duration"
@@ -222,7 +222,7 @@ class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
             f"{identity.lower()}_p{datapoint.dp_port}{GENERIC_CONTROL_DURATION_SUFFIX}"
         )
 
-        sub_name = sensor_info.get("sub_name") or "Device"
+        sub_name = sensor_info.get("sub_name") or self._device_name_prefix
         zone = ""
         if port_number is not None and port_number > 1 and datapoint.dp_port >= 1:
             zone = f" Zone {datapoint.dp_port}"

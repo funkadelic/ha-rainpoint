@@ -355,7 +355,7 @@ class RainPointSensorBase(RainPointSubDeviceEntity, SensorEntity):
             _LOGGER.debug("No timestamp found in sensor data: %s", data)
 
         # Legacy timestamp from raw_status (fallback)
-        info = self.coordinator.data.get("sensors", {}).get(self._sensor_key) or {}
+        info = (self.coordinator.data or {}).get("sensors", {}).get(self._sensor_key) or {}
         raw_status = info.get("raw_status") or {}
         ts = raw_status.get("time")
         if ts:
