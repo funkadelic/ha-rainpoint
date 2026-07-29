@@ -25,6 +25,12 @@ def build_sub_device_info(sensor_info: dict, *, name_fallback: str) -> DeviceInf
 
     name_fallback stays per-platform: it only applies to a device the cloud
     gave no name, and changing it would rename those devices in place.
+
+    A function rather than a base class: the platform entities all descend
+    from CoordinatorEntity with their own __init__ chains. A sub-device base
+    class shipped alongside RainPointHubDevice originally and no platform ever
+    inherited from it, which is how the inline copies drifted in the first
+    place.
     """
     hid = sensor_info["hid"]
     mid = sensor_info["mid"]
@@ -68,32 +74,3 @@ class RainPointHubDevice(Entity):
     @property
     def available(self) -> bool:
         return True  # Hub is always available if config exists
-
-
-class RainPointSubDevice(Entity):
-    """Base class for RainPoint sub-devices (sensors, valves, etc.)."""
-
-    def __init__(
-        self,
-        hub_info: dict,
-        sub_device_info: dict,
-    ) -> None:
-        self._hub_info = hub_info
-        self._sub_device_info = sub_device_info
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device registry information for this sub-device."""
-        return build_sub_device_info(
-            {
-                "hid": self._hub_info["hid"],
-                "mid": self._sub_device_info["mid"],
-                "addr": self._sub_device_info["addr"],
-                "sub_name": self._sub_device_info.get("sub_name"),
-                "model": self._sub_device_info.get("model"),
-                # This class is constructed from a raw hub record, where the
-                # firmware field is still the API's own softVer spelling.
-                "firmware_version": self._sub_device_info.get("softVer"),
-            },
-            name_fallback=f"Device {self._sub_device_info['addr']}",
-        )

@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 from custom_components.rainpoint.const import DOMAIN
-from custom_components.rainpoint.device import (
-    RainPointHubDevice,
-    RainPointSubDevice,
-    build_sub_device_info,
-)
+from custom_components.rainpoint.device import RainPointHubDevice, build_sub_device_info
 
 
 class TestRainPointHubDevice:
@@ -66,56 +62,24 @@ class TestRainPointHubDevice:
         assert hub._attr_name == "Test Hub"
 
 
-class TestRainPointSubDevice:
-    """Tests for RainPointSubDevice."""
+class TestBuildSubDeviceInfoIdentity:
+    """Identity fields the builder must keep stable for every platform."""
 
-    def _make_sub(self, hid=100, mid=200, addr=1, sub_name="Sensor 1", model="HCS026FRF"):
-        """Create a RainPointSubDevice."""
-        hub_info = {"hid": hid}
-        sub_device_info = {
-            "mid": mid,
-            "addr": addr,
-            "sub_name": sub_name,
-            "model": model,
-            "softVer": "1.0",
-        }
-        sub = RainPointSubDevice.__new__(RainPointSubDevice)
-        RainPointSubDevice.__init__(sub, hub_info=hub_info, sub_device_info=sub_device_info)
-        return sub
+    def test_manufacturer_is_rainpoint(self):
+        """All supported hardware is RainPoint, hub and sub-device alike."""
+        info = build_sub_device_info(
+            {"hid": 100, "mid": 200, "addr": 1, "sub_name": "Soil Sensor", "model": "HCS026FRF"},
+            name_fallback="Sensor 1",
+        )
+        assert info["manufacturer"] == "RainPoint"
 
-    def test_sub_device_info_identifiers(self):
-        """device_info should contain {hid}_{mid}_{addr} identifier."""
-        sub = self._make_sub(hid=100, mid=200, addr=1)
-        info = sub.device_info
-        assert (DOMAIN, "100_200_1") in info["identifiers"]
-
-    def test_sub_device_info_name(self):
-        """device_info name should match sub_name."""
-        sub = self._make_sub(sub_name="Sensor 1")
-        assert sub.device_info["name"] == "Sensor 1"
-
-    def test_sub_device_info_manufacturer(self):
-        """device_info manufacturer should be 'RainPoint'."""
-        sub = self._make_sub()
-        assert sub.device_info["manufacturer"] == "RainPoint"
-
-    def test_sub_device_info_model(self):
-        """device_info model should match sub_device_info model."""
-        sub = self._make_sub(model="HCS026FRF")
-        assert sub.device_info["model"] == "HCS026FRF"
-
-    def test_sub_device_info_via_device(self):
-        """device_info should link to parent hub via via_device."""
-        sub = self._make_sub(hid=100)
-        assert sub.device_info["via_device"] == (DOMAIN, "hub_100")
-
-    def test_sub_device_info_name_fallback(self):
-        """If sub_name is absent, device_info name should fall back to 'Device {addr}'."""
-        hub_info = {"hid": 100}
-        sub_device_info = {"mid": 200, "addr": 7, "model": "Unknown", "softVer": "1.0"}
-        sub = RainPointSubDevice.__new__(RainPointSubDevice)
-        RainPointSubDevice.__init__(sub, hub_info=hub_info, sub_device_info=sub_device_info)
-        assert sub.device_info["name"] == "Device 7"
+    def test_model_is_passed_through(self):
+        """The cloud's model string reaches the device page verbatim."""
+        info = build_sub_device_info(
+            {"hid": 100, "mid": 200, "addr": 1, "sub_name": "Soil Sensor", "model": "HCS026FRF"},
+            name_fallback="Sensor 1",
+        )
+        assert info["model"] == "HCS026FRF"
 
 
 class TestBuildSubDeviceInfo:
