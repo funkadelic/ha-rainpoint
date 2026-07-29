@@ -17,7 +17,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Family | Examples | Entities Created |
 | ------ | -------- | ---------------- |
 | Valve hubs | HTV245FRF (primary tested device), HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV0540FRF | Valve per zone, duration number per zone |
-| Soil sensors | HCS021FRF, HCS026FRF, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
+| Soil sensors | HCS021FRF, HCS026FRF (tested device), HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
@@ -25,7 +25,9 @@ This integration supports RainPoint Smart+ device families, including:
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
 | Flow meters | HCS008FRF | Flow reading |
 
-The **HTV245FRF** wifi valve is the primary tested device and the integration's core-value target. Other models are supported opportunistically from captured payloads.
+The **HTV245FRF** wifi valve and the **HCS026FRF** soil sensor are the maintainer's own hardware and are the models tested against real devices. The HTV245FRF remains the integration's core-value target. Other models are supported opportunistically from captured payloads.
+
+The **HTV210B** valve is under test now, which is why it is absent from the table above. It pairs to a hub, so the integration does see it and it can report readings, but the cloud API exposes a different open/close command path for this model than the one the integration drives. No valve entity is created for it rather than one that accepts a command the hardware never acts on. Whether it graduates to the table depends on captures from the device.
 
 Every model listed above has a decoder written against a real payload. A model that is absent is not necessarily unusable: the opt-in generic sensors described under [Configuration](#configuration) can often surface readings for it from the product catalog, clearly labeled unverified.
 
