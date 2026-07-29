@@ -246,7 +246,7 @@ class TestNumberAsyncAddedToHass:
 
         import custom_components.rainpoint.number as num_mod
 
-        real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
+        real_fn = num_mod.RainPointZoneDurationNumber.async_added_to_hass
         await real_fn(num)
 
         assert num._current_value == 25.0
@@ -263,7 +263,7 @@ class TestNumberAsyncAddedToHass:
 
         import custom_components.rainpoint.number as num_mod
 
-        real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
+        real_fn = num_mod.RainPointZoneDurationNumber.async_added_to_hass
         await real_fn(num)
 
         assert num._current_value == 10.0  # unchanged
@@ -280,7 +280,7 @@ class TestNumberAsyncAddedToHass:
 
         import custom_components.rainpoint.number as num_mod
 
-        real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
+        real_fn = num_mod.RainPointZoneDurationNumber.async_added_to_hass
         await real_fn(num)
 
         assert num._current_value == 10.0
@@ -295,7 +295,7 @@ class TestNumberAsyncAddedToHass:
 
         import custom_components.rainpoint.number as num_mod
 
-        real_fn = num_mod.RainPointZoneDurationNumber.__dict__["async_added_to_hass"]
+        real_fn = num_mod.RainPointZoneDurationNumber.async_added_to_hass
         await real_fn(num)
 
         assert num._current_value == 10.0

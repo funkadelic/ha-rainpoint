@@ -14,9 +14,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfVolume
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import _USAGE_GALLONS_PER_COUNT
 from .const import (
@@ -41,13 +39,13 @@ from .const import (
     MODEL_VALVE_405,
 )
 from .coordinator import RainPointCoordinator, _build_new_device_issue_url
-from .device import build_sub_device_info
 from .diagnostic_sensors import (
     RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
     RainPointLastUpdatedSensor,
     RainPointRSSISensor,
 )
+from .entity import RainPointSubDeviceEntity, sub_device_attributes
 from .hub_entities import (
     RainPointHubDeviceIDSensor,
     RainPointHubFirmwareSensor,
@@ -331,39 +329,10 @@ async def async_setup_entry(
         async_add_entities(entities)
 
 
-class RainPointSensorBase(CoordinatorEntity, SensorEntity):
+class RainPointSensorBase(RainPointSubDeviceEntity, SensorEntity):
     """Base class for RainPoint sensors."""
 
-    _attr_should_poll = False
-
-    def __init__(
-        self,
-        coordinator: RainPointCoordinator,
-        sensor_key: str,
-        sensor_info: dict,
-        base_slug: str,
-    ) -> None:
-        super().__init__(coordinator)
-        self._sensor_key = sensor_key
-        self._sensor_info = sensor_info
-        self._base_slug = base_slug
-
-    @property
-    def _sensor_data(self) -> dict | None:
-        sensors = self.coordinator.data.get("sensors", {})
-        info = sensors.get(self._sensor_key)
-        if not info:
-            return None
-        return info.get("data")
-
-    @property
-    def available(self) -> bool:
-        return self._sensor_data is not None
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Represent each subDevice as its own HA device, child of hub."""
-        return build_sub_device_info(self._sensor_info, name_fallback=f"Sensor {self._sensor_info['addr']}")
+    _device_name_prefix = "Sensor"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -381,25 +350,12 @@ class RainPointSensorBase(CoordinatorEntity, SensorEntity):
         if data.get("report_time") is not None:
             attrs["report_time"] = data["report_time"]
 
-        # Add firmware version from sensor info
-        sensors = self.coordinator.data.get("sensors", {})
-        info = sensors.get(self._sensor_key) or {}
-        firmware_version = info.get("firmware_version")
-        if firmware_version:
-            attrs["firmware_version"] = firmware_version
-
-        # Add device timestamp from decoded data
-        if "device_timestamp" in data:
-            attrs["device_timestamp"] = data["device_timestamp"]
-            attrs["timestamp_method"] = data.get("timestamp_method")
-            attrs["timestamp_source"] = data.get("timestamp_source", "server")
-        elif "server_timestamp" in data:
-            attrs["device_timestamp"] = data["server_timestamp"]
-            attrs["timestamp_source"] = data.get("timestamp_source", "server")
-        else:
+        attrs.update(sub_device_attributes(self.coordinator, self._sensor_key))
+        if "device_timestamp" not in attrs:
             _LOGGER.debug("No timestamp found in sensor data: %s", data)
 
         # Legacy timestamp from raw_status (fallback)
+        info = self.coordinator.data.get("sensors", {}).get(self._sensor_key) or {}
         raw_status = info.get("raw_status") or {}
         ts = raw_status.get("time")
         if ts:

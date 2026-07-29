@@ -13,11 +13,8 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import PERCENTAGE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT, EntityCategory
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .coordinator import RainPointCoordinator
-from .device import build_sub_device_info
+from .entity import RainPointSubDeviceEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,40 +80,11 @@ def _find_device_id_in_raw_payload(raw_payload: Any) -> int | None:
     return None
 
 
-class RainPointDiagnosticSensorBase(CoordinatorEntity, SensorEntity):
+class RainPointDiagnosticSensorBase(RainPointSubDeviceEntity, SensorEntity):
     """Base class for RainPoint diagnostic sensors."""
 
-    _attr_should_poll = False
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(
-        self,
-        coordinator: RainPointCoordinator,
-        sensor_key: str,
-        sensor_info: dict,
-        base_slug: str,
-    ) -> None:
-        super().__init__(coordinator)
-        self._sensor_key = sensor_key
-        self._sensor_info = sensor_info
-        self._base_slug = base_slug
-
-    @property
-    def _sensor_data(self) -> dict | None:
-        sensors = self.coordinator.data.get("sensors", {})
-        info = sensors.get(self._sensor_key)
-        if not info:
-            return None
-        return info.get("data")
-
-    @property
-    def available(self) -> bool:
-        return self._sensor_data is not None
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Represent each subDevice as its own HA device."""
-        return build_sub_device_info(self._sensor_info, name_fallback=f"Sensor {self._sensor_info['addr']}")
+    _device_name_prefix = "Sensor"
 
 
 class RainPointDeviceIDSensor(RainPointDiagnosticSensorBase):

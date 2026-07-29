@@ -23,6 +23,7 @@ from .const import (
 )
 from .coordinator import RainPointCoordinator
 from .device import build_sub_device_info
+from .entity import sub_device_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,12 +76,12 @@ async def async_setup_entry(
         async_add_entities(entities)
 
 
-class RainPointZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
-    """Configurable run duration (in minutes) for a single irrigation zone.
+class _RainPointDurationNumberBase(CoordinatorEntity, NumberEntity, RestoreEntity):
+    """Shared restore, value, attribute, and device-page behaviour for a duration entity.
 
-    The value is restored on HA restart via RestoreEntity.  When a valve is
-    opened without an explicit duration override in the service call data,
-    valve.py reads this entity's current value and converts it to seconds.
+    The two concrete classes below differ only in their constructors and class
+    attributes: one is built from a zone number, the other from a catalog
+    datapoint. Everything here was duplicated between them verbatim.
     """
 
     _attr_native_min_value = DURATION_MIN_MINUTES
@@ -88,28 +89,7 @@ class RainPointZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity
     _attr_native_step = DURATION_STEP_MINUTES
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_mode = NumberMode.BOX
-    _attr_icon = "mdi:timer-outline"
-
-    def __init__(
-        self,
-        coordinator: RainPointCoordinator,
-        sensor_key: str,
-        sensor_info: dict,
-        zone_num: int,
-    ) -> None:
-        super().__init__(coordinator)
-        self._sensor_key = sensor_key
-        self._sensor_info = sensor_info
-        self._zone_num = zone_num
-        self._current_value: float = DURATION_DEFAULT_MINUTES
-
-        hid = sensor_info["hid"]
-        mid = sensor_info["mid"]
-        addr = sensor_info["addr"]
-        sub_name = sensor_info.get("sub_name") or f"Valve Hub {addr}"
-
-        self._attr_unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{zone_num}_duration"
-        self._attr_name = f"{sub_name} Zone {zone_num} Duration"
+    _device_name_prefix = "Valve Hub"
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -137,30 +117,46 @@ class RainPointZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        attrs: dict[str, Any] = {}
-
-        # Add firmware version from sensor info
-        sensors = self.coordinator.data.get("sensors", {})
-        info = sensors.get(self._sensor_key) or {}
-        firmware_version = info.get("firmware_version")
-        if firmware_version:
-            attrs["firmware_version"] = firmware_version
-
-        # Add device timestamp from decoded data
-        data = self.coordinator.data.get("sensors", {}).get(self._sensor_key, {}).get("data", {})
-        if "device_timestamp" in data:
-            attrs["device_timestamp"] = data["device_timestamp"]
-            attrs["timestamp_method"] = data.get("timestamp_method")
-            attrs["timestamp_source"] = data.get("timestamp_source", "server")
-        elif "server_timestamp" in data:
-            attrs["device_timestamp"] = data["server_timestamp"]
-            attrs["timestamp_source"] = data.get("timestamp_source", "server")
-
-        return attrs
+        return sub_device_attributes(self.coordinator, self._sensor_key)
 
     @property
     def device_info(self) -> DeviceInfo:
-        return build_sub_device_info(self._sensor_info, name_fallback=f"Valve Hub {self._sensor_info['addr']}")
+        return build_sub_device_info(
+            self._sensor_info,
+            name_fallback=f"{self._device_name_prefix} {self._sensor_info['addr']}",
+        )
+
+
+class RainPointZoneDurationNumber(_RainPointDurationNumberBase):
+    """Configurable run duration (in minutes) for a single irrigation zone.
+
+    The value is restored on HA restart via RestoreEntity.  When a valve is
+    opened without an explicit duration override in the service call data,
+    valve.py reads this entity's current value and converts it to seconds.
+    """
+
+    _attr_icon = "mdi:timer-outline"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        zone_num: int,
+    ) -> None:
+        super().__init__(coordinator)
+        self._sensor_key = sensor_key
+        self._sensor_info = sensor_info
+        self._zone_num = zone_num
+        self._current_value: float = DURATION_DEFAULT_MINUTES
+
+        hid = sensor_info["hid"]
+        mid = sensor_info["mid"]
+        addr = sensor_info["addr"]
+        sub_name = sensor_info.get("sub_name") or f"Valve Hub {addr}"
+
+        self._attr_unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{zone_num}_duration"
+        self._attr_name = f"{sub_name} Zone {zone_num} Duration"
 
 
 def build_generic_duration_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
@@ -183,10 +179,10 @@ def build_generic_duration_entities(coordinator, sensor_key: str, sensor_info: d
     )
 
 
-class RainPointGenericZoneDurationNumber(CoordinatorEntity, NumberEntity, RestoreEntity):
+class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
     """Companion run-duration entity for one generic control valve zone.
 
-    Built near-verbatim from RainPointZoneDurationNumber above: same bounds,
+    Shares the base class above with RainPointZoneDurationNumber: same bounds,
     same default, same restore-on-add behaviour, same extra attributes, same
     device_info construction. The differences are confined to identity and
     presentation -- constructed from the sensor key, sensor info, base slug
@@ -202,11 +198,7 @@ class RainPointGenericZoneDurationNumber(CoordinatorEntity, NumberEntity, Restor
     the way the trusted valve resolves its own duration companion.
     """
 
-    _attr_native_min_value = DURATION_MIN_MINUTES
-    _attr_native_max_value = DURATION_MAX_MINUTES
-    _attr_native_step = DURATION_STEP_MINUTES
-    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
-    _attr_mode = NumberMode.BOX
+    _device_name_prefix = "Device"
 
     def __init__(
         self,
@@ -238,52 +230,3 @@ class RainPointGenericZoneDurationNumber(CoordinatorEntity, NumberEntity, Restor
 
         # Assigned last so the marker always wins over any domain default icon.
         self._attr_icon = GENERIC_CONTROL_MARKER_ICON
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last_state = await self.async_get_last_state()
-        if last_state is not None:
-            try:
-                restored = float(last_state.state)
-                if DURATION_MIN_MINUTES <= restored <= DURATION_MAX_MINUTES:
-                    self._current_value = restored
-                    _LOGGER.debug(
-                        "Restored duration for %s: %s min",
-                        self._attr_unique_id,
-                        restored,
-                    )
-            except (ValueError, TypeError):
-                pass
-
-    @property
-    def native_value(self) -> float:
-        return self._current_value
-
-    async def async_set_native_value(self, value: float) -> None:
-        self._current_value = value
-        self.async_write_ha_state()
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        attrs: dict[str, Any] = {}
-
-        sensors = self.coordinator.data.get("sensors", {})
-        info = sensors.get(self._sensor_key) or {}
-        firmware_version = info.get("firmware_version")
-        if firmware_version:
-            attrs["firmware_version"] = firmware_version
-
-        data = info.get("data") or {}
-        if "device_timestamp" in data:
-            attrs["device_timestamp"] = data["device_timestamp"]
-            attrs["timestamp_method"] = data.get("timestamp_method")
-            attrs["timestamp_source"] = data.get("timestamp_source", "server")
-        elif "server_timestamp" in data:
-            attrs["device_timestamp"] = data["server_timestamp"]
-            attrs["timestamp_source"] = data.get("timestamp_source", "server")
-
-        return attrs
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return build_sub_device_info(self._sensor_info, name_fallback=f"Device {self._sensor_info['addr']}")

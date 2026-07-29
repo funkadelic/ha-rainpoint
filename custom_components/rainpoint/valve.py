@@ -27,6 +27,7 @@ from .const import (
 )
 from .coordinator import RainPointCoordinator
 from .device import build_sub_device_info
+from .entity import sub_device_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -174,23 +175,7 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
             if event_time is not None:
                 attrs["event_time"] = event_time
 
-        # Add firmware version from sensor info
-        sensors = self.coordinator.data.get("sensors", {})
-        info = sensors.get(self._sensor_key) or {}
-        firmware_version = info.get("firmware_version")
-        if firmware_version:
-            attrs["firmware_version"] = firmware_version
-
-        # Add device timestamp from decoded data
-        data = self.coordinator.data.get("sensors", {}).get(self._sensor_key, {}).get("data", {})
-        if "device_timestamp" in data:
-            attrs["device_timestamp"] = data["device_timestamp"]
-            attrs["timestamp_method"] = data.get("timestamp_method")
-            attrs["timestamp_source"] = data.get("timestamp_source", "server")
-        elif "server_timestamp" in data:
-            attrs["device_timestamp"] = data["server_timestamp"]
-            attrs["timestamp_source"] = data.get("timestamp_source", "server")
-
+        attrs.update(sub_device_attributes(self.coordinator, self._sensor_key))
         return attrs
 
     @property
