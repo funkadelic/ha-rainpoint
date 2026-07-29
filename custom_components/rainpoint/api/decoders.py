@@ -236,8 +236,13 @@ def _extract_htv213_rssi(b: bytes) -> int | None:
     return None
 
 
-def _extract_htv213_battery(b: bytes) -> int | None:
-    """Return the battery percentage from an HTV213/245 hex frame, or None.
+def _extract_htv213_battery(b: bytes) -> tuple[int | None, int | None]:
+    """Return (raw STA_BAT flag, battery percentage) for an HTV213/245 hex frame.
+
+    Both may be None: no STA_BAT record yields no flag, and a flag no capture
+    pairs with a charge level yields no percentage. The flag is returned
+    alongside so this family reports it like every other decoder does; it is
+    the only thing left to look at when the percentage cannot be derived.
 
     The frame's STA_BAT record is located structurally, so no tail marker is
     needed. What the previous version read as a [0xFE marker][battery:2] tail
@@ -245,7 +250,8 @@ def _extract_htv213_battery(b: bytes) -> int | None:
     trailing STA_REPTIME record, whose four-byte value is the "timestamp:4"
     that same comment described.
     """
-    return _battery_flag_to_percent(_extract_battery_flag(b, dp_id_prefixed=True))
+    flag = _extract_battery_flag(b, dp_id_prefixed=True)
+    return flag, _battery_flag_to_percent(flag)
 
 
 def _scan_htv213_dp_map(b: bytes) -> dict[int, tuple[int, int]]:
@@ -448,13 +454,14 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         hub_online, hub_state_raw = _extract_htv213_hub_state(dp_map, raw)
         zones = _extract_htv213_zones(dp_map)
 
-        battery_percent = _extract_htv213_battery(b)
+        battery_flag, battery_percent = _extract_htv213_battery(b)
 
         _LOGGER.debug(
-            debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s, battery=%s"),
+            debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s, battery=%s (flag %s)"),
             len(zones),
             hub_online,
             battery_percent,
+            battery_flag,
         )
         result = {
             "type": "valve_hub",
@@ -464,6 +471,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
             "tlv_raw": {},
             "hub_online": hub_online,
             "hub_state_raw": hub_state_raw,
+            "battery_flag": battery_flag,
             "decoder": "htv213frf_hex",
         }
         if battery_percent is not None:
@@ -726,7 +734,11 @@ def _decode_moisture_full_hex(raw: str) -> dict:
     b10    = 0xC6  (lux tag)
     b11,b12= lux_raw * 10 LE
     b13    = 0x00
-    b14,b15= 0xFF,0x0F (status/battery)
+    b14..  = trailing STA_REPTIME record (0xFF 0x0F + 4-byte packed wall clock)
+
+    Battery is the STA_BAT record at b3,b4, read structurally rather than at
+    these offsets; the 0xFF 0x0F pair is that trailing record's extended-type
+    header, not a battery word.
 
     Based on actual payload: 10#E1A200DC0185AB02881FC6600600FF0FFA28F718
     E1 A2 00 DC 01 85 AB 02 88 1F C6 60 06 00 FF 0F FA 28 F7 18
@@ -1065,8 +1077,11 @@ def decode_rain(raw: str) -> dict:
     b15,16 = DC,01
     b17 = 0x97 ; b18,b19 = total raw*10 LE
     b20,b21 = 0x00,0x00
-    b22,b23 = 0xFF,0x0F (status/battery)
-    b24..b27 = tail
+    b22..b27 = trailing STA_REPTIME record (0xFF 0x0F + 4-byte packed wall clock)
+
+    Battery is the STA_BAT record at b15,b16, read structurally rather than at
+    these offsets; the 0xFF 0x0F pair is that trailing record's extended-type
+    header, not a battery word.
 
     Based on actual payload: 10#E10000FD040000FD054E07FD064E07DC01974E070000FF0F0410F718
     E1 00 00 FD 04 00 00 FD 05 4E 07 FD 06 4E 07 DC 01 97 4E 07 00 00 FF 0F 04 10 F7 18

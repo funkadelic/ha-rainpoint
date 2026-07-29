@@ -249,11 +249,23 @@ class TestDecodeHtv213frfValve:
         assert result["battery_percent"] == 100
 
     def test_uncorroborated_flag_yields_no_battery_percent(self):
-        """A STA_BAT flag with no known charge level is reported as no reading."""
+        """A STA_BAT flag with no known charge level is reported as no reading.
+
+        The raw flag is still surfaced, as it is on every other decoder: with
+        no percentage to show it is the only remaining evidence of the frame's
+        battery state.
+        """
         raw = SAMPLE_HTV245_FULL_IDLE_PAYLOAD.replace("18DC01", "18DC03")
         result = decode_htv213frf_valve(raw)
         assert "battery_percent" not in result
+        assert result["battery_flag"] == 3
         assert result["zones"]
+
+    def test_full_frame_surfaces_the_raw_flag(self):
+        """A healthy frame reports both the flag and the percentage."""
+        result = decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
 
     def test_ascii_payload_has_no_battery_percent(self):
         """The ASCII firmware format carries no STA_BAT record, so the key is absent."""
