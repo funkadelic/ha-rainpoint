@@ -27,7 +27,7 @@ This integration supports RainPoint Smart+ device families, including:
 
 The **HTV245FRF** wifi valve and the **HCS026FRF** soil sensor are the maintainer's own hardware and are the models tested against real devices. The HTV245FRF remains the integration's core-value target. Other models are supported opportunistically from captured payloads.
 
-The **HTV210B** valve is under test now, which is why it is absent from the table above. It pairs to a hub, so the integration does see it and it can report readings, but the cloud API exposes a different open/close command path for this model than the one the integration drives. No valve entity is created for it rather than one that accepts a command the hardware never acts on. Whether it graduates to the table depends on captures from the device.
+The **HTV210B** valve is under test now, which is why it is absent from the table above. It pairs to a hub and the integration discovers it, but the cloud returns no status data for it, so it produces no entities yet. Its open/close command also runs through a different path than the one the integration drives, so no valve entity is created rather than one that accepts a command the hardware never acts on. Whether it graduates to the table depends on captures from the device.
 
 Every model listed above has a decoder written against a real payload. A model that is absent is not necessarily unusable: the opt-in generic sensors described under [Configuration](#configuration) can often surface readings for it from the product catalog, clearly labeled unverified.
 
