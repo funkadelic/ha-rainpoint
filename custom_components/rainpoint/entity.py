@@ -79,7 +79,7 @@ class RainPointSubDeviceEntity(CoordinatorEntity):
 
     @property
     def _sensor_data(self) -> dict | None:
-        sensors = self.coordinator.data.get("sensors", {})
+        sensors = (self.coordinator.data or {}).get("sensors", {})
         info = sensors.get(self._sensor_key)
         if not info:
             return None

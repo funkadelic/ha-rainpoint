@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from custom_components.rainpoint.entity import sub_device_attributes
+from custom_components.rainpoint.entity import RainPointSubDeviceEntity, sub_device_attributes
 
 
 def _coordinator(entry):
@@ -64,3 +65,30 @@ class TestSubDeviceAttributes:
         """An empty firmware string is treated as absent rather than reported."""
         coordinator = _coordinator({"firmware_version": "", "data": {}})
         assert sub_device_attributes(coordinator, "k") == {}
+
+
+class TestSubDeviceEntity:
+    """Tests for RainPointSubDeviceEntity."""
+
+    @staticmethod
+    def _entity(data):
+        """Return an entity bound to a coordinator holding ``data``."""
+        coordinator = MagicMock()
+        coordinator.data = data
+        return RainPointSubDeviceEntity(coordinator, "k", {"addr": 1}, "slug")
+
+    def test_sensor_data_without_coordinator_data(self):
+        """A coordinator with no data yet reads as no reading, not a crash.
+
+        Matches the guard sub_device_attributes already applies, so both halves
+        of this module agree on what an empty coordinator means.
+        """
+        entity = self._entity(None)
+        assert entity._sensor_data is None
+        assert entity.available is False
+
+    def test_sensor_data_reads_through_to_the_entry(self):
+        """A populated entry yields its decoded reading and reads as available."""
+        entity = self._entity({"sensors": {"k": {"data": {"type": "valve"}}}})
+        assert entity._sensor_data == {"type": "valve"}
+        assert entity.available is True
