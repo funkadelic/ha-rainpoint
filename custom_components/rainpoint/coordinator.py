@@ -63,7 +63,7 @@ from .const import (
     VALVE_MODELS,
     debug_with_version,
 )
-from .repairs import RainPointSilentDeviceIssues, SilentDeviceRecord
+from .repairs import RainPointSilentDeviceIssues, SilentDeviceRecord, silent_device_issue_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -556,6 +556,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             hubs = await RainPointCoordinator._collect_hubs(self)
             status_by_mid: dict[int, dict] = {}
             decoded_sensors: dict[str, dict] = {}
+            absent_hubs: list[dict] = []
 
             if hubs:
                 status_by_mid = await RainPointCoordinator._fetch_status_by_mid(self, hubs)
@@ -566,10 +567,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 # covers every hub mid (D-05): a mid genuinely missing here would mean
                 # its status was never obtained this poll, not that it arrived empty.
                 status = status_by_mid.get(mid, STATUS_ABSENT)
+                if isinstance(status, _AbsentStatus):
+                    absent_hubs.append(hub)
                 decoded_sensors.update(RainPointCoordinator._decode_hub_subdevices(self, hub, status))
 
             RainPointCoordinator._prune_silent_state(self, hubs)
-            RainPointCoordinator._sync_silent_device_issues(self, decoded_sensors)
+            RainPointCoordinator._sync_silent_device_issues(self, decoded_sensors, absent_hubs)
 
             _LOGGER.info("Coordinator update complete: %d hubs, %d sensors", len(hubs), len(decoded_sensors))
             _LOGGER.debug(debug_with_version("Final data: hubs=%s, sensors=%s"), hubs, list(decoded_sensors.keys()))
@@ -934,7 +937,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         live_keys = {_sensor_key(hub["hid"], hub["mid"], sd["addr"]) for hub in hubs for sd in hub.get("subDevices", [])}
         self._silent_poll_counts = {key: count for key, count in self._silent_poll_counts.items() if key in live_keys}
 
-    def _sync_silent_device_issues(self, decoded_sensors: dict[str, dict]) -> None:
+    def _sync_silent_device_issues(self, decoded_sensors: dict[str, dict], absent_hubs: list[dict]) -> None:
         """Reconcile the per-device not-reporting repair issue against this poll's sensors.
 
         Translates this poll's sensor entries into plain SilentDeviceRecord
@@ -943,7 +946,18 @@ class RainPointCoordinator(DataUpdateCoordinator):
         fires for a payload that decoded to "unknown", and a silent entry has
         no payload to decode at all. The repair issue is the notification for
         this case.
+
+        absent_hubs carries the hubs whose status could not be obtained this
+        poll. Such a hub contributes no decoded sensors at all, so without it
+        its still-silent children look identical to children that left the
+        sub-device list, and their issues would be cleared here and re-raised
+        on the next successful poll. The asymmetry only ever suppresses
+        clearing, never raising: a hub that cannot be reached also produces no
+        silent entries, so there is nothing to raise from in the first place.
         """
+        unreachable_ids = {
+            silent_device_issue_id(hub["hid"], hub["mid"], sd["addr"]) for hub in absent_hubs for sd in hub.get("subDevices", [])
+        }
         records = [
             SilentDeviceRecord(
                 hid=entry["hid"],
@@ -956,4 +970,4 @@ class RainPointCoordinator(DataUpdateCoordinator):
             )
             for entry in decoded_sensors.values()
         ]
-        self._silent_issues.async_sync(records)
+        self._silent_issues.async_sync(records, unreachable_ids=unreachable_ids)

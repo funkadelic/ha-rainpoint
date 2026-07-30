@@ -295,6 +295,37 @@ class TestSanitizePlaceholder:
         assert _sanitize_placeholder("   ") == "unknown"
         assert _sanitize_placeholder("[]()") == "unknown"
 
+    def test_defangs_a_scheme_prefixed_address_with_a_path(self):
+        """Deleting the scheme separator and the slashes leaves display text, not a link."""
+        result = _sanitize_placeholder("https://evil.example/phish")
+        assert ":" not in result
+        assert "/" not in result
+
+    def test_defangs_a_bare_scheme_prefixed_host(self):
+        result = _sanitize_placeholder("http://evil.example")
+        assert ":" not in result
+        assert "/" not in result
+
+    def test_breaks_the_bare_host_prefix_a_renderer_autolinks(self):
+        """The www form carries no scheme to delete, so the prefix itself is broken."""
+        result = _sanitize_placeholder("www.evil.example")
+        assert not result.lower().startswith("www.")
+        assert result == "evil.example"
+
+    def test_breaks_the_bare_host_prefix_case_insensitively(self):
+        assert not _sanitize_placeholder("WWW.evil.example").lower().startswith("www.")
+
+    def test_removes_the_address_at_sign(self):
+        result = _sanitize_placeholder("admin@evil.example")
+        assert "@" not in result
+
+    def test_an_address_only_value_still_shows_the_user_something_odd_arrived(self):
+        """Defanging must not reduce a hostile value to the unknown fallback, which
+        would hide the fact that the cloud sent something strange."""
+        result = _sanitize_placeholder("https://evil.example/phish")
+        assert result != "unknown"
+        assert "evil.example" in result
+
 
 class TestSilentDeviceIssueId:
     def test_id_shape(self):
@@ -398,3 +429,54 @@ class TestRainPointSilentDeviceIssues:
         _hass, domain, issue_id = delete.call_args.args
         assert domain == DOMAIN
         assert issue_id == silent_device_issue_id(100, 200, 1)
+
+
+class TestUnreachableIdsAreNotCleared:
+    """An id whose owning hub could not be reached this poll is left exactly as it is."""
+
+    def test_unmentioned_but_unreachable_id_is_not_cleared(self, issue_mocks):
+        """The outage case: no record mentions it, but its hub is down, so the
+        stale sweep must skip it rather than read the silence as a removal."""
+        create, delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+        issue_id = silent_device_issue_id(100, 200, 1)
+
+        manager.async_sync([_make_record()])
+        create.assert_called_once()
+
+        manager.async_sync([], unreachable_ids={issue_id})
+
+        assert delete.call_count == 0
+
+    def test_unmentioned_and_reachable_id_is_still_cleared(self, issue_mocks):
+        """The contrast case, proving the skip is scoped to the unreachable set."""
+        _create, delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+
+        manager.async_sync([_make_record()])
+        manager.async_sync([], unreachable_ids=set())
+
+        assert delete.call_count == 1
+        _hass, _domain, issue_id = delete.call_args.args
+        assert issue_id == silent_device_issue_id(100, 200, 1)
+
+    def test_unreachable_id_that_is_not_active_produces_nothing(self, issue_mocks):
+        create, delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+
+        manager.async_sync([], unreachable_ids={silent_device_issue_id(100, 200, 9)})
+
+        assert create.call_count == 0
+        assert delete.call_count == 0
+
+    def test_a_mentioned_silent_record_still_raises_once_alongside_an_unreachable_id(self, issue_mocks):
+        """Another hub being down must not suppress a raise for a hub that reported."""
+        create, delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+        other_id = silent_device_issue_id(100, 300, 1)
+
+        manager.async_sync([_make_record()], unreachable_ids={other_id})
+        manager.async_sync([_make_record()], unreachable_ids={other_id})
+
+        assert create.call_count == 1
+        assert delete.call_count == 0

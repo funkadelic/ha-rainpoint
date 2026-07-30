@@ -34,6 +34,7 @@ _async_update_data_fn = _coord_module.RainPointCoordinator.__dict__["_async_upda
 DECODER_REGISTRY = _coord_module.DECODER_REGISTRY
 SILENT_DATA_TYPE = _coord_module.SILENT_DATA_TYPE
 
+import custom_components.rainpoint.repairs as _repairs_module  # noqa: E402
 from custom_components.rainpoint.api import RainPointApiError, decode_htv145frf  # noqa: E402
 from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_CO2,
@@ -51,6 +52,10 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_VALVE_HUB,
 )
 from custom_components.rainpoint.entity import sub_device_attributes  # noqa: E402
+from custom_components.rainpoint.repairs import (  # noqa: E402
+    RainPointSilentDeviceIssues,
+    silent_device_issue_id,
+)
 from tests.payload_samples import (  # noqa: E402
     CATALOG_ANCHOR_MODEL,
     SAMPLE_HTV113_IDLE_PAYLOAD,
@@ -1212,7 +1217,7 @@ class TestSyncSilentDeviceIssues:
             },
         }
 
-        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors)
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors, [])
 
         coord._silent_issues.async_sync.assert_called_once()
         (records,) = coord._silent_issues.async_sync.call_args.args
@@ -1231,9 +1236,9 @@ class TestSyncSilentDeviceIssues:
     def test_empty_decoded_sensors_syncs_an_empty_record_list(self):
         coord, _ = _make_coord()
 
-        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, {})
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, {}, [])
 
-        coord._silent_issues.async_sync.assert_called_once_with([])
+        coord._silent_issues.async_sync.assert_called_once_with([], unreachable_ids=set())
 
     def test_does_not_call_notify_unknown_model(self):
         """D-17: the silent path adds no call site for the unknown-model notification."""
@@ -1250,9 +1255,126 @@ class TestSyncSilentDeviceIssues:
         }
         coord._notify_unknown_model = MagicMock()
 
-        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors)
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors, [])
 
         coord._notify_unknown_model.assert_not_called()
+
+    def test_an_absent_hub_contributes_every_one_of_its_children_as_unreachable(self):
+        """Two children, so the comprehension is proven to cover more than the first."""
+        coord, _ = _make_coord()
+        absent_hub = {
+            "hid": 100,
+            "mid": 200,
+            "subDevices": [{"addr": 1}, {"addr": 2}],
+        }
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, {}, [absent_hub])
+
+        _records, kwargs = coord._silent_issues.async_sync.call_args
+        assert kwargs["unreachable_ids"] == {
+            silent_device_issue_id(100, 200, 1),
+            silent_device_issue_id(100, 200, 2),
+        }
+
+
+class TestSilentIssueSurvivesHubOutage:
+    """An active not-reporting issue must survive a poll in which its hub was unreachable.
+
+    Drives the real poll sequence through _async_update_data against a real
+    RainPointSilentDeviceIssues rather than pre-seeding an active set, because
+    the defect was that a routine transport failure looked identical to a
+    device leaving the hub's sub-device list, producing a clear-then-reraise
+    cycle that broke the raised-once guarantee.
+    """
+
+    ISSUE_ID = silent_device_issue_id(100, 200, 1)
+
+    @staticmethod
+    def _hub(addrs=(1,)):
+        """A hub record listing the given addrs as children."""
+        return {
+            "mid": 200,
+            "name": "Hub1",
+            "deviceName": "dev1",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [{"addr": addr, "model": "HTV210B", "name": f"Sub{addr}", "softVer": "1.0"} for addr in addrs],
+        }
+
+    @staticmethod
+    def _arrived_empty():
+        """A status response that arrived and named nobody."""
+        return [{"mid": 200, "subDeviceStatus": []}]
+
+    def _build(self):
+        """Return (coord, client) with a real issue manager and a silent child."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [self._hub()]
+        client.get_multiple_device_status.return_value = self._arrived_empty()
+        coord._silent_issues = RainPointSilentDeviceIssues(MagicMock())
+        return coord, client
+
+    @staticmethod
+    def _go_unreachable(client):
+        """Make both the batch call and the per-hub fallback fail at the transport layer."""
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
+        client.get_device_status.side_effect = aiohttp.ClientError("boom")
+
+    def _restore(self, client):
+        """Undo _go_unreachable."""
+        client.get_multiple_device_status.side_effect = None
+        client.get_device_status.side_effect = None
+        client.get_multiple_device_status.return_value = self._arrived_empty()
+
+    @pytest.mark.asyncio
+    async def test_outage_poll_neither_clears_nor_reraises_the_issue(self):
+        coord, client = self._build()
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            for _ in range(3):
+                await _run(coord)
+            assert create.call_count == 1
+
+            self._go_unreachable(client)
+            await _run(coord)
+
+            assert delete.call_count == 0
+            assert self.ISSUE_ID in coord._silent_issues._active
+
+            self._restore(client)
+            await _run(coord)
+
+            # The raised-once guarantee itself, not a proxy for it.
+            assert create.call_count == 1
+            assert delete.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_a_genuine_removal_after_an_outage_still_clears(self):
+        """The skip is scoped to the outage poll, so removal still reaps the issue."""
+        coord, client = self._build()
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            for _ in range(3):
+                await _run(coord)
+            assert create.call_count == 1
+
+            self._go_unreachable(client)
+            await _run(coord)
+            assert delete.call_count == 0
+
+            self._restore(client)
+            client.get_devices_by_hid.return_value = [self._hub(addrs=())]
+            await _run(coord)
+
+            assert delete.call_count == 1
+            _hass, _domain, issue_id = delete.call_args.args
+            assert issue_id == self.ISSUE_ID
 
 
 class TestLastSeenFromEntry:

@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -191,9 +192,13 @@ def silent_device_issue_id(hid: Any, mid: int, addr: int) -> str:
 
 # Markdown- and HTML-active characters stripped from a value before it reaches
 # a Repairs translation placeholder: backtick, angle brackets, square
-# brackets, parentheses, pipe, backslash, asterisk, underscore, and hash.
-_MARKDOWN_HTML_TRANSLATION = str.maketrans("", "", "`<>[]()|\\*_#")
+# brackets, parentheses, pipe, backslash, asterisk, underscore, and hash, plus
+# the colon, forward slash and at sign that make a bare address linkable.
+_MARKDOWN_HTML_TRANSLATION = str.maketrans("", "", "`<>[]()|\\*_#:/@")
 _WHITESPACE_RUN_RE = re.compile(r"\s+")
+# The bare-host form some Markdown renderers autolink on the prefix alone,
+# with no scheme and no surrounding syntax to strip.
+_AUTOLINK_PREFIX_RE = re.compile(r"www\.", re.IGNORECASE)
 
 
 def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
@@ -202,12 +207,20 @@ def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
     model, hub_name and addr all originate from the RainPoint cloud
     unvalidated and are rendered by Home Assistant into a Repairs card as
     Markdown, so an unsanitised value could plant a clickable link, an image,
-    or raw HTML there. Collapses every run of whitespace (including an
-    embedded newline) to a single space, deletes every Markdown-and-HTML-active
-    character, strips, and caps length; falls back to the literal "unknown"
-    when nothing is left.
+    or raw HTML there. The goal is that no output of this function can be
+    rendered as a link at all, not merely that bracketed link syntax is
+    broken.
+
+    Collapses every run of whitespace (including an embedded newline) to a
+    single space, breaks the bare-host prefix a renderer autolinks without any
+    surrounding syntax, deletes every Markdown-and-HTML-active character
+    (which also takes out the scheme separator and the address at sign),
+    strips, and caps length; falls back to the literal "unknown" when nothing
+    is left. The prefix substitution runs after the whitespace collapse so the
+    space it inserts is not collapsed away again.
     """
     text = _WHITESPACE_RUN_RE.sub(" ", str(value))
+    text = _AUTOLINK_PREFIX_RE.sub(" ", text)
     text = text.translate(_MARKDOWN_HTML_TRANSLATION)
     text = text.strip()[:limit]
     return text or "unknown"
@@ -228,7 +241,7 @@ class RainPointSilentDeviceIssues:
         self._hass = hass
         self._active: set[str] = set()
 
-    def async_sync(self, records: list[SilentDeviceRecord]) -> None:
+    def async_sync(self, records: list[SilentDeviceRecord], *, unreachable_ids: Iterable[str] = frozenset()) -> None:
         """Reconcile the active issue set against one poll's worth of records.
 
         A silent record raises its issue once (deduped on _active). A
@@ -236,9 +249,17 @@ class RainPointSilentDeviceIssues:
         when active: a fresh instance after a restart has no memory of an
         issue a prior session raised, so guarding on _active would strand it
         forever, and async_delete_issue is already a no-op for an unknown id.
-        Any id still active that no record mentions at all is also cleared,
-        so a device that leaves the hub's sub-device list entirely does not
-        leave an orphaned issue behind.
+        Any id still active that no record mentions at all is normally
+        cleared, so a device that leaves the hub's sub-device list entirely
+        does not leave an orphaned issue behind.
+
+        An id listed in unreachable_ids is the third case: it is left exactly
+        as it is, neither raised nor cleared, because the hub that owns it
+        could not be reached this poll and an outage is not evidence about any
+        particular device. Those ids are opaque strings, so this module still
+        needs no knowledge of the coordinator's data shape. The parameter is
+        keyword-only and defaults to empty, so the class stays usable, and
+        callable in tests, without it.
         """
         mentioned: set[str] = set()
         for record in records:
@@ -248,7 +269,7 @@ class RainPointSilentDeviceIssues:
                 self._raise_issue(issue_id, record)
             else:
                 self._clear_issue(issue_id)
-        for stale_id in self._active - mentioned:
+        for stale_id in self._active - mentioned - set(unreachable_ids):
             self._clear_issue(stale_id)
 
     def async_clear(self, hid: Any, mid: int, addr: int) -> None:
