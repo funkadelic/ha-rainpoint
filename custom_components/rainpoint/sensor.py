@@ -396,6 +396,12 @@ class _LateSensorEntityAdder:
         sensors_cfg = (self._coordinator.data or {}).get("sensors", {})
         new: list = []
         for key, info in sensors_cfg.items():
+            # Matches the defensive filter valve.py and switch.py already apply
+            # at setup. It matters more here: this runs on every coordinator
+            # update, and raising inside the listener would break the update
+            # for every other key rather than just skipping one bad record.
+            if not isinstance(info, dict):
+                continue
             new.extend(self.collect(key, info))
         if new:
             self._async_add_entities(new)

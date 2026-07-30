@@ -184,7 +184,7 @@ body:
     attributes:
       label: Before submitting
       options:
-        - label: I enabled the disabled-by-default "Raw Payload" diagnostic sensor to capture the payload(s) above.
+        - label: I captured the payload(s) above from the disabled-by-default "Raw Payload" diagnostic sensor, or this device returns no status and I described what the RainPoint app shows.
           required: true
         - label: I searched existing issues and this model is not already requested or supported.
           required: true

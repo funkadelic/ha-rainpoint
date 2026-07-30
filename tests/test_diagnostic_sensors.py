@@ -143,10 +143,7 @@ class TestDiagnosticSensorsAgainstASilentEntry:
         from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 
         coord = _make_coordinator(sensor_data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
-        sensor_info = _make_sensor_info()
-        sensor = cls.__new__(cls)
-        cls.__init__(sensor, coord, "100_200_1", sensor_info, "100_200_1")
-        return sensor
+        return cls(coord, "100_200_1", _make_sensor_info(), "100_200_1")
 
     def test_rssi_sensor_reads_none_and_unavailable(self):
         sensor = self._make(RainPointRSSISensor)

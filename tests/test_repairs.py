@@ -418,6 +418,27 @@ class TestRainPointSilentDeviceIssues:
             manager.async_sync([_make_record()])
             manager.async_sync([_make_record(silent=False)])
 
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Failed to create the not-reporting repair issue" in m for m in messages)
+        assert any("Failed to delete the not-reporting repair issue" in m for m in messages)
+
+    def test_a_failed_raise_is_retried_on_the_next_poll(self, issue_mocks):
+        """A device must not be silenced for the session by one registry error.
+
+        The dedup guard keys on the active set, so marking the issue active
+        before the registry accepted it would make a transient failure
+        permanent: every later poll would take the already-active early return
+        and never retry.
+        """
+        create, _delete = issue_mocks
+        create.side_effect = [RuntimeError("registry unavailable"), None]
+        manager = RainPointSilentDeviceIssues(MagicMock())
+
+        manager.async_sync([_make_record()])
+        manager.async_sync([_make_record()])
+
+        assert create.call_count == 2
+
     def test_async_clear_deletes_by_key(self, issue_mocks):
         _create, delete = issue_mocks
         manager = RainPointSilentDeviceIssues(MagicMock())

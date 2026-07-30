@@ -285,7 +285,6 @@ class RainPointSilentDeviceIssues:
     def _raise_issue(self, issue_id: str, record: SilentDeviceRecord) -> None:
         if issue_id in self._active:
             return
-        self._active.add(issue_id)
         try:
             ir.async_create_issue(
                 self._hass,
@@ -301,6 +300,12 @@ class RainPointSilentDeviceIssues:
                     "missed_polls": str(record.missed_polls),
                 },
             )
+            # Marked active only once the registry accepted it. Marking before
+            # the call would strand a device whose first raise failed: the
+            # dedup guard above would suppress every later attempt, so a
+            # transient registry error would silence that device for the rest
+            # of the session.
+            self._active.add(issue_id)
             _LOGGER.warning(
                 "RainPoint sub-device addr=%s (model=%s) has not reported for %s polls; raising repair issue",
                 record.addr,

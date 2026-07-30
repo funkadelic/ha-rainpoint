@@ -2137,6 +2137,24 @@ class TestLateSensorEntityAdder:
         assert len([e for e in captured if isinstance(e, RainPointNotReportingSensor)]) == 1
 
     @pytest.mark.asyncio
+    async def test_a_malformed_record_is_skipped_without_stopping_the_others(self):
+        """One bad record must not break late registration for every other key.
+
+        This listener runs on every coordinator update, so raising here would
+        take down the whole update rather than skipping a single entry.
+        """
+        good = "100_200_1"
+        coordinator, captured, _add, listener = await self._setup({good: self._reporting_entry()})
+        before = len(captured)
+
+        coordinator.data["sensors"]["100_200_9"] = "not a dict"
+        coordinator.data["sensors"]["100_200_2"] = self._silent_entry()
+        listener()
+
+        assert len(captured) > before
+        assert all(getattr(e, "_sensor_key", None) != "100_200_9" for e in captured)
+
+    @pytest.mark.asyncio
     async def test_an_update_that_changes_nothing_adds_nothing(self):
         """Steady-state polling must not call async_add_entities again."""
         key = "100_200_1"
