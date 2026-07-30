@@ -28,7 +28,7 @@ rather than proven, and an invented percentage is indistinguishable from a
 real one downstream.
 
 The humidity row carries no device class, and that is the whole of what is
-unproven about it. Its scale is proven twice over: the vendor uses this
+unproven about it. Its scale is proven twice over: RainPoint uses this
 identity for a soil sensor's moisture percentage, and both hand-written soil
 decoders read the byte carrying it as a percentage directly, on the same
 framing the generic decode path reads. What no capture settles is which
@@ -348,8 +348,8 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         # decoding that same captured frame generically resolves that byte to
         # this identity.
         #
-        # No device class: both proofs are soil moisture readings, while the
-        # vendor also uses this identity for air relative humidity, so the
+        # No device class: both proofs are soil moisture readings, while
+        # RainPoint also uses this identity for air relative humidity, so the
         # percentage is proven but which quantity an unrecognized model reports
         # is not. Claiming SensorDeviceClass.HUMIDITY would assert the part
         # that is unproven, on exactly the models with no decoder to check it
