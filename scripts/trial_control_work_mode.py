@@ -269,11 +269,19 @@ async def _run_trial(args: argparse.Namespace, password: str) -> int:
                 except Exception as exc:
                     print(f"response state did not decode: {exc!r}")
 
+        # One flaky poll must not discard the rest of the trial. The cloud
+        # times a status request out often enough that an unguarded loop
+        # loses the frames after it, which is the same way a trial stops
+        # being evidence.
         elapsed = 0
         while elapsed < args.watch:
             await asyncio.sleep(_POLL_INTERVAL_SECONDS)
             elapsed += _POLL_INTERVAL_SECONDS
-            status = await client.get_device_status(args.mid)
+            try:
+                status = await client.get_device_status(args.mid)
+            except (TimeoutError, aiohttp.ClientError, RainPointApiError) as exc:
+                print(f"after +{elapsed}s: status poll failed ({exc!r}); continuing")
+                continue
             _print_status(f"after +{elapsed}s", _status_entry_for(status, args.addr), decoder)
 
         print("\nRecord the physical observation (did the valve run, and for how long) next to this output.")
