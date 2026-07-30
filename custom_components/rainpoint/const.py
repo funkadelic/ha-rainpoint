@@ -80,6 +80,12 @@ GENERIC_CONTROL_MARKER_ICON = "mdi:flask-outline"
 # zone, mirroring how coordinator._notify_unknown_model dedupes on its
 # notification id.
 GENERIC_CONTROL_ISSUE_ID_PREFIX = "generic_control_command_failed"
+# Both the repair issue's translation key and the stem of its per-device
+# issue id (see repairs.silent_device_issue_id). The issue id itself is the
+# dedup key: it is built as f"{SILENT_DEVICE_ISSUE_ID_PREFIX}_{hid}_{mid}_{addr}",
+# so a hub with several silent children raises one issue per child rather
+# than colliding on a single id.
+SILENT_DEVICE_ISSUE_ID_PREFIX = "device_not_reporting"
 # Committed, variant-keyed force-disable list. Each member is a
 # (model, modelCode-as-string) tuple, keyed exactly the way the product
 # catalog itself is keyed: get_catalog_entry's UNCODED_VARIANT sentinel ("*")

@@ -1,7 +1,9 @@
-"""Tests for the push-channel liveness watchdog (repairs.py)."""
+"""Tests for the integration's Repairs surfaces (repairs.py): the push-channel
+liveness watchdog and the per-device silent sub-device issue lifecycle."""
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
@@ -14,8 +16,15 @@ from custom_components.rainpoint.const import (
     PUSH_WATCHDOG_ISSUE_ID,
     PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS,
     PUSH_WATCHDOG_SCAN_INTERVAL_SECONDS,
+    SILENT_DEVICE_ISSUE_ID_PREFIX,
 )
-from custom_components.rainpoint.repairs import RainPointPushWatchdog
+from custom_components.rainpoint.repairs import (
+    RainPointPushWatchdog,
+    RainPointSilentDeviceIssues,
+    SilentDeviceRecord,
+    _sanitize_placeholder,
+    silent_device_issue_id,
+)
 
 
 class _Clock:
@@ -243,3 +252,149 @@ class TestWatchdogTimer:
             watchdog.start()
 
         delete.assert_called_once()
+
+
+def _make_record(hid=100, mid=200, addr=1, model="HTV210B", hub_name="Hub1", missed_polls=3, silent=True):
+    return SilentDeviceRecord(
+        hid=hid,
+        mid=mid,
+        addr=addr,
+        model=model,
+        hub_name=hub_name,
+        missed_polls=missed_polls,
+        silent=silent,
+    )
+
+
+class TestSanitizePlaceholder:
+    """T-15-05: cloud-supplied text must not carry Markdown/HTML into a Repairs card."""
+
+    def test_neutralises_markdown_link(self):
+        result = _sanitize_placeholder("[Click here](http://evil.example/x)")
+        assert "[" not in result
+        assert "]" not in result
+        assert "(" not in result
+        assert ")" not in result
+
+    def test_neutralises_html_tag(self):
+        result = _sanitize_placeholder("<img src=x onerror=alert(1)>")
+        assert "<" not in result
+        assert ">" not in result
+
+    def test_collapses_embedded_newline(self):
+        result = _sanitize_placeholder("Hub\nRoom\nBasement")
+        assert "\n" not in result
+        assert result == "Hub Room Basement"
+
+    def test_truncates_over_long_name(self):
+        result = _sanitize_placeholder("x" * 200, limit=64)
+        assert len(result) == 64
+
+    def test_empty_input_falls_back_to_unknown(self):
+        assert _sanitize_placeholder("") == "unknown"
+        assert _sanitize_placeholder("   ") == "unknown"
+        assert _sanitize_placeholder("[]()") == "unknown"
+
+
+class TestSilentDeviceIssueId:
+    def test_id_shape(self):
+        assert silent_device_issue_id(100, 200, 1) == f"{SILENT_DEVICE_ISSUE_ID_PREFIX}_100_200_1"
+
+
+class TestRainPointSilentDeviceIssues:
+    """Raise-once / dedupe / clear-on-recovery, re-keyed per device."""
+
+    def test_first_sync_with_silent_record_creates_issue_once(self, issue_mocks):
+        create, _delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+        record = _make_record()
+
+        manager.async_sync([record])
+
+        create.assert_called_once()
+        _hass, domain, issue_id = create.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == silent_device_issue_id(100, 200, 1)
+        kwargs = create.call_args.kwargs
+        assert kwargs["is_fixable"] is False
+        assert kwargs["severity"] == repairs.ir.IssueSeverity.WARNING
+        assert kwargs["translation_key"] == SILENT_DEVICE_ISSUE_ID_PREFIX
+        placeholders = kwargs["translation_placeholders"]
+        assert placeholders["model"] == "HTV210B"
+        assert placeholders["address"] == "1"
+        assert placeholders["hub_name"] == "Hub1"
+        assert placeholders["missed_polls"] == "3"
+
+    def test_second_sync_with_same_record_does_not_recreate(self, issue_mocks):
+        create, _delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+        record = _make_record()
+
+        manager.async_sync([record])
+        manager.async_sync([record])
+
+        create.assert_called_once()
+
+    def test_flipping_to_not_silent_deletes_the_issue(self, issue_mocks):
+        create, delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+        record = _make_record()
+
+        manager.async_sync([record])
+        create.assert_called_once()
+
+        recovered = _make_record(silent=False)
+        manager.async_sync([recovered])
+
+        delete.assert_called_once()
+        _hass, domain, issue_id = delete.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == silent_device_issue_id(100, 200, 1)
+
+    def test_omitting_a_previously_active_record_still_clears_it(self, issue_mocks):
+        """A device that disappears from subDevices entirely (D-03) is not in the
+        next poll's records at all; its issue must still be cleared."""
+        create, delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+        record = _make_record()
+
+        manager.async_sync([record])
+        create.assert_called_once()
+
+        manager.async_sync([])
+
+        delete.assert_called_once()
+        _hass, domain, issue_id = delete.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == silent_device_issue_id(100, 200, 1)
+
+    def test_never_active_record_still_issues_idempotent_delete(self, issue_mocks):
+        _create, delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+        record = _make_record(silent=False)
+
+        manager.async_sync([record])
+
+        delete.assert_called_once()
+
+    def test_registry_error_is_swallowed_and_logged(self, issue_mocks, caplog):
+        create, delete = issue_mocks
+        create.side_effect = RuntimeError("registry unavailable")
+        delete.side_effect = RuntimeError("registry unavailable")
+        manager = RainPointSilentDeviceIssues(MagicMock())
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_record()])
+            manager.async_sync([_make_record(silent=False)])
+
+    def test_async_clear_deletes_by_key(self, issue_mocks):
+        _create, delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+        manager.async_sync([_make_record()])
+
+        manager.async_clear(100, 200, 1)
+
+        assert delete.call_count == 1
+        _hass, domain, issue_id = delete.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == silent_device_issue_id(100, 200, 1)

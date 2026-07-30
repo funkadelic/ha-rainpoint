@@ -88,6 +88,7 @@ def _make_coord(hids=None):
         _notified_unknown_models=set(),
         _last_valve_command_at={},
         _silent_poll_counts={},
+        _silent_issues=MagicMock(),
         data={},
         hass=mock_hass,
         logger=MagicMock(),
@@ -1151,6 +1152,74 @@ class TestPruneSilentState:
         _coord_module.RainPointCoordinator._prune_silent_state(coord, [hub1, hub2])
 
         assert coord._silent_poll_counts == {"100_200_1": 1, "100_300_5": 2}
+
+
+class TestSyncSilentDeviceIssues:
+    """Direct-call tests for _sync_silent_device_issues: one SilentDeviceRecord
+    per sensor entry, translated correctly from the coordinator's own shape."""
+
+    def test_builds_one_record_per_entry_with_correct_silent_flag_and_missed_polls(self):
+        coord, _ = _make_coord()
+        decoded_sensors = {
+            "100_200_1": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 1,
+                "model": "HTV210B",
+                "hub_name": "Hub1",
+                "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
+            },
+            "100_200_2": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 2,
+                "model": MODEL_MOISTURE_SIMPLE,
+                "hub_name": "Hub1",
+                "data": {"type": "moisture"},
+            },
+        }
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors)
+
+        coord._silent_issues.async_sync.assert_called_once()
+        (records,) = coord._silent_issues.async_sync.call_args.args
+        by_key = {(r.hid, r.mid, r.addr): r for r in records}
+
+        silent_record = by_key[(100, 200, 1)]
+        assert silent_record.silent is True
+        assert silent_record.missed_polls == 3
+        assert silent_record.model == "HTV210B"
+        assert silent_record.hub_name == "Hub1"
+
+        reporting_record = by_key[(100, 200, 2)]
+        assert reporting_record.silent is False
+        assert reporting_record.missed_polls == 0
+
+    def test_empty_decoded_sensors_syncs_an_empty_record_list(self):
+        coord, _ = _make_coord()
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, {})
+
+        coord._silent_issues.async_sync.assert_called_once_with([])
+
+    def test_does_not_call_notify_unknown_model(self):
+        """D-17: the silent path adds no call site for the unknown-model notification."""
+        coord, _ = _make_coord()
+        decoded_sensors = {
+            "100_200_1": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 1,
+                "model": "HTV210B",
+                "hub_name": "Hub1",
+                "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
+            }
+        }
+        coord._notify_unknown_model = MagicMock()
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors)
+
+        coord._notify_unknown_model.assert_not_called()
 
 
 class TestLastSeenFromEntry:

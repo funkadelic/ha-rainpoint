@@ -63,6 +63,7 @@ from .const import (
     VALVE_MODELS,
     debug_with_version,
 )
+from .repairs import RainPointSilentDeviceIssues, SilentDeviceRecord
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -425,6 +426,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._notified_unknown_models: set[tuple[str | None, int | None]] = set()
         self._last_valve_command_at: dict[tuple[str, int], datetime] = {}
         self._silent_poll_counts: dict[str, int] = {}
+        self._silent_issues = RainPointSilentDeviceIssues(hass)
 
     def record_valve_command(self, sensor_key: str, zone_num: int) -> datetime:
         """Remember the latest successful valve command time for stale-poll protection."""
@@ -539,6 +541,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 decoded_sensors.update(RainPointCoordinator._decode_hub_subdevices(self, hub, status))
 
             RainPointCoordinator._prune_silent_state(self, hubs)
+            RainPointCoordinator._sync_silent_device_issues(self, decoded_sensors)
 
             _LOGGER.info("Coordinator update complete: %d hubs, %d sensors", len(hubs), len(decoded_sensors))
             _LOGGER.debug(debug_with_version("Final data: hubs=%s, sensors=%s"), hubs, list(decoded_sensors.keys()))
@@ -902,3 +905,27 @@ class RainPointCoordinator(DataUpdateCoordinator):
         """
         live_keys = {_sensor_key(hub["hid"], hub["mid"], sd["addr"]) for hub in hubs for sd in hub.get("subDevices", [])}
         self._silent_poll_counts = {key: count for key, count in self._silent_poll_counts.items() if key in live_keys}
+
+    def _sync_silent_device_issues(self, decoded_sensors: dict[str, dict]) -> None:
+        """Reconcile the per-device not-reporting repair issue against this poll's sensors.
+
+        Translates this poll's sensor entries into plain SilentDeviceRecord
+        instances -- repairs.py holds no knowledge of this dict's shape.
+        Deliberately calls no unknown-model notification: that one only
+        fires for a payload that decoded to "unknown", and a silent entry has
+        no payload to decode at all. The repair issue is the notification for
+        this case.
+        """
+        records = [
+            SilentDeviceRecord(
+                hid=entry["hid"],
+                mid=entry["mid"],
+                addr=entry["addr"],
+                model=entry.get("model"),
+                hub_name=entry.get("hub_name"),
+                missed_polls=(entry.get("data") or {}).get("missed_polls", 0),
+                silent=(entry.get("data") or {}).get("type") == SILENT_DATA_TYPE,
+            )
+            for entry in decoded_sensors.values()
+        ]
+        self._silent_issues.async_sync(records)
