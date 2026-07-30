@@ -62,10 +62,18 @@ def _decoded_field(name: str, value, dp_port, width_mismatch: bool = False, widt
     untestable through the entity, and would have hidden the gate entirely.
     Pass ``width`` explicitly to build a record at a width no row declares.
     """
+    spec = _IDENTITY_SPECS.get(name)
+    declared = sorted(spec.widths) if spec else [1]
+    numeric = isinstance(value, int) and not isinstance(value, bool) and value >= 0
     if width is None:
-        spec = _IDENTITY_SPECS.get(name)
-        width = min(spec.widths) if spec else 1
-    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 256**width:
+        # The narrowest declared width the value actually fits in. Taking the
+        # narrowest unconditionally would silently zero-fill any value too big
+        # for it, producing a record whose raw and value disagree, which is the
+        # very inconsistency the production width gate exists to reject.
+        width = next((w for w in declared if value < 256**w), declared[-1]) if numeric else declared[0]
+    if numeric:
+        if value >= 256**width:
+            raise ValueError(f"{name}: {value!r} does not fit {width} byte(s); pass a wider width explicitly")
         raw = int(value).to_bytes(width, "little").hex()
     else:
         raw = "00" * width
