@@ -245,6 +245,15 @@ class TestDecodeHtv213frfValve:
         """
         assert decode_htv213frf_valve("11#17E10500FEFF0FEC4BCB19")["rssi_dbm"] is None
 
+    def test_rssi_rejects_an_unsupported_phy(self):
+        """A negative dBm paired with a PHY no capture has shown is not accepted.
+
+        0xb4 would be a valid -76, so this pins the PHY bound on its own rather
+        than through the sign guard. Widening it for a future capture then has to
+        be a deliberate change to both the bound and this test.
+        """
+        assert decode_htv213frf_valve("11#17E1B402FEFF0FEC4BCB19")["rssi_dbm"] is None
+
     # --- Battery (STA_BAT record on real hex frames) ---
 
     def test_full_frame_reports_battery_percent(self):
