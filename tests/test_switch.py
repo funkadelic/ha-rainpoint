@@ -155,6 +155,7 @@ class TestSwitchSetupEntryGenericControl:
 
     @pytest.mark.asyncio
     async def test_option_true_creates_a_generic_switch_alongside_the_broadcast_switch(self):
+        """With generic control on, the socket candidate adds a switch next to the hub's."""
         hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
         hass, entry, coord = _make_hass(hubs=[hub_info])
         entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
@@ -169,6 +170,7 @@ class TestSwitchSetupEntryGenericControl:
 
     @pytest.mark.asyncio
     async def test_option_false_creates_no_generic_switch(self):
+        """With generic control off, only the hub broadcast switch is created."""
         hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
         hass, entry, coord = _make_hass(hubs=[hub_info])
         entry.options = {CONF_GENERIC_CONTROL_ENABLED: False}
@@ -198,6 +200,7 @@ class TestSwitchSetupEntryGenericControl:
 
     @pytest.mark.asyncio
     async def test_option_absent_creates_no_generic_switch(self):
+        """A missing option key is treated as off, not as enabled."""
         hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
         hass, entry, coord = _make_hass(hubs=[hub_info])
         entry.options = {}

@@ -53,6 +53,12 @@ class RainPointHubDevice(Entity):
         self,
         hub_info: dict,
     ) -> None:
+        """Bind this entity to one hub record.
+
+        hub_info is the raw top-level device record the coordinator collected,
+        with hid and brand injected. Held by reference so a later poll's field
+        changes are picked up without rebuilding the entity.
+        """
         self._hub_info = hub_info
         self._attr_unique_id = f"{DOMAIN}_hub_{hub_info['hid']}"
         self._attr_name = hub_info.get("name") or "RainPoint Hub"

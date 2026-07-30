@@ -62,12 +62,14 @@ class TestResolvePushDiagnosticHubs:
         assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 222}]
 
     def test_falls_back_to_first_hub_when_mid_is_none(self):
+        """With no bound mid to match on, the first real hub is used."""
         hubs = [{"mid": 111, "did": "d111"}, {"mid": 222, "did": "d222"}]
         client = MagicMock()
         client.hub_mid = None
         assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111, "did": "d111"}]
 
     def test_falls_back_to_first_hub_when_no_hub_matches(self):
+        """A bound mid matching no hub falls back to the first real hub."""
         hubs = [{"mid": 111, "did": "d111"}, {"mid": 222, "did": "d222"}]
         client = MagicMock()
         client.hub_mid = 999  # no such hub

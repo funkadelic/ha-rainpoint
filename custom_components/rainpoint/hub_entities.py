@@ -104,6 +104,7 @@ class RainPointHubDeviceIDSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:identifier"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
+        """Name the entity after the hub and key the entity to its home id."""
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_device_id"
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Device ID"
@@ -121,6 +122,7 @@ class RainPointHubFirmwareSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:chip"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
+        """Name the entity after the hub and key the entity to its home id."""
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_firmware"
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Firmware Version"
@@ -136,6 +138,7 @@ class RainPointHubMACSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:network-outline"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
+        """Name the entity after the hub and key the entity to its home id."""
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_mac"
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} MAC Address"
@@ -221,6 +224,11 @@ class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDev
     _attr_icon = "mdi:radio-tower"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
+        """Build the RF channel selector from the hub's supported-channel bitmask.
+
+        Options come from the hub's function blob and the current option from
+        its recich field; both resolve to nothing selectable when absent.
+        """
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_channel"
@@ -335,6 +343,11 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
     _attr_icon = "mdi:clock-outline"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
+        """Build the broadcast switch with an unknown initial state.
+
+        The API exposes no way to read the current setting, so the state stays
+        None rather than asserting a value that was never reported.
+        """
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_broadcast"

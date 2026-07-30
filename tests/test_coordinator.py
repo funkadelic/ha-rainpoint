@@ -1604,12 +1604,15 @@ class TestIsHubRecord:
     }
 
     def test_real_hub_is_a_hub(self):
+        """A hub carrying did, mac, productKey and model is a hub."""
         assert _coord_module.is_hub_record(self.REAL_HUB) is True
 
     def test_wrapper_with_all_empty_identity_is_not_a_hub(self):
+        """Empty strings are identity absent, so the wrapper is not a hub."""
         assert _coord_module.is_hub_record(self.WRAPPER) is False
 
     def test_empty_record_is_not_a_hub(self):
+        """A record with no keys at all is not a hub."""
         assert _coord_module.is_hub_record({}) is False
 
     @pytest.mark.parametrize("field", ["did", "mac", "productKey", "model"])
@@ -1618,14 +1621,18 @@ class TestIsHubRecord:
         assert _coord_module.is_hub_record({field: "x"}) is True
 
     def test_first_hub_record_skips_a_leading_wrapper(self):
+        """A wrapper in slot 0 is passed over in favour of the real hub behind it."""
         assert _coord_module.first_hub_record([self.WRAPPER, self.REAL_HUB]) is self.REAL_HUB
 
     def test_first_hub_record_keeps_api_order_among_real_hubs(self):
+        """With several real hubs the first in API order wins, matching the MQTT client."""
         second = {"mid": 999, "did": "d999"}
         assert _coord_module.first_hub_record([self.REAL_HUB, second]) is self.REAL_HUB
 
     def test_first_hub_record_returns_none_when_only_wrappers(self):
+        """An all-wrapper list resolves to no hub rather than a phantom one."""
         assert _coord_module.first_hub_record([self.WRAPPER]) is None
 
     def test_first_hub_record_returns_none_for_empty_list(self):
+        """No hubs collected yet resolves to None."""
         assert _coord_module.first_hub_record([]) is None
