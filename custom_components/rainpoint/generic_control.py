@@ -64,17 +64,19 @@ DEFAULT_CONTROL_DURATION_SECONDS = 600  # 10 minutes
 # "generic control is never a wildcard" is a structural property provable by
 # reading it, not a runtime edge case.
 #
-# CTL_BT_WATER is deliberately absent. Every entity built here commands through
-# client.control_work_mode, and a Bluetooth-backed valve does not appear to
-# accept that call: the models declaring this identity (HTV102B, HTV107B,
-# HTV124LT, HTV210B, HTV224B) carry no CTL_WATER datapoint at all, and the
-# vendor app is understood to drive them through a separate endpoint carrying
-# the datapoint code. Admitting the identity without that endpoint yields a
-# valve entity that accepts a command, reports no state change (this module
-# never assumes an outcome), and leaves the user to conclude the hardware is
-# slow rather than uncommanded. Producing no entity is the honest answer until
-# a capture confirms the endpoint and payload. See the corresponding backlog
-# item before widening this set.
+# CTL_BT_WATER is deliberately absent, and the exclusion is proven rather
+# than suspected. Every entity built here commands through
+# client.control_work_mode, and a hardware trial on 2026-07-29 (via
+# scripts/trial_control_work_mode.py) showed a hub-paired HTV210B rejects
+# that call with response code 3 for both open and close, in the same
+# session where the identical call shape was accepted by an HTV245FRF on
+# the same hub. The vendor app can command the valve through the cloud with
+# Bluetooth off, so a cloud path exists, but it is not this endpoint. The
+# models declaring this identity (HTV102B, HTV107B, HTV124LT, HTV210B,
+# HTV224B) carry no CTL_WATER datapoint at all, so admitting the identity
+# would build a valve entity whose every command fails. Producing no entity
+# stays the honest answer until a capture of the app's traffic identifies
+# the endpoint and payload it actually uses.
 CONTROL_IDENTITY_ALLOWLIST = frozenset({"CTL_WATER", "CTL_SOCK"})
 VALVE_CONTROL_IDENTITIES = frozenset({"CTL_WATER"})
 SWITCH_CONTROL_IDENTITIES = frozenset({"CTL_SOCK"})
