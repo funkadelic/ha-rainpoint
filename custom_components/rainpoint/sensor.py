@@ -4,7 +4,7 @@ import logging
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -27,6 +27,7 @@ from .const import (
     MODEL_HCS005FRF,
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
+    MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
     MODEL_POOL,
@@ -202,6 +203,29 @@ def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
     return entities
 
 
+def _make_htv210b_entities(coordinator, key, info, base_slug):
+    """Battery, signal, and per-zone state for the HTV210B Bluetooth valve.
+
+    Hub-paired, this valve reports the same status-frame family as the HTV213
+    group, but it gets no valve or number entities yet: its cloud control path
+    is unproven, so the open/closed reading surfaces as a read-only sensor
+    instead of a valve that could not honestly offer open/close. No per-zone
+    water-usage entities either; the device has no flow meter, and its usage
+    records read zero on every capture.
+
+    Zones come from the decoded payload rather than the model name, mirroring
+    the HTV213 factory, so only zones the frame reports grow entities.
+    """
+    entities = [
+        RainPointBatterySensor(coordinator, key, info, base_slug),
+        RainPointRSSISensor(coordinator, key, info, base_slug),
+    ]
+    zones = (info.get("data") or {}).get("zones")
+    if isinstance(zones, dict):
+        entities.extend(RainPointZoneStateSensor(coordinator, key, info, base_slug, zone_num) for zone_num in sorted(zones))
+    return entities
+
+
 def _make_hcs_moisture_only_entities(coordinator, key, info, base_slug):
     return [RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True)]
 
@@ -246,6 +270,7 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     MODEL_VALVE_245: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_345: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_405: _make_htv_valve_diagnostic_entities,
+    MODEL_HTV210B: _make_htv210b_entities,
 }
 
 
@@ -1165,7 +1190,36 @@ class RainPointRawPayloadSensor(RainPointSensorBase):
         return value
 
 
-class RainPointZoneWaterUsageSensor(RainPointSensorBase):
+class RainPointZoneSensorBase(RainPointSensorBase):
+    """Shared per-zone plumbing: the zone number and the guarded record lookup.
+
+    Every per-zone sensor reads its record the same way, so the zones-shape
+    guard lives here once rather than once per class.
+    """
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+        zone_num: int,
+    ) -> None:
+        """Bind the sensor to its sub-device and remember which zone it reads."""
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._zone_num = zone_num
+
+    @property
+    def _zone_data(self) -> dict | None:
+        """Return this zone's decoded record, or None when the frame omits it."""
+        data = self._sensor_data or {}
+        zones = data.get("zones")
+        if not isinstance(zones, dict):
+            return None
+        return zones.get(self._zone_num)
+
+
+class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
     """Water used by one valve zone during its last completed run.
 
     The value is a converted flow count, not a metered volume: the device
@@ -1198,20 +1252,11 @@ class RainPointZoneWaterUsageSensor(RainPointSensorBase):
         base_slug: str,
         zone_num: int,
     ) -> None:
-        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        self._zone_num = zone_num
+        """Name and key the water-usage sensor for one zone."""
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
         sub_name = sensor_info.get("sub_name") or "Valve Hub"
         self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_water_used"
         self._attr_name = f"{sub_name} Zone {zone_num} Water Used"
-
-    @property
-    def _zone_data(self) -> dict | None:
-        """Return this zone's decoded record, or None when the frame omits it."""
-        data = self._sensor_data or {}
-        zones = data.get("zones")
-        if not isinstance(zones, dict):
-            return None
-        return zones.get(self._zone_num)
 
     @property
     def native_value(self) -> float | None:
@@ -1222,9 +1267,60 @@ class RainPointZoneWaterUsageSensor(RainPointSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose the zone number, raw flow count, and conversion factor for auditing."""
         attrs = dict(super().extra_state_attributes)
         zone = self._zone_data or {}
         attrs["zone"] = self._zone_num
         attrs["last_usage_counts"] = zone.get("last_usage_counts")
         attrs["gallons_per_count"] = _USAGE_GALLONS_PER_COUNT
+        return attrs
+
+
+class RainPointZoneStateSensor(RainPointZoneSensorBase):
+    """Open/closed state of one valve zone, read-only.
+
+    Exists for valve models whose decode is trusted but whose control path is
+    not: a valve entity would advertise open/close it cannot deliver, so the
+    state ships as an enum sensor until the control half is proven on real
+    hardware. The commanded run length and the packed end-of-run time ride
+    along as attributes rather than separate entities, since both describe
+    the same run the state refers to; the raw state word stays visible so a
+    latched high bit is auditable against future captures.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options: ClassVar[list[str]] = ["closed", "open"]
+    _attr_icon = "mdi:valve"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+        zone_num: int,
+    ) -> None:
+        """Name and key the state sensor for one zone."""
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
+        sub_name = sensor_info.get("sub_name") or "Valve"
+        self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_state"
+        self._attr_name = f"{sub_name} Zone {zone_num} State"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return "open" or "closed", or None when the frame omits the zone."""
+        zone = self._zone_data
+        if not zone:
+            return None
+        return "open" if zone.get("open") else "closed"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose the zone number plus the run's duration, end time, and raw state word."""
+        attrs = dict(super().extra_state_attributes)
+        zone = self._zone_data or {}
+        attrs["zone"] = self._zone_num
+        attrs["duration_seconds"] = zone.get("duration_seconds")
+        attrs["event_time"] = zone.get("event_time")
+        attrs["state_raw"] = zone.get("state_raw")
         return attrs

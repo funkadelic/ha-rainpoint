@@ -7,6 +7,7 @@ from custom_components.rainpoint.api import (
     decode_flowmeter,
     decode_hcs005frf,
     decode_htv145frf,
+    decode_htv210b,
     decode_htv213frf_valve,
     decode_hws019wrf_v2,
     decode_moisture_full,
@@ -1421,3 +1422,153 @@ class TestHtvWiderFamilyUsageRecords:
         zones = decode_htv213frf_valve(SAMPLE_HTV405_TLV_PAYLOAD)["zones"]
         assert zones[4]["duration_seconds"] == 0
         assert zones[4]["event_time"] is None
+
+
+class TestDecodeHtv210b:
+    """The HTV210B structural decoder against the real idle capture and evidenced run states.
+
+    The running-state payloads are synthetic but every field value in them is
+    taken from a timed two-minute run on real hardware: work state 0x00 ->
+    0x21 -> 0x20, a 120-second commanded duration that persists after the
+    run, and an event time exactly two minutes after the run started.
+    """
+
+    # Zone 1 running: state 0x21, 4-byte duration 120s (header 0xAF, the width
+    # the real idle capture uses), event time 2026-07-29T19:08:17 packed.
+    RUNNING_PAYLOAD = "11#18DC0117E1B40119D8211AD80021B71132FB1922B70000000025AF7800000026AF00000000FEFF0F1527FB19"
+
+    def test_idle_capture_decodes_both_zones_closed(self):
+        """The real idle capture yields two closed zones with no run data."""
+        result = decode_htv210b(SAMPLE_HTV210B_TLV_PAYLOAD)
+        assert result["decoder"] == "htv210b_hex"
+        assert result["type"] == "valve_hub"
+        assert sorted(result["zones"]) == [1, 2]
+        for zone in result["zones"].values():
+            assert zone["open"] is False
+            assert zone["state_raw"] == 0x00
+            assert zone["duration_seconds"] == 0
+            assert zone["event_time"] is None
+
+    def test_idle_capture_reports_rssi_battery_and_report_time(self):
+        """The frame's diagnostics match what the vendor app showed at capture time.
+
+        RSSI -76 dBm at 1M PHY, battery flag 1, and a report time that decodes
+        to the calendar day the capture was taken.
+        """
+        result = decode_htv210b(SAMPLE_HTV210B_TLV_PAYLOAD)
+        assert result["rssi_dbm"] == -76
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
+        assert result["report_time"] == "2026-07-29T18:28:21"
+        assert result["hub_online"] is True
+
+    def test_zones_carry_no_usage_fields(self):
+        """No flow meter, so the zone dict must not manufacture usage keys.
+
+        The frame does carry per-zone usage records, but they read zero in
+        every capture including mid-run, which is a meter that never moves,
+        not a meter reading zero.
+        """
+        zones = decode_htv210b(SAMPLE_HTV210B_TLV_PAYLOAD)["zones"]
+        for zone in zones.values():
+            assert "last_usage_counts" not in zone
+            assert "last_usage_gallons" not in zone
+
+    def test_running_zone_reports_open_duration_and_end_time(self):
+        """Work-state bit 0 open, commanded seconds, and the packed end-of-run stamp."""
+        zones = decode_htv210b(self.RUNNING_PAYLOAD)["zones"]
+        assert zones[1]["open"] is True
+        assert zones[1]["state_raw"] == 0x21
+        assert zones[1]["duration_seconds"] == 120
+        assert zones[1]["event_time"] == "2026-07-29T19:08:17"
+        assert zones[2]["open"] is False
+
+    def test_after_run_latched_bit_still_reads_closed(self):
+        """0x20 after the zone's first use: bit 5 is latched, bit 0 is the state."""
+        zones = decode_htv210b("11#19D820")["zones"]
+        assert zones[1]["open"] is False
+        assert zones[1]["state_raw"] == 0x20
+
+    def test_two_byte_duration_width_decodes_the_same(self):
+        """A 2-byte duration record (the HTV213 family's width) reads identically.
+
+        The structural walk resolves both widths to the same field, so a
+        firmware that writes the narrower record needs no special case.
+        """
+        zones = decode_htv210b("11#19D82125AD7800")["zones"]
+        assert zones[1]["duration_seconds"] == 120
+
+    def test_missing_duration_and_event_records_leave_defaults(self):
+        """A state-only frame reads duration 0 and no event time."""
+        zones = decode_htv210b("11#19D800")["zones"]
+        assert zones[1]["duration_seconds"] == 0
+        assert zones[1]["event_time"] is None
+
+    def test_wrong_width_state_record_is_skipped(self):
+        """A 2-byte record on the state field is not a zone state and grows no zone."""
+        result = decode_htv210b("11#19D90021")
+        assert result["zones"] == {}
+        assert result["hub_online"] is False
+
+    def test_wrong_width_event_record_is_ignored(self):
+        """A 2-byte record on the event-time field leaves the zone's event time empty."""
+        zones = decode_htv210b("11#19D82121B51132")["zones"]
+        assert zones[1]["event_time"] is None
+
+    def test_battery_percent_absent_when_frame_has_no_battery_record(self):
+        """A frame with no battery record leaves the flag None and the percent absent."""
+        result = decode_htv210b("11#19D800")
+        assert result["battery_flag"] is None
+        assert "battery_percent" not in result
+
+    def test_rssi_read_is_structural_not_a_byte_scan(self):
+        """A 17E1B401 sequence inside another record's value bytes is not an RSSI.
+
+        The byte pattern of a genuine RSSI record sits entirely within a 4-byte
+        usage value here; a linear scan would read it as -76. The structural
+        walk sees one usage record and no RSSI record at all.
+        """
+        result = decode_htv210b("11#299F17E1B40119D800")
+        assert result["rssi_dbm"] is None
+        assert result["zones"][1]["open"] is False
+
+    def test_rssi_rejects_a_positive_dbm_reading(self):
+        """A non-negative dBm value is no reading; no radio reports +5 dBm."""
+        assert decode_htv210b("11#17E10500")["rssi_dbm"] is None
+
+    def test_rssi_record_truncated_to_no_value_bytes_reads_none(self):
+        """A frame ending mid-record leaves the RSSI empty rather than misread."""
+        assert decode_htv210b("11#17E1")["rssi_dbm"] is None
+
+    def test_duration_record_of_unobserved_width_is_rejected(self):
+        """A 3-byte duration is a truncated record, not a third firmware width.
+
+        The record walk silently shortens a record whose declared width runs
+        past the buffer end; only the two widths captures have shown decode as
+        seconds, so the cut-short value stays out of duration_seconds.
+        """
+        zones = decode_htv210b("11#19D82125AF780000")["zones"]
+        assert zones[1]["duration_seconds"] == 0
+
+    def test_non_hex_frame_returns_error_dict(self):
+        """A payload this decoder cannot read degrades to the family's error shape."""
+        result = decode_htv210b("10#208500968832DC64E0C5")
+        assert result["decoder"] == "htv210b_error"
+        assert result["zones"] == {}
+        assert "error" in result
+        # None, not 0: the RSSI sensor renders this verbatim, and 0 dBm would
+        # read as a perfect signal instead of no reading.
+        assert result["rssi_dbm"] is None
+        assert result["hub_online"] is False
+        assert result["battery_flag"] is None
+
+    def test_alarm_records_do_not_misframe_the_stream(self):
+        """The compact 1-byte alarm records parse as themselves, not as a 2-byte type.
+
+        The HTV213 type-byte table reads 0x20 as a 2-byte record, which on
+        this frame would swallow the second alarm's dp_id. The structural walk
+        keeps every following record intact, which this asserts through the
+        zone 2 event time surviving unshifted.
+        """
+        result = decode_htv210b("11#19D8001AD8001D201E2022B71132FB19")
+        assert result["zones"][2]["event_time"] == "2026-07-29T19:08:17"

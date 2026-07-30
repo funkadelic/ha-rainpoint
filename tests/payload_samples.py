@@ -255,8 +255,8 @@ CATALOG_ANCHOR_MODEL = "HCS702B"
 # the RSSI record it carries: 17e1b401, where 0xb4 is -76 dBm (the value the
 # vendor app showed at the time) and the trailing 0x01 is the PHY. Every other
 # frame we hold carries 0x00 there, so this is the only capture proving that
-# byte varies. HTV210B has no hand-written decoder; this exercises the shared
-# byte scanning and the generic path.
+# byte varies. Decoded by decode_htv210b; also exercises the shared byte
+# scanning, since the HTV213 family's RSSI extractor must read this frame too.
 SAMPLE_HTV210B_TLV_PAYLOAD = (
     "11#37FF0D0000000018DC0117E1B40119D8001AD8001D201E2021B70000000022B7000000002"
     "5AF0000000026AF00000000299F000000002A9F0000000038FF0D00000000FEFF0F1527FB19"
