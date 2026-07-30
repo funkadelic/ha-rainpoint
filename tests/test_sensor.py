@@ -26,6 +26,7 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_345,
     MODEL_VALVE_405,
 )
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 from custom_components.rainpoint.sensor import (
     DisplayHubReadingSensor,
     RainPointBatterySensor,
@@ -44,6 +45,7 @@ from custom_components.rainpoint.sensor import (
     RainPointFlowTotalTodaySensor,
     RainPointIlluminanceSensor,
     RainPointMoisturePercentSensor,
+    RainPointNotReportingSensor,
     RainPointPoolBatterySensor,
     RainPointPoolCurrentTempSensor,
     RainPointPoolHighTempSensor,
@@ -1687,6 +1689,110 @@ class TestHtv210bDispatch:
         await async_setup_entry(hass, entry, async_add_entities)
         assert [e for e in captured if isinstance(e, RainPointZoneStateSensor)] == []
         assert len(captured) == 3
+
+
+class TestSilentSensorDispatch:
+    """A "silent" sensor entry always yields exactly one RainPointNotReportingSensor."""
+
+    @staticmethod
+    def _silent_entry(model, **data_overrides):
+        data = {"type": SILENT_DATA_TYPE, "model": model, "silent_state": "never_reported", "last_seen": None, "missed_polls": 3}
+        data.update(data_overrides)
+        return make_sensor_entry(hid=100, mid=200, addr=1, model=model, sub_name="BT Valve", data=data)
+
+    async def _setup(self, entry):
+        sensor_key = "100_200_1"
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: entry}))
+        hass, entry_obj = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry_obj, async_add_entities)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_silent_entry_yields_exactly_one_not_reporting_entity(self):
+        """A model with no factory yields exactly the one diagnostic entity."""
+        captured = await self._setup(self._silent_entry("MYSTERY_SILENT"))
+
+        assert len(captured) == 1
+        assert isinstance(captured[0], RainPointNotReportingSensor)
+        assert captured[0]._attr_unique_id == "rainpoint_100_200_1_not_reporting"
+
+    @pytest.mark.asyncio
+    async def test_htv210b_silent_entry_yields_not_reporting_not_the_factory_pair(self):
+        """MODEL_HTV210B has a factory (_make_htv210b_entities), but a silent entry
+        must never reach it: the silent dispatch runs first, so no battery/RSSI
+        pair, no zone sensors, and no Raw Payload sensor appear (D-02/D-14)."""
+        captured = await self._setup(self._silent_entry(MODEL_HTV210B))
+
+        assert len(captured) == 1
+        assert isinstance(captured[0], RainPointNotReportingSensor)
+        assert not any(isinstance(e, RainPointBatterySensor) for e in captured)
+        assert not any(isinstance(e, RainPointRSSISensor) for e in captured)
+        assert not any(isinstance(e, RainPointRawPayloadSensor) for e in captured)
+
+
+def _make_not_reporting_sensor(data, sub_name="BT Valve"):
+    """Build a RainPointNotReportingSensor, bypassing entity setup for unit tests."""
+    return _make_sensor_base(
+        RainPointNotReportingSensor,
+        "100_200_1",
+        data,
+        sensor_info_overrides={"model": "HTV210B", "sub_name": sub_name},
+    )
+
+
+class TestNotReportingSensor:
+    """Tests for RainPointNotReportingSensor."""
+
+    def test_constructor_sets_unique_id_and_name_from_sub_name(self):
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {}}
+        sensor = RainPointNotReportingSensor(coordinator, "100_200_1", {"addr": 1, "sub_name": "BT Valve"}, "100_200_1")
+
+        assert sensor._attr_unique_id == "rainpoint_100_200_1_not_reporting"
+        assert sensor._attr_name == "BT Valve Not Reporting"
+
+    def test_constructor_name_falls_back_to_device_when_sub_name_absent(self):
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {}}
+        sensor = RainPointNotReportingSensor(coordinator, "100_200_1", {"addr": 1}, "100_200_1")
+
+        assert sensor._attr_name == "Device Not Reporting"
+
+    def test_always_available(self):
+        """The absence of a reading is exactly what this entity reports, so it
+        is never itself unavailable, unlike every other entity bound to the
+        same silent sensor key (D-02/D-12)."""
+        sensor = _make_not_reporting_sensor(None)
+        assert sensor.available is True
+
+    def test_native_value_never_reported(self):
+        sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
+        assert sensor.native_value == "never_reported"
+
+    def test_native_value_stopped_reporting(self):
+        sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "stopped_reporting"})
+        assert sensor.native_value == "stopped_reporting"
+
+    def test_native_value_no_data_is_none(self):
+        sensor = _make_not_reporting_sensor(None)
+        assert sensor.native_value is None
+
+    def test_extra_state_attributes_carries_model_last_seen_missed_polls(self):
+        sensor = _make_not_reporting_sensor(
+            {
+                "type": SILENT_DATA_TYPE,
+                "model": "HTV210B",
+                "silent_state": "stopped_reporting",
+                "last_seen": "2026-01-01T00:00:00+00:00",
+                "missed_polls": 5,
+            }
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["model"] == "HTV210B"
+        assert attrs["last_seen"] == "2026-01-01T00:00:00+00:00"
+        assert attrs["missed_polls"] == 5
 
 
 class TestZoneStateSensor:

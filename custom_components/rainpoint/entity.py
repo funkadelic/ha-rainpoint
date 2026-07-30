@@ -21,7 +21,7 @@ from typing import Any
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .coordinator import RainPointCoordinator
+from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .device import build_sub_device_info
 
 
@@ -87,7 +87,18 @@ class RainPointSubDeviceEntity(CoordinatorEntity):
 
     @property
     def available(self) -> bool:
-        return self._sensor_data is not None
+        """Return False while the reading is missing or the sensor is silent.
+
+        A silent entry's data is truthy (it carries silent_state/last_seen), so
+        the plain "is not None" check used to read this as available with a
+        native_value of None once a previously-reporting device went silent
+        (D-02/D-12). RainPointNotReportingSensor is the one deliberate
+        exception and overrides this back to True.
+        """
+        data = self._sensor_data
+        if data is None:
+            return False
+        return data.get("type") != SILENT_DATA_TYPE
 
     @property
     def device_info(self) -> DeviceInfo:

@@ -68,6 +68,34 @@ _LOGGER = logging.getLogger(__name__)
 
 STALE_VALVE_POLL_GUARD = timedelta(minutes=5)
 
+
+class _AbsentStatus(dict):
+    """Marker meaning "no status response arrived for this hub" (D-05/D-06).
+
+    Subclasses dict rather than using a bare sentinel object because
+    _merge_push_sensor_entry and every other status reader do
+    dict(status.get(mid, ...)) and similar dict operations; those must keep
+    working unchanged. Callers distinguish it with isinstance(status, _AbsentStatus)
+    rather than an equality check, since its contents are indistinguishable from
+    a real "status arrived and reported nobody" dict.
+    """
+
+
+# The single module-level instance every absent-status call site shares.
+STATUS_ABSENT = _AbsentStatus({"subDeviceStatus": []})
+
+# The coordinator data["type"] value for a sub-device the hub lists but no
+# status response has ever mentioned. Deliberately distinct from "unknown":
+# type == "unknown" is the admission ticket for the opt-in generic sensor and
+# generic control paths, and a device the cloud reports nothing about must
+# never become eligible for a generic valve entity.
+SILENT_DATA_TYPE = "silent"
+
+# Consecutive arrived-but-omitted polls required before a status-less addr is
+# surfaced as silent (~6 minutes at the 120s DEFAULT_SCAN_INTERVAL). Absorbs a
+# single-poll transient omission without hiding a genuinely silent device.
+SILENT_DEBOUNCE_POLLS = 3
+
 # Decoder registry - maps device models to their decoder functions
 DECODER_REGISTRY = {
     MODEL_MOISTURE_SIMPLE: decode_moisture_simple,
@@ -236,6 +264,11 @@ def _resolve_addr_from_sid(sid: str) -> int | None:
         return None
 
 
+def _sensor_key(hid, mid: int, addr: int) -> str:
+    """Return the canonical sensor key, the single definition every caller shares."""
+    return f"{hid}_{mid}_{addr}"
+
+
 def is_hub_record(hub: dict) -> bool:
     """Return True when a top-level device record is a real hub.
 
@@ -317,6 +350,27 @@ def _status_entry_time(status_entry: dict) -> datetime | None:
         return None
 
 
+def _last_seen_from_entry(previous: dict | None) -> str | None:
+    """Return an ISO-8601 last-seen timestamp carried by a previous sensor entry, or None.
+
+    Resolution order: a previous silent entry carries its own last_seen forward
+    unchanged (it never had a real reading to time itself by); otherwise a real
+    entry's device_timestamp is used when present; otherwise the raw_status
+    arrival time is used as a last resort. Returns None only when the device
+    has never reported anything at all.
+    """
+    if not previous:
+        return None
+    data = previous.get("data") or {}
+    if data.get("type") == SILENT_DATA_TYPE:
+        return data.get("last_seen")
+    device_timestamp = data.get("device_timestamp")
+    if device_timestamp:
+        return device_timestamp
+    entry_time = _status_entry_time(previous.get("raw_status") or {})
+    return entry_time.isoformat() if entry_time else None
+
+
 def _valve_zone_poll_is_stale(poll_time: datetime | None, last_command_time: datetime, now: datetime) -> bool:
     """Return True when a poll should be treated as older than the last command.
 
@@ -370,6 +424,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._hids = entry.data.get(CONF_HIDS, [])
         self._notified_unknown_models: set[tuple[str | None, int | None]] = set()
         self._last_valve_command_at: dict[tuple[str, int], datetime] = {}
+        self._silent_poll_counts: dict[str, int] = {}
 
     def record_valve_command(self, sensor_key: str, zone_num: int) -> datetime:
         """Remember the latest successful valve command time for stale-poll protection."""
@@ -443,7 +498,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
         data["sensors"] = sensors
 
         status = dict(data.get("status", {}))
-        mid_status = dict(status.get(mid, {"subDeviceStatus": []}))
+        # Merely "no prior status recorded for this mid to merge into yet" --
+        # unrelated to the D-05 absent-vs-omitted distinction, which concerns
+        # the fetch layer's status_by_mid, not this push-side merge target.
+        # STATUS_ABSENT's contents are the same shape, so reusing the shared
+        # sentinel here is equivalent and avoids a second copy of the literal.
+        mid_status = dict(status.get(mid, STATUS_ABSENT))
         sub_status = list(mid_status.get("subDeviceStatus", []))
         for index, existing in enumerate(sub_status):
             if existing.get("id") == sid:
@@ -472,8 +532,13 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
             for hub in hubs:
                 mid = hub["mid"]
-                status = status_by_mid.get(mid, {"subDeviceStatus": []})
+                # STATUS_ABSENT is an unreachable safety net once _fetch_status_by_mid
+                # covers every hub mid (D-05): a mid genuinely missing here would mean
+                # its status was never obtained this poll, not that it arrived empty.
+                status = status_by_mid.get(mid, STATUS_ABSENT)
                 decoded_sensors.update(RainPointCoordinator._decode_hub_subdevices(self, hub, status))
+
+            RainPointCoordinator._prune_silent_state(self, hubs)
 
             _LOGGER.info("Coordinator update complete: %d hubs, %d sensors", len(hubs), len(decoded_sensors))
             _LOGGER.debug(debug_with_version("Final data: hubs=%s, sensors=%s"), hubs, list(decoded_sensors.keys()))
@@ -552,6 +617,13 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 status_array = device_data.get("subDeviceStatus", [])
                 status_by_mid[mid] = {"subDeviceStatus": status_array}
                 _LOGGER.debug(debug_with_version("Fetched status for mid=%s using multipleDeviceStatus"), mid)
+            # The call succeeded, so a hub mid the response did not mention is
+            # evidence about that hub (arrived, reported nobody), not an outage
+            # (D-05). Filling it in here is what makes the absent-vs-omitted
+            # split correct for the exact case that motivated this phase: a
+            # hub whose status came back but never named one of its addrs.
+            for hub in hubs:
+                status_by_mid.setdefault(hub["mid"], {"subDeviceStatus": []})
             return status_by_mid
 
         # Plain conditional fallback path: empty / None / transient-error multi-status all
@@ -580,7 +652,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 raise
             except (aiohttp.ClientError, TimeoutError) as individual_e:
                 _LOGGER.error("Transport error getting status for mid=%s: %s", mid, individual_e)
-                status_by_mid[mid] = {"subDeviceStatus": []}
+                # This hub's status was not obtained this poll -- an outage, not
+                # evidence that it reported nobody -- so it must contribute no
+                # silent entries for any of its children (D-06).
+                status_by_mid[mid] = STATUS_ABSENT
         return status_by_mid
 
     def _notify_unknown_model(
@@ -681,7 +756,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
         _attach_device_timestamp(decoded, status_entry)
 
-        sensor_key = f"{hub['hid']}_{mid}_{addr}"
+        sensor_key = _sensor_key(hub["hid"], mid, addr)
         decoded = self._preserve_recent_valve_command_state(
             sensor_key,
             model,
@@ -740,27 +815,90 @@ class RainPointCoordinator(DataUpdateCoordinator):
         return preserved
 
     def _decode_hub_subdevices(self, hub: dict, status: dict) -> dict[str, dict]:
-        """Walk the sub_status entries for one hub and return a {sensor_key: sensor_entry} dict."""
+        """Walk this hub's own sub-device list and return a {sensor_key: sensor_entry} dict.
+
+        Driven by addr_map (the addrs the hub itself lists), not by the status
+        response: an addr the hub lists but the status response omits still
+        gets a debounced "silent" entry (D-06/D-09), which a loop driven from
+        the status response could never produce -- that asymmetry was the
+        actual defect. A status entry whose sid resolves to an addr the hub
+        does not list is still dropped, and an unresolvable sid is still
+        ignored, exactly as before.
+
+        An absent status (this hub's status could not be obtained this poll)
+        contributes nothing at all for any of its children (D-06): that is an
+        outage, not evidence about any particular addr.
+        """
         mid = hub["mid"]
         _LOGGER.debug(debug_with_version("Processing hub mid=%s with status"), mid)
 
-        sub_status = {s["id"]: s for s in status.get("subDeviceStatus", [])}
-        _LOGGER.debug(debug_with_version("Parsed sub_status for mid=%s: %s keys"), mid, len(sub_status))
+        if isinstance(status, _AbsentStatus):
+            _LOGGER.debug(debug_with_version("Status absent for mid=%s; contributing nothing"), mid)
+            return {}
 
-        # Map addr -> subDevice
-        addr_map = {sd["addr"]: sd for sd in hub.get("subDevices", [])}
-
-        decoded_sensors: dict[str, dict] = {}
-        for sid, s in sub_status.items():
+        status_by_addr: dict[int, dict] = {}
+        for sid, s in {s["id"]: s for s in status.get("subDeviceStatus", [])}.items():
             addr = _resolve_addr_from_sid(sid)
             if addr is None:
                 continue
+            status_by_addr[addr] = s
+        _LOGGER.debug(debug_with_version("Parsed status_by_addr for mid=%s: %s keys"), mid, len(status_by_addr))
 
-            sub = addr_map.get(addr)
-            if not sub:
-                continue
+        # Map addr -> subDevice, the primary loop (promoted from sub_status).
+        addr_map = {sd["addr"]: sd for sd in hub.get("subDevices", [])}
 
-            sensor_key, sensor_entry = RainPointCoordinator._decode_one_subdevice(self, hub, mid, addr, sub, s)
-            decoded_sensors[sensor_key] = sensor_entry
+        decoded_sensors: dict[str, dict] = {}
+        for addr, sub in addr_map.items():
+            sensor_key = _sensor_key(hub["hid"], mid, addr)
+            s = status_by_addr.get(addr)
+            if s is not None:
+                sensor_key, sensor_entry = RainPointCoordinator._decode_one_subdevice(self, hub, mid, addr, sub, s)
+                # A real reading resets the debounce counter (D-07).
+                self._silent_poll_counts.pop(sensor_key, None)
+            else:
+                sensor_entry = RainPointCoordinator._build_silent_subdevice(self, hub, mid, addr, sub, sensor_key)
+            if sensor_entry is not None:
+                decoded_sensors[sensor_key] = sensor_entry
 
         return decoded_sensors
+
+    def _build_silent_subdevice(
+        self,
+        hub: dict,
+        mid: int,
+        addr: int,
+        sub: dict,
+        sensor_key: str,
+    ) -> dict | None:
+        """Return a "silent" sensor entry once an addr has been omitted for
+        SILENT_DEBOUNCE_POLLS consecutive arrived-but-silent polls, else None.
+
+        Bypasses _decode_one_subdevice entirely: there is no payload to decode,
+        so there is nothing to run _notify_unknown_model against either.
+        """
+        count = self._silent_poll_counts.get(sensor_key, 0) + 1
+        self._silent_poll_counts[sensor_key] = count
+        if count < SILENT_DEBOUNCE_POLLS:
+            return None
+
+        previous = (self.data or {}).get("sensors", {}).get(sensor_key)
+        last_seen = _last_seen_from_entry(previous)
+        decoded = {
+            "type": SILENT_DATA_TYPE,
+            "model": sub.get("model"),
+            "silent_state": "stopped_reporting" if last_seen else "never_reported",
+            "last_seen": last_seen,
+            "missed_polls": count,
+        }
+        # status_entry={} per D-09/D-11: every downstream raw_status reader
+        # already tolerates a missing "value"/"time" pair.
+        return _build_sensor_entry(hub, sub, mid, addr, {}, decoded)
+
+    def _prune_silent_state(self, hubs: list[dict]) -> None:
+        """Drop any debounce counter for an addr no hub currently lists.
+
+        Runs every poll so a device that leaves subDevices (unpaired, removed)
+        cannot accumulate a counter forever (T-15-03).
+        """
+        live_keys = {_sensor_key(hub["hid"], hub["mid"], sd["addr"]) for hub in hubs for sd in hub.get("subDevices", [])}
+        self._silent_poll_counts = {key: count for key, count in self._silent_poll_counts.items() if key in live_keys}

@@ -39,7 +39,7 @@ from .const import (
     MODEL_VALVE_345,
     MODEL_VALVE_405,
 )
-from .coordinator import RainPointCoordinator, _build_new_device_issue_url, is_hub_record
+from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator, _build_new_device_issue_url, is_hub_record
 from .diagnostic_sensors import (
     RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
@@ -316,6 +316,16 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
         sub_name,
         base_slug,
     )
+
+    if (info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
+        # Must run before the factory lookup: a silent entry has no payload of
+        # any kind, but MODEL_HTV210B -- the device that motivated this phase --
+        # HAS a factory (_make_htv210b_entities), and reaching it here would
+        # emit a battery/RSSI pair that reads available with a native_value of
+        # None, exactly the "looks wired up while reading nothing" outcome D-02
+        # forbids. No generic entities and no Raw Payload sensor either: there
+        # is nothing for either to hold.
+        return [RainPointNotReportingSensor(coordinator, key, info, base_slug)]
 
     factory = _MODEL_FACTORIES.get(model)
     if factory is not None:
@@ -1157,6 +1167,48 @@ class RainPointUnknownSensor(RainPointSensorBase):
             "then add what the RainPoint app shows for this device."
         )
 
+        return attrs
+
+
+class RainPointNotReportingSensor(RainPointSensorBase):
+    """Diagnostic sensor for a sub-device the hub lists but no status response ever mentions.
+
+    "never_reported" means this integration has observed no reading from this
+    device since it started; "stopped_reporting" means it observed one at
+    last_seen and has since stopped. That distinction stays true across a
+    Home Assistant restart, which a bare "never seen" state would not report
+    honestly (D-02). No state class is set, matching RainPointUnknownSensor:
+    an entity with no readable state must never enter long-term statistics.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options: ClassVar[list[str]] = ["never_reported", "stopped_reporting"]
+    _attr_icon = "mdi:message-off-outline"
+
+    def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_not_reporting"
+        sub_name = sensor_info.get("sub_name") or "Device"
+        self._attr_name = f"{sub_name} Not Reporting"
+
+    @property
+    def available(self) -> bool:
+        """Always available: reporting the absence of a reading is this entity's job."""
+        return True
+
+    @property
+    def native_value(self) -> str | None:
+        data = self._sensor_data or {}
+        return data.get("silent_state")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs = super().extra_state_attributes
+        data = self._sensor_data or {}
+        attrs["model"] = data.get("model")
+        attrs["last_seen"] = data.get("last_seen")
+        attrs["missed_polls"] = data.get("missed_polls")
         return attrs
 
 

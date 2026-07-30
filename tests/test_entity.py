@@ -92,3 +92,12 @@ class TestSubDeviceEntity:
         entity = self._entity({"sensors": {"k": {"data": {"type": "valve"}}}})
         assert entity._sensor_data == {"type": "valve"}
         assert entity.available is True
+
+    def test_silent_entry_reads_as_unavailable(self):
+        """A silent entry's data is truthy, but must still read as unavailable:
+        a battery/RSSI/generic entity bound to this key must not look wired up
+        while reading nothing (D-02/D-12)."""
+        from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+
+        entity = self._entity({"sensors": {"k": {"data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"}}}})
+        assert entity.available is False
