@@ -333,13 +333,16 @@ class TestEvaluateControlGateRealCatalog:
         """CTL_BT_WATER models must produce no control entity while the only command
         path is control_work_mode.
 
-        Every model in the committed catalog whose sole control identity is
+        The exclusion is proven, not suspected: a 2026-07-29 hardware trial
+        (scripts/trial_control_work_mode.py) showed a hub-paired HTV210B rejects
+        control_work_mode with response code 3 for both open and close, in the same
+        session where the identical call shape was accepted by an HTV245FRF on the
+        same hub. Every model in the committed catalog whose sole control identity is
         CTL_BT_WATER declares no CTL_WATER datapoint, so admitting it would build a
-        valve that commands through an endpoint the device does not appear to accept.
-        Nothing is assumed about the outcome of a command here, so the entity would
-        never report a state change either -- the user would read it as slow hardware
-        rather than an uncommanded one. This pins the exclusion until a capture
-        confirms the endpoint and payload.
+        valve whose every command fails while never reporting a state change -- the
+        user would read it as slow hardware rather than an uncommanded one. This pins
+        the exclusion until a capture of the vendor app's traffic identifies the
+        endpoint and payload it actually uses.
         """
         bt_variants = [
             (model, code)
