@@ -38,6 +38,7 @@ from .product_catalog import get_catalog_entry, get_catalog_port_number, get_cat
 from .trust import is_hand_written_model
 from .utils import (
     _base_decoder_dict,
+    _decode_packed_report_time,
     _extract_report_time,
     _f10_to_c,
     _le16,
@@ -63,6 +64,7 @@ __all__ = [
     "_base_decoder_dict",
     # Validators
     "_battery_flag_to_percent",
+    "_decode_packed_report_time",
     "_decode_packed_timestamp",
     "_extract_battery_flag",
     "_extract_report_time",

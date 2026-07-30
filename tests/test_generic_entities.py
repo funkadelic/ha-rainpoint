@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import collections
+from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,8 +11,9 @@ import pytest
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
 from custom_components.rainpoint.api.decoders import _decode_packed_timestamp, decode_moisture_simple
-from custom_components.rainpoint.api.generic_decoder import decode_generic
+from custom_components.rainpoint.api.generic_decoder import _STATUS_FIELDS, decode_generic
 from custom_components.rainpoint.api.trust import is_hand_written_model
+from custom_components.rainpoint.api.utils import _decode_packed_report_time
 from custom_components.rainpoint.api.validators import _battery_flag_to_percent
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
@@ -36,6 +39,7 @@ from custom_components.rainpoint.generic_entities import (
 )
 from custom_components.rainpoint.sensor import _MODEL_FACTORIES, async_setup_entry
 from tests.helpers import make_coordinator_data, make_sensor_entry
+from tests.payload_samples import SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD
 
 FAKE_MODEL = "FAKE_GENERIC_MODEL"
 
@@ -746,7 +750,6 @@ class TestRealCatalogMultiReasonRegression:
         assert any("status readings have no verified definition" in reason for reason in result.blocked_by)
         assert result.unmapped_identities == (
             "STA_ALARM",
-            "STA_DURATION",
             "STA_EVTIME2",
             "STA_LASTUSAGE",
             "STA_RSRP",
@@ -923,6 +926,86 @@ class TestRainPointGenericSensorNativeValue:
         fields = [_decoded_field("STA_FAKE", 5, 0)]
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
         assert sensor.native_value is None
+
+
+class TestCuratedTableIsReachable:
+    """Every curated identity must be one the decode path can actually produce.
+
+    The gate reads identities from the catalog while an entity reads its value
+    by matching decoded field names, and nothing else ties those two name
+    sources together. Curating an identity the decoder never emits builds a
+    sensor that passes the gate, registers, logs nothing, and reports no state
+    forever. No other test can catch it: every one of them builds its own
+    fields named after the identity under test, so the two agree by
+    construction there.
+
+    STA_RSRP is the live example. The catalog declares it on 23 variant rows
+    and neither decoder mentions it at all, so it must never be curated
+    without teaching the decode path to emit it first.
+    """
+
+    def test_every_curated_identity_can_be_produced_by_the_decoder(self):
+        assert set(_IDENTITY_SPECS) <= set(_STATUS_FIELDS.values())
+
+    def test_the_known_unreachable_catalog_identity_is_still_unreachable(self):
+        """Pins the reason STA_RSRP stays out, so curating it fails here rather than in a dashboard."""
+        assert "STA_RSRP" not in set(_STATUS_FIELDS.values())
+        assert "STA_RSRP" not in _IDENTITY_SPECS
+
+
+class TestDurationRow:
+    """The STA_DURATION row, whose unit one captured frame proves on its own."""
+
+    SPEC = _IDENTITY_SPECS["STA_DURATION"]
+
+    def test_the_captured_frame_proves_the_unit_without_an_external_reading(self):
+        """event time minus report time equals the raw duration, so the word is seconds."""
+        decoded = decode_generic(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)
+        by_name = collections.defaultdict(list)
+        for field in decoded["fields"]:
+            by_name[field["name"]].append(field["value"])
+
+        report = datetime.fromisoformat(_decode_packed_timestamp(by_name["STA_REPTIME"][0]))
+        # The active zone is the one carrying a non-zero stamp and duration.
+        event = datetime.fromisoformat(_decode_packed_timestamp(max(by_name["STA_EVTIME"])))
+        duration = max(by_name["STA_DURATION"])
+
+        assert (event - report).total_seconds() == duration
+        assert self.SPEC.transform(duration) == 2940.0
+        assert self.SPEC.unit == "s"
+
+    def test_both_observed_record_widths_read_as_seconds(self):
+        """2 bytes on the HTV213 family and 4 on the HTV210B, both little-endian already."""
+        assert self.SPEC.transform(0x0B7C) == 2940.0
+        assert self.SPEC.transform(0x00010000) == 65536.0
+
+    def test_a_four_byte_reading_is_not_rejected_by_the_range(self):
+        """The range is the widest record width, so a long but real run is not dropped."""
+        low, high = self.SPEC.valid_range
+        assert low == 0.0
+        assert high == float(0xFFFFFFFF)
+        assert self.SPEC.transform(0xFFFFFFFF) <= high
+
+
+class TestReportTimeRow:
+    """The STA_REPTIME row, a second wall-clock string alongside the event-time one."""
+
+    SPEC = _IDENTITY_SPECS["STA_REPTIME"]
+
+    def test_it_delegates_to_the_unpacking_proven_for_this_identity(self):
+        decoded = decode_generic(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)
+        raw = next(f["value"] for f in decoded["fields"] if f["name"] == "STA_REPTIME")
+        assert self.SPEC.transform(raw) == _decode_packed_report_time(raw)
+        assert self.SPEC.transform(raw) == "2026-07-04T17:40:51"
+
+    def test_it_claims_no_device_class_or_numeric_guards(self):
+        assert self.SPEC.device_class is None
+        assert self.SPEC.unit is None
+        assert self.SPEC.valid_range is None
+        assert self.SPEC.precision is None
+
+    def test_an_unusable_word_reads_as_no_state(self):
+        assert self.SPEC.transform(0) is None
 
 
 class TestHumidityRow:

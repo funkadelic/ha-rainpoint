@@ -48,6 +48,7 @@ from homeassistant.components.sensor import SensorDeviceClass
 
 from .api import (
     _battery_flag_to_percent,
+    _decode_packed_report_time,
     _decode_packed_timestamp,
     _f10_to_c,
     get_catalog_entry,
@@ -138,6 +139,29 @@ def _percent_byte(raw: int) -> float | None:
     return float(raw)
 
 
+def _duration_seconds(raw: int) -> float | None:
+    """Read a duration stored as an unsigned little-endian word of seconds.
+
+    Both hand-written valve decoders read this identity's record exactly this
+    way, at either observed width, so no arithmetic is applied here either.
+    """
+    return float(raw)
+
+
+def _packed_report_wall_clock(raw: int) -> str | None:
+    """Unpack a packed report-time stamp to a naive ISO-8601 string.
+
+    Delegates to the unpacking proven for this identity specifically, rather
+    than to the event-time one: the two carry the same bit layout, but each
+    row cites the function whose evidence is about its own identity, so a
+    later correction to one cannot silently redefine the other.
+
+    Naive and without a device class for the same reason the event-time row
+    is; see that transform.
+    """
+    return _decode_packed_report_time(raw)
+
+
 def _packed_wall_clock(raw: int) -> str | None:
     """Unpack a packed wall-clock stamp to a naive ISO-8601 string.
 
@@ -188,6 +212,34 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         # scaling are the trusted path's own, not a reading of the catalog's
         # dpDataType.
     ),
+    "STA_DURATION": GenericSensorSpec(
+        label="Duration",
+        device_class=SensorDeviceClass.DURATION,
+        unit="s",
+        state_class=None,
+        transform=_duration_seconds,
+        valid_range=(0.0, 4294967295.0),
+        precision=0,
+        # Evidence: the captured HTV245 zone-2-active frame proves the unit
+        # internally, with no external reading needed. Its report time unpacks
+        # to 17:40:51, its zone-2 event time to 18:29:51, and the difference of
+        # 2940 seconds is exactly the raw value this identity carries on that
+        # zone. api/decoders.py (_extract_htv213_zones) and api/decoders.py
+        # (_extract_htv210b_zones) both read the record as little-endian
+        # seconds, at the two widths captures show (2 bytes on the HTV213
+        # family, 4 on the HTV210B).
+        #
+        # The valid_range is the widest of those record widths, not a claim
+        # about how long a run can be: an unsigned duration has no ceiling the
+        # payload contradicts, and inventing one would drop a long but real
+        # reading rather than catch anything.
+        #
+        # Labelled "Duration" rather than "Time Remaining". On the valve hub
+        # the delta above shows it is the remainder of the current run, but a
+        # controller may report a configured duration through the same
+        # identity; seconds are seconds either way, so only the narrower name
+        # would be a guess.
+    ),
     "STA_EVTIME": GenericSensorSpec(
         label="Event Time",
         device_class=None,
@@ -203,6 +255,22 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         # exactly that frame's report time plus the zone's remaining duration.
         # api/decoders.py reads the same field index (21) off the same
         # little-endian four-byte record the generic decode path hands over.
+    ),
+    "STA_REPTIME": GenericSensorSpec(
+        label="Report Time",
+        device_class=None,
+        unit=None,
+        state_class=None,
+        transform=_packed_report_wall_clock,
+        valid_range=None,
+        precision=None,
+        # Evidence: api/utils.py (_decode_packed_report_time) unpacks this
+        # identity's word, and its year base is confirmed against captures
+        # whose decoded stamp matched the moment they were pulled, where a base
+        # of 2000 would have placed those same frames in 2006. api/utils.py
+        # (_extract_report_time) reads it off the same little-endian four-byte
+        # record the generic decode path hands over, and the hand-written
+        # decoders already surface the result on trusted devices.
     ),
     "STA_RH": GenericSensorSpec(
         label="Humidity",
