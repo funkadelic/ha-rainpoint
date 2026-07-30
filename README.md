@@ -99,8 +99,8 @@ You can still reach every device and zone the original account can. Invited memb
 For each device the coordinator discovers, the integration creates:
 
 - **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API.
-- **Valve entities**: one per irrigation zone for valve hub models (HTV*).
-- **Number entities**: one per zone for configuring zone run duration (1–60 minutes).
+- **Valve entities**: one per irrigation zone, for the valve hub models listed in the table above. The HTV210B is not one of them: its zone state is read-only, as described under [Supported devices](#supported-devices).
+- **Number entities**: one per zone for configuring zone run duration (1–60 minutes), on those same valve hub models.
 - **Hub diagnostic sensors**: RSSI, battery, firmware version, last-updated timestamp.
 
 All entities are grouped under their parent hub device in the Home Assistant device registry.
