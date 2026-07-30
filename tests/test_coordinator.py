@@ -360,6 +360,39 @@ class TestCoordinatorUpdate:
         assert "gate_diagnostics=" in url
         assert "not+in+the+product+catalog" in url
 
+    def test_build_new_device_issue_url_payload_note_fills_primary_payload(self):
+        """payload_note lands in primary_payload verbatim, not left blank (D-15)."""
+        url = _coord_module._build_new_device_issue_url("HTV210B", None, 360, payload_note=_coord_module.NO_STATUS_PAYLOAD_MARKER)
+
+        primary_payload_value = url.split("primary_payload=")[1].split("&")[0]
+        assert primary_payload_value != ""
+        assert "returns+no+status" in url
+        assert "model_code=360" in url
+
+    def test_build_new_device_issue_url_payload_note_suppresses_auto_decode(self):
+        """A payload_note skips the auto-decode step even when raw_value is also a decodable payload.
+
+        decode_generic cannot read prose, so running it against a marker string
+        would waste a decode to produce nothing; payload_note takes over the
+        primary_payload field entirely and auto_decoded must not appear.
+        """
+        url = _coord_module._build_new_device_issue_url(
+            "HTV210B",
+            SAMPLE_HTV245_TLV_PAYLOAD,
+            payload_note=_coord_module.NO_STATUS_PAYLOAD_MARKER,
+        )
+
+        assert "auto_decoded=" not in url
+        assert "returns+no+status" in url
+
+    def test_build_new_device_issue_url_omitting_payload_note_is_unaffected(self):
+        """Existing callers that pass no payload_note keep byte-identical output."""
+        without_kwarg = _coord_module._build_new_device_issue_url("HTV210B", None, 123)
+        with_default = _coord_module._build_new_device_issue_url("HTV210B", None, 123, payload_note=None)
+
+        assert without_kwarg == with_default
+        assert "auto_decoded=" not in without_kwarg
+
     def test_format_gate_diagnostics_lists_unmapped_readings_and_every_reason(self, monkeypatch):
         """Both the uncurated-reading list and all block reasons are rendered, not just one."""
         import custom_components.rainpoint.generic_entities as generic_entities_module

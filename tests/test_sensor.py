@@ -1794,6 +1794,51 @@ class TestNotReportingSensor:
         assert attrs["last_seen"] == "2026-01-01T00:00:00+00:00"
         assert attrs["missed_polls"] == 5
 
+    def test_report_url_carries_model_and_no_status_marker(self):
+        """report_url is the same one-click report path an unsupported payload gets,
+        except the payload field states plainly there is no payload (D-15)."""
+        sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
+        attrs = sensor.extra_state_attributes
+
+        assert "report_url" in attrs
+        assert "template=new_device.yml" in attrs["report_url"]
+        assert "model=HTV210B" in attrs["report_url"]
+        assert "returns+no+status" in attrs["report_url"]
+        assert "instructions" in attrs
+
+    def test_report_url_includes_model_code_when_known(self):
+        sensor = _make_sensor_base(
+            RainPointNotReportingSensor,
+            "100_200_1",
+            {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
+            sensor_info_overrides={"model": "HTV210B", "model_code": 360, "sub_name": "BT Valve"},
+        )
+        assert "model_code=360" in sensor.extra_state_attributes["report_url"]
+
+    def test_report_url_omits_model_code_when_absent(self):
+        sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
+        assert "model_code=" not in sensor.extra_state_attributes["report_url"]
+
+    def test_report_url_is_computed_once_across_reads(self, monkeypatch):
+        """The URL's inputs are fixed at construction, so a repeat read must cost nothing."""
+        import custom_components.rainpoint.sensor as sensor_module
+
+        calls = []
+
+        def _counting(model, raw_value, model_code=None, *, payload_note=None):
+            calls.append((model, raw_value, model_code, payload_note))
+            return "https://example.invalid/report"
+
+        monkeypatch.setattr(sensor_module, "_build_new_device_issue_url", _counting)
+        sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
+
+        first = sensor.extra_state_attributes["report_url"]
+        second = sensor.extra_state_attributes["report_url"]
+
+        assert first == second == "https://example.invalid/report"
+        assert len(calls) == 1
+        assert calls[0] == ("HTV210B", None, None, sensor_module.NO_STATUS_PAYLOAD_MARKER)
+
 
 class TestZoneStateSensor:
     """The read-only per-zone open/closed enum sensor."""

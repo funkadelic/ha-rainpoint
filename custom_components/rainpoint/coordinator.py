@@ -128,6 +128,13 @@ DECODER_REGISTRY = {
 # form with the model and idle payload already populated.
 NEW_DEVICE_ISSUE_TEMPLATE = "new_device.yml"
 
+# Explicit marker for a silent device's report link: there is no payload to
+# capture, and the absence of one is itself the finding, so the primary_payload
+# field states that plainly instead of arriving blank.
+NO_STATUS_PAYLOAD_MARKER = (
+    "This device pairs to the hub but returns no status to the RainPoint cloud. There is no payload to capture."
+)
+
 
 def _format_generic_fields(generic: dict | None) -> str:
     """Render a best-effort generic decode as a text block for the issue form.
@@ -208,7 +215,13 @@ def _fit_param(params: dict, key: str, value: str) -> dict:
     return {**params, key: value[:low] + _ISSUE_FIELD_TRUNCATION_NOTE}
 
 
-def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: int | str | None = None) -> str:
+def _build_new_device_issue_url(
+    model: str,
+    raw_value: str | None,
+    model_code: int | str | None = None,
+    *,
+    payload_note: str | None = None,
+) -> str:
     """Return a GitHub New-device-support URL pre-filled with what the integration already knows.
 
     The reporter only has to add what the RainPoint app shows and submit, instead
@@ -232,18 +245,27 @@ def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: i
     at all. The payload is left out and named in the form instead, so the
     reporter is told to paste it from the device's raw payload sensor rather
     than being handed a link GitHub refuses.
+
+    payload_note replaces the raw payload with an explicit statement when there
+    is no payload to begin with (a silent sub-device, D-15): decode_generic
+    cannot read prose, so the auto-decode step is skipped entirely rather than
+    run against text it was never meant to parse.
     """
     params = {
         "template": NEW_DEVICE_ISSUE_TEMPLATE,
         "title": f"Add support for {model}",
         "model": model,
-        "primary_payload": raw_value or "",
+        "primary_payload": payload_note if payload_note is not None else (raw_value or ""),
     }
     if model_code is not None:
         params["model_code"] = str(model_code)
     if len(_url_for_params(params)) > ISSUE_URL_MAX_LENGTH:
         return _url_for_params({**params, "primary_payload": _ISSUE_PAYLOAD_TOO_LONG_NOTE})
-    auto_decoded = _format_generic_fields(decode_generic(raw_value, model=model, model_code=model_code)) if raw_value else ""
+    auto_decoded = (
+        _format_generic_fields(decode_generic(raw_value, model=model, model_code=model_code))
+        if raw_value and payload_note is None
+        else ""
+    )
     if auto_decoded:
         params = _fit_param(params, "auto_decoded", auto_decoded)
     gate_diagnostics = _format_gate_diagnostics(model, model_code)

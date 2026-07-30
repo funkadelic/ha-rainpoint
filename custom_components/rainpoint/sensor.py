@@ -39,7 +39,13 @@ from .const import (
     MODEL_VALVE_345,
     MODEL_VALVE_405,
 )
-from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator, _build_new_device_issue_url, is_hub_record
+from .coordinator import (
+    NO_STATUS_PAYLOAD_MARKER,
+    SILENT_DATA_TYPE,
+    RainPointCoordinator,
+    _build_new_device_issue_url,
+    is_hub_record,
+)
 from .diagnostic_sensors import (
     RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
@@ -1186,6 +1192,12 @@ class RainPointNotReportingSensor(RainPointSensorBase):
     _attr_options: ClassVar[list[str]] = ["never_reported", "stopped_reporting"]
     _attr_icon = "mdi:message-off-outline"
 
+    # The report link's inputs (model, modelCode) are fixed once this entity is
+    # constructed, so it is computed once and reused rather than rebuilt on
+    # every attribute read. Declared on the class so an instance built without
+    # __init__ still starts from an empty memo, matching RainPointUnknownSensor.
+    _report_url: str | None = None
+
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_not_reporting"
@@ -1209,6 +1221,21 @@ class RainPointNotReportingSensor(RainPointSensorBase):
         attrs["model"] = data.get("model")
         attrs["last_seen"] = data.get("last_seen")
         attrs["missed_polls"] = data.get("missed_polls")
+
+        # The same one-click report path an unsupported-payload device gets,
+        # except the payload field states plainly that there is no payload
+        # (D-15): the absence of one is itself the finding a maintainer needs.
+        if self._report_url is None:
+            model = self._sensor_info.get("model")
+            model_code = self._sensor_info.get("model_code")
+            self._report_url = _build_new_device_issue_url(
+                model or "unknown", None, model_code, payload_note=NO_STATUS_PAYLOAD_MARKER
+            )
+        attrs["report_url"] = self._report_url
+        attrs["instructions"] = (
+            "This device is listed by RainPoint but returns no readings. Opening report_url files a "
+            "pre-filled support request that already states the device reports no status."
+        )
         return attrs
 
 
