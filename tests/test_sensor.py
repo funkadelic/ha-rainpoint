@@ -1796,6 +1796,27 @@ class TestNotReportingSensor:
         sensor = _make_not_reporting_sensor(None)
         assert sensor.native_value is None
 
+    def test_recovered_device_keeps_the_entity_with_no_state(self):
+        """What the README promises about recovery, pinned.
+
+        Nothing removes this entity when the device starts reporting again:
+        the add-once bookkeeping keeps the key forever and no registry
+        cleanup runs. The entry it reads is simply a decoded reading now,
+        which carries no silent_state, so the entity stays put, stays
+        available, and reports nothing. The README says exactly that, and
+        used to claim the entity was cleared alongside the Repairs issue.
+        """
+        sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
+        assert sensor.native_value == "never_reported"
+
+        sensor.coordinator.data["sensors"][sensor._sensor_key]["data"] = {
+            "type": "valve",
+            "zone1_state": "closed",
+        }
+
+        assert sensor.native_value is None
+        assert sensor.available is True
+
     def test_extra_state_attributes_carries_model_last_seen_missed_polls(self):
         sensor = _make_not_reporting_sensor(
             {
