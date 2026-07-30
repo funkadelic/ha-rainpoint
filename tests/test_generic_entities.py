@@ -8,7 +8,8 @@ import pytest
 
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
-from custom_components.rainpoint.api.decoders import _decode_packed_timestamp
+from custom_components.rainpoint.api.decoders import _decode_packed_timestamp, decode_moisture_simple
+from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.api.trust import is_hand_written_model
 from custom_components.rainpoint.api.validators import _battery_flag_to_percent
 from custom_components.rainpoint.const import (
@@ -922,6 +923,49 @@ class TestRainPointGenericSensorNativeValue:
         fields = [_decoded_field("STA_FAKE", 5, 0)]
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
         assert sensor.native_value is None
+
+
+class TestHumidityRow:
+    """The STA_RH row, whose scale is proven but whose physical quantity is not."""
+
+    SPEC = _IDENTITY_SPECS["STA_RH"]
+
+    def _displayed(self, raw: int):
+        """Return what the sensor would show for a raw field value, or None."""
+        value = self.SPEC.transform(raw)
+        low, high = self.SPEC.valid_range
+        if value is None or not (low <= value <= high):
+            return None
+        return round(value, self.SPEC.precision)
+
+    def test_the_byte_is_the_percentage_unscaled(self):
+        """0x1A reads 26% in decode_moisture_simple and 0x1F reads 31% in the HCS021FRF hex path."""
+        assert self._displayed(0x1A) == 26
+        assert self._displayed(0x1F) == 31
+
+    def test_the_hcs026frf_capture_resolves_to_this_identity_at_the_decoders_value(self):
+        """Ties the row to the frame the hand-written decoder was written against.
+
+        Guards the assumption the row rests on: that the byte the trusted
+        decoder reports as a moisture percentage is the same byte the generic
+        decode path labels with this identity.
+        """
+        decoded = decode_generic("10#E1C600DC01881AFF0F5E21F718", model=MODEL_MOISTURE_SIMPLE)
+        field = next(f for f in decoded["fields"] if f["name"] == "STA_RH")
+        assert field["value"] == 26
+        assert decode_moisture_simple("10#E1C600DC01881AFF0F5E21F718")["moisture_percent"] == 26
+        assert self._displayed(field["value"]) == 26
+
+    def test_a_byte_above_one_hundred_reads_as_no_state(self):
+        """Out of range rather than clamped, so a bad frame cannot read as a plausible 100."""
+        assert self.SPEC.transform(0xFF) == 255.0
+        assert self._displayed(0xFF) is None
+
+    def test_no_device_class_is_claimed(self):
+        """One identity covers soil moisture and air humidity, so the quantity stays unasserted."""
+        assert self.SPEC.device_class is None
+        assert self.SPEC.unit == "%"
+        assert self.SPEC.state_class is None
 
 
 class TestEventTimeRow:

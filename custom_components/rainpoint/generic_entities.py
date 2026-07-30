@@ -27,17 +27,14 @@ non-normal flag with a known charge level, so a finer scale would be invented
 rather than proven, and an invented percentage is indistinguishable from a
 real one downstream.
 
-The table carries no humidity row. The only hand-written decoder that
-reports a humidity percentage parses a decimal ASCII token, which is
-evidence about the end value but not about the scale of the single raw byte
-the catalog declares for that identity; the byte-level temperature/humidity
-decoders extract signal strength only and never decode humidity at all. A
-raw-byte-to-percent mapping is therefore unproven, and a systematic scale
-error would land inside a plausible zero-to-one-hundred range where nothing
-downstream would catch it.
-
-Adding that row later is additive and only widens which models pass the
-gate.
+The humidity row carries no device class, and that is the whole of what is
+unproven about it. Its scale is proven twice over: the vendor uses this
+identity for a soil sensor's moisture percentage, and both hand-written soil
+decoders read the byte carrying it as a percentage directly, on the same
+framing the generic decode path reads. What no capture settles is which
+physical quantity an unrecognized model reports through it, since one
+identity covers both a soil moisture percentage and an air relative humidity.
+The magnitude is therefore published and the semantics are not claimed.
 """
 
 from __future__ import annotations
@@ -130,6 +127,17 @@ def _temperature_c(raw: int) -> float | None:
     return _f10_to_c(raw)
 
 
+def _percent_byte(raw: int) -> float | None:
+    """Read a percentage stored as one byte, unscaled.
+
+    Both hand-written soil decoders read this identity's byte exactly this
+    way, so no arithmetic is applied here either. A byte above 100 is left for
+    the row's valid_range to reject rather than being clamped, so an
+    out-of-range frame reads as no state instead of as a plausible 100.
+    """
+    return float(raw)
+
+
 def _packed_wall_clock(raw: int) -> str | None:
     """Unpack a packed wall-clock stamp to a naive ISO-8601 string.
 
@@ -195,6 +203,30 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         # exactly that frame's report time plus the zone's remaining duration.
         # api/decoders.py reads the same field index (21) off the same
         # little-endian four-byte record the generic decode path hands over.
+    ),
+    "STA_RH": GenericSensorSpec(
+        label="Humidity",
+        device_class=None,
+        unit="%",
+        state_class=None,
+        transform=_percent_byte,
+        valid_range=(0.0, 100.0),
+        precision=0,
+        # Evidence: api/decoders.py (decode_moisture_simple, HCS026FRF) reads
+        # the byte this identity carries as a moisture percentage with no
+        # scaling, against a captured frame whose 0x1A reads as 26%, and
+        # api/decoders.py (_decode_moisture_full_hex, HCS021FRF) reads the byte
+        # behind the same 0x88 tag the same unscaled way, with 0x1F reading as
+        # 31%. Both are the 10# framing the generic decode path reads, and
+        # decoding that same captured frame generically resolves that byte to
+        # this identity.
+        #
+        # No device class: both proofs are soil moisture readings, while the
+        # vendor also uses this identity for air relative humidity, so the
+        # percentage is proven but which quantity an unrecognized model reports
+        # is not. Claiming SensorDeviceClass.HUMIDITY would assert the part
+        # that is unproven, on exactly the models with no decoder to check it
+        # against.
     ),
     "STA_RSSI": GenericSensorSpec(
         label="Signal Strength",
