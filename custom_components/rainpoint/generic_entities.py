@@ -13,13 +13,14 @@ not enter Home Assistant long-term statistics, which a later correction to
 the table cannot retroactively fix. Recent-state history and graphs are
 unaffected.
 
-The curated table carries no battery row. The hand-written battery
-percentage is derived from a sixteen-bit composite status code read at fixed
-trailing offsets and mapped through a lookup table, not from the single-byte
-battery datapoint the catalog declares, so no raw-to-percent mapping is
-proven for it.
+The battery row reports the same coarse reading the hand-written decoders
+report, by delegating to the same mapping: a normal flag reads one hundred
+percent and every other flag value reads nothing at all. No capture pairs a
+non-normal flag with a known charge level, so a finer scale would be invented
+rather than proven, and an invented percentage is indistinguishable from a
+real one downstream.
 
-The table carries no humidity row either. The only hand-written decoder that
+The table carries no humidity row. The only hand-written decoder that
 reports a humidity percentage parses a decimal ASCII token, which is
 evidence about the end value but not about the scale of the single raw byte
 the catalog declares for that identity; the byte-level temperature/humidity
@@ -28,7 +29,7 @@ raw-byte-to-percent mapping is therefore unproven, and a systematic scale
 error would land inside a plausible zero-to-one-hundred range where nothing
 downstream would catch it.
 
-Adding either row later is additive and only widens which models pass the
+Adding that row later is additive and only widens which models pass the
 gate.
 """
 
@@ -42,6 +43,7 @@ from typing import Any
 from homeassistant.components.sensor import SensorDeviceClass
 
 from .api import (
+    _battery_flag_to_percent,
     _f10_to_c,
     get_catalog_entry,
     get_catalog_port_number,
@@ -91,6 +93,23 @@ def _rssi_dbm(raw: int) -> float | None:
     return float(low - 256 if low >= 128 else low)
 
 
+def _battery_percent(raw: int) -> float | None:
+    """Map the low byte of a raw STA_BAT reading to a battery percentage.
+
+    Delegates to the mapping the hand-written decoders already use rather than
+    restating it, so this row cannot drift from the trusted path: a normal flag
+    reads 100 and every unmapped flag reads None, which the caller turns into
+    no state at all rather than an invented charge level.
+
+    The low byte is exactly what the hand-written extraction reads (the first
+    value byte of the record), and every multi-byte value in these framings is
+    little-endian, so masking keeps a one-byte and a two-byte STA_BAT decoding
+    identically the way the signal-strength row does.
+    """
+    percent = _battery_flag_to_percent(raw & 0xFF)
+    return None if percent is None else float(percent)
+
+
 def _temperature_c(raw: int) -> float | None:
     """Convert a raw Fahrenheit-times-ten reading to Celsius."""
     return _f10_to_c(raw)
@@ -110,6 +129,23 @@ def _wkstate_open(raw: int) -> float | None:
 # absent-row notes in that docstring are deliberately worded without one, so
 # the marker count and the row count stay equal.
 _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
+    "STA_BAT": GenericSensorSpec(
+        label="Battery",
+        device_class=SensorDeviceClass.BATTERY,
+        unit="%",
+        state_class=None,
+        transform=_battery_percent,
+        valid_range=(0.0, 100.0),
+        precision=0,
+        # Evidence: api/validators.py (_extract_battery_flag) locates STA_BAT
+        # structurally and reads its first value byte, on the same record walk
+        # the generic decode path uses, and api/validators.py
+        # (_battery_flag_to_percent) is the percentage mapping every
+        # hand-written decoder that reports a battery level already applies to
+        # that byte. This row calls that same function, so the unit and the
+        # scaling are the trusted path's own, not a reading of the catalog's
+        # dpDataType.
+    ),
     "STA_RSSI": GenericSensorSpec(
         label="Signal Strength",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,

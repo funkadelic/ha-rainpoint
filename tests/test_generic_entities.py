@@ -9,6 +9,7 @@ import pytest
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
 from custom_components.rainpoint.api.trust import is_hand_written_model
+from custom_components.rainpoint.api.validators import _battery_flag_to_percent
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
@@ -215,7 +216,7 @@ class TestBuildGenericEntitiesGate:
         assert build_generic_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
     def test_uncurated_identity_fails_whole_model(self, monkeypatch):
-        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_BAT", dp_port=0, dp_code=11)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_ALARM", dp_port=0, dp_code=11)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         sensor_info = make_sensor_entry(model=FAKE_MODEL, data=_unknown_data())
         coordinator = self._coordinator_for("100_200_1", sensor_info)
@@ -419,14 +420,14 @@ class TestEvaluateGenericGate:
         assert result.port_number == 1
 
     def test_one_curated_and_one_uncurated_identity_fails_naming_the_gap(self, monkeypatch):
-        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_BAT", dp_port=0, dp_code=11)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_ALARM", dp_port=0, dp_code=11)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
 
         result = evaluate_generic_gate(FAKE_MODEL, None)
 
         assert result.passed is False
         assert result.datapoints == []
-        assert result.unmapped_identities == ("STA_BAT",)
+        assert result.unmapped_identities == ("STA_ALARM",)
         assert len(result.blocked_by) == 1
         assert "1 of this device's 2 status readings" in result.blocked_by[0]
 
@@ -743,7 +744,6 @@ class TestRealCatalogMultiReasonRegression:
         assert any("status readings have no verified definition" in reason for reason in result.blocked_by)
         assert result.unmapped_identities == (
             "STA_ALARM",
-            "STA_BAT",
             "STA_DURATION",
             "STA_EVTIME",
             "STA_EVTIME2",
@@ -1001,7 +1001,7 @@ class TestGenericSensorDispatchEndToEnd:
 
     @pytest.mark.asyncio
     async def test_toggle_on_uncurated_identity_yields_zero_generic_sensors(self, monkeypatch):
-        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_BAT", dp_port=0, dp_code=11)]
+        dp_entries = [_dp("STA_TEM", dp_port=0, dp_code=9), _dp("STA_ALARM", dp_port=0, dp_code=11)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 1)
 
@@ -1147,6 +1147,46 @@ class TestMalformedCatalogValuesKeepSpecificReasons:
 
         assert result.passed is True
         assert result.blocked_by == ()
+
+
+class TestBatteryTransform:
+    """The STA_BAT row against the mapping the hand-written decoders apply.
+
+    The row exists to report the trusted path's own coarse reading, so these
+    tests assert it agrees with that mapping rather than asserting a finer
+    scale no capture supports.
+    """
+
+    SPEC = _IDENTITY_SPECS["STA_BAT"]
+
+    def _displayed(self, raw: int):
+        """Return what the sensor would show for a raw field value, or None."""
+        value = self.SPEC.transform(raw)
+        low, high = self.SPEC.valid_range
+        if value is None or not (low <= value <= high):
+            return None
+        return round(value, self.SPEC.precision)
+
+    @pytest.mark.parametrize("raw", [0, 1])
+    def test_a_normal_flag_reads_one_hundred_percent(self, raw):
+        """Both flag values the captures corroborate report the same level."""
+        assert self._displayed(raw) == 100
+
+    def test_an_unmapped_flag_reports_nothing_rather_than_a_level(self):
+        """A single HTV113FRF frame reports 3, which no capture pairs with a charge level."""
+        assert self.SPEC.transform(3) is None
+        assert self._displayed(3) is None
+
+    def test_a_two_byte_reading_uses_the_low_byte(self):
+        """The hand-written extraction reads the first value byte, which is the low byte here."""
+        assert self._displayed(0x0001) == 100
+        assert self._displayed(0xFF01) == 100
+
+    def test_the_row_agrees_with_the_hand_written_mapping_across_every_byte(self):
+        """No byte value may read differently here than on the trusted path."""
+        for raw in range(256):
+            expected = _battery_flag_to_percent(raw)
+            assert self.SPEC.transform(raw) == (None if expected is None else float(expected))
 
 
 class TestRssiTransformWidths:
