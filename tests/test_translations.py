@@ -41,6 +41,7 @@ def _placeholders_in(text: str) -> set[str]:
 
 
 def _not_reporting_entry() -> dict:
+    """The issues entry whose copy the code renders placeholders into."""
     return _load_en_translations()["issues"]["device_not_reporting"]
 
 
@@ -48,6 +49,7 @@ class TestIssueCopyStructure:
     """Every Repairs issue must have copy for both halves of its card."""
 
     def test_file_parses_and_has_issues_block(self):
+        """Invalid JSON here breaks every Repairs card at once."""
         data = _load_en_translations()
         assert isinstance(data, dict)
         assert isinstance(data.get("issues"), dict)
@@ -85,11 +87,13 @@ class TestNotReportingIssuePlaceholderParity:
         return create.call_args.kwargs["translation_placeholders"]
 
     def test_copy_placeholders_match_the_ones_the_code_supplies(self):
+        """A mismatch in either direction ships a card with a literal brace or a blank."""
         entry = _not_reporting_entry()
         in_copy = _placeholders_in(entry["title"]) | _placeholders_in(entry["description"])
         assert in_copy == set(self._supplied_placeholders())
 
     def test_copy_renders_with_the_supplied_values_and_leaves_no_brace(self):
+        """Proves the parity holds under an actual render, not just by name comparison."""
         entry = _not_reporting_entry()
         supplied = self._supplied_placeholders()
         rendered = entry["description"].format(**supplied)

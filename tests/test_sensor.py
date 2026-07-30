@@ -1122,6 +1122,7 @@ class TestUnknownSensorAttributeCost:
         calls = []
 
         def _counting(model, model_code=None):
+            """Count how many entities of each class were offered."""
             calls.append((model, model_code))
             return {"unmapped_generic_identities": ["STA_X"], "generic_gate_blocked_by": ["nope"]}
 
@@ -1156,6 +1157,7 @@ class TestUnknownSensorAttributeCost:
         calls = []
 
         def _counting(model, raw_value, model_code=None):
+            """Count how many entities of each class were offered."""
             calls.append(raw_value)
             return f"https://example.invalid/{raw_value}"
 
@@ -1224,6 +1226,7 @@ class TestUnknownSensorControlGateAttribute:
         calls = []
 
         def _counting(model, model_code=None):
+            """Count how many entities of each class were offered."""
             calls.append((model, model_code))
             return {"generic_control_blocked_by": ["nope"]}
 
@@ -1508,6 +1511,7 @@ class TestZoneWaterUsageSensor:
         return next(e for e in entities if isinstance(e, RainPointZoneWaterUsageSensor))
 
     async def _setup(self, zones):
+        """Drive first refresh then platform setup, returning the registered listener."""
         sensor_key = "100_200_1"
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: self._valve_entry(zones)}))
         hass, entry = _make_hass(coordinator)
@@ -1601,6 +1605,7 @@ class TestWiderValveFamilyUsageEntities:
 
     @staticmethod
     async def _setup(model, payload):
+        """Drive first refresh then platform setup, returning the registered listener."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
@@ -1713,11 +1718,13 @@ class TestSilentSensorDispatch:
 
     @staticmethod
     def _silent_entry(model, **data_overrides):
+        """A coordinator entry for a device the hub lists but never reports on."""
         data = {"type": SILENT_DATA_TYPE, "model": model, "silent_state": "never_reported", "last_seen": None, "missed_polls": 3}
         data.update(data_overrides)
         return make_sensor_entry(hid=100, mid=200, addr=1, model=model, sub_name="BT Valve", data=data)
 
     async def _setup(self, entry):
+        """Drive first refresh then platform setup, returning the registered listener."""
         sensor_key = "100_200_1"
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: entry}))
         hass, entry_obj = _make_hass(coordinator)
@@ -1763,6 +1770,7 @@ class TestNotReportingSensor:
     """Tests for RainPointNotReportingSensor."""
 
     def test_constructor_sets_unique_id_and_name_from_sub_name(self):
+        """The hub's own name for the device is the only label a user recognises."""
         coordinator = MagicMock()
         coordinator.data = {"sensors": {}}
         sensor = RainPointNotReportingSensor(coordinator, "100_200_1", {"addr": 1, "sub_name": "BT Valve"}, "100_200_1")
@@ -1771,6 +1779,7 @@ class TestNotReportingSensor:
         assert sensor._attr_name == "BT Valve Not Reporting"
 
     def test_constructor_name_falls_back_to_device_when_sub_name_absent(self):
+        """A nameless sub-device still needs a readable entity name."""
         coordinator = MagicMock()
         coordinator.data = {"sensors": {}}
         sensor = RainPointNotReportingSensor(coordinator, "100_200_1", {"addr": 1}, "100_200_1")
@@ -1785,14 +1794,17 @@ class TestNotReportingSensor:
         assert sensor.available is True
 
     def test_native_value_never_reported(self):
+        """The state vocabulary must distinguish never-seen from stopped."""
         sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
         assert sensor.native_value == "never_reported"
 
     def test_native_value_stopped_reporting(self):
+        """The state vocabulary must distinguish never-seen from stopped."""
         sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "stopped_reporting"})
         assert sensor.native_value == "stopped_reporting"
 
     def test_native_value_no_data_is_none(self):
+        """No entry at all reports nothing rather than raising."""
         sensor = _make_not_reporting_sensor(None)
         assert sensor.native_value is None
 
@@ -1818,6 +1830,7 @@ class TestNotReportingSensor:
         assert sensor.available is True
 
     def test_extra_state_attributes_carries_model_last_seen_missed_polls(self):
+        """The attributes are the evidence a maintainer needs from a report."""
         sensor = _make_not_reporting_sensor(
             {
                 "type": SILENT_DATA_TYPE,
@@ -1845,6 +1858,7 @@ class TestNotReportingSensor:
         assert "instructions" in attrs
 
     def test_report_url_includes_model_code_when_known(self):
+        """A model string can map to several modelCodes, so the code disambiguates."""
         sensor = _make_sensor_base(
             RainPointNotReportingSensor,
             "100_200_1",
@@ -1854,6 +1868,7 @@ class TestNotReportingSensor:
         assert "model_code=360" in sensor.extra_state_attributes["report_url"]
 
     def test_report_url_omits_model_code_when_absent(self):
+        """An unknown code must be omitted rather than sent as a literal None."""
         sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
         assert "model_code=" not in sensor.extra_state_attributes["report_url"]
 
@@ -1864,6 +1879,7 @@ class TestNotReportingSensor:
         calls = []
 
         def _counting(model, raw_value, model_code=None, *, payload_note=None):
+            """Count how many entities of each class were offered."""
             calls.append((model, raw_value, model_code, payload_note))
             return "https://example.invalid/report"
 

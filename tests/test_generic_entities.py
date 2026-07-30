@@ -1100,6 +1100,7 @@ class TestSilentEntryRejectedByGenericSensorGate:
         assert SILENT_DATA_TYPE != "unknown"
 
     def test_build_generic_entities_returns_empty_for_a_silent_entry(self):
+        """The trust boundary: a silent entry must never reach the generic path."""
         from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 
         sensor_info = make_sensor_entry(

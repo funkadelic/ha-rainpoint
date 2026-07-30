@@ -255,6 +255,7 @@ class TestWatchdogTimer:
 
 
 def _make_record(hid=100, mid=200, addr=1, model="HTV210B", hub_name="Hub1", missed_polls=3, silent=True):
+    """Build a SilentDeviceRecord with sensible defaults for one device."""
     return SilentDeviceRecord(
         hid=hid,
         mid=mid,
@@ -270,6 +271,7 @@ class TestSanitizePlaceholder:
     """T-15-05: cloud-supplied text must not carry Markdown/HTML into a Repairs card."""
 
     def test_neutralises_markdown_link(self):
+        """Bracketed link syntax must not survive into the card."""
         result = _sanitize_placeholder("[Click here](http://evil.example/x)")
         assert "[" not in result
         assert "]" not in result
@@ -277,20 +279,24 @@ class TestSanitizePlaceholder:
         assert ")" not in result
 
     def test_neutralises_html_tag(self):
+        """Angle brackets must not survive, so raw HTML cannot render."""
         result = _sanitize_placeholder("<img src=x onerror=alert(1)>")
         assert "<" not in result
         assert ">" not in result
 
     def test_collapses_embedded_newline(self):
+        """A newline would let cloud text forge its own paragraph in the card."""
         result = _sanitize_placeholder("Hub\nRoom\nBasement")
         assert "\n" not in result
         assert result == "Hub Room Basement"
 
     def test_truncates_over_long_name(self):
+        """An unbounded cloud string must not swamp the card."""
         result = _sanitize_placeholder("x" * 200, limit=64)
         assert len(result) == 64
 
     def test_empty_input_falls_back_to_unknown(self):
+        """An empty value must render as a word, not as a gap in the sentence."""
         assert _sanitize_placeholder("") == "unknown"
         assert _sanitize_placeholder("   ") == "unknown"
         assert _sanitize_placeholder("[]()") == "unknown"
@@ -302,6 +308,7 @@ class TestSanitizePlaceholder:
         assert "/" not in result
 
     def test_defangs_a_bare_scheme_prefixed_host(self):
+        """A bare URL autolinks in Markdown with no surrounding syntax at all."""
         result = _sanitize_placeholder("http://evil.example")
         assert ":" not in result
         assert "/" not in result
@@ -313,9 +320,11 @@ class TestSanitizePlaceholder:
         assert result == "evil.example"
 
     def test_breaks_the_bare_host_prefix_case_insensitively(self):
+        """Renderers autolink WWW. as readily as www."""
         assert not _sanitize_placeholder("WWW.evil.example").lower().startswith("www.")
 
     def test_removes_the_address_at_sign(self):
+        """The at sign is the other prefix a renderer turns into a link."""
         result = _sanitize_placeholder("admin@evil.example")
         assert "@" not in result
 
@@ -328,7 +337,10 @@ class TestSanitizePlaceholder:
 
 
 class TestSilentDeviceIssueId:
+    """The issue id doubles as the per-device dedup key, so its shape is a contract."""
+
     def test_id_shape(self):
+        """Pinned because the id is persisted and drives dedup across polls."""
         assert silent_device_issue_id(100, 200, 1) == f"{SILENT_DEVICE_ISSUE_ID_PREFIX}_100_200_1"
 
 
@@ -336,6 +348,7 @@ class TestRainPointSilentDeviceIssues:
     """Raise-once / dedupe / clear-on-recovery, re-keyed per device."""
 
     def test_first_sync_with_silent_record_creates_issue_once(self, issue_mocks):
+        """The raise-once half of the lifecycle."""
         create, _delete = issue_mocks
         manager = RainPointSilentDeviceIssues(MagicMock())
         record = _make_record()
@@ -357,6 +370,7 @@ class TestRainPointSilentDeviceIssues:
         assert placeholders["missed_polls"] == "3"
 
     def test_second_sync_with_same_record_does_not_recreate(self, issue_mocks):
+        """A device staying silent must not raise a second issue every poll."""
         create, _delete = issue_mocks
         manager = RainPointSilentDeviceIssues(MagicMock())
         record = _make_record()
@@ -367,6 +381,7 @@ class TestRainPointSilentDeviceIssues:
         create.assert_called_once()
 
     def test_flipping_to_not_silent_deletes_the_issue(self, issue_mocks):
+        """Recovery clears the issue without waiting for anything else."""
         create, delete = issue_mocks
         manager = RainPointSilentDeviceIssues(MagicMock())
         record = _make_record()
@@ -400,6 +415,7 @@ class TestRainPointSilentDeviceIssues:
         assert issue_id == silent_device_issue_id(100, 200, 1)
 
     def test_never_active_record_still_issues_idempotent_delete(self, issue_mocks):
+        """Clearing unconditionally is what stops a pre-reload issue stranding."""
         _create, delete = issue_mocks
         manager = RainPointSilentDeviceIssues(MagicMock())
         record = _make_record(silent=False)
@@ -409,6 +425,7 @@ class TestRainPointSilentDeviceIssues:
         delete.assert_called_once()
 
     def test_registry_error_is_swallowed_and_logged(self, issue_mocks, caplog):
+        """A failing diagnostic surface must never break the poll that drives it."""
         create, delete = issue_mocks
         create.side_effect = RuntimeError("registry unavailable")
         delete.side_effect = RuntimeError("registry unavailable")
@@ -440,6 +457,7 @@ class TestRainPointSilentDeviceIssues:
         assert create.call_count == 2
 
     def test_async_clear_deletes_by_key(self, issue_mocks):
+        """The push-arrival half of the lifecycle, which does not wait for a poll."""
         _create, delete = issue_mocks
         manager = RainPointSilentDeviceIssues(MagicMock())
         manager.async_sync([_make_record()])
@@ -482,6 +500,7 @@ class TestUnreachableIdsAreNotCleared:
         assert issue_id == silent_device_issue_id(100, 200, 1)
 
     def test_unreachable_id_that_is_not_active_produces_nothing(self, issue_mocks):
+        """Skipping an unreachable id must not invent work for one never raised."""
         create, delete = issue_mocks
         manager = RainPointSilentDeviceIssues(MagicMock())
 

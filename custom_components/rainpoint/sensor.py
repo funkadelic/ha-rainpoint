@@ -1267,6 +1267,11 @@ class RainPointNotReportingSensor(RainPointSensorBase):
     _report_url: str | None = None
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
+        """Name the entity after the sub-device the hub lists, not the model.
+
+        A silent device has no reading to identify it by, so the hub's own
+        name for it is the only label a user will recognise.
+        """
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_not_reporting"
         sub_name = sensor_info.get("sub_name") or "Device"
@@ -1279,11 +1284,18 @@ class RainPointNotReportingSensor(RainPointSensorBase):
 
     @property
     def native_value(self) -> str | None:
+        """Report which kind of silence this is, or nothing once it recovers.
+
+        A recovered device keeps this entity (nothing removes it) but its
+        entry no longer carries silent_state, so the state goes empty rather
+        than reporting a stale "not reporting".
+        """
         data = self._sensor_data or {}
         return data.get("silent_state")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        """Carry the report link and the evidence a maintainer needs with it."""
         attrs = super().extra_state_attributes
         data = self._sensor_data or {}
         attrs["model"] = data.get("model")

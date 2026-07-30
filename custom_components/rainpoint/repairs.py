@@ -238,6 +238,12 @@ class RainPointSilentDeviceIssues:
     """
 
     def __init__(self, hass: HomeAssistant) -> None:
+        """Start with an empty active set, which is per-instance by design.
+
+        A reload builds a fresh instance with no memory of what a prior
+        session raised, which is why _clear_issue deletes unconditionally
+        rather than only when it believes the issue is active.
+        """
         self._hass = hass
         self._active: set[str] = set()
 
@@ -283,6 +289,12 @@ class RainPointSilentDeviceIssues:
         self._clear_issue(silent_device_issue_id(hid, mid, addr))
 
     def _raise_issue(self, issue_id: str, record: SilentDeviceRecord) -> None:
+        """Raise one device's issue, at most once per active period.
+
+        Every cloud-supplied placeholder is sanitized on the way in: Home
+        Assistant renders this card as Markdown, so an unfiltered model or hub
+        name could plant a link in it.
+        """
         if issue_id in self._active:
             return
         try:
@@ -320,6 +332,12 @@ class RainPointSilentDeviceIssues:
             )
 
     def _clear_issue(self, issue_id: str) -> None:
+        """Delete one device's issue, unconditionally rather than only when active.
+
+        A fresh instance after a reload has no record of an issue a prior
+        session raised, so guarding on the active set would strand it forever.
+        Deleting an unknown id is already a no-op.
+        """
         self._active.discard(issue_id)
         try:
             ir.async_delete_issue(self._hass, DOMAIN, issue_id)

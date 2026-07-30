@@ -973,6 +973,7 @@ class TestCoordinatorEdgeBranches:
 
         # Second fallback call per-hub: first hub raises a transport error, second returns empty
         def per_hub(mid):
+            """Stand in for the per-hub status fallback the coordinator tries next."""
             if mid == 301:
                 raise aiohttp.ClientError("per-hub transport boom")
             return {"subDeviceStatus": []}
@@ -1054,6 +1055,7 @@ class TestSilentSubDeviceEndToEnd:
         client.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
 
         def per_hub(mid):
+            """Stand in for the per-hub status fallback the coordinator tries next."""
             if mid == 301:
                 raise aiohttp.ClientError("outage")
             return {"subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD}]}
@@ -1130,12 +1132,14 @@ class TestBuildSilentSubdevice:
 
     @staticmethod
     def _hub_and_sub():
+        """One hub record carrying a single sub-device at the given addr."""
         hub = _make_hub(mid=200)
         hub["hid"] = 100
         sub = hub["subDevices"][0]
         return hub, sub
 
     def test_below_threshold_returns_none(self):
+        """One or two misses are absorbed as a transient, not surfaced."""
         coord, _ = _make_coord()
         hub, sub = self._hub_and_sub()
 
@@ -1145,6 +1149,7 @@ class TestBuildSilentSubdevice:
         assert coord._silent_poll_counts["100_200_1"] == 1
 
     def test_never_reported_when_no_prior_entry(self):
+        """No prior reading means the device has never been seen at all."""
         coord, _ = _make_coord()
         hub, sub = self._hub_and_sub()
         coord._silent_poll_counts["100_200_1"] = 2  # about to cross the threshold
@@ -1157,6 +1162,7 @@ class TestBuildSilentSubdevice:
         assert result["raw_status"] == {}
 
     def test_stopped_reporting_when_prior_entry_had_a_reading(self):
+        """A device that used to report gets the honest 'stopped' wording."""
         coord, _ = _make_coord()
         hub, sub = self._hub_and_sub()
         coord._silent_poll_counts["100_200_1"] = 2
@@ -1175,6 +1181,7 @@ class TestBuildSilentSubdevice:
         assert result["data"]["last_seen"] == "2026-01-01T00:00:00+00:00"
 
     def test_carried_last_seen_survives_a_second_silent_poll_unchanged(self):
+        """last_seen must not drift forward while the device stays silent."""
         coord, _ = _make_coord()
         hub, sub = self._hub_and_sub()
         coord._silent_poll_counts["100_200_1"] = 2
@@ -1211,6 +1218,7 @@ class TestPruneSilentState:
     """Direct-call tests for _prune_silent_state (T-15-03)."""
 
     def test_drops_counter_for_a_device_no_longer_listed(self):
+        """A device that leaves the hub must not keep a debounce counter alive."""
         coord, _ = _make_coord()
         coord._silent_poll_counts = {"100_200_1": 2, "100_200_2": 1}
         hub = _make_hub(mid=200)
@@ -1221,6 +1229,7 @@ class TestPruneSilentState:
         assert coord._silent_poll_counts == {"100_200_1": 2}
 
     def test_keeps_counters_for_devices_still_listed_across_multiple_hubs(self):
+        """Pruning one hub's departed device must not disturb another hub's."""
         coord, _ = _make_coord()
         coord._silent_poll_counts = {"100_200_1": 1, "100_300_5": 2}
         hub1 = _make_hub(mid=200)
@@ -1237,6 +1246,7 @@ class TestSyncSilentDeviceIssues:
     per sensor entry, translated correctly from the coordinator's own shape."""
 
     def test_builds_one_record_per_entry_with_correct_silent_flag_and_missed_polls(self):
+        """The coordinator-to-repairs translation carries the whole poll."""
         coord, _ = _make_coord()
         decoded_sensors = {
             "100_200_1": {
@@ -1274,6 +1284,7 @@ class TestSyncSilentDeviceIssues:
         assert reporting_record.missed_polls == 0
 
     def test_empty_decoded_sensors_syncs_an_empty_record_list(self):
+        """A poll that decoded nothing still reconciles, so stale issues clear."""
         coord, _ = _make_coord()
 
         _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, {}, [])
@@ -1368,6 +1379,7 @@ class TestSilentIssueSurvivesHubOutage:
 
     @pytest.mark.asyncio
     async def test_outage_poll_neither_clears_nor_reraises_the_issue(self):
+        """The regression this fix exists for: an outage is not evidence about a device."""
         coord, client = self._build()
 
         with (
@@ -1421,22 +1433,27 @@ class TestLastSeenFromEntry:
     """Direct-call tests covering every resolution path of _last_seen_from_entry."""
 
     def test_none_previous_returns_none(self):
+        """Nothing known means nothing to carry forward."""
         assert _coord_module._last_seen_from_entry(None) is None
 
     def test_previous_silent_entry_carries_last_seen_forward(self):
+        """The carried timestamp is the whole point of distinguishing the two silent states."""
         previous = {"data": {"type": SILENT_DATA_TYPE, "last_seen": "2026-01-01T00:00:00+00:00"}}
         assert _coord_module._last_seen_from_entry(previous) == "2026-01-01T00:00:00+00:00"
 
     def test_previous_real_entry_uses_device_timestamp(self):
+        """The device's own clock is preferred over the server's."""
         previous = {"data": {"device_timestamp": "2026-02-01T00:00:00+00:00"}, "raw_status": {"time": 1}}
         assert _coord_module._last_seen_from_entry(previous) == "2026-02-01T00:00:00+00:00"
 
     def test_previous_real_entry_falls_back_to_raw_status_time(self):
+        """Without a device timestamp the status time is the best available."""
         previous = {"data": {}, "raw_status": {"time": 1700000000000}}
         expected = datetime.fromtimestamp(1700000000000 / 1000, tz=UTC).isoformat()
         assert _coord_module._last_seen_from_entry(previous) == expected
 
     def test_previous_entry_with_nothing_usable_returns_none(self):
+        """An entry with no timestamp at all must not invent one."""
         previous = {"data": {}, "raw_status": {}}
         assert _coord_module._last_seen_from_entry(previous) is None
 
