@@ -16,7 +16,7 @@ This integration supports RainPoint Smart+ device families, including:
 
 | Family | Examples | Entities Created |
 | ------ | -------- | ---------------- |
-| Valve hubs | HTV245FRF (primary tested device), HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV0540FRF | Valve per zone, duration number per zone |
+| Valve hubs | HTV245FRF, HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV0540FRF | Valve per zone, duration number per zone |
 | Soil sensors | HCS021FRF, HCS026FRF (tested device), HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
@@ -26,7 +26,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Flow meters | HCS008FRF | Flow reading |
 | Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state |
 
-The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B** Bluetooth valve are the maintainer's own hardware and are the models tested against real devices. The HTV245FRF remains the integration's core-value target. Other models are supported opportunistically from captured payloads.
+The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B** Bluetooth valve are the maintainer's own hardware and are the models tested against real devices. Other models are supported opportunistically from captured payloads.
 
 The **HTV210B** only reports to the cloud while paired through a hub; used over Bluetooth alone it is invisible to the cloud and the integration cannot see it at all. Its zone sensors are read-only: opening and closing from the app works over the cloud, but the exact command the integration would need to send is still being verified, so no valve entity is created rather than one that might accept a command the hardware never acts on.
 
