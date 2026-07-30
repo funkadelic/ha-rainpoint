@@ -1190,7 +1190,35 @@ class RainPointRawPayloadSensor(RainPointSensorBase):
         return value
 
 
-class RainPointZoneWaterUsageSensor(RainPointSensorBase):
+class RainPointZoneSensorBase(RainPointSensorBase):
+    """Shared per-zone plumbing: the zone number and the guarded record lookup.
+
+    Every per-zone sensor reads its record the same way, so the zones-shape
+    guard lives here once rather than once per class.
+    """
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+        zone_num: int,
+    ) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._zone_num = zone_num
+
+    @property
+    def _zone_data(self) -> dict | None:
+        """Return this zone's decoded record, or None when the frame omits it."""
+        data = self._sensor_data or {}
+        zones = data.get("zones")
+        if not isinstance(zones, dict):
+            return None
+        return zones.get(self._zone_num)
+
+
+class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
     """Water used by one valve zone during its last completed run.
 
     The value is a converted flow count, not a metered volume: the device
@@ -1223,20 +1251,10 @@ class RainPointZoneWaterUsageSensor(RainPointSensorBase):
         base_slug: str,
         zone_num: int,
     ) -> None:
-        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        self._zone_num = zone_num
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
         sub_name = sensor_info.get("sub_name") or "Valve Hub"
         self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_water_used"
         self._attr_name = f"{sub_name} Zone {zone_num} Water Used"
-
-    @property
-    def _zone_data(self) -> dict | None:
-        """Return this zone's decoded record, or None when the frame omits it."""
-        data = self._sensor_data or {}
-        zones = data.get("zones")
-        if not isinstance(zones, dict):
-            return None
-        return zones.get(self._zone_num)
 
     @property
     def native_value(self) -> float | None:
@@ -1255,7 +1273,7 @@ class RainPointZoneWaterUsageSensor(RainPointSensorBase):
         return attrs
 
 
-class RainPointZoneStateSensor(RainPointSensorBase):
+class RainPointZoneStateSensor(RainPointZoneSensorBase):
     """Open/closed state of one valve zone, read-only.
 
     Exists for valve models whose decode is trusted but whose control path is
@@ -1279,20 +1297,10 @@ class RainPointZoneStateSensor(RainPointSensorBase):
         base_slug: str,
         zone_num: int,
     ) -> None:
-        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        self._zone_num = zone_num
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
         sub_name = sensor_info.get("sub_name") or "Valve"
         self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_state"
         self._attr_name = f"{sub_name} Zone {zone_num} State"
-
-    @property
-    def _zone_data(self) -> dict | None:
-        """Return this zone's decoded record, or None when the frame omits it."""
-        data = self._sensor_data or {}
-        zones = data.get("zones")
-        if not isinstance(zones, dict):
-            return None
-        return zones.get(self._zone_num)
 
     @property
     def native_value(self) -> str | None:

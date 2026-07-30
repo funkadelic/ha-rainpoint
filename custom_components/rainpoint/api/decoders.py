@@ -585,7 +585,7 @@ def _extract_htv210b_zones(records: dict[tuple[int, int], bytes]) -> dict[int, d
             "state_raw": state_val,
             "event_time": event_time,
         }
-        _LOGGER.info(
+        _LOGGER.debug(
             "HTV210B Zone %d: open=%s duration=%ds state_raw=0x%02X event_time=%s",
             zone_num,
             is_open,
@@ -639,10 +639,14 @@ def decode_htv210b(raw: str) -> dict:
         _LOGGER.exception("HTV210B decoder error for payload %r", raw)
         return {
             "type": "valve_hub",
-            "rssi_dbm": 0,
+            # None, not 0: the RSSI sensor renders this value verbatim, and a
+            # 0 here would read as a perfect signal instead of no reading.
+            "rssi_dbm": None,
             "raw_bytes": [],
             "zones": {},
             "tlv_raw": {},
+            "hub_online": False,
+            "battery_flag": None,
             "decoder": "htv210b_error",
             "error": str(e),
         }

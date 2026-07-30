@@ -1554,6 +1554,11 @@ class TestDecodeHtv210b:
         assert result["decoder"] == "htv210b_error"
         assert result["zones"] == {}
         assert "error" in result
+        # None, not 0: the RSSI sensor renders this verbatim, and 0 dBm would
+        # read as a perfect signal instead of no reading.
+        assert result["rssi_dbm"] is None
+        assert result["hub_online"] is False
+        assert result["battery_flag"] is None
 
     def test_alarm_records_do_not_misframe_the_stream(self):
         """The compact 1-byte alarm records parse as themselves, not as a 2-byte type.
