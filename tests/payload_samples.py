@@ -248,3 +248,16 @@ SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD = "10#208500968832DC64E0C5"
 # "decoded field the catalog knows nothing about" case alive for STA_ALARM.
 # Its STA_TEM is S16, so it also exercises the signed/multi-byte annotation.
 CATALOG_ANCHOR_MODEL = "HCS702B"
+
+
+# Real hex (11#) payload from the maintainer's HTV210B, captured after moving it
+# off Bluetooth onto the hub, both zones idle and no usage history yet. Kept for
+# the RSSI record it carries: 17e1b401, where 0xb4 is -76 dBm (the value the
+# vendor app showed at the time) and the trailing 0x01 is the PHY. Every other
+# frame we hold carries 0x00 there, so this is the only capture proving that
+# byte varies. HTV210B has no hand-written decoder; this exercises the shared
+# byte scanning and the generic path.
+SAMPLE_HTV210B_TLV_PAYLOAD = (
+    "11#37FF0D0000000018DC0117E1B40119D8001AD8001D201E2021B70000000022B7000000002"
+    "5AF0000000026AF00000000299F000000002A9F0000000038FF0D00000000FEFF0F1527FB19"
+)

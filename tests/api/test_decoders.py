@@ -32,6 +32,7 @@ from tests.payload_samples import (
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
+    SAMPLE_HTV210B_TLV_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_FULL_IDLE_PAYLOAD,
     SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD,
@@ -224,6 +225,34 @@ class TestDecodeHtv213frfValve:
         """
         raw = "11#2B9F17E1054217E1CA0018DC0119D800FEFF0FEC4BCB19"
         assert decode_htv213frf_valve(raw)["rssi_dbm"] == -54
+
+    def test_rssi_survives_a_non_zero_phy_byte(self):
+        """A header whose fourth byte is a real PHY, not padding, still yields RSSI.
+
+        The captured HTV210B frame carries 17e1b401: 0xb4 is -76 dBm, which the
+        vendor app showed for that device, and the 0x01 is the PHY. Matching the
+        fourth byte against 0x00 voided the reading on any frame reporting a
+        non-zero PHY, and the catalog declares this field two bytes wide on
+        HTV213FRF and HTV405FRF, which share this decoder.
+        """
+        assert decode_htv213frf_valve(SAMPLE_HTV210B_TLV_PAYLOAD)["rssi_dbm"] == -76
+
+    def test_rssi_rejects_a_positive_dbm_candidate(self):
+        """A 0x17/0xE1 pair whose dBm byte is not negative is not the header.
+
+        0x05 would be +5 dBm, which no radio reports, so the pair belongs to
+        some other record's value bytes.
+        """
+        assert decode_htv213frf_valve("11#17E10500FEFF0FEC4BCB19")["rssi_dbm"] is None
+
+    def test_rssi_rejects_an_unsupported_phy(self):
+        """A negative dBm paired with a PHY no capture has shown is not accepted.
+
+        0xb4 would be a valid -76, so this pins the PHY bound on its own rather
+        than through the sign guard. Widening it for a future capture then has to
+        be a deliberate change to both the bound and this test.
+        """
+        assert decode_htv213frf_valve("11#17E1B402FEFF0FEC4BCB19")["rssi_dbm"] is None
 
     # --- Battery (STA_BAT record on real hex frames) ---
 

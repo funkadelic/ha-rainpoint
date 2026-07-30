@@ -1147,3 +1147,40 @@ class TestMalformedCatalogValuesKeepSpecificReasons:
 
         assert result.passed is True
         assert result.blocked_by == ()
+
+
+class TestRssiTransformWidths:
+    """The STA_RSSI transform against both widths the catalog declares.
+
+    Most models declare the field one byte wide; the Bluetooth-capable ones
+    declare two, where the second byte carries the PHY the reading was taken on
+    rather than part of the magnitude.
+    """
+
+    SPEC = _IDENTITY_SPECS["STA_RSSI"]
+
+    def _displayed(self, raw: int):
+        """Return what the sensor would show for a raw field value, or None."""
+        value = self.SPEC.transform(raw)
+        low, high = self.SPEC.valid_range
+        if value is None or not (low <= value <= high):
+            return None
+        return round(value, self.SPEC.precision)
+
+    def test_two_byte_reading_decodes_to_the_app_value(self):
+        """b401 is -76 dBm at 1M PHY, the value the vendor app showed for an HTV210B.
+
+        The generic decoder hands this over as a little-endian word, 436, which
+        the valid_range then rejected, so the reading was dropped entirely.
+        """
+        assert self.SPEC.transform(0x01B4) == -76.0
+        assert self._displayed(0x01B4) == -76
+
+    def test_one_byte_reading_is_unchanged(self):
+        """A single-byte 0xC4 still reads -60, as the hand-written decoders have it."""
+        assert self.SPEC.transform(0xC4) == -60.0
+        assert self._displayed(0xC4) == -60
+
+    def test_a_positive_reading_is_still_suppressed(self):
+        """A non-negative result stays out of range rather than being shown."""
+        assert self._displayed(0x0A) is None
