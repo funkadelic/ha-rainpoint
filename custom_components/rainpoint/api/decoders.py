@@ -14,6 +14,7 @@ from .utils import (
     _extract_report_time,
     _f10_to_c,
     _le16,
+    _parse_entries,
     _parse_rainpoint_payload,
     _parse_tlv_payload,
 )
@@ -496,6 +497,128 @@ def _decode_htv213frf_hex(raw: str) -> dict:
     except Exception:
         _LOGGER.exception("HTV213FRF hex decoder error for payload %r", raw)
         raise
+
+
+# Structural field indices for the HTV210B stream, equal to the catalog's
+# dpCode for the same datapoint (STA_BAT 31 and STA_REPTIME 54 already live in
+# utils.py). The auto-detected list in the pre-filled bug report reads the same
+# frame with the same indices, which is the cross-check that these are right.
+_HTV210B_FIELD_WKSTATE = 30
+_HTV210B_FIELD_DURATION = 19
+_HTV210B_FIELD_EVTIME = 21
+
+
+def _map_htv210b_records(b: bytes) -> dict[tuple[int, int], bytes]:
+    """Walk an HTV210B frame into {(dp_id, field): value_bytes}.
+
+    Keyed on the pair rather than the dp_id alone so every read is guarded on
+    the record's own structural field index; a record that belongs to another
+    datapoint can never satisfy a lookup. Duplicate pairs are last-write-wins,
+    matching the HTV213 scanner.
+    """
+    return {(e["dp_id"], e["field"]): bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=True)}
+
+
+def _extract_htv210b_zones(records: dict[tuple[int, int], bytes]) -> dict[int, dict]:
+    """Pull per-zone open state, duration, and event time from the record map.
+
+    Zone N owns the same dp_id blocks as the HTV213 family: state 0x18+N,
+    event time 0x20+N, duration 0x24+N. Semantics were each confirmed against
+    a known physical state on a timed two-minute run: work-state bit 0 is
+    open/closed (bit 5 latches on after the zone's first use), the duration is
+    the commanded run length in seconds and persists after the run, and the
+    event time is the packed wall-clock moment the current run ends, written
+    at start - the same meaning the HTV213 family documents.
+
+    Durations arrive in whichever width the firmware chose (captures show 4
+    bytes where the HTV213 family writes 2); the little-endian read is
+    width-agnostic. There are no usage fields: this valve has no flow meter,
+    and its usage records read zero on every capture, so reporting them would
+    manufacture a meter for water it cannot measure.
+    """
+    zones: dict[int, dict] = {}
+    for zone_num in range(1, 9):
+        state_bytes = records.get((_HTV213_DP_BASE_STATE + zone_num, _HTV210B_FIELD_WKSTATE))
+        if state_bytes is None or len(state_bytes) != 1:
+            continue
+        state_val = state_bytes[0]
+
+        duration_seconds = 0
+        dur_bytes = records.get((_HTV213_DP_BASE_DURATION + zone_num, _HTV210B_FIELD_DURATION))
+        if dur_bytes:
+            duration_seconds = int.from_bytes(dur_bytes, "little")
+
+        event_time = None
+        ev_bytes = records.get((_HTV213_DP_BASE_EVENT_TIME + zone_num, _HTV210B_FIELD_EVTIME))
+        if ev_bytes is not None and len(ev_bytes) == 4:
+            event_time = _decode_packed_timestamp(int.from_bytes(ev_bytes, "little"))
+
+        is_open = bool(state_val & 0x01)
+        zones[zone_num] = {
+            "open": is_open,
+            "duration_seconds": duration_seconds,
+            "state_raw": state_val,
+            "event_time": event_time,
+        }
+        _LOGGER.info(
+            "HTV210B Zone %d: open=%s duration=%ds state_raw=0x%02X event_time=%s",
+            zone_num,
+            is_open,
+            duration_seconds,
+            state_val,
+            event_time,
+        )
+    return zones
+
+
+def decode_htv210b(raw: str) -> dict:
+    """Decode an HTV210B valve status frame (11# prefix, hub-paired).
+
+    The HTV210B is a Bluetooth valve that becomes an ordinary RF sub-device
+    once paired through a hub; Bluetooth-only, it reports nothing to the cloud
+    at all, so this decoder only ever sees hub-paired frames. The frame is the
+    same self-describing record stream the generic decoder walks, so records
+    are located structurally rather than through the HTV213 type-byte table:
+    this firmware writes records in widths that table does not know (a 4-byte
+    duration, a compact 1-byte alarm), and a fixed-width table would mis-frame
+    them.
+
+    hub_online comes from zone presence, the same evidence the HTV213 decoder
+    falls back on: this model's dp 0x18 record is its battery flag, not an
+    online state, so there is no dedicated record to read.
+    """
+    try:
+        if not raw.startswith("11#"):
+            raise ValueError(f"Unexpected payload format: {raw}")
+        b = _parse_rainpoint_payload(raw)
+        records = _map_htv210b_records(b)
+        zones = _extract_htv210b_zones(records)
+        battery_flag, battery_percent = _extract_htv213_battery(b)
+        result = {
+            "type": "valve_hub",
+            "rssi_dbm": _extract_htv213_rssi(b),
+            "raw_bytes": b,
+            "zones": zones,
+            "tlv_raw": {},
+            "hub_online": bool(zones),
+            "battery_flag": battery_flag,
+            "decoder": "htv210b_hex",
+        }
+        if battery_percent is not None:
+            result["battery_percent"] = battery_percent
+        _attach_report_time(result, b, dp_id_prefixed=True)
+        return result
+    except Exception as e:
+        _LOGGER.exception("HTV210B decoder error for payload %r", raw)
+        return {
+            "type": "valve_hub",
+            "rssi_dbm": 0,
+            "raw_bytes": [],
+            "zones": {},
+            "tlv_raw": {},
+            "decoder": "htv210b_error",
+            "error": str(e),
+        }
 
 
 def _scan_htv145_markers(b: bytes) -> dict[int, int]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from homeassistant.components.sensor import SensorDeviceClass
 
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
@@ -16,6 +17,7 @@ from custom_components.rainpoint.const import (
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
     MODEL_HCS0528ARF,
+    MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
     MODEL_RAIN,
@@ -66,6 +68,7 @@ from custom_components.rainpoint.sensor import (
     RainPointTempHumHumidityLowSensor,
     RainPointTempHumLowSensor,
     RainPointUnknownSensor,
+    RainPointZoneStateSensor,
     RainPointZoneWaterUsageSensor,
     _slugify,
     async_setup_entry,
@@ -1614,3 +1617,137 @@ class TestWiderValveFamilyUsageEntities:
         assert len(usage) == 4
         assert all(e.native_value is None for e in usage)
         assert all(e.extra_state_attributes["last_usage_counts"] is None for e in usage)
+
+
+class TestHtv210bDispatch:
+    """The HTV210B gets battery + signal + per-zone state sensors, no usage entities."""
+
+    @staticmethod
+    def _entry(zones):
+        return make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HTV210B,
+            sub_name="BT Valve",
+            data={"type": "valve_hub", "zones": zones, "rssi_dbm": -76, "battery_percent": 100},
+        )
+
+    async def _setup(self, zones):
+        sensor_key = "100_200_3"
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: self._entry(zones)}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_creates_diagnostics_and_one_state_sensor_per_zone(self):
+        zones = {
+            1: {"open": False, "duration_seconds": 0, "state_raw": 0x00, "event_time": None},
+            2: {"open": False, "duration_seconds": 0, "state_raw": 0x00, "event_time": None},
+        }
+        captured = await self._setup(zones)
+        assert len([e for e in captured if isinstance(e, RainPointBatterySensor)]) == 1
+        assert len([e for e in captured if isinstance(e, RainPointRSSISensor)]) == 1
+        states = [e for e in captured if isinstance(e, RainPointZoneStateSensor)]
+        assert len(states) == 2
+        assert states[0]._attr_unique_id == "rainpoint_100_200_3_zone1_state"
+        assert states[0]._attr_name == "BT Valve Zone 1 State"
+        # battery + RSSI + 2 zone states + raw payload sensor, nothing else.
+        assert len(captured) == 5
+
+    @pytest.mark.asyncio
+    async def test_no_usage_entities_for_this_model(self):
+        """No flow meter: the usage entity the HTV213 factory adds must not appear."""
+        zones = {1: {"open": False, "duration_seconds": 0, "state_raw": 0x00, "event_time": None}}
+        captured = await self._setup(zones)
+        assert [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)] == []
+
+    @pytest.mark.asyncio
+    async def test_malformed_zones_still_yield_diagnostics(self):
+        """A decode without a usable zones dict still produces battery and signal."""
+        sensor_key = "100_200_3"
+        sensor_info = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HTV210B,
+            sub_name="BT Valve",
+            data={"type": "valve_hub", "rssi_dbm": -76, "battery_percent": 100},
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        assert [e for e in captured if isinstance(e, RainPointZoneStateSensor)] == []
+        assert len(captured) == 3
+
+
+class TestZoneStateSensor:
+    """The read-only per-zone open/closed enum sensor."""
+
+    @staticmethod
+    def _entry(zones):
+        return make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HTV210B,
+            sub_name="BT Valve",
+            data={"type": "valve_hub", "zones": zones, "rssi_dbm": -76, "battery_percent": 100},
+        )
+
+    async def _first_state(self, zones):
+        sensor_key = "100_200_3"
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: self._entry(zones)}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        return next(e for e in captured if isinstance(e, RainPointZoneStateSensor))
+
+    @pytest.mark.asyncio
+    async def test_running_zone_reads_open_with_run_attributes(self):
+        zones = {1: {"open": True, "duration_seconds": 120, "state_raw": 0x21, "event_time": "2026-07-29T19:08:17"}}
+        state = await self._first_state(zones)
+        assert state.native_value == "open"
+        attrs = state.extra_state_attributes
+        assert attrs["zone"] == 1
+        assert attrs["duration_seconds"] == 120
+        assert attrs["event_time"] == "2026-07-29T19:08:17"
+        assert attrs["state_raw"] == 0x21
+
+    @pytest.mark.asyncio
+    async def test_idle_zone_reads_closed(self):
+        zones = {1: {"open": False, "duration_seconds": 0, "state_raw": 0x20, "event_time": None}}
+        state = await self._first_state(zones)
+        assert state.native_value == "closed"
+
+    @pytest.mark.asyncio
+    async def test_is_an_enum_outside_long_term_statistics(self):
+        """Enum device class with exactly the two states; no state class to record."""
+        zones = {1: {"open": False, "duration_seconds": 0, "state_raw": 0x00, "event_time": None}}
+        state = await self._first_state(zones)
+        assert state._attr_device_class == SensorDeviceClass.ENUM
+        assert state._attr_options == ["closed", "open"]
+        assert getattr(state, "_attr_state_class", None) is None
+
+    @pytest.mark.asyncio
+    async def test_missing_zone_record_reads_unknown(self):
+        """A zone that drops out of a later frame reads unknown rather than stale."""
+        zones = {1: {"open": True, "duration_seconds": 120, "state_raw": 0x21, "event_time": None}}
+        state = await self._first_state(zones)
+        state.coordinator.data["sensors"]["100_200_3"]["data"]["zones"] = {}
+        assert state.native_value is None
+        assert state.extra_state_attributes["duration_seconds"] is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_zones_payload_reads_unknown(self):
+        """A non-dict zones value degrades to unknown instead of raising."""
+        zones = {1: {"open": True, "duration_seconds": 120, "state_raw": 0x21, "event_time": None}}
+        state = await self._first_state(zones)
+        state.coordinator.data["sensors"]["100_200_3"]["data"]["zones"] = ["not", "a", "dict"]
+        assert state.native_value is None

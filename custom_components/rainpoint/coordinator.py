@@ -23,6 +23,7 @@ from .api import (
     decode_hcs024frf_v1,
     decode_hcs0528arf,
     decode_htv145frf,
+    decode_htv210b,
     decode_htv213frf_valve,
     decode_hws019wrf_v2,
     decode_moisture_full,
@@ -45,6 +46,7 @@ from .const import (
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
     MODEL_HCS0528ARF,
+    MODEL_HTV210B,  # HTV210B support
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
     MODEL_POOL,
@@ -83,6 +85,7 @@ DECODER_REGISTRY = {
     MODEL_VALVE_245: decode_htv213frf_valve,  # HTV245FRF uses custom decoder
     MODEL_VALVE_345: decode_htv213frf_valve,  # HTV345FRF uses custom decoder
     MODEL_VALVE_405: decode_htv213frf_valve,  # HTV405FRF uses custom decoder
+    MODEL_HTV210B: decode_htv210b,  # HTV210B structural record walk (hub-paired frames)
     # HCS sensor models (v1.3.0)
     MODEL_HCS005FRF: decode_hcs005frf,
     MODEL_HCS024FRF_V1: decode_hcs024frf_v1,

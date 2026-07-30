@@ -200,6 +200,7 @@ MODEL_HTV245FRF = "HTV245FRF"  # Irrigation valve (similar to HTV0540FRF)
 MODEL_HTV345FRF = "HTV345FRF"  # Irrigation valve variant (similar to HTV245FRF)
 MODEL_HTV405FRF = "HTV405FRF"  # 4-zone irrigation valve variant (similar to HTV245FRF)
 MODEL_HTV0540FRF = "HTV0540FRF"  # Multi-zone valve hub (fully supported)
+MODEL_HTV210B = "HTV210B"  # Bluetooth valve; reports over RF as a normal hub sub-device once hub-paired
 
 # Legacy valve aliases
 MODEL_VALVE_113 = MODEL_HTV113FRF
@@ -245,6 +246,7 @@ HAND_WRITTEN_MODELS: frozenset[str] = frozenset(
         MODEL_VALVE_245,
         MODEL_VALVE_345,
         MODEL_VALVE_405,
+        MODEL_HTV210B,
         MODEL_HCS005FRF,
         MODEL_HCS024FRF_V1,
         MODEL_HCS015ARF,
