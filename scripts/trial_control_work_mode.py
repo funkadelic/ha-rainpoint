@@ -74,7 +74,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--duration",
         type=int,
         default=_DEFAULT_TRIAL_DURATION_SECONDS,
-        help=f"Run time in seconds for open (default {_DEFAULT_TRIAL_DURATION_SECONDS}, max {_MAX_TRIAL_DURATION_SECONDS})",
+        help=f"Run time in seconds for open, 1 to {_MAX_TRIAL_DURATION_SECONDS} (default {_DEFAULT_TRIAL_DURATION_SECONDS})",
     )
     parser.add_argument(
         "--watch",
@@ -181,7 +181,7 @@ def _print_status(label: str, entry: dict | None, decoder) -> None:
 async def _run_trial(args: argparse.Namespace, password: str) -> int:
     import aiohttp
 
-    from custom_components.rainpoint.api.client import RainPointClient
+    from custom_components.rainpoint.api.client import RainPointApiError, RainPointClient
 
     timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT_SECONDS)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -194,6 +194,18 @@ async def _run_trial(args: argparse.Namespace, password: str) -> int:
 
         if args.addr is None or args.port is None or args.mode is None:
             print("--mid needs --addr, --port, and --mode as well.", file=sys.stderr)
+            return 2
+
+        # Reject nonsense before it reaches the hardware: port 0 addresses no
+        # zone, and a run time outside the trial window is a config mistake.
+        if args.port < 1:
+            print(f"--port is 1-based; got {args.port}.", file=sys.stderr)
+            return 2
+        if args.mode == "open" and not 1 <= args.duration <= _MAX_TRIAL_DURATION_SECONDS:
+            print(
+                f"--duration must be 1 to {_MAX_TRIAL_DURATION_SECONDS} seconds for open; got {args.duration}.",
+                file=sys.stderr,
+            )
             return 2
 
         hub = next((h for h in hubs if h.get("mid") == args.mid), None)
@@ -216,7 +228,7 @@ async def _run_trial(args: argparse.Namespace, password: str) -> int:
             return 2
 
         mode = 1 if args.mode == "open" else 0
-        duration = min(args.duration, _MAX_TRIAL_DURATION_SECONDS) if mode == 1 else 0
+        duration = args.duration if mode == 1 else 0
         model = sub.get("model")
         decoder = _decoder_for(model)
 
@@ -230,21 +242,32 @@ async def _run_trial(args: argparse.Namespace, password: str) -> int:
             print("\nDry run: nothing sent. Re-run with --execute to send this command.")
             return 0
 
-        response_state = await client.control_work_mode(
-            mid=args.mid,
-            addr=args.addr,
-            device_name=device_name,
-            product_key=product_key,
-            port=args.port,
-            mode=mode,
-            duration=duration,
-        )
-        print(f"controlWorkMode accepted; response state={response_state!r}")
-        if decoder and isinstance(response_state, str):
-            try:
-                print(f"response decoded: {decoder(response_state).get('zones')}")
-            except Exception as exc:
-                print(f"response state did not decode: {exc!r}")
+        # A rejected command is a result, not a crash: the whole point of the
+        # trial is to learn whether controlWorkMode drives this model, and a
+        # rejection paired with an unchanged read-back is exactly that evidence.
+        # So keep polling either way and report the outcome in the exit code.
+        rejected = False
+        try:
+            response_state = await client.control_work_mode(
+                mid=args.mid,
+                addr=args.addr,
+                device_name=device_name,
+                product_key=product_key,
+                port=args.port,
+                mode=mode,
+                duration=duration,
+            )
+        except RainPointApiError as exc:
+            rejected = True
+            print(f"controlWorkMode rejected: {exc}")
+            print("Polling anyway so the read-back after the rejection is captured.")
+        else:
+            print(f"controlWorkMode accepted; response state={response_state!r}")
+            if decoder and isinstance(response_state, str):
+                try:
+                    print(f"response decoded: {decoder(response_state).get('zones')}")
+                except Exception as exc:
+                    print(f"response state did not decode: {exc!r}")
 
         elapsed = 0
         while elapsed < args.watch:
@@ -254,7 +277,7 @@ async def _run_trial(args: argparse.Namespace, password: str) -> int:
             _print_status(f"after +{elapsed}s", _status_entry_for(status, args.addr), decoder)
 
         print("\nRecord the physical observation (did the valve run, and for how long) next to this output.")
-        return 0
+        return 1 if rejected else 0
 
 
 def main(argv: list[str] | None = None) -> int:
