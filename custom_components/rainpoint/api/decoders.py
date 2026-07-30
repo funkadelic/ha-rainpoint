@@ -222,17 +222,31 @@ def _extract_htv213_rssi(b: bytes) -> int | None:
 
     The 10# frames put the 0xE1 header at offset 0, so _extract_rssi reads its
     RSSI from b[1]. The 11# frame prefixes every record with a dp_id, so the
-    header appears as [dp_id 0x17][type 0xE1][signed dBm][0x00] somewhere in the
+    header appears as [dp_id 0x17][type 0xE1][signed dBm][phy] somewhere in the
     stream, not at a fixed offset (dp records can be reordered). Locate that
     record and return the signed dBm byte. Reading b[1] here would instead
     return the constant 0xE1 header byte (a bogus -31), which was the bug this
-    replaces. The trailing 0x00 is part of the match so a 0x17/0xE1 pair that
-    lands inside another record's value bytes cannot be mistaken for the header.
+    replaces.
+
+    The fourth byte is the PHY the reading was taken on, not padding. It used to
+    be matched against 0x00 to stop a 0x17/0xE1 pair inside another record's
+    value bytes being read as the header, which silently voided the RSSI on any
+    frame reporting a non-zero PHY: a captured HTV210B frame carries 17e1b401,
+    which the vendor app shows as -76 dBm at 1M PHY. The catalog declares this
+    field two bytes wide on HTV213FRF and HTV405FRF but one byte on HTV245FRF
+    and HTV345FRF, so the width cannot be trusted to disambiguate either.
+
+    Two constraints replace it. The dBm byte must be negative, which is the one
+    that carries meaning: a real RSSI is always negative and this family already
+    discards non-negative readings. The PHY byte must be one of the values any
+    capture has actually shown, 0x00 on the RF frames and 0x01 on the HTV210B.
+    That keeps the collision this used to catch out (the false pair in a 0x9F
+    value ends 0x42) while letting a real non-zero PHY through. If a capture ever
+    shows a higher PHY, this bound is the thing to widen.
     """
     for i in range(len(b) - 3):
-        if b[i] == 0x17 and b[i + 1] == 0xE1 and b[i + 3] == 0x00:
-            raw = b[i + 2]
-            return raw if raw < 128 else raw - 256
+        if b[i] == 0x17 and b[i + 1] == 0xE1 and b[i + 2] >= 0x80 and b[i + 3] <= 0x01:
+            return b[i + 2] - 256
     return None
 
 

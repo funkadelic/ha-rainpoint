@@ -74,9 +74,21 @@ class GenericSensorSpec:
 
 
 def _rssi_dbm(raw: int) -> float | None:
-    """Reinterpret an unsigned byte as a signed int8 dBm reading."""
-    value = raw - 256 if raw >= 128 else raw
-    return float(value)
+    """Reinterpret the low byte of a reading as a signed int8 dBm value.
+
+    The catalog declares STA_RSSI one byte wide on most models and two on the
+    Bluetooth-capable ones, where the second byte carries the PHY the reading
+    was taken on rather than part of the magnitude. Masking to the low byte
+    first makes both widths decode the same way: a captured HTV210B frame reads
+    b401, which the vendor app reports as -76 dBm at 1M PHY, and a one-byte 0xC4
+    still reads -60 as the hand-written decoders have it.
+
+    Without the mask the two-byte form arrived here as a little-endian word
+    (b401 as 436), which the spec's valid_range then rejected, so the reading
+    was dropped rather than shown wrong.
+    """
+    low = raw & 0xFF
+    return float(low - 256 if low >= 128 else low)
 
 
 def _temperature_c(raw: int) -> float | None:
