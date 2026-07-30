@@ -1205,6 +1205,7 @@ class RainPointZoneSensorBase(RainPointSensorBase):
         base_slug: str,
         zone_num: int,
     ) -> None:
+        """Bind the sensor to its sub-device and remember which zone it reads."""
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._zone_num = zone_num
 
@@ -1251,6 +1252,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
         base_slug: str,
         zone_num: int,
     ) -> None:
+        """Name and key the water-usage sensor for one zone."""
         super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
         sub_name = sensor_info.get("sub_name") or "Valve Hub"
         self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_water_used"
@@ -1265,6 +1267,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose the zone number, raw flow count, and conversion factor for auditing."""
         attrs = dict(super().extra_state_attributes)
         zone = self._zone_data or {}
         attrs["zone"] = self._zone_num
@@ -1297,6 +1300,7 @@ class RainPointZoneStateSensor(RainPointZoneSensorBase):
         base_slug: str,
         zone_num: int,
     ) -> None:
+        """Name and key the state sensor for one zone."""
         super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
         sub_name = sensor_info.get("sub_name") or "Valve"
         self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_state"
@@ -1304,6 +1308,7 @@ class RainPointZoneStateSensor(RainPointZoneSensorBase):
 
     @property
     def native_value(self) -> str | None:
+        """Return "open" or "closed", or None when the frame omits the zone."""
         zone = self._zone_data
         if not zone:
             return None
@@ -1311,6 +1316,7 @@ class RainPointZoneStateSensor(RainPointZoneSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose the zone number plus the run's duration, end time, and raw state word."""
         attrs = dict(super().extra_state_attributes)
         zone = self._zone_data or {}
         attrs["zone"] = self._zone_num

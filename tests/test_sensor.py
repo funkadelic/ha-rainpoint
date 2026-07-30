@@ -1624,6 +1624,7 @@ class TestHtv210bDispatch:
 
     @staticmethod
     def _entry(zones):
+        """Build an HTV210B sensor entry carrying the given zones dict."""
         return make_sensor_entry(
             hid=100,
             mid=200,
@@ -1634,6 +1635,7 @@ class TestHtv210bDispatch:
         )
 
     async def _setup(self, zones):
+        """Run sensor setup for an HTV210B entry and capture the created entities."""
         sensor_key = "100_200_3"
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: self._entry(zones)}))
         hass, entry = _make_hass(coordinator)
@@ -1644,6 +1646,7 @@ class TestHtv210bDispatch:
 
     @pytest.mark.asyncio
     async def test_creates_diagnostics_and_one_state_sensor_per_zone(self):
+        """Two zones yield battery, signal, two state sensors, and the raw payload sensor."""
         zones = {
             1: {"open": False, "duration_seconds": 0, "state_raw": 0x00, "event_time": None},
             2: {"open": False, "duration_seconds": 0, "state_raw": 0x00, "event_time": None},
@@ -1691,6 +1694,7 @@ class TestZoneStateSensor:
 
     @staticmethod
     def _entry(zones):
+        """Build an HTV210B sensor entry carrying the given zones dict."""
         return make_sensor_entry(
             hid=100,
             mid=200,
@@ -1701,6 +1705,7 @@ class TestZoneStateSensor:
         )
 
     async def _first_state(self, zones):
+        """Set up an HTV210B entry and return its first zone state sensor."""
         sensor_key = "100_200_3"
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: self._entry(zones)}))
         hass, entry = _make_hass(coordinator)
@@ -1711,6 +1716,7 @@ class TestZoneStateSensor:
 
     @pytest.mark.asyncio
     async def test_running_zone_reads_open_with_run_attributes(self):
+        """A running zone reads open and carries its run details as attributes."""
         zones = {1: {"open": True, "duration_seconds": 120, "state_raw": 0x21, "event_time": "2026-07-29T19:08:17"}}
         state = await self._first_state(zones)
         assert state.native_value == "open"
@@ -1722,6 +1728,7 @@ class TestZoneStateSensor:
 
     @pytest.mark.asyncio
     async def test_idle_zone_reads_closed(self):
+        """An idle zone reads closed even with the latched high bit set."""
         zones = {1: {"open": False, "duration_seconds": 0, "state_raw": 0x20, "event_time": None}}
         state = await self._first_state(zones)
         assert state.native_value == "closed"

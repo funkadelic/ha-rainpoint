@@ -1438,6 +1438,7 @@ class TestDecodeHtv210b:
     RUNNING_PAYLOAD = "11#18DC0117E1B40119D8211AD80021B71132FB1922B70000000025AF7800000026AF00000000FEFF0F1527FB19"
 
     def test_idle_capture_decodes_both_zones_closed(self):
+        """The real idle capture yields two closed zones with no run data."""
         result = decode_htv210b(SAMPLE_HTV210B_TLV_PAYLOAD)
         assert result["decoder"] == "htv210b_hex"
         assert result["type"] == "valve_hub"
@@ -1515,6 +1516,7 @@ class TestDecodeHtv210b:
         assert zones[1]["event_time"] is None
 
     def test_battery_percent_absent_when_frame_has_no_battery_record(self):
+        """A frame with no battery record leaves the flag None and the percent absent."""
         result = decode_htv210b("11#19D800")
         assert result["battery_flag"] is None
         assert "battery_percent" not in result
