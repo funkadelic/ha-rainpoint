@@ -1851,6 +1851,72 @@ class TestApplyPushUpdate:
         assert zone1["open"] is True
         assert zone1["state_raw"] == 1
 
+    def test_push_clears_debounce_counter_for_the_sensor_key(self):
+        """A push for a sensor key with a live debounce count leaves it absent afterward."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+        coord._silent_poll_counts["100_200_1"] = 2
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        assert "100_200_1" not in coord._silent_poll_counts
+
+    def test_push_clears_the_repair_issue_with_hid_mid_addr(self):
+        """The same push calls async_clear once with the device's hid, mid and addr."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        coord._silent_issues.async_clear.assert_called_once_with(100, 200, 1)
+
+    def test_push_replaces_a_silent_entry_with_a_decoded_one(self):
+        """A pushed frame for a currently-silent sensor key replaces it; the type
+        string is no longer the silent sentinel."""
+        hub = _push_hub()
+        silent_entry = {
+            "hid": 100,
+            "mid": 200,
+            "addr": 1,
+            "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
+        }
+        coord = _seed_push_coord(hub, sensors={"100_200_1": silent_entry})
+        coord._silent_poll_counts["100_200_1"] = 3
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        updated = coord.data["sensors"]["100_200_1"]["data"]
+        assert updated["type"] != SILENT_DATA_TYPE
+        assert "zones" in updated
+        assert "100_200_1" not in coord._silent_poll_counts
+        coord._silent_issues.async_clear.assert_called_once_with(100, 200, 1)
+
+    @pytest.mark.parametrize(
+        ("reason", "mid", "sid", "seed"),
+        [
+            ("before first poll", 200, "D1", False),
+            ("unknown mid", 999, "D1", True),
+            ("unresolvable sid", 200, "state", True),
+            ("unknown addr", 200, "D9", True),
+        ],
+    )
+    def test_dropped_push_clears_neither_counter_nor_issue(self, reason, mid, sid, seed):
+        """Each early-return drop path in apply_push_update must not clear
+        _silent_poll_counts or call async_clear, since none of them reach the
+        merge that follows those drops."""
+        if seed:
+            coord = _seed_push_coord(_push_hub(addr=1), sensors={"100_200_1": {"data": None}})
+        else:
+            coord, _ = _make_coord()
+            coord.data = None
+            coord.async_update_listeners = MagicMock()
+        coord._silent_poll_counts["100_200_1"] = 2
+
+        _APPLY(coord, mid, sid, "11#DEADBEEFCAFE", 1717200000000)
+
+        assert coord._silent_poll_counts.get("100_200_1") == 2, reason
+        coord._silent_issues.async_clear.assert_not_called()
+
 
 class TestIssueUrlLengthBudget:
     """The pre-filled report link is capped so GitHub cannot answer it with 414 URI Too Long.

@@ -474,6 +474,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
         status_entry = {"id": sid, "value": raw_value, "time": device_ts}
         sensor_key, sensor_entry = RainPointCoordinator._decode_one_subdevice(self, hub, mid, addr, sub, status_entry)
         RainPointCoordinator._merge_push_sensor_entry(self, mid, sid, sensor_key, sensor_entry, status_entry)
+        # _merge_push_sensor_entry's contract is a copy-on-write merge of
+        # coordinator data; the debounce counter and the not-reporting repair
+        # issue are separate state it does not touch, so clearing both on push
+        # arrival has to be explicit here rather than folded into the merge.
+        self._silent_poll_counts.pop(sensor_key, None)
+        self._silent_issues.async_clear(hub["hid"], mid, addr)
         # Notify listeners WITHOUT async_set_updated_data so the poll interval
         # timer is never reset; the 120s poll keeps running as the fallback.
         self.async_update_listeners()
