@@ -40,6 +40,24 @@ class TestSwitchSetupEntry:
         assert len(entities) == 1
 
     @pytest.mark.asyncio
+    async def test_bluetooth_wrapper_record_gets_no_broadcast_switch(self):
+        """A parent record with no hub identity is not a hub and gets no switch.
+
+        Its identity fields are empty strings rather than absent keys, so it
+        used to collapse onto the real hub's hid-keyed slot and win.
+        """
+        real_hub = {"hid": 182509, "mid": 236547, "name": "Hub", "did": "17053410", "mac": "A8:46:74:BB:91:F0"}
+        wrapper = {"hid": 182509, "mid": 346965, "name": "", "did": "", "mac": "", "model": "", "productKey": ""}
+        hass, entry, _coord = _make_hass(hubs=[real_hub, wrapper])
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        entities = mock_add_entities.call_args[0][0]
+        assert len(entities) == 1
+        assert entities[0]._hub_info["did"] == "17053410"
+
+    @pytest.mark.asyncio
     async def test_setup_entry_no_hubs(self):
         """No hubs should result in no broadcast switch entities."""
         hass, entry, _coord = _make_hass(hubs=[])
@@ -55,8 +73,8 @@ class TestSwitchSetupEntry:
     async def test_setup_entry_multiple_hubs(self):
         """Multiple hubs should each get a broadcast switch entity."""
         hubs = [
-            {"hid": 100, "name": "Hub 1", "softVer": "1.0"},
-            {"hid": 200, "name": "Hub 2", "softVer": "2.0"},
+            {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"},
+            {"hid": 200, "mid": 2002, "name": "Hub 2", "softVer": "2.0", "mac": "CC:DD"},
         ]
         hass, entry, _coord = _make_hass(hubs=hubs)
 
@@ -75,7 +93,7 @@ class TestSwitchSetupEntry:
         # failure if anyone sets a real debug worker URL.
         monkeypatch.setattr("custom_components.rainpoint.switch.DEBUG_WORKER_URL", "")
 
-        hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0"}
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
         hass, entry, _coord = _make_hass(hubs=[hub_info])
 
         mock_add_entities = MagicMock()
@@ -99,7 +117,7 @@ class TestSwitchSetupEntry:
             MagicMock(),
         )
 
-        hub_info = {"hid": 100, "name": "Hub A", "softVer": "1.0"}
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub A", "softVer": "1.0", "mac": "AA:BB"}
         hass, entry, _coord = _make_hass(hubs=[hub_info])
 
         captured: list = []
@@ -137,7 +155,8 @@ class TestSwitchSetupEntryGenericControl:
 
     @pytest.mark.asyncio
     async def test_option_true_creates_a_generic_switch_alongside_the_broadcast_switch(self):
-        hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0"}
+        """With generic control on, the socket candidate adds a switch next to the hub's."""
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
         hass, entry, coord = _make_hass(hubs=[hub_info])
         entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
         coord.data["sensors"] = {"300_400_1": _socket_sensor_entry()}
@@ -151,7 +170,8 @@ class TestSwitchSetupEntryGenericControl:
 
     @pytest.mark.asyncio
     async def test_option_false_creates_no_generic_switch(self):
-        hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0"}
+        """With generic control off, only the hub broadcast switch is created."""
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
         hass, entry, coord = _make_hass(hubs=[hub_info])
         entry.options = {CONF_GENERIC_CONTROL_ENABLED: False}
         coord.data["sensors"] = {"300_400_1": _socket_sensor_entry()}
@@ -166,7 +186,7 @@ class TestSwitchSetupEntryGenericControl:
     @pytest.mark.asyncio
     async def test_a_non_dict_sensor_record_is_skipped_and_the_broadcast_switch_survives(self):
         """A malformed sub-device record must not abort setup and drop the hub switch."""
-        hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0"}
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
         hass, entry, coord = _make_hass(hubs=[hub_info])
         entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
         coord.data["sensors"] = {"bad": "not-a-dict", "300_400_1": _socket_sensor_entry()}
@@ -180,7 +200,8 @@ class TestSwitchSetupEntryGenericControl:
 
     @pytest.mark.asyncio
     async def test_option_absent_creates_no_generic_switch(self):
-        hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0"}
+        """A missing option key is treated as off, not as enabled."""
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
         hass, entry, coord = _make_hass(hubs=[hub_info])
         entry.options = {}
         coord.data["sensors"] = {"300_400_1": _socket_sensor_entry()}

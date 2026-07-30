@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .coordinator import RainPointCoordinator
+from .coordinator import RainPointCoordinator, is_hub_record
 from .hub_entities import RainPointHubChannelSelect
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,9 +28,11 @@ async def async_setup_entry(
     if not isinstance(hubs_cfg, list):
         _LOGGER.error("Expected hubs to be a list, got %s; skipping select entity setup", type(hubs_cfg).__name__)
         return
-    hubs_dict = {str(hub.get("hid", i)): hub for i, hub in enumerate(hubs_cfg)}
+    hubs_dict = {str(hub.get("mid", i)): hub for i, hub in enumerate(hubs_cfg)}
 
     for _hub_key, hub_info in hubs_dict.items():
+        if not is_hub_record(hub_info):
+            continue
         entities.append(RainPointHubChannelSelect(coordinator, hub_info))
 
     _LOGGER.info("Added %d select entities", len(entities))

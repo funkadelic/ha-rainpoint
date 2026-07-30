@@ -233,6 +233,34 @@ def _resolve_addr_from_sid(sid: str) -> int | None:
         return None
 
 
+def is_hub_record(hub: dict) -> bool:
+    """Return True when a top-level device record is a real hub.
+
+    getDeviceByHid returns one top-level record per parent device in a home, and
+    not all of them are hubs. Pairing a Bluetooth valve makes the cloud add a
+    second record that exists only to carry that valve in its subDevices: every
+    identity field on it (did, mac, productKey, model, name) is an empty string
+    rather than a missing key, so `.get(key, default)` hands back "" and the
+    default never fires.
+
+    Such a record must not produce hub-level entities. It is still kept in the
+    "hubs" list so its subDevices stay discoverable; this only gates the things
+    that describe a hub as a device.
+    """
+    return bool(hub.get("did") or hub.get("mac") or hub.get("productKey") or hub.get("model"))
+
+
+def first_hub_record(hubs: list[dict]) -> dict | None:
+    """Return the first real hub in API order, or None when there is none.
+
+    Callers that need "the" hub used to take hubs[0] unconditionally. That holds
+    only while the cloud happens to order a real hub first; a Bluetooth wrapper
+    record in slot 0 has an empty deviceName and productKey, which silently
+    yields a hub that cannot be identified.
+    """
+    return next((hub for hub in hubs if is_hub_record(hub)), None)
+
+
 def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int | str | None = None) -> dict:
     """Dispatch raw_value through DECODER_REGISTRY or the MODEL_DISPLAY_HUB special case.
 
