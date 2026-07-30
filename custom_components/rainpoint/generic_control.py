@@ -15,6 +15,19 @@ variant must declare an allowlisted control identity, have no hand-written
 decoder, not be in the committed override list, and have a command port that
 resolves unambiguously from the catalog. Anything that does not meet every
 condition is disabled by construction, never by an explicit deny entry.
+
+With both options on, the run-state reading is exposed twice for the same
+zone: once as the read-only generic sensor and once as this module's control
+entity, whose state is a readback of that same record. That is intended, and
+it does depart from the trusted path, where a model gets zone state either on
+a valve entity or as a sensor but never both. That either/or comes from one
+per-model factory deciding both platforms at once, which is not available
+here: the two generic options are gated independently, so suppressing the
+sensor whenever control is on would make the sensor platform read the control
+option, and would leave a row behind when that option flips, since each
+namespace sweep is keyed to its own option. The overlap also earns its keep
+while these mappings are unverified, because the raw reading sits beside the
+actuator that claims to drive it, which is where a disagreement shows up.
 """
 
 from __future__ import annotations
