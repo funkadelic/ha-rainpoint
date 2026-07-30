@@ -10,7 +10,7 @@
     },
     "device_not_reporting": {
       "title": "A device is not reporting",
-      "description": "RainPoint lists {model} (address {address}) on {hub_name}, but the cloud has returned no readings for it across the last {missed_polls} checks, which run a couple of minutes apart. This can happen when a device is paired over Bluetooth only, is out of range, or is switched off. The integration keeps checking and will clear this notice on its own once readings resume. A Not Reporting entity was added for this device at the same time as this notice. You will find it on the device's own page under Diagnostic, and its attributes carry a pre-filled report link if you believe the device should be reporting."
+      "description": "RainPoint lists this device on your account, but the cloud has returned no readings for it across the last {missed_polls} checks, which run a couple of minutes apart.\n\n- **Model:** {model}\n- **Address:** {address}\n- **Hub:** {hub_name}\n\nThis can happen when a device is paired over Bluetooth only, is out of range, or is switched off. The integration keeps checking and will clear this notice on its own once readings resume.\n\nA **Not Reporting** entity was added for this device at the same time as this notice. You will find it on the device's own page under Diagnostic, and its attributes carry a pre-filled report link if you believe the device should be reporting."
     }
   },
   "config": {
