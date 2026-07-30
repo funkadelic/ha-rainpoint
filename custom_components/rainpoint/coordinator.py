@@ -385,25 +385,30 @@ class RainPointCoordinator(DataUpdateCoordinator):
         dropped without mutating coordinator data, mirroring the poll path's
         continue-on-miss. Never touches the poll timer, so polling keeps running
         as the fallback.
+
+        Every drop log carries the raw value. A device paired between two polls
+        pushes against a sub-device map that does not list it yet, so its first
+        frames are dropped; those are exactly the frames worth having when the
+        model has no decoder, and without the value in the log they were gone.
         """
         data = self.data
         if not data:
-            _LOGGER.debug("Dropping push before first poll: mid=%s sid=%s", mid, sid)
+            _LOGGER.debug("Dropping push before first poll: mid=%s sid=%s value=%s", mid, sid, raw_value)
             return
 
         hub = next((h for h in data.get("hubs", []) if h.get("mid") == mid), None)
         if hub is None:
-            _LOGGER.debug("Dropping push for unknown mid=%s (sid=%s)", mid, sid)
+            _LOGGER.debug("Dropping push for unknown mid=%s (sid=%s) value=%s", mid, sid, raw_value)
             return
 
         addr = _resolve_addr_from_sid(sid)
         if addr is None:
-            _LOGGER.debug("Dropping push with unresolvable sid=%s for mid=%s", sid, mid)
+            _LOGGER.debug("Dropping push with unresolvable sid=%s for mid=%s value=%s", sid, mid, raw_value)
             return
 
         sub = {sd["addr"]: sd for sd in hub.get("subDevices", [])}.get(addr)
         if sub is None:
-            _LOGGER.debug("Dropping push for unknown addr=%s (mid=%s sid=%s)", addr, mid, sid)
+            _LOGGER.debug("Dropping push for unknown addr=%s (mid=%s sid=%s) value=%s", addr, mid, sid, raw_value)
             return
 
         status_entry = {"id": sid, "value": raw_value, "time": device_ts}

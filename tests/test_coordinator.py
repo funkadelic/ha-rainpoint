@@ -1450,6 +1450,39 @@ class TestApplyPushUpdate:
 
         coord.async_update_listeners.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("reason", "mid", "sid", "seed"),
+        [
+            ("before first poll", 200, "D1", False),
+            ("unknown mid", 999, "D1", True),
+            ("unresolvable sid", 200, "state", True),
+            ("unknown addr", 200, "D9", True),
+        ],
+    )
+    def test_every_drop_path_logs_the_raw_value(self, caplog, reason, mid, sid, seed):
+        """A dropped push must leave its payload in the log.
+
+        A device paired between two polls pushes against a sub-device map that
+        does not list it yet, so its first frames are dropped. Those frames are
+        the ones worth having when the model has no decoder, and they used to be
+        discarded without ever being written down.
+        """
+        sentinel = "11#DEADBEEFCAFE"
+        if seed:
+            coord = _seed_push_coord(_push_hub(addr=1), sensors={"100_200_1": {"data": None}})
+        else:
+            coord, _ = _make_coord()
+            coord.data = None
+            coord.async_update_listeners = MagicMock()
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.coordinator"):
+            _APPLY(coord, mid, sid, sentinel, 1717200000000)
+
+        dropped = [r.getMessage() for r in caplog.records if "Dropping push" in r.getMessage()]
+        assert len(dropped) == 1, f"{reason}: expected one drop log, got {dropped}"
+        assert sentinel in dropped[0], f"{reason}: payload missing from {dropped[0]}"
+        coord.async_update_listeners.assert_not_called()
+
     def test_stale_push_after_command_preserves_commanded_zone(self):
         """A push whose device timestamp predates a fresh valve command does not
         revert the just-commanded zone state (the valve-race guard, via push)."""
