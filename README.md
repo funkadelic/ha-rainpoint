@@ -24,10 +24,11 @@ This integration supports RainPoint Smart+ device families, including:
 | Pool sensors | HCS0528ARF, HCS015ARF, HCS015ARF+ | Pool temperature, ambient |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
 | Flow meters | HCS008FRF | Flow reading |
+| Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state |
 
-The **HTV245FRF** wifi valve and the **HCS026FRF** soil sensor are the maintainer's own hardware and are the models tested against real devices. The HTV245FRF remains the integration's core-value target. Other models are supported opportunistically from captured payloads.
+The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B** Bluetooth valve are the maintainer's own hardware and are the models tested against real devices. The HTV245FRF remains the integration's core-value target. Other models are supported opportunistically from captured payloads.
 
-The **HTV210B** valve is under test now, which is why it is absent from the table above. It pairs to a hub and the integration discovers it, but the cloud returns no status data for it, so it produces no entities yet. Its open/close command also runs through a different path than the one the integration drives, so no valve entity is created rather than one that accepts a command the hardware never acts on. Whether it graduates to the table depends on captures from the device.
+The **HTV210B** only reports to the cloud while paired through a hub; used over Bluetooth alone it is invisible to the cloud and the integration cannot see it at all. Its zone sensors are read-only: opening and closing from the app works over the cloud, but the exact command the integration would need to send is still being verified, so no valve entity is created rather than one that might accept a command the hardware never acts on.
 
 Every model listed above has a decoder written against a real payload. A model that is absent is not necessarily unusable: the opt-in generic sensors described under [Configuration](#configuration) can often surface readings for it from the product catalog, clearly labeled unverified.
 
