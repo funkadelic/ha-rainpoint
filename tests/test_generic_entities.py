@@ -393,7 +393,8 @@ class TestEvaluateGenericGate:
         assert len(result.blocked_by) == 1
         reason = result.blocked_by[0]
         assert "more than one hardware variant" in reason
-        assert "278" in reason and "279" in reason
+        assert "278" in reason
+        assert "279" in reason
         assert "not in the product catalog" not in reason
 
     def test_a_reported_code_the_catalog_does_not_list_is_not_called_ambiguous(self, monkeypatch):
@@ -412,7 +413,8 @@ class TestEvaluateGenericGate:
         assert len(result.blocked_by) == 1
         reason = result.blocked_by[0]
         assert "no entry for this device's hardware variant" in reason
-        assert "999" in reason and "278" in reason
+        assert "999" in reason
+        assert "278" in reason
         assert "did not report which one it is" not in reason
         assert "not in the product catalog" not in reason
 
