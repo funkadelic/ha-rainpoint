@@ -991,6 +991,7 @@ class TestRecordWidthGate:
 
     @pytest.mark.parametrize("identity", sorted(_IDENTITY_SPECS))
     def test_every_row_declares_at_least_one_width(self, identity):
+        """A row with no declared width would silently accept every width."""
         spec = _IDENTITY_SPECS[identity]
         assert spec.widths, f"{identity} declares no record width"
         assert all(isinstance(w, int) and w > 0 for w in spec.widths)
@@ -1034,10 +1035,12 @@ class TestEveryCuratedRowThroughTheEntity:
     ]
 
     def test_every_curated_row_is_covered_by_a_case(self):
+        """Fails when a row is added without an entity-level case, so none is proven only in isolation."""
         assert {identity for identity, _code, _raw, _expected in self.CASES} == set(_IDENTITY_SPECS)
 
     @pytest.mark.parametrize(("identity", "dp_code", "raw", "expected"), CASES)
     def test_the_row_publishes_its_reading(self, identity, dp_code, raw, expected):
+        """The whole native_value path for one row: wiring, width, transform, range, rounding."""
         dp_entry = _dp(identity, dp_port=0, dp_code=dp_code)
         fields = [_decoded_field(identity, raw, 0)]
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
@@ -1059,6 +1062,7 @@ class TestCatalogEligibilityIsPinned:
     }
 
     def _sweep(self):
+        """Return {(model, code): identities} for every variant the committed catalog admits."""
         found = {}
         for model in product_catalog_module._CATALOG:
             for code in get_catalog_variant_codes(model) or [None]:
@@ -1068,6 +1072,7 @@ class TestCatalogEligibilityIsPinned:
         return found
 
     def test_exactly_these_variants_are_eligible(self):
+        """An exact set, so a row that widens or narrows eligibility cannot pass unnoticed."""
         assert self._sweep() == self.EXPECTED
 
     def test_no_eligible_variant_has_a_hand_written_decoder(self):
@@ -1100,6 +1105,7 @@ class TestCuratedTableIsReachable:
     """
 
     def test_every_curated_identity_can_be_produced_by_the_decoder(self):
+        """The gate names identities from the catalog; an entity reads them from the decoder map."""
         assert set(_IDENTITY_SPECS) <= set(_STATUS_FIELDS.values())
 
     def test_the_known_unreachable_catalog_identity_is_still_unreachable(self):
@@ -1178,18 +1184,21 @@ class TestReportTimeRow:
     SPEC = _IDENTITY_SPECS["STA_REPTIME"]
 
     def test_it_delegates_to_the_unpacking_proven_for_this_identity(self):
+        """Reads the stamp off a real captured frame, not a constructed word."""
         decoded = decode_generic(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)
         raw = next(f["value"] for f in decoded["fields"] if f["name"] == "STA_REPTIME")
         assert self.SPEC.transform(raw) == _decode_packed_report_time(raw)
         assert self.SPEC.transform(raw) == "2026-07-04T17:40:51"
 
     def test_it_claims_no_device_class_or_numeric_guards(self):
+        """A naive stamp is a string state: no timestamp class, no unit, nothing to bound or round."""
         assert self.SPEC.device_class is None
         assert self.SPEC.unit is None
         assert self.SPEC.valid_range is None
         assert self.SPEC.precision is None
 
     def test_an_unusable_word_reads_as_no_state(self):
+        """Zero means no report rather than the epoch, and the unpacking already returns None for it."""
         assert self.SPEC.transform(0) is None
 
 
@@ -1250,6 +1259,7 @@ class TestEventTimeRow:
         assert spec.transform(self.PACKED_STAMP) == "2026-07-30T14:05:00"
 
     def test_the_state_is_the_wall_clock_string(self):
+        """The entity publishes the ISO string itself, with no rounding or range applied to it."""
         dp_entry = _dp("STA_EVTIME", dp_port=0, dp_code=21, data_type="T4")
         fields = [_decoded_field("STA_EVTIME", self.PACKED_STAMP, 0)]
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
@@ -1266,6 +1276,7 @@ class TestEventTimeRow:
         assert sensor._attr_name == "Garden Sensor Event Time (unverified)"
 
     def test_a_zero_word_means_no_event_and_reads_as_no_state(self):
+        """An idle zone reports zero here, which must not surface as a date."""
         dp_entry = _dp("STA_EVTIME", dp_port=0, dp_code=21, data_type="T4")
         fields = [_decoded_field("STA_EVTIME", 0, 0)]
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))

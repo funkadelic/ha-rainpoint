@@ -862,6 +862,15 @@ class RainPointGenericSensor(RainPointSensorBase):
 
     @property
     def native_value(self) -> float | str | None:
+        """Publish the row's reading, or no state when any check refuses it.
+
+        Four independent refusals, each returning None rather than a
+        substitute: no decoded data for this sub-device, no field matching
+        this identity and port, a raw value that is not a plain int, and a
+        record whose width the row has no evidence for. Only then does the
+        transform run, and a numeric result must still fall inside the row's
+        declared range.
+        """
         data = self._sensor_data
         if not data:
             return None
