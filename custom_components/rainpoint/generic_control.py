@@ -243,6 +243,12 @@ def _resolve_datapoint(entry: dict, run_state_entries: list[dict], port_number: 
     command_port = resolve_control_port(dp_port, port_number)
     if command_port is None:
         return f"{identity} on port {dp_port!r} has no resolvable command port, so that zone is refused"
+    # identity and dp_port are typed str and int on the dataclass, and both are
+    # invariants this function has already established rather than assumptions:
+    # the caller admits an entry only when its identity is in the allowlist (a
+    # set of literal strings), and the run-state pairing plus resolve_control_port
+    # above both reject a dpPort that is not a usable int. Left unguarded for the
+    # same reason the sensor path leaves its own port unguarded.
     return ControlDatapoint(
         identity=identity,
         dp_port=dp_port,

@@ -826,6 +826,13 @@ class RainPointGenericSensor(RainPointSensorBase):
         spec = _IDENTITY_SPECS[identity]
         self._spec = spec
         self._identity = identity
+        # Annotated int rather than int | None on an invariant the gate owns,
+        # not on a local check: _bad_port_reason refuses any datapoint whose
+        # dpPort is not a plain int, and _duplicate_port_reason refuses the
+        # ambiguous rest, both before build_generic_entities constructs
+        # anything. Deliberately unguarded here -- a defensive branch would
+        # pin behaviour for a state the factory cannot produce, and read as
+        # though the gate might not hold.
         self._dp_port: int = dp_entry.get("dpPort")
         self._dp_code = dp_entry.get("dpCode")
         self._dp_data_type = dp_entry.get("dpDataType")
