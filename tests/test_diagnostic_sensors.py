@@ -135,6 +135,30 @@ class TestRainPointBatterySensor:
         assert sensor.available is False
 
 
+class TestDiagnosticSensorsAgainstASilentEntry:
+    """D-11/D-12: a diagnostic sensor bound to a key that turns silent must
+    return None from native_value and read as unavailable, not raise."""
+
+    def _make(self, cls):
+        from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+
+        coord = _make_coordinator(sensor_data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
+        sensor_info = _make_sensor_info()
+        sensor = cls.__new__(cls)
+        cls.__init__(sensor, coord, "100_200_1", sensor_info, "100_200_1")
+        return sensor
+
+    def test_rssi_sensor_reads_none_and_unavailable(self):
+        sensor = self._make(RainPointRSSISensor)
+        assert sensor.native_value is None
+        assert sensor.available is False
+
+    def test_battery_sensor_reads_none_and_unavailable(self):
+        sensor = self._make(RainPointBatterySensor)
+        assert sensor.native_value is None
+        assert sensor.available is False
+
+
 class TestRainPointFirmwareVersionSensor:
     """Tests for RainPointFirmwareVersionSensor."""
 

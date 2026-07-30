@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_145, MODEL_VALVE_245, MODEL_VALVE_345
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
     RainPointValveEntity,
@@ -97,6 +98,17 @@ class TestValveProperties:
         """No data in sensors should give available == False."""
         valve = _make_valve()
         valve.coordinator.data["sensors"]["100_200_1"]["data"] = None
+        assert valve.available is False
+
+    def test_unavailable_when_sensor_entry_turns_silent(self):
+        """A valve already bound to a key that goes silent (D-11/D-12) reports
+        unavailable rather than raising: raw_status={} carries no hub_online."""
+        valve = _make_valve()
+        valve.coordinator.data["sensors"]["100_200_1"]["raw_status"] = {}
+        valve.coordinator.data["sensors"]["100_200_1"]["data"] = {
+            "type": SILENT_DATA_TYPE,
+            "silent_state": "stopped_reporting",
+        }
         assert valve.available is False
 
     def test_extra_state_attributes_includes_duration(self):
@@ -531,6 +543,37 @@ class TestValveSetupEntry:
         hass = MagicMock()
         entry = MagicMock()
         entry.entry_id = "e1"
+        hass.data = {DOMAIN: {"e1": {"coordinator": mock_coordinator}}}
+
+        async_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert not async_add_entities.called
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_creates_no_valve_for_a_silent_entry(self):
+        """A valve model with no status at all (raw_status={}, D-11/D-12) has no
+        zones to walk, so it produces no valve entity rather than raising."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        sensors = {
+            "10_20_1": {
+                "hid": 10,
+                "mid": 20,
+                "addr": 1,
+                "sub_name": "Hub A",
+                "model": MODEL_VALVE_245,
+                "raw_status": {},
+                "data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
+            }
+        }
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {"sensors": sensors}
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.options = {}
         hass.data = {DOMAIN: {"e1": {"coordinator": mock_coordinator}}}
 
         async_add_entities = MagicMock()

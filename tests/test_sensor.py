@@ -813,6 +813,21 @@ class TestSensorBaseProperties:
         assert "firmware_version" not in attrs
         assert "last_updated" not in attrs
 
+    def test_extra_state_attributes_does_not_raise_for_a_silent_entry(self):
+        """D-11/D-12: a battery/RSSI/generic sensor already bound to a key that
+        turns silent must not raise while reading its attributes, and the
+        legacy last_updated fallback (raw_status.get("time")) must be omitted
+        since raw_status is {}."""
+        sensor = self._make_base(data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
+        key = sensor._sensor_key
+        sensor.coordinator.data["sensors"][key]["raw_status"] = {}
+
+        attrs = sensor.extra_state_attributes
+
+        assert "last_updated" not in attrs
+        assert "rssi_dbm" not in attrs
+        assert "battery_percent" not in attrs
+
 
 # ---------------------------------------------------------------------------
 # Parametrized native_value coverage for simple "return data.get(KEY)" sensors.

@@ -22,6 +22,7 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_245,
     VALVE_MODELS,
 )
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 from custom_components.rainpoint.generic_control import (
     CONTROL_IDENTITY_ALLOWLIST,
     DEFAULT_CONTROL_DURATION_SECONDS,
@@ -607,6 +608,13 @@ class TestCountGenericControlEligibleDevices:
 
         assert count_generic_control_eligible_devices(data) == (1, 1)
 
+    def test_a_silent_device_is_not_counted_as_unsupported(self):
+        """A device with no status at all is not an unsupported model (D-10/D-12);
+        counting it here would misstate the control toggle's real effect in the options copy."""
+        data = {"sensors": {"a": {"model": ANCHOR_MODEL, "model_code": ANCHOR_MODEL_CODE, "data": {"type": SILENT_DATA_TYPE}}}}
+
+        assert count_generic_control_eligible_devices(data) == (0, 0)
+
     def test_malformed_coordinator_data_degrades_to_zero_rather_than_raising(self):
         assert count_generic_control_eligible_devices({"sensors": 5}) == (0, 0)
 
@@ -658,6 +666,18 @@ class TestBuildGenericValveEntities:
 
         assert len(entities) == 1
         assert isinstance(entities[0], RainPointGenericValve)
+
+    def test_silent_entry_yields_no_valve_even_for_the_anchor_the_gate_otherwise_admits(self):
+        """D-10: proves the type-string gate rejects a silent entry rather than an
+        unrelated gate failing first, since ANCHOR_MODEL/ANCHOR_MODEL_CODE is the
+        real catalog variant the control gate otherwise passes (see
+        test_fully_eligible_anchor_yields_one_valve above). Closes T-15-01.
+        """
+        sensor_info = _anchor_sensor_info()
+        sensor_info["data"] = {"type": SILENT_DATA_TYPE}
+        coordinator = _make_coordinator("100_200_1", sensor_info)
+
+        assert build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
     def test_socket_identity_yields_no_valve(self):
         """HWG004WRF/34 admits a CTL_SOCK datapoint at the gate; the valve
@@ -731,6 +751,18 @@ class TestBuildGenericSwitchEntities:
 
         assert len(entities) == 1
         assert isinstance(entities[0], RainPointGenericSwitch)
+
+    def test_silent_entry_yields_no_switch_even_for_the_anchor_the_gate_otherwise_admits(self):
+        """D-10: SOCKET_MODEL/SOCKET_MODEL_CODE is the real catalog variant the
+        control gate otherwise passes for a switch (see
+        test_fully_eligible_anchor_yields_one_switch above); this proves the
+        type-string gate, not an unrelated one, rejects a silent entry. Closes T-15-01.
+        """
+        sensor_info = _socket_sensor_info()
+        sensor_info["data"] = {"type": SILENT_DATA_TYPE}
+        coordinator = _make_coordinator("300_400_1", sensor_info)
+
+        assert build_generic_switch_entities(coordinator, "300_400_1", sensor_info, "300_400_1") == []
 
     def test_valve_identity_yields_no_switch(self):
         sensor_info = _anchor_sensor_info()

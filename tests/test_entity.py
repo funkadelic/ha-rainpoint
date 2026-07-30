@@ -66,6 +66,21 @@ class TestSubDeviceAttributes:
         coordinator = _coordinator({"firmware_version": "", "data": {}})
         assert sub_device_attributes(coordinator, "k") == {}
 
+    def test_silent_entry_yields_firmware_alone(self):
+        """A silent entry (D-09/D-11) carries neither a device nor a server
+        timestamp key, so it must not raise and must yield the firmware
+        attribute alone, same as a bare None reading."""
+        from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+
+        coordinator = _coordinator(
+            {
+                "firmware_version": "1.4",
+                "raw_status": {},
+                "data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
+            }
+        )
+        assert sub_device_attributes(coordinator, "k") == {"firmware_version": "1.4"}
+
 
 class TestSubDeviceEntity:
     """Tests for RainPointSubDeviceEntity."""
