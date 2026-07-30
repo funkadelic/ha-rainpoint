@@ -96,8 +96,8 @@ def _response_code_from_error(exc: Exception) -> str:
     """Extract the numeric controlWorkMode response code from the client's error text.
 
     Extracting from the message rather than from an attribute on the
-    exception is deliberate: GCTL-02 requires api/client.py be reused
-    unchanged, so the message is the only place the code is exposed. Do not
+    exception is deliberate: api/client.py is reused unchanged, so the
+    message is the only place the code is exposed. Do not
     "fix" this by adding a code attribute to RainPointApiError -- that would
     be an unrequested change to the reused client.
 
@@ -228,7 +228,7 @@ def _resolve_datapoint(entry: dict, run_state_entries: list[dict], port_number: 
     is safe and load-bearing, not a heuristic), and its command port must
     resolve. Refusing on an ambiguous or absent pairing before ever looking
     at the port is what stops a plausible-looking but unconfirmable port
-    from ever reaching the client -- GCTL-04's confirm-by-re-poll is
+    from ever reaching the client -- confirming a command by re-polling is
     meaningless for a datapoint whose state can never be read back.
     """
     identity = entry.get("identity")
@@ -518,6 +518,12 @@ class RainPointGenericControlBase(CoordinatorEntity):
         if not isinstance(raw, int) or isinstance(raw, bool):
             return None
         value = _IDENTITY_SPECS[RUN_STATE_IDENTITY].transform(raw)
+        if not isinstance(value, (int, float)):
+            # Unreachable while the run-state row masks bit zero to 0.0 or 1.0.
+            # Guarded because a curated row may now yield a non-numeric reading,
+            # and a control entity must report unknown rather than raise inside
+            # a state property.
+            return None
         # The run-state transform yields exactly 0.0 or 1.0 (a bit-zero mask),
         # so isclose is exact here; it also keeps a scaled future transform
         # from tripping on float representation while preserving the three-way
@@ -531,13 +537,13 @@ class RainPointGenericControlBase(CoordinatorEntity):
     async def _async_send_command(self, mode: int, duration: int) -> None:
         """Issue one control_work_mode call and schedule the confirming refresh.
 
-        Never decodes the response and never touches coordinator data --
-        D-14's no-optimistic-state rule. The client method is reused
+        Never decodes the response and never touches coordinator data, which
+        is the no-optimistic-state rule. The client method is reused
         unchanged; nothing here (or anywhere in this module) modifies it.
 
         A raised RainPointApiError propagates unchanged after raising the
         one-shot repair issue, so Home Assistant still reports the action as
-        failed (T-14-10): the issue is additional, never a substitute, and
+        failed: the issue is additional, never a substitute, and
         the confirming refresh below is never reached on a failure -- there
         is nothing to confirm.
         """
@@ -590,7 +596,7 @@ class RainPointGenericControlBase(CoordinatorEntity):
 class RainPointGenericValve(RainPointGenericControlBase, ValveEntity):
     """Opt-in, unverified generic valve entity for one allowlisted control datapoint.
 
-    Never optimistic (D-14): ``is_closed`` is read only from the shared
+    Never optimistic: ``is_closed`` is read only from the shared
     base's run-state property, so a command's effect only ever becomes
     visible once the coordinator's own data confirms it.
     """
@@ -647,16 +653,16 @@ class RainPointGenericValve(RainPointGenericControlBase, ValveEntity):
 class RainPointGenericSwitch(RainPointGenericControlBase, SwitchEntity):
     """Opt-in, unverified generic switch entity for one allowlisted CTL_SOCK control datapoint.
 
-    Ships the allowlist's third identity literally (D-04): CTL_SOCK names a
-    mains socket, not a valve, so it belongs on the switch platform rather
-    than silently collapsing into a valve entity. There is no existing
+    CTL_SOCK is carried on the switch platform rather than silently
+    collapsing into a valve entity, because it names a mains socket, not a
+    valve. There is no existing
     per-device write-path switch in this repository to copy -- the two
     entities in switch.py are a hub-level broadcast switch and a debug
     switch, both structurally unrelated -- so this is built from the shared
     control base and the same coordinator-read-plus-actuate-through-client
     shape RainPointGenericValve already has.
 
-    Never optimistic (D-14): ``is_on`` is read only from the shared base's
+    Never optimistic: ``is_on`` is read only from the shared base's
     run-state property, so a command's effect only ever becomes visible once
     the coordinator's own data confirms it.
     """

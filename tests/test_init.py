@@ -915,7 +915,7 @@ class _GenericSweepFixtures:
         config_entry_id=ENTRY_ID,
     )
     # Control-namespace rows: the control marker nests inside the sensor
-    # marker (option-a), so these unique_ids also contain GENERIC_UNIQUE_ID_MARKER
+    # marker, so these unique_ids also contain GENERIC_UNIQUE_ID_MARKER
     # -- exactly the ambiguity the dispatch-order guard in
     # _remove_stale_generic_entities exists to resolve correctly.
     CONTROL_A = SimpleNamespace(
@@ -1081,7 +1081,7 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
 
         The control option is explicitly enabled here so this test's scope
         stays on the sensor toggle alone; it also doubles as one direction of
-        D-11's independence guarantee -- the sensor option, off, removes only
+        the namespace independence guarantee -- the sensor option, off, removes only
         sensor-namespace rows and leaves every control-namespace row
         (including the always-unresolvable one) untouched.
         """

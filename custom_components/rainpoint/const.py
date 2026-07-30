@@ -49,18 +49,18 @@ GENERIC_UNIQUE_ID_MARKER = "_generic_"
 
 # === Generic (catalog-driven) control entity factory ===
 CONF_GENERIC_CONTROL_ENABLED = "generic_control_enabled"
-# The control marker is nested inside GENERIC_UNIQUE_ID_MARKER (checkpoint
-# decision: option-a) rather than given a top-level marker of its own. That
-# keeps the existing __init__.py registry sweep guard (which matches on
-# GENERIC_UNIQUE_ID_MARKER alone) already matching every control row, with no
-# second substring guard needed. The trailing "ctl_" segment is what
-# distinguishes a control row from a sensor row within the shared substring,
-# per D-11's requirement that the two namespaces stay distinguishable -- every
-# namespace test must assert on this FULL marker, never on GENERIC_UNIQUE_ID_MARKER
-# alone, which a control unique_id also contains.
+# The control marker is nested inside GENERIC_UNIQUE_ID_MARKER rather than
+# given a top-level marker of its own. That keeps the existing __init__.py
+# registry sweep guard (which matches on GENERIC_UNIQUE_ID_MARKER alone)
+# already matching every control row, with no second substring guard needed.
+# The trailing "ctl_" segment is what distinguishes a control row from a
+# sensor row within the shared substring, which the two namespaces must stay
+# distinguishable by -- every namespace test must assert on this FULL marker,
+# never on GENERIC_UNIQUE_ID_MARKER alone, which a control unique_id also
+# contains.
 GENERIC_CONTROL_UNIQUE_ID_MARKER = f"{GENERIC_UNIQUE_ID_MARKER}ctl_"
-# Trailing suffix for the duration companion entity (added in a later plan),
-# mirroring the trusted zone-duration convention ("_zone{n}_duration"): the
+# Trailing suffix for the duration companion entity, mirroring the trusted
+# zone-duration convention ("_zone{n}_duration"): the
 # companion's unique_id is the control entity's own id plus this suffix, never
 # a separate namespace of its own.
 GENERIC_CONTROL_DURATION_SUFFIX = "_duration"

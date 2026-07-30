@@ -367,7 +367,7 @@ class TestEvaluateControlGateRealCatalog:
 class TestEvaluateControlGateSynthetic:
     def test_port_zero_admitted_at_command_port_one_on_synthetic_single_port_variant(self, monkeypatch):
         """No committed variant declares a control dp on port zero with portNumber == 1;
-        this shape is covered synthetically per D-06.
+        this shape is covered synthetically.
         """
         dp_entries = [
             {"dpCode": 1, "identity": "CTL_WATER", "dpPort": 0},
@@ -446,7 +446,7 @@ class TestEvaluateControlGateSynthetic:
     def test_control_datapoint_with_no_paired_run_state_datapoint_is_refused(self, monkeypatch):
         """A control dp whose port resolves fine but has no run-state datapoint declared
         at all on that port is still refused: a resolvable port is not enough on its
-        own -- GCTL-04's confirm-by-re-poll needs a readable state to confirm against.
+        own -- confirming a command by re-polling needs a readable state to confirm against.
         """
         dp_entries = [{"dpCode": 1, "identity": "CTL_WATER", "dpPort": 1}]  # no STA_WKSTATE anywhere
         monkeypatch.setattr(generic_control_module, "is_hand_written_model", lambda model: False)
@@ -718,7 +718,7 @@ class TestBuildGenericSwitchEntities:
 
     def test_fully_eligible_anchor_yields_one_switch(self):
         """HWG004WRF/34 is the one real CTL_SOCK candidate in the committed
-        catalog with no hand-written decoder (D-04's note); this proves the
+        catalog with no hand-written decoder; this proves the
         switch branch actually builds an entity for it.
         """
         sensor_info = _socket_sensor_info()
@@ -782,7 +782,7 @@ class TestRainPointGenericValveConstruction:
 
         assert entity._attr_unique_id == "rainpoint_100_200_1_generic_ctl_ctl_water_p1"
         assert GENERIC_CONTROL_UNIQUE_ID_MARKER in entity._attr_unique_id
-        # The control marker nests the sensor marker (option-a); assert the
+        # The control marker nests the sensor marker; assert the
         # FULL control marker, never a prefix, so a sloppy substring test
         # cannot silently pass on a sensor-namespace unique_id too.
         assert GENERIC_UNIQUE_ID_MARKER in entity._attr_unique_id
@@ -886,6 +886,24 @@ class TestRunStateReading:
 
         original = _IDENTITY_SPECS[RUN_STATE_IDENTITY]
         monkeypatch.setitem(_IDENTITY_SPECS, RUN_STATE_IDENTITY, replace(original, transform=lambda raw: 0.5))
+
+        entity, _, _ = _build_anchor_valve(fields=[_run_state_field(1, 1)])
+
+        assert entity.is_closed is None
+
+    def test_run_state_none_when_transform_yields_a_non_numeric_reading(self, monkeypatch):
+        """A curated row may now yield a string, so a state property must not feed one to isclose.
+
+        Unreachable through the committed table, where the run-state row masks
+        bit zero to 0.0 or 1.0. Asserted so a non-numeric run-state row would
+        report unknown rather than raise inside the property.
+        """
+        from dataclasses import replace
+
+        from custom_components.rainpoint.generic_entities import _IDENTITY_SPECS
+
+        original = _IDENTITY_SPECS[RUN_STATE_IDENTITY]
+        monkeypatch.setitem(_IDENTITY_SPECS, RUN_STATE_IDENTITY, replace(original, transform=lambda raw: "open"))
 
         entity, _, _ = _build_anchor_valve(fields=[_run_state_field(1, 1)])
 
@@ -1701,7 +1719,7 @@ class TestTrustedValveEntitySetsUnchangedByControlOption:
 
 class TestGenericAndHandWrittenUniqueIdNamespacesAreDisjoint:
     def test_generic_and_hand_written_unique_id_sets_never_collide(self):
-        """Structural proof, following the Phase 13 precedent: collect the
+        """Structural proof: collect the
         unique_ids produced across every generic builder for a representative
         eligible variant and across the hand-written builders for a
         representative trusted model, and assert the two sets are disjoint and
