@@ -77,6 +77,14 @@ class GenericSensorSpec:
     returns a string from its transform: there is no range to bound and
     nothing to round, and inventing either would only look like a check that
     was performed.
+
+    ``widths`` is the set of record byte widths the row's cited evidence
+    actually covers, and it is mandatory. The record stream is
+    self-describing, so a truncated or foreign frame can present this
+    identity at a width no decoder has ever read: a three-byte stamp still
+    unpacks to a plausible date, and roughly half of all three-byte words do.
+    Every trusted path enforces a width before reading, so every row here
+    declares one too, and a record of any other width reads as no state.
     """
 
     label: str
@@ -86,6 +94,34 @@ class GenericSensorSpec:
     transform: Callable[[int], float | str | None]
     valid_range: tuple[float, float] | None
     precision: int | None
+    widths: frozenset[int]
+
+
+def record_width_bytes(field: dict) -> int | None:
+    """Return how many bytes the decoded record occupied, or None when unreadable.
+
+    Read from the field's own hex, which is the only place the width survives:
+    the parsed integer cannot distinguish a one-byte 0x01 from a four-byte
+    0x00000001. An absent, non-string, or odd-length hex body returns None,
+    which every caller treats as "refuse the reading" rather than as a width
+    that happens to match.
+    """
+    raw_hex = field.get("raw")
+    if not isinstance(raw_hex, str) or not raw_hex or len(raw_hex) % 2:
+        return None
+    return len(raw_hex) // 2
+
+
+def has_declared_width(spec: GenericSensorSpec, field: dict) -> bool:
+    """True when the record's width is one the row's evidence actually covers.
+
+    The gate that stops a truncated or foreign record from being read as a
+    reading no decoder has ever validated at that width. Shared by the sensor
+    path and by generic control's state readback so the two cannot diverge on
+    which records they are willing to believe.
+    """
+    width = record_width_bytes(field)
+    return width is not None and width in spec.widths
 
 
 def _rssi_dbm(raw: int) -> float | None:
@@ -116,8 +152,10 @@ def _battery_percent(raw: int) -> float | None:
 
     The low byte is exactly what the hand-written extraction reads (the first
     value byte of the record), and every multi-byte value in these framings is
-    little-endian, so masking keeps a one-byte and a two-byte STA_BAT decoding
-    identically the way the signal-strength row does.
+    little-endian, so the mask and that extraction agree byte for byte. The row
+    still declares a single-byte width: the trusted function would read the
+    first byte of a wider record without complaint, but no capture shows one,
+    and accepting a width nothing has demonstrated is what this table avoids.
     """
     percent = _battery_flag_to_percent(raw & 0xFF)
     return None if percent is None else float(percent)
@@ -152,9 +190,12 @@ def _packed_report_wall_clock(raw: int) -> str | None:
     """Unpack a packed report-time stamp to a naive ISO-8601 string.
 
     Delegates to the unpacking proven for this identity specifically, rather
-    than to the event-time one: the two carry the same bit layout, but each
-    row cites the function whose evidence is about its own identity, so a
-    later correction to one cannot silently redefine the other.
+    than to the event-time one. The two are currently identical over the whole
+    32-bit space, so this buys no different result today; what it buys is that
+    each row's citation points at the evidence for its own identity, so
+    correcting one stamp's layout cannot silently redefine the other. If the
+    two are ever consolidated, the citations are what say whether one function
+    is proven for both identities or merely reused across them.
 
     Naive and without a device class for the same reason the event-time row
     is; see that transform.
@@ -188,12 +229,15 @@ def _wkstate_open(raw: int) -> float | None:
 
 # Evidence-backed only: a row exists here only because an existing
 # hand-written decoder proves both its unit and its scaling, on the same wire
-# format the generic decode path reads. Nothing is inferred from the
-# catalog's dpDataType. An identity whose only citable decoder works on a
-# different encoding stays out of the table: see the humidity note in the
-# module docstring above. Exactly one evidence marker per row - the
-# absent-row notes in that docstring are deliberately worded without one, so
-# the marker count and the row count stay equal.
+# format the generic decode path reads. Nothing is inferred from the catalog's
+# dpDataType, and an identity whose only citable decoder works on a different
+# encoding stays out of the table entirely.
+#
+# Every row carries an Evidence note naming the decoder and the capture it
+# rests on, and a Width note for the record widths that evidence covers. Cite
+# what a decoder demonstrably does, never what the catalog declares: the
+# battery and humidity notes in the module docstring above both replaced
+# earlier claims that had gone stale against the decoders they described.
 _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
     "STA_BAT": GenericSensorSpec(
         label="Battery",
@@ -203,6 +247,9 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         transform=_battery_percent,
         valid_range=(0.0, 100.0),
         precision=0,
+        widths=frozenset({1}),
+        # Width: every capture carries this flag as a single byte, and the
+        # trusted extraction reads only the first byte of the record.
         # Evidence: api/validators.py (_extract_battery_flag) locates STA_BAT
         # structurally and reads its first value byte, on the same record walk
         # the generic decode path uses, and api/validators.py
@@ -220,6 +267,10 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         transform=_duration_seconds,
         valid_range=(0.0, 4294967295.0),
         precision=0,
+        widths=frozenset({2, 4}),
+        # Width: the two the captures and the trusted decoders agree on, 2
+        # bytes on the HTV213 family and 4 on the HTV210B, which is the same
+        # pair api/decoders.py enforces before reading seconds.
         # Evidence: the captured HTV245 zone-2-active frame proves the unit
         # internally, with no external reading needed. Its report time unpacks
         # to 17:40:51, its zone-2 event time to 18:29:51, and the difference of
@@ -248,6 +299,9 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         transform=_packed_wall_clock,
         valid_range=None,
         precision=None,
+        widths=frozenset({4}),
+        # Width: exactly 4, the width api/decoders.py requires before it will
+        # unpack an event time, and the only width any capture shows.
         # Evidence: api/decoders.py (_decode_packed_timestamp) unpacks this
         # word, and its docstring records the two independent captures that
         # confirm the bit layout: one frame's trailing stamp decodes to the day
@@ -264,6 +318,9 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         transform=_packed_report_wall_clock,
         valid_range=None,
         precision=None,
+        widths=frozenset({4}),
+        # Width: exactly 4, the width api/utils.py (_extract_report_time)
+        # requires before unpacking, and the only width any capture shows.
         # Evidence: api/utils.py (_decode_packed_report_time) unpacks this
         # identity's word, and its year base is confirmed against captures
         # whose decoded stamp matched the moment they were pulled, where a base
@@ -280,6 +337,8 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         transform=_percent_byte,
         valid_range=(0.0, 100.0),
         precision=0,
+        widths=frozenset({1}),
+        # Width: a single byte, which is what both cited soil decoders read.
         # Evidence: api/decoders.py (decode_moisture_simple, HCS026FRF) reads
         # the byte this identity carries as a moisture percentage with no
         # scaling, against a captured frame whose 0x1A reads as 26%, and
@@ -304,6 +363,9 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         transform=_rssi_dbm,
         valid_range=(-120.0, -1.0),
         precision=0,
+        widths=frozenset({1, 2}),
+        # Width: 1 on most models and 2 on the Bluetooth-capable ones, both
+        # covered by the low-byte mask the transform applies.
         # Evidence: api/validators.py:42-45 (_extract_rssi) reinterprets the
         # raw byte as a signed int8, and api/decoders.py:95 discards
         # non-negative values rather than reporting them.
@@ -316,6 +378,9 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         transform=_temperature_c,
         valid_range=(-40.0, 80.0),
         precision=1,
+        widths=frozenset({2}),
+        # Width: 2 bytes, the width the cited decoders read through _le16
+        # before scaling.
         # Evidence: api/utils.py:93-95 (_f10_to_c) treats the raw value as
         # Fahrenheit times ten, and api/decoders.py:582 and api/decoders.py:734
         # both show that scaling against real captured values.
@@ -328,6 +393,9 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         transform=_wkstate_open,
         valid_range=(0.0, 1.0),
         precision=0,
+        widths=frozenset({1}),
+        # Width: a single state byte, the width both cited decoders check
+        # for before masking bit zero.
         # Evidence: api/decoders.py:264 (decode_htv213frf_valve, the ASCII
         # HTV213FRF/HTV245FRF path) masks bit zero and notes the device
         # reports 0x21 and 0x20 rather than 0x01 and 0x00, and
@@ -797,6 +865,11 @@ class RainPointGenericSensor(RainPointSensorBase):
             return None
         raw = field.get("value")
         if not isinstance(raw, int) or isinstance(raw, bool):
+            return None
+        if not has_declared_width(self._spec, field):
+            # A record at a width this row has no evidence for. Refused before
+            # the transform runs, because several transforms would return a
+            # perfectly plausible reading from a truncated word.
             return None
         value = self._spec.transform(raw)
         if value is None:

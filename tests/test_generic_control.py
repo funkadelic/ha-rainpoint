@@ -46,8 +46,11 @@ ANCHOR_MODEL_CODE = 31
 
 # HWG004WRF/34 is the one real CTL_SOCK candidate in the committed catalog:
 # it declares CTL_SOCK on port 1, STA_WKSTATE on port 1, portNumber 1, and has
-# no hand-written decoder (unlike HCS003FRF, the catalog's other CTL_SOCK
-# model, which is hand-written and therefore structurally excluded).
+# no hand-written decoder. HCS003FRF, the catalog's other CTL_SOCK model, is
+# not excluded at all: it has no hand-written decoder either and its own
+# control gate passes, so it is a second candidate rather than a
+# counterexample. This anchor is the one the switch tests are built around,
+# not the only one that exists.
 SOCKET_MODEL = "HWG004WRF"
 SOCKET_MODEL_CODE = 34
 
@@ -907,6 +910,17 @@ class TestRunStateReading:
 
         entity, _, _ = _build_anchor_valve(fields=[_run_state_field(1, 1)])
 
+        assert entity.is_closed is None
+
+    def test_a_run_state_record_at_an_unproven_width_reads_as_unknown(self):
+        """The readback that confirms a command must not believe an unvalidated record.
+
+        The run-state row declares a single byte, the width both cited decoders
+        check for. A two-byte record is a truncated or foreign frame, and
+        reporting it as confirmed actuation is worse here than on a sensor.
+        """
+        field = dict(_run_state_field(1, 1), raw="0100")
+        entity, _, _ = _build_anchor_valve(fields=[field])
         assert entity.is_closed is None
 
     def test_higher_bits_are_masked_off(self):

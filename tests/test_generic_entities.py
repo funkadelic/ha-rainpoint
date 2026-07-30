@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import collections
 from datetime import datetime
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
 
 from custom_components.rainpoint import generic_entities as generic_entities_module
+from custom_components.rainpoint.api import get_catalog_variant_codes
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
 from custom_components.rainpoint.api.decoders import _decode_packed_timestamp, decode_moisture_simple
 from custom_components.rainpoint.api.generic_decoder import _STATUS_FIELDS, decode_generic
@@ -51,13 +53,27 @@ def _dp(identity: str, dp_port=0, dp_code: int = 10, data_type: str = "U8") -> d
     return {"dpCode": dp_code, "identity": identity, "dpPort": dp_port, "dpDataType": data_type, "dpLen": 1}
 
 
-def _decoded_field(name: str, value, dp_port, width_mismatch: bool = False) -> dict:
-    """Build one decode_generic field entry, catalog-annotated."""
+def _decoded_field(name: str, value, dp_port, width_mismatch: bool = False, width: int | None = None) -> dict:
+    """Build one decode_generic field entry, catalog-annotated.
+
+    The ``raw`` hex is synthesized at the width the curated row declares, so a
+    field built here is a record the production width gate would actually
+    accept. A fixed one-byte ``raw`` would have made every multi-byte row
+    untestable through the entity, and would have hidden the gate entirely.
+    Pass ``width`` explicitly to build a record at a width no row declares.
+    """
+    if width is None:
+        spec = _IDENTITY_SPECS.get(name)
+        width = min(spec.widths) if spec else 1
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 256**width:
+        raw = int(value).to_bytes(width, "little").hex()
+    else:
+        raw = "00" * width
     return {
         "name": name,
         "index": 0,
         "dp_id": 0,
-        "raw": "00",
+        "raw": raw,
         "value": value,
         "catalog": {"dp_port": dp_port, "width_mismatch": width_mismatch},
     }
@@ -898,6 +914,7 @@ class TestRainPointGenericSensorNativeValue:
             transform=lambda raw: None,
             valid_range=(0.0, 100.0),
             precision=0,
+            widths=frozenset({1}),
         )
         monkeypatch.setitem(_IDENTITY_SPECS, "STA_FAKE", fake_spec)
         dp_entry = _dp("STA_FAKE", dp_port=0, dp_code=99)
@@ -920,12 +937,132 @@ class TestRainPointGenericSensorNativeValue:
             transform=lambda raw: 5.0,
             valid_range=None,
             precision=None,
+            widths=frozenset({1}),
         )
         monkeypatch.setitem(_IDENTITY_SPECS, "STA_FAKE", fake_spec)
         dp_entry = _dp("STA_FAKE", dp_port=0, dp_code=99)
         fields = [_decoded_field("STA_FAKE", 5, 0)]
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
         assert sensor.native_value is None
+
+
+class TestRecordWidthGate:
+    """No row may read a record at a width its cited evidence never validated.
+
+    The record stream is self-describing, so a truncated or foreign frame can
+    present a curated identity at an unfamiliar width. Every trusted decoder
+    checks a width before reading; these tests hold the curated rows to the
+    same rule, at the entity level where a published state is what matters.
+    """
+
+    TRUNCATED_STAMP_PAYLOAD = "10#B68FA74A"
+
+    def test_a_three_byte_stamp_publishes_no_state(self):
+        """The payload that exposed this: a 3-byte record unpacks to a plausible date.
+
+        decode_generic labels the trailing 3 bytes STA_EVTIME, and the packed
+        unpacking turns them into 2020-01-05T10:30:15, which is a valid date and
+        therefore indistinguishable downstream from a real reading. The trusted
+        paths require exactly 4 bytes before unpacking a stamp, so this must
+        read as no state rather than as a date nobody reported.
+        """
+        decoded = decode_generic(self.TRUNCATED_STAMP_PAYLOAD)
+        field = next(f for f in decoded["fields"] if f["name"] == "STA_EVTIME")
+        assert len(field["raw"]) // 2 == 3
+        assert _IDENTITY_SPECS["STA_EVTIME"].transform(field["value"]) == "2020-01-05T10:30:15"
+
+        dp_entry = _dp("STA_EVTIME", dp_port=0, dp_code=21, data_type="T4")
+        sensor = _make_generic_sensor(
+            dp_entry,
+            port_number=1,
+            data=_unknown_data([dict(field, catalog={"dp_port": 0, "width_mismatch": False})]),
+        )
+        assert sensor.native_value is None
+
+    @pytest.mark.parametrize("identity", sorted(_IDENTITY_SPECS))
+    def test_every_row_declares_at_least_one_width(self, identity):
+        spec = _IDENTITY_SPECS[identity]
+        assert spec.widths, f"{identity} declares no record width"
+        assert all(isinstance(w, int) and w > 0 for w in spec.widths)
+
+    @pytest.mark.parametrize("identity", sorted(_IDENTITY_SPECS))
+    def test_every_row_refuses_a_width_it_does_not_declare(self, identity):
+        """Each row is checked at a real undeclared width, so no row is merely skipped."""
+        spec = _IDENTITY_SPECS[identity]
+        undeclared = next(w for w in range(1, 9) if w not in spec.widths)
+        dp_entry = _dp(identity, dp_port=0, dp_code=1)
+        fields = [_decoded_field(identity, 1, 0, width=undeclared)]
+        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
+        assert sensor.native_value is None, f"{identity} published a state at {undeclared} bytes"
+
+    def test_a_missing_or_malformed_raw_hex_is_refused(self):
+        """Width is only knowable from the hex, so an unreadable hex fails closed."""
+        dp_entry = _dp("STA_RH", dp_port=0, dp_code=10)
+        for bad in ({}, {"raw": None}, {"raw": ""}, {"raw": "abc"}, {"raw": 26}):
+            field = {"name": "STA_RH", "index": 0, "dp_id": 0, "value": 26, "catalog": {"dp_port": 0}, **bad}
+            sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data([field]))
+            assert sensor.native_value is None, f"published a state for raw={bad!r}"
+
+
+class TestEveryCuratedRowThroughTheEntity:
+    """One entity-level reading per curated row, so no row is proven only in isolation.
+
+    A transform asserted directly proves arithmetic; it does not prove the row
+    is wired up, that its width is accepted, or that the range and rounding let
+    the value through. These cases run the whole native_value path.
+    """
+
+    CASES: ClassVar[list[tuple]] = [
+        ("STA_BAT", 11, 1, 100),
+        ("STA_DURATION", 19, 2940, 2940),
+        ("STA_EVTIME", 21, 436003136, "2026-07-30T14:05:00"),
+        ("STA_REPTIME", 54, 432609843, "2026-07-04T17:40:51"),
+        ("STA_RH", 10, 26, 26),
+        ("STA_RSSI", 32, 0x01B4, -76),
+        ("STA_TEM", 9, 683, 20.2),
+        ("STA_WKSTATE", 30, 0x21, 1),
+    ]
+
+    def test_every_curated_row_is_covered_by_a_case(self):
+        assert {identity for identity, _code, _raw, _expected in self.CASES} == set(_IDENTITY_SPECS)
+
+    @pytest.mark.parametrize(("identity", "dp_code", "raw", "expected"), CASES)
+    def test_the_row_publishes_its_reading(self, identity, dp_code, raw, expected):
+        dp_entry = _dp(identity, dp_port=0, dp_code=dp_code)
+        fields = [_decoded_field(identity, raw, 0)]
+        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
+        assert sensor.native_value == expected
+
+
+class TestCatalogEligibilityIsPinned:
+    """The set of variants the committed catalog admits, which is the whole visible effect.
+
+    Held as an exact set rather than a count: a curated row that accidentally
+    widened or narrowed eligibility is otherwise invisible until someone runs a
+    sweep by hand.
+    """
+
+    EXPECTED: ClassVar[dict[tuple[str, str], tuple[str, ...]]] = {
+        ("HCS003FRF", "35"): ("STA_EVTIME", "STA_RSSI", "STA_WKSTATE"),
+        ("HCS024FRF", "295"): ("STA_BAT", "STA_RH", "STA_RSSI"),
+        ("HWG004WRF", "34"): ("STA_EVTIME", "STA_RSSI", "STA_WKSTATE"),
+    }
+
+    def _sweep(self):
+        found = {}
+        for model in product_catalog_module._CATALOG:
+            for code in get_catalog_variant_codes(model) or [None]:
+                result = evaluate_generic_gate(model, code)
+                if result.passed:
+                    found[(model, str(code))] = tuple(sorted(dp.get("identity") for dp in result.datapoints))
+        return found
+
+    def test_exactly_these_variants_are_eligible(self):
+        assert self._sweep() == self.EXPECTED
+
+    def test_no_eligible_variant_has_a_hand_written_decoder(self):
+        """Trust boundary, asserted against the real catalog rather than a fixture."""
+        assert not [model for model, _code in self._sweep() if is_hand_written_model(model)]
 
 
 class TestCuratedTableIsReachable:
@@ -942,6 +1079,14 @@ class TestCuratedTableIsReachable:
     STA_RSRP is the live example. The catalog declares it on 23 variant rows
     and neither decoder mentions it at all, so it must never be curated
     without teaching the decode path to emit it first.
+
+    What this cannot catch: unreachability caused by framing rather than by
+    naming. decode_generic cannot parse the comma-and-semicolon ASCII payloads
+    some firmwares emit, returning an error and no fields at all, so on such a
+    device every curated row reports nothing while still looking wired up.
+    A name present in the map says the identity is nameable, not that the
+    device's framing can be read. Only a capture from an ASCII-firmware device
+    settles that.
     """
 
     def test_every_curated_identity_can_be_produced_by_the_decoder(self):
@@ -959,17 +1104,34 @@ class TestDurationRow:
     SPEC = _IDENTITY_SPECS["STA_DURATION"]
 
     def test_the_captured_frame_proves_the_unit_without_an_external_reading(self):
-        """event time minus report time equals the raw duration, so the word is seconds."""
-        decoded = decode_generic(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)
-        by_name = collections.defaultdict(list)
-        for field in decoded["fields"]:
-            by_name[field["name"]].append(field["value"])
+        """event time minus report time equals the raw duration, so the word is seconds.
 
-        report = datetime.fromisoformat(_decode_packed_timestamp(by_name["STA_REPTIME"][0]))
-        # The active zone is the one carrying a non-zero stamp and duration.
-        event = datetime.fromisoformat(_decode_packed_timestamp(max(by_name["STA_EVTIME"])))
-        duration = max(by_name["STA_DURATION"])
+        The event time and the duration are paired by their own dp_id rather
+        than by taking the largest of each: two independent maxima could agree
+        by luck across zones, which would let the proof pass while the frame
+        did not actually support it. The record ordering the decoder emits is
+        what pairs zone N's state, duration and event time.
+        """
+        fields = decode_generic(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)["fields"]
+        by_name = collections.defaultdict(dict)
+        for field in fields:
+            by_name[field["name"]][field["dp_id"]] = field["value"]
 
+        # STA_REPTIME is frame-level, and carries its own unpacking.
+        report_raw = next(iter(by_name["STA_REPTIME"].values()))
+        report = datetime.fromisoformat(_decode_packed_report_time(report_raw))
+
+        # Zone records are emitted in ascending dp_id per datapoint kind, so
+        # the Nth duration belongs with the Nth event time.
+        durations = [v for _dp_id, v in sorted(by_name["STA_DURATION"].items())]
+        events = [v for _dp_id, v in sorted(by_name["STA_EVTIME"].items())]
+        assert len(durations) == len(events) == 2
+
+        running = [(d, e) for d, e in zip(durations, events, strict=True) if d and e]
+        assert len(running) == 1, "exactly one zone is mid-run in this capture"
+        duration, event_raw = running[0]
+
+        event = datetime.fromisoformat(_decode_packed_timestamp(event_raw))
         assert (event - report).total_seconds() == duration
         assert self.SPEC.transform(duration) == 2940.0
         assert self.SPEC.unit == "s"
@@ -979,12 +1141,25 @@ class TestDurationRow:
         assert self.SPEC.transform(0x0B7C) == 2940.0
         assert self.SPEC.transform(0x00010000) == 65536.0
 
-    def test_a_four_byte_reading_is_not_rejected_by_the_range(self):
-        """The range is the widest record width, so a long but real run is not dropped."""
+    def test_the_range_cannot_reject_anything_the_width_gate_admits(self):
+        """States plainly that the width gate, not the range, is this row's validation.
+
+        The range spans the widest declared width, so no admitted record can
+        fall outside it. That is deliberate: an unsigned duration has no
+        ceiling the payload contradicts, so a tighter bound would drop a long
+        but real run. The row is guarded by which record widths it accepts.
+        """
         low, high = self.SPEC.valid_range
-        assert low == 0.0
-        assert high == float(0xFFFFFFFF)
-        assert self.SPEC.transform(0xFFFFFFFF) <= high
+        assert (low, high) == (0.0, float(0xFFFFFFFF))
+        widest = max(self.SPEC.widths)
+        assert self.SPEC.transform(256**widest - 1) <= high
+
+    def test_a_record_at_an_unproven_width_is_refused(self):
+        """3 bytes is a width no decoder validates, so it must not become seconds."""
+        dp_entry = _dp("STA_DURATION", dp_port=0, dp_code=19, data_type="U32")
+        fields = [_decoded_field("STA_DURATION", 2940, 0, width=3)]
+        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
+        assert sensor.native_value is None
 
 
 class TestReportTimeRow:

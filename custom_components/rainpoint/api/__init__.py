@@ -60,9 +60,8 @@ __all__ = [
     "RainPointApiError",
     "RainPointClient",
     "RainPointThrottledError",
-    # Utils
+    # Utils and decoder helpers
     "_base_decoder_dict",
-    # Validators
     "_battery_flag_to_percent",
     "_decode_packed_report_time",
     "_decode_packed_timestamp",

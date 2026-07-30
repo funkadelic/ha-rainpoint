@@ -50,6 +50,7 @@ from .generic_entities import (
     _matching_field,
     _unresolved_variant_reason,
     _usable_port,
+    has_declared_width,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -517,7 +518,14 @@ class RainPointGenericControlBase(CoordinatorEntity):
         raw = field.get("value")
         if not isinstance(raw, int) or isinstance(raw, bool):
             return None
-        value = _IDENTITY_SPECS[RUN_STATE_IDENTITY].transform(raw)
+        spec = _IDENTITY_SPECS[RUN_STATE_IDENTITY]
+        if not has_declared_width(spec, field):
+            # Same refusal the sensor path applies, and it matters more here:
+            # this reading is what confirms a command actuated hardware, so a
+            # record at an unvalidated width must read as unknown rather than
+            # as a confirmation.
+            return None
+        value = spec.transform(raw)
         if not isinstance(value, (int, float)):
             # Unreachable while the run-state row masks bit zero to 0.0 or 1.0.
             # Guarded because a curated row may now yield a non-numeric reading,
