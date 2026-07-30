@@ -13,7 +13,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfVolume
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import _USAGE_GALLONS_PER_COUNT
@@ -349,6 +349,58 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
     return entities
 
 
+class _LateSensorEntityAdder:
+    """Add a sub-device's entities the first time its key is worth entities.
+
+    Entity construction used to happen exactly once, from the single snapshot
+    taken right after the first refresh. A device the hub lists but the cloud
+    never reports on only turns into a "silent" entry after three consecutive
+    polls, so its diagnostic entity could never be built inside a running
+    session. Registering this as a coordinator listener closes that gap.
+
+    Two add-once sets rather than one, and that split is load bearing. A device
+    that was reporting when the platform was set up and later goes quiet must
+    still gain its Not Reporting entity, and a device that was silent and later
+    starts reporting must still gain its real model entities. Neither may be
+    handed what it already has, because a repeated unique_id is an error in
+    Home Assistant.
+    """
+
+    def __init__(self, coordinator, async_add_entities, generic_enabled: bool):
+        """Init helper."""
+        self._coordinator = coordinator
+        self._async_add_entities = async_add_entities
+        self._generic_enabled = generic_enabled
+        self._keys_with_model_entities: set[str] = set()
+        self._keys_with_silent_entity: set[str] = set()
+
+    def collect(self, key: str, info: dict) -> list:
+        """Return the entities to add for one sensor key, recording that they were added.
+
+        The single place the add-once bookkeeping is written, so the setup path
+        and the listener path cannot disagree about what already exists.
+        """
+        if (info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
+            if key in self._keys_with_silent_entity:
+                return []
+            self._keys_with_silent_entity.add(key)
+        else:
+            if key in self._keys_with_model_entities:
+                return []
+            self._keys_with_model_entities.add(key)
+        return list(_create_sensor_entities(self._coordinator, key, info, self._generic_enabled))
+
+    @callback
+    def async_on_coordinator_update(self) -> None:
+        """Add entities for any sensor key that has become eligible since the last update."""
+        sensors_cfg = (self._coordinator.data or {}).get("sensors", {})
+        new: list = []
+        for key, info in sensors_cfg.items():
+            new.extend(self.collect(key, info))
+        if new:
+            self._async_add_entities(new)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -361,10 +413,15 @@ async def async_setup_entry(
     hubs_cfg = coordinator.data.get("hubs", [])
     generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
 
+    adder = _LateSensorEntityAdder(coordinator, async_add_entities, generic_enabled)
+
     entities: list[RainPointSensorBase] = []
     entities.extend(_create_hub_entities(coordinator, hubs_cfg))
     for key, info in sensors_cfg.items():
-        entities.extend(_create_sensor_entities(coordinator, key, info, generic_enabled))
+        # Routed through the adder so the setup snapshot seeds the same
+        # bookkeeping the listener reads, which is what keeps the two paths
+        # from ever offering the same unique_id twice.
+        entities.extend(adder.collect(key, info))
 
     # The push last-message age entity only exists when push is enabled (it reads
     # the MQTT client's liveness clock, not coordinator.data).
@@ -375,6 +432,11 @@ async def async_setup_entry(
 
     if entities:
         async_add_entities(entities)
+
+    # Registered unconditionally: a hub whose every child is silent from the
+    # first poll produces zero entities here, and that is precisely the install
+    # the late-add path exists for.
+    entry.async_on_unload(coordinator.async_add_listener(adder.async_on_coordinator_update))
 
 
 class RainPointSensorBase(RainPointSubDeviceEntity, SensorEntity):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.components.sensor import SensorDeviceClass
@@ -11,6 +11,8 @@ from custom_components.rainpoint import generic_control as generic_control_modul
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import decode_htv213frf_valve
 from custom_components.rainpoint.const import (
+    CONF_GENERIC_ENTITIES_ENABLED,
+    CONF_HIDS,
     DOMAIN,
     MODEL_DISPLAY_HUB,
     MODEL_HCS005FRF,
@@ -26,7 +28,7 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_345,
     MODEL_VALVE_405,
 )
-from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from custom_components.rainpoint.sensor import (
     DisplayHubReadingSensor,
     RainPointBatterySensor,
@@ -1924,3 +1926,245 @@ class TestZoneStateSensor:
         state = await self._first_state(zones)
         state.coordinator.data["sensors"]["100_200_3"]["data"]["zones"] = ["not", "a", "dict"]
         assert state.native_value is None
+
+
+# ---------------------------------------------------------------------------
+# Late entity creation: the coordinator listener
+# ---------------------------------------------------------------------------
+
+
+def _silent_wrapper_hub_record():
+    """The cloud's Bluetooth wrapper record: one child, every identity field empty.
+
+    Empty identity fields make is_hub_record return False, so no hub entities
+    are created and the captured entity list holds sub-device entities only.
+    """
+    return {
+        "mid": 200,
+        "homeName": "Home",
+        "name": "",
+        "deviceName": "",
+        "productKey": "",
+        "model": "",
+        "subDevices": [{"addr": 1, "model": MODEL_HTV210B, "name": "BT Valve", "softVer": "1.0"}],
+    }
+
+
+class TestSilentEntityAppearsWithinTheSession:
+    """A device silent since before the session started still gets its entity.
+
+    Every earlier test for this path injected a coordinator.data snapshot that
+    was already past the silent debounce threshold, which is how a suite at
+    full branch coverage still shipped an entity that could never be created:
+    entities are built once, from the snapshot taken right after the first
+    refresh, and the debounce needs three refreshes to be satisfied. So this
+    drives the real order instead: construct the coordinator, first refresh,
+    platform setup, then further refreshes, asserting between the steps.
+    """
+
+    @staticmethod
+    def _build():
+        """Return (coordinator, hass, entry, captured, async_add_entities)."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [_silent_wrapper_hub_record()]
+        # Arrived but named nobody: the debounce increments rather than the
+        # outage path firing.
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+        # Real dicts, not MagicMock attributes: a bare MagicMock options would
+        # silently enable the generic sensor path.
+        entry.options = {}
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"test_entry": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["test_entry"]["coordinator"] = coordinator
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        return coordinator, hass, entry, captured, async_add_entities
+
+    @staticmethod
+    def _not_reporting(captured):
+        """Return every RainPointNotReportingSensor offered so far."""
+        return [e for e in captured if isinstance(e, RainPointNotReportingSensor)]
+
+    @pytest.mark.asyncio
+    async def test_entity_absent_at_setup_and_present_after_the_debounce(self):
+        """The whole timeline in one body: absent at poll 1, present at poll 3, once only."""
+        coordinator, hass, entry, captured, async_add_entities = self._build()
+
+        await coordinator.async_config_entry_first_refresh()
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert self._not_reporting(captured) == []
+
+        await coordinator.async_refresh()
+        await coordinator.async_refresh()
+
+        assert len(self._not_reporting(captured)) == 1
+        assert self._not_reporting(captured)[0]._attr_unique_id == "rainpoint_100_200_1_not_reporting"
+
+        await coordinator.async_refresh()
+        await coordinator.async_refresh()
+
+        assert len(self._not_reporting(captured)) == 1
+
+    @pytest.mark.asyncio
+    async def test_listener_is_registered_even_with_no_entities_at_setup(self):
+        """Zero entities at setup is exactly the install the late-add path exists for."""
+        coordinator, hass, entry, captured, async_add_entities = self._build()
+
+        await coordinator.async_config_entry_first_refresh()
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert captured == []
+        assert coordinator._listeners
+        entry.async_on_unload.assert_called_once()
+
+
+class TestLateSensorEntityAdder:
+    """The add-once bookkeeping behind the coordinator listener."""
+
+    @staticmethod
+    def _reporting_entry():
+        """A normally decoded moisture entry."""
+        return make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=MODEL_MOISTURE_SIMPLE,
+            sub_name="Soil",
+            data={"type": "moisture", "moisture_percent": 42},
+        )
+
+    @staticmethod
+    def _silent_entry(model=MODEL_HTV210B):
+        """A silent entry for the same key."""
+        return make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=model,
+            sub_name="BT Valve",
+            data={
+                "type": SILENT_DATA_TYPE,
+                "model": model,
+                "silent_state": "never_reported",
+                "last_seen": None,
+                "missed_polls": 3,
+            },
+        )
+
+    async def _setup(self, sensors, options=None):
+        """Run platform setup and return (coordinator, captured, async_add_entities, listener)."""
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors=sensors))
+        hass, entry = _make_hass(coordinator)
+        if options is not None:
+            entry.options = options
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        listener = coordinator.async_add_listener.call_args[0][0]
+        return coordinator, captured, async_add_entities, listener
+
+    @pytest.mark.asyncio
+    async def test_device_that_goes_quiet_after_setup_gains_its_entity(self):
+        """The reporting-then-silent half of the lifecycle."""
+        key = "100_200_1"
+        coordinator, captured, _add, listener = await self._setup({key: self._reporting_entry()})
+        before = len(captured)
+
+        coordinator.data["sensors"][key] = self._silent_entry()
+        listener()
+
+        added = captured[before:]
+        assert len(added) == 1
+        assert isinstance(added[0], RainPointNotReportingSensor)
+        assert added[0]._attr_unique_id == "rainpoint_100_200_1_not_reporting"
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_went_quiet_is_never_given_a_second_entity(self):
+        """Further updates with the same silent entry add nothing."""
+        key = "100_200_1"
+        coordinator, captured, _add, listener = await self._setup({key: self._reporting_entry()})
+
+        coordinator.data["sensors"][key] = self._silent_entry()
+        listener()
+        after_first = len(captured)
+        listener()
+        listener()
+
+        assert len(captured) == after_first
+
+    @pytest.mark.asyncio
+    async def test_silent_device_that_recovers_gains_its_model_entities(self):
+        """The silent-then-reporting half: the real entity set arrives, the diagnostic is not repeated."""
+        key = "100_200_1"
+        coordinator, captured, _add, listener = await self._setup({key: self._silent_entry()})
+        assert len(captured) == 1
+
+        coordinator.data["sensors"][key] = self._reporting_entry()
+        listener()
+
+        added = captured[1:]
+        assert any(isinstance(e, RainPointRawPayloadSensor) for e in added)
+        assert len([e for e in captured if isinstance(e, RainPointNotReportingSensor)]) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_update_that_changes_nothing_adds_nothing(self):
+        """Steady-state polling must not call async_add_entities again."""
+        key = "100_200_1"
+        _coordinator, _captured, async_add_entities, listener = await self._setup({key: self._reporting_entry()})
+        before = async_add_entities.call_count
+
+        listener()
+
+        assert async_add_entities.call_count == before
+
+    @pytest.mark.asyncio
+    async def test_a_key_first_seen_after_setup_is_added(self):
+        """A sensors dict that was empty at setup still gains entities later."""
+        key = "100_200_1"
+        coordinator, captured, _add, listener = await self._setup({})
+        assert captured == []
+        coordinator.async_add_listener.assert_called_once()
+
+        coordinator.data["sensors"][key] = self._silent_entry()
+        listener()
+
+        assert len(captured) == 1
+        assert isinstance(captured[0], RainPointNotReportingSensor)
+
+    @pytest.mark.asyncio
+    async def test_late_added_silent_key_yields_one_entity_with_generics_enabled(self):
+        """The late path must not widen the admission the silent type string blocks."""
+        key = "100_200_1"
+        coordinator, captured, _add, listener = await self._setup({}, options={CONF_GENERIC_ENTITIES_ENABLED: True})
+
+        coordinator.data["sensors"][key] = self._silent_entry()
+        listener()
+
+        assert len(captured) == 1
+        assert isinstance(captured[0], RainPointNotReportingSensor)
+        assert not any(isinstance(e, RainPointBatterySensor) for e in captured)
+        assert not any(isinstance(e, RainPointRSSISensor) for e in captured)
+        assert not any(isinstance(e, RainPointRawPayloadSensor) for e in captured)
+        assert not any(isinstance(e, generic_entities_module.RainPointGenericSensor) for e in captured)
+
+    @pytest.mark.asyncio
+    async def test_late_path_feeds_the_generic_gate_the_same_value_setup_does(self):
+        """Pins the trust boundary across the new path rather than re-proving the gate."""
+        key = "100_200_1"
+        info = self._silent_entry()
+        coordinator, _captured, _add, listener = await self._setup({})
+        coordinator.data["sensors"][key] = info
+        listener()
+
+        assert (info["data"] or {}).get("type") == SILENT_DATA_TYPE
+        assert (info["data"] or {}).get("type") != "unknown"
+        assert generic_entities_module.build_generic_entities(coordinator, key, info, "100_200_1") == []
