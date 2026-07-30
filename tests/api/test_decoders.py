@@ -1519,6 +1519,35 @@ class TestDecodeHtv210b:
         assert result["battery_flag"] is None
         assert "battery_percent" not in result
 
+    def test_rssi_read_is_structural_not_a_byte_scan(self):
+        """A 17E1B401 sequence inside another record's value bytes is not an RSSI.
+
+        The byte pattern of a genuine RSSI record sits entirely within a 4-byte
+        usage value here; a linear scan would read it as -76. The structural
+        walk sees one usage record and no RSSI record at all.
+        """
+        result = decode_htv210b("11#299F17E1B40119D800")
+        assert result["rssi_dbm"] is None
+        assert result["zones"][1]["open"] is False
+
+    def test_rssi_rejects_a_positive_dbm_reading(self):
+        """A non-negative dBm value is no reading; no radio reports +5 dBm."""
+        assert decode_htv210b("11#17E10500")["rssi_dbm"] is None
+
+    def test_rssi_record_truncated_to_no_value_bytes_reads_none(self):
+        """A frame ending mid-record leaves the RSSI empty rather than misread."""
+        assert decode_htv210b("11#17E1")["rssi_dbm"] is None
+
+    def test_duration_record_of_unobserved_width_is_rejected(self):
+        """A 3-byte duration is a truncated record, not a third firmware width.
+
+        The record walk silently shortens a record whose declared width runs
+        past the buffer end; only the two widths captures have shown decode as
+        seconds, so the cut-short value stays out of duration_seconds.
+        """
+        zones = decode_htv210b("11#19D82125AF780000")["zones"]
+        assert zones[1]["duration_seconds"] == 0
+
     def test_non_hex_frame_returns_error_dict(self):
         """A payload this decoder cannot read degrades to the family's error shape."""
         result = decode_htv210b("10#208500968832DC64E0C5")

@@ -506,6 +506,30 @@ def _decode_htv213frf_hex(raw: str) -> dict:
 _HTV210B_FIELD_WKSTATE = 30
 _HTV210B_FIELD_DURATION = 19
 _HTV210B_FIELD_EVTIME = 21
+_HTV210B_FIELD_RSSI = 32
+_HTV210B_DP_RSSI = 0x17
+
+# The two duration record widths any capture has shown: 4 bytes on the HTV210B
+# frames, 2 on the HTV213 family sharing the field. Any other width is a
+# truncated or foreign record, not a third firmware choice.
+_HTV210B_DURATION_WIDTHS = (2, 4)
+
+
+def _extract_htv210b_rssi(records: dict[tuple[int, int], bytes]) -> int | None:
+    """Return the signed dBm from the frame's RSSI record, or None.
+
+    Read structurally from the record map rather than through
+    _extract_htv213_rssi's byte-pattern scan: that scan documents its own
+    false-positive surface and PHY-byte bound, both needed only because the
+    scan has no record boundaries to trust. The walk has already isolated the
+    record here (value bytes [signed dBm][PHY]), so the only check left is
+    the sign - a non-negative dBm is no reading - and the PHY byte needs no
+    bound at all.
+    """
+    value = records.get((_HTV210B_DP_RSSI, _HTV210B_FIELD_RSSI))
+    if value is None or len(value) < 1 or value[0] < 0x80:
+        return None
+    return value[0] - 256
 
 
 def _map_htv210b_records(b: bytes) -> dict[tuple[int, int], bytes]:
@@ -530,9 +554,10 @@ def _extract_htv210b_zones(records: dict[tuple[int, int], bytes]) -> dict[int, d
     event time is the packed wall-clock moment the current run ends, written
     at start - the same meaning the HTV213 family documents.
 
-    Durations arrive in whichever width the firmware chose (captures show 4
-    bytes where the HTV213 family writes 2); the little-endian read is
-    width-agnostic. There are no usage fields: this valve has no flow meter,
+    Durations arrive in either of the two observed widths (4 bytes here, 2 on
+    the HTV213 family sharing the field); the little-endian read handles both,
+    and any other width is treated as a truncated or foreign record rather
+    than seconds. There are no usage fields: this valve has no flow meter,
     and its usage records read zero on every capture, so reporting them would
     manufacture a meter for water it cannot measure.
     """
@@ -545,7 +570,7 @@ def _extract_htv210b_zones(records: dict[tuple[int, int], bytes]) -> dict[int, d
 
         duration_seconds = 0
         dur_bytes = records.get((_HTV213_DP_BASE_DURATION + zone_num, _HTV210B_FIELD_DURATION))
-        if dur_bytes:
+        if dur_bytes is not None and len(dur_bytes) in _HTV210B_DURATION_WIDTHS:
             duration_seconds = int.from_bytes(dur_bytes, "little")
 
         event_time = None
@@ -593,10 +618,12 @@ def decode_htv210b(raw: str) -> dict:
         b = _parse_rainpoint_payload(raw)
         records = _map_htv210b_records(b)
         zones = _extract_htv210b_zones(records)
+        # Shared with the HTV213 family on purpose despite the name: the
+        # battery extraction is structural and model-agnostic underneath.
         battery_flag, battery_percent = _extract_htv213_battery(b)
         result = {
             "type": "valve_hub",
-            "rssi_dbm": _extract_htv213_rssi(b),
+            "rssi_dbm": _extract_htv210b_rssi(records),
             "raw_bytes": b,
             "zones": zones,
             "tlv_raw": {},
