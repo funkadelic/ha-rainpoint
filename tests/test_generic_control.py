@@ -1603,6 +1603,38 @@ class TestGenericControlCommandFailedRepairIssue:
         assert kwargs["translation_placeholders"]["model"] == sensor_info["model"]
         assert "code 5" in kwargs["translation_placeholders"]["error"]
 
+    def test_neither_placeholder_can_plant_a_link_in_the_card(self):
+        """Both values are unvalidated and both land in Markdown-rendered copy.
+
+        model comes from the cloud catalog and the error text can quote a
+        cloud response body, so both get the same treatment the not-reporting
+        card's placeholders get (T-15-05).
+        """
+        with patch.object(generic_control_module.ir, "async_create_issue") as create:
+            generic_control_module._create_command_failed_issue(
+                MagicMock(),
+                "[Click here](http://evil.example/x)",
+                RainPointApiError("failed: code 5, see https://evil.example/phish"),
+            )
+
+        placeholders = create.call_args.kwargs["translation_placeholders"]
+        assert set(placeholders) == {"model", "error"}
+        for value in placeholders.values():
+            assert not any(ch in value for ch in "[]()<>`|*_#")
+            assert "://" not in value
+
+    def test_a_long_error_is_capped_without_losing_its_opening(self):
+        """Uncapped, a cloud response body would swamp the card; capped at the
+        placeholder default, a real message loses its useful half."""
+        with patch.object(generic_control_module.ir, "async_create_issue") as create:
+            generic_control_module._create_command_failed_issue(
+                MagicMock(), "HWG004WRF", RainPointApiError("code 5 " + "x" * 500)
+            )
+
+        error = create.call_args.kwargs["translation_placeholders"]["error"]
+        assert len(error) == generic_control_module._ERROR_PLACEHOLDER_LIMIT
+        assert error.startswith("code 5")
+
     @pytest.mark.asyncio
     async def test_two_failures_same_model_and_code_produce_the_same_issue_id(self):
         entity, coordinator, _ = _build_anchor_valve()
