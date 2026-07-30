@@ -8,6 +8,7 @@ import pytest
 
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
+from custom_components.rainpoint.api.decoders import _decode_packed_timestamp
 from custom_components.rainpoint.api.trust import is_hand_written_model
 from custom_components.rainpoint.api.validators import _battery_flag_to_percent
 from custom_components.rainpoint.const import (
@@ -745,7 +746,6 @@ class TestRealCatalogMultiReasonRegression:
         assert result.unmapped_identities == (
             "STA_ALARM",
             "STA_DURATION",
-            "STA_EVTIME",
             "STA_EVTIME2",
             "STA_LASTUSAGE",
             "STA_RSRP",
@@ -898,6 +898,71 @@ class TestRainPointGenericSensorNativeValue:
         monkeypatch.setitem(_IDENTITY_SPECS, "STA_FAKE", fake_spec)
         dp_entry = _dp("STA_FAKE", dp_port=0, dp_code=99)
         fields = [_decoded_field("STA_FAKE", 5, 0)]
+        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
+        assert sensor.native_value is None
+
+    def test_a_numeric_row_missing_its_guards_fails_closed(self, monkeypatch):
+        """A magnitude with no declared range or precision is refused, not published raw.
+
+        Unreachable through the committed table, where every numeric row
+        declares both. Asserted so a later row added without them drops the
+        reading instead of publishing an unbounded, unrounded number.
+        """
+        fake_spec = GenericSensorSpec(
+            label="Fake",
+            device_class=None,
+            unit="unit",
+            state_class=None,
+            transform=lambda raw: 5.0,
+            valid_range=None,
+            precision=None,
+        )
+        monkeypatch.setitem(_IDENTITY_SPECS, "STA_FAKE", fake_spec)
+        dp_entry = _dp("STA_FAKE", dp_port=0, dp_code=99)
+        fields = [_decoded_field("STA_FAKE", 5, 0)]
+        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
+        assert sensor.native_value is None
+
+
+class TestEventTimeRow:
+    """The STA_EVTIME row, the one curated reading that is not a magnitude."""
+
+    # 2026-07-30T14:05:00 packed as the hand-written unpacking reads it: year
+    # offset from 2020 in the top 6 bits, then month, day, hour, minute, second.
+    PACKED_STAMP = (6 << 26) | (7 << 22) | (30 << 17) | (14 << 12) | (5 << 6)
+
+    def test_the_row_agrees_with_the_hand_written_unpacking(self):
+        """The row must not restate the bit layout, only delegate to it."""
+        spec = _IDENTITY_SPECS["STA_EVTIME"]
+        assert spec.transform(self.PACKED_STAMP) == _decode_packed_timestamp(self.PACKED_STAMP)
+        assert spec.transform(self.PACKED_STAMP) == "2026-07-30T14:05:00"
+
+    def test_the_state_is_the_wall_clock_string(self):
+        dp_entry = _dp("STA_EVTIME", dp_port=0, dp_code=21, data_type="T4")
+        fields = [_decoded_field("STA_EVTIME", self.PACKED_STAMP, 0)]
+        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
+        assert sensor.native_value == "2026-07-30T14:05:00"
+
+    def test_no_timestamp_device_class_and_no_numeric_display_hints(self):
+        """A naive stamp must not claim SensorDeviceClass.TIMESTAMP, which requires an offset."""
+        dp_entry = _dp("STA_EVTIME", dp_port=0, dp_code=21, data_type="T4")
+        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data([]))
+        assert sensor._attr_device_class is None
+        assert sensor._attr_native_unit_of_measurement is None
+        assert sensor._attr_state_class is None
+        assert sensor._attr_suggested_display_precision is None
+        assert sensor._attr_name == "Garden Sensor Event Time (unverified)"
+
+    def test_a_zero_word_means_no_event_and_reads_as_no_state(self):
+        dp_entry = _dp("STA_EVTIME", dp_port=0, dp_code=21, data_type="T4")
+        fields = [_decoded_field("STA_EVTIME", 0, 0)]
+        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
+        assert sensor.native_value is None
+
+    def test_a_word_that_is_not_a_real_date_reads_as_no_state(self):
+        """Month zero cannot be a date, so a misaligned frame yields nothing rather than a guess."""
+        dp_entry = _dp("STA_EVTIME", dp_port=0, dp_code=21, data_type="T4")
+        fields = [_decoded_field("STA_EVTIME", 6 << 26, 0)]
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
         assert sensor.native_value is None
 

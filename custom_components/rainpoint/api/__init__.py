@@ -7,6 +7,7 @@ This module provides a clean, organized interface to the RainPoint API functiona
 from .client import RainPointApiError, RainPointClient, RainPointThrottledError
 from .decoders import (
     _USAGE_GALLONS_PER_COUNT,
+    _decode_packed_timestamp,
     decode_co2,
     decode_display,
     decode_flow_meter,
@@ -62,6 +63,7 @@ __all__ = [
     "_base_decoder_dict",
     # Validators
     "_battery_flag_to_percent",
+    "_decode_packed_timestamp",
     "_extract_battery_flag",
     "_extract_report_time",
     "_extract_rssi",

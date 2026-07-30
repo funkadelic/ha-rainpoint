@@ -13,6 +13,13 @@ not enter Home Assistant long-term statistics, which a later correction to
 the table cannot retroactively fix. Recent-state history and graphs are
 unaffected.
 
+Most rows are magnitudes. The event-time row is not: it publishes the
+device's own naive wall-clock stamp as a string, with no device class.
+SensorDeviceClass.TIMESTAMP is deliberately not used, because it requires a
+timezone-aware value and the stamp carries no offset; attaching Home
+Assistant's own timezone would assume it matches the device's and shift every
+reading whenever it does not.
+
 The battery row reports the same coarse reading the hand-written decoders
 report, by delegating to the same mapping: a normal flag reads one hundred
 percent and every other flag value reads nothing at all. No capture pairs a
@@ -44,6 +51,7 @@ from homeassistant.components.sensor import SensorDeviceClass
 
 from .api import (
     _battery_flag_to_percent,
+    _decode_packed_timestamp,
     _f10_to_c,
     get_catalog_entry,
     get_catalog_port_number,
@@ -64,15 +72,22 @@ GENERIC_MARKER_ICON = "mdi:flask-outline"
 
 @dataclass(frozen=True)
 class GenericSensorSpec:
-    """Curated Home Assistant semantics for one catalog status identity."""
+    """Curated Home Assistant semantics for one catalog status identity.
+
+    Most rows are numeric and carry a valid_range and a precision. A row whose
+    reading is not a magnitude (a wall-clock stamp) sets both to None and
+    returns a string from its transform: there is no range to bound and
+    nothing to round, and inventing either would only look like a check that
+    was performed.
+    """
 
     label: str
     device_class: Any
-    unit: str
+    unit: str | None
     state_class: Any
-    transform: Callable[[int], float | None]
-    valid_range: tuple[float, float]
-    precision: int
+    transform: Callable[[int], float | str | None]
+    valid_range: tuple[float, float] | None
+    precision: int | None
 
 
 def _rssi_dbm(raw: int) -> float | None:
@@ -115,6 +130,25 @@ def _temperature_c(raw: int) -> float | None:
     return _f10_to_c(raw)
 
 
+def _packed_wall_clock(raw: int) -> str | None:
+    """Unpack a packed wall-clock stamp to a naive ISO-8601 string.
+
+    Delegates to the hand-written unpacking rather than restating the bit
+    layout, so this row cannot drift from it. A zero word means "no event" and
+    a word whose fields do not form a real date reads as no state at all,
+    both of which that function already returns as None.
+
+    Deliberately not SensorDeviceClass.TIMESTAMP: that class requires a
+    timezone-aware value, the stamp carries no offset, and the device reports
+    its own local wall clock. Attaching Home Assistant's timezone would assume
+    the two agree and shift every reading whenever they do not, which is the
+    kind of inference the rest of this table exists to avoid. The reading is
+    therefore a plain string state, the same naive ISO form the hand-written
+    valve decoders already expose as a zone attribute.
+    """
+    return _decode_packed_timestamp(raw)
+
+
 def _wkstate_open(raw: int) -> float | None:
     """Mask bit zero: the open/closed reading both cited decoders agree on."""
     return float(raw & 0x01)
@@ -145,6 +179,22 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         # that byte. This row calls that same function, so the unit and the
         # scaling are the trusted path's own, not a reading of the catalog's
         # dpDataType.
+    ),
+    "STA_EVTIME": GenericSensorSpec(
+        label="Event Time",
+        device_class=None,
+        unit=None,
+        state_class=None,
+        transform=_packed_wall_clock,
+        valid_range=None,
+        precision=None,
+        # Evidence: api/decoders.py (_decode_packed_timestamp) unpacks this
+        # word, and its docstring records the two independent captures that
+        # confirm the bit layout: one frame's trailing stamp decodes to the day
+        # that capture was taken, and a mid-run frame's zone event time is
+        # exactly that frame's report time plus the zone's remaining duration.
+        # api/decoders.py reads the same field index (21) off the same
+        # little-endian four-byte record the generic decode path hands over.
     ),
     "STA_RSSI": GenericSensorSpec(
         label="Signal Strength",
@@ -636,7 +686,7 @@ class RainPointGenericSensor(RainPointSensorBase):
         self._attr_icon = GENERIC_MARKER_ICON
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self) -> float | str | None:
         data = self._sensor_data
         if not data:
             return None
@@ -650,6 +700,17 @@ class RainPointGenericSensor(RainPointSensorBase):
             return None
         value = self._spec.transform(raw)
         if value is None:
+            return None
+        # A non-numeric reading is returned as its transform produced it. The
+        # range check and the rounding below are the numeric rows' guards, and
+        # a row that declares neither has nothing for them to check: the
+        # transform itself is what rejects an unusable word, by returning None.
+        if isinstance(value, str):
+            return value
+        if self._spec.valid_range is None or self._spec.precision is None:
+            # Unreachable through the committed table, where every numeric row
+            # declares both. Fails closed rather than publishing an unbounded,
+            # unrounded magnitude if a later row is added without them.
             return None
         low, high = self._spec.valid_range
         if not (low <= value <= high):
