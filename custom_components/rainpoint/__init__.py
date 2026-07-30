@@ -168,8 +168,8 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
     modelCode) variant is in the committed override list, so a graduated or
     force-disabled model can never keep a stale or actuating unverified
     entity beside its new trusted state. Neither toggle can reach the
-    other's namespace (D-11): the control marker nests inside the sensor
-    marker (option-a), so every row is dispatched to the control reason
+    other's namespace: the control marker nests inside the sensor marker,
+    so every row is dispatched to the control reason
     function first and only falls through to the sensor reason function when
     the control marker is absent -- reversing that order would let the
     sensor toggle govern control rows it was never supposed to touch.
@@ -214,7 +214,7 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
         # than abandoning the rest of the sweep.
         try:
             unique_id = getattr(row, "unique_id", None)
-            # Dispatch order is load-bearing (D-11): the control marker nests
+            # Dispatch order is load-bearing: the control marker nests
             # inside the sensor marker, so a control-namespace unique_id also
             # contains the sensor marker substring. Testing for the control
             # marker first, and only falling through to the sensor reason

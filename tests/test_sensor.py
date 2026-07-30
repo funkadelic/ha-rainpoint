@@ -1017,13 +1017,13 @@ class TestUnknownSensor:
         assert attrs["generic_gate_blocked_by"] == []
 
     def test_unmapped_list_contains_exactly_the_uncurated_identity(self, monkeypatch):
-        dp_entries = [{"identity": "STA_TEM", "dpPort": 0}, {"identity": "STA_BAT", "dpPort": 0, "dpCode": 2}]
+        dp_entries = [{"identity": "STA_TEM", "dpPort": 0}, {"identity": "STA_ALARM", "dpPort": 0, "dpCode": 2}]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         sensor = self._make(model="MYSTERY")
 
         attrs = sensor.extra_state_attributes
 
-        assert attrs["unmapped_generic_identities"] == ["STA_BAT"]
+        assert attrs["unmapped_generic_identities"] == ["STA_ALARM"]
         assert len(attrs["generic_gate_blocked_by"]) == 1
         assert "1 of this device's 2 status readings" in attrs["generic_gate_blocked_by"][0]
 

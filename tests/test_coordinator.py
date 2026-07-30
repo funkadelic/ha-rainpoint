@@ -366,14 +366,14 @@ class TestCoordinatorUpdate:
             "get_catalog_entry",
             lambda model, model_code=None: [
                 {"dpCode": 9, "identity": "STA_ALARM", "dpPort": 1},
-                {"dpCode": 9, "identity": "STA_BAT", "dpPort": 2},
+                {"dpCode": 9, "identity": "STA_TREND", "dpPort": 2},
             ],
         )
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 2)
 
         text = _coord_module._format_gate_diagnostics("FAKE_MODEL", None)
 
-        assert "Readings with no verified definition yet: STA_ALARM, STA_BAT" in text
+        assert "Readings with no verified definition yet: STA_ALARM, STA_TREND" in text
         assert len([line for line in text.splitlines() if line.startswith("Blocked: ")]) >= 1
 
     def test_format_gate_diagnostics_blank_when_nothing_to_say(self, monkeypatch):

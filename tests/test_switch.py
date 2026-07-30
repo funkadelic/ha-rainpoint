@@ -130,7 +130,7 @@ class TestSwitchSetupEntry:
 
 def _socket_sensor_entry() -> dict:
     """HWG004WRF/34: the one real CTL_SOCK candidate in the committed catalog
-    with no hand-written decoder (see generic_control.py's D-04 note).
+    with no hand-written decoder (see the note in generic_control.py).
     """
     return {
         "hid": 300,

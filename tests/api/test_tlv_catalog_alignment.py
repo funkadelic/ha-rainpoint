@@ -1,9 +1,9 @@
-"""D-02 evidence sweep for the TLV (11#) catalog annotation key selection.
+"""Evidence sweep for the TLV (11#) catalog annotation key selection.
 
 Measurement only, not production change: nothing here touches
 ``custom_components/``. It exists to widen the evidence behind the finding
-in ``.planning/todos/pending/2026-07-24-tlv-catalog-annotation-keys-on-the-wrong-field.md``
-before the annotation key is changed - a decoded field's structural
+that the catalog annotation was keyed on the wrong field, before the
+annotation key is changed - a decoded field's structural
 ``index`` lines up with the catalog's ``dpCode``, while its per-entry
 ``dp_id`` (the vendor's per-instance ordering handle, only present on ``11#``
 TLV framing) does not - and to prove, against the trusted hand-written valve
@@ -90,8 +90,7 @@ def _full_catalog_sweep():
     """Yield (sample_name, model, model_code, fields, dp_codes) for every sample x every catalog variant.
 
     Decodes each sample once with no model (so no annotation runs) and
-    reuses that field list across every catalog variant, per the D-02
-    requirement to sweep "every available TLV sample crossed with every
+    reuses that field list across every catalog variant, to sweep "every available TLV sample crossed with every
     catalog variant". The model universe is read from the loaded catalog
     module (there is no public accessor that lists every model - the
     catalog is keyed by model, not the other way around), matching the
@@ -122,7 +121,7 @@ def _pairing(fields: list[dict], dp_list: list, index: int) -> list[tuple[dict, 
 
 
 class TestIndexVsDpIdAlignmentSweep:
-    """D-02's widened evidence: index vs dp_id, every TLV sample x every catalog variant."""
+    """Widened evidence: index vs dp_id, every TLV sample x every catalog variant."""
 
     def test_index_key_strictly_dominates_dp_id_key(self):
         """Summed over every (sample, variant) pair, index produces far more hits than dp_id."""
@@ -169,7 +168,7 @@ class TestIndexVsDpIdAlignmentSweep:
 
 
 class TestGroundTruthZoneOrdering:
-    """D-01's core validation against the trusted hand-written valve decoder.
+    """Core validation against the trusted hand-written valve decoder.
 
     Ascending dp_id paired to ascending dpPort must reproduce the trusted
     decoder's exact per-zone assignment. Getting the direction backwards

@@ -15,6 +15,19 @@ variant must declare an allowlisted control identity, have no hand-written
 decoder, not be in the committed override list, and have a command port that
 resolves unambiguously from the catalog. Anything that does not meet every
 condition is disabled by construction, never by an explicit deny entry.
+
+With both options on, the run-state reading is exposed twice for the same
+zone: once as the read-only generic sensor and once as this module's control
+entity, whose state is a readback of that same record. That is intended, and
+it does depart from the trusted path, where a model gets zone state either on
+a valve entity or as a sensor but never both. That either/or comes from one
+per-model factory deciding both platforms at once, which is not available
+here: the two generic options are gated independently, so suppressing the
+sensor whenever control is on would make the sensor platform read the control
+option, and would leave a row behind when that option flips, since each
+namespace sweep is keyed to its own option. The overlap also earns its keep
+while these mappings are unverified, because the raw reading sits beside the
+actuator that claims to drive it, which is where a disagreement shows up.
 """
 
 from __future__ import annotations
@@ -50,6 +63,7 @@ from .generic_entities import (
     _matching_field,
     _unresolved_variant_reason,
     _usable_port,
+    has_declared_width,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -96,8 +110,8 @@ def _response_code_from_error(exc: Exception) -> str:
     """Extract the numeric controlWorkMode response code from the client's error text.
 
     Extracting from the message rather than from an attribute on the
-    exception is deliberate: GCTL-02 requires api/client.py be reused
-    unchanged, so the message is the only place the code is exposed. Do not
+    exception is deliberate: api/client.py is reused unchanged, so the
+    message is the only place the code is exposed. Do not
     "fix" this by adding a code attribute to RainPointApiError -- that would
     be an unrequested change to the reused client.
 
@@ -228,7 +242,7 @@ def _resolve_datapoint(entry: dict, run_state_entries: list[dict], port_number: 
     is safe and load-bearing, not a heuristic), and its command port must
     resolve. Refusing on an ambiguous or absent pairing before ever looking
     at the port is what stops a plausible-looking but unconfirmable port
-    from ever reaching the client -- GCTL-04's confirm-by-re-poll is
+    from ever reaching the client -- confirming a command by re-polling is
     meaningless for a datapoint whose state can never be read back.
     """
     identity = entry.get("identity")
@@ -242,6 +256,12 @@ def _resolve_datapoint(entry: dict, run_state_entries: list[dict], port_number: 
     command_port = resolve_control_port(dp_port, port_number)
     if command_port is None:
         return f"{identity} on port {dp_port!r} has no resolvable command port, so that zone is refused"
+    # identity and dp_port are typed str and int on the dataclass, and both are
+    # invariants this function has already established rather than assumptions:
+    # the caller admits an entry only when its identity is in the allowlist (a
+    # set of literal strings), and the run-state pairing plus resolve_control_port
+    # above both reject a dpPort that is not a usable int. Left unguarded for the
+    # same reason the sensor path leaves its own port unguarded.
     return ControlDatapoint(
         identity=identity,
         dp_port=dp_port,
@@ -517,7 +537,20 @@ class RainPointGenericControlBase(CoordinatorEntity):
         raw = field.get("value")
         if not isinstance(raw, int) or isinstance(raw, bool):
             return None
-        value = _IDENTITY_SPECS[RUN_STATE_IDENTITY].transform(raw)
+        spec = _IDENTITY_SPECS[RUN_STATE_IDENTITY]
+        if not has_declared_width(spec, field):
+            # Same refusal the sensor path applies, and it matters more here:
+            # this reading is what confirms a command actuated hardware, so a
+            # record at an unvalidated width must read as unknown rather than
+            # as a confirmation.
+            return None
+        value = spec.transform(raw)
+        if not isinstance(value, (int, float)):
+            # Unreachable while the run-state row masks bit zero to 0.0 or 1.0.
+            # Guarded because a curated row may now yield a non-numeric reading,
+            # and a control entity must report unknown rather than raise inside
+            # a state property.
+            return None
         # The run-state transform yields exactly 0.0 or 1.0 (a bit-zero mask),
         # so isclose is exact here; it also keeps a scaled future transform
         # from tripping on float representation while preserving the three-way
@@ -531,13 +564,13 @@ class RainPointGenericControlBase(CoordinatorEntity):
     async def _async_send_command(self, mode: int, duration: int) -> None:
         """Issue one control_work_mode call and schedule the confirming refresh.
 
-        Never decodes the response and never touches coordinator data --
-        D-14's no-optimistic-state rule. The client method is reused
+        Never decodes the response and never touches coordinator data, which
+        is the no-optimistic-state rule. The client method is reused
         unchanged; nothing here (or anywhere in this module) modifies it.
 
         A raised RainPointApiError propagates unchanged after raising the
         one-shot repair issue, so Home Assistant still reports the action as
-        failed (T-14-10): the issue is additional, never a substitute, and
+        failed: the issue is additional, never a substitute, and
         the confirming refresh below is never reached on a failure -- there
         is nothing to confirm.
         """
@@ -590,7 +623,7 @@ class RainPointGenericControlBase(CoordinatorEntity):
 class RainPointGenericValve(RainPointGenericControlBase, ValveEntity):
     """Opt-in, unverified generic valve entity for one allowlisted control datapoint.
 
-    Never optimistic (D-14): ``is_closed`` is read only from the shared
+    Never optimistic: ``is_closed`` is read only from the shared
     base's run-state property, so a command's effect only ever becomes
     visible once the coordinator's own data confirms it.
     """
@@ -647,16 +680,16 @@ class RainPointGenericValve(RainPointGenericControlBase, ValveEntity):
 class RainPointGenericSwitch(RainPointGenericControlBase, SwitchEntity):
     """Opt-in, unverified generic switch entity for one allowlisted CTL_SOCK control datapoint.
 
-    Ships the allowlist's third identity literally (D-04): CTL_SOCK names a
-    mains socket, not a valve, so it belongs on the switch platform rather
-    than silently collapsing into a valve entity. There is no existing
+    CTL_SOCK is carried on the switch platform rather than silently
+    collapsing into a valve entity, because it names a mains socket, not a
+    valve. There is no existing
     per-device write-path switch in this repository to copy -- the two
     entities in switch.py are a hub-level broadcast switch and a debug
     switch, both structurally unrelated -- so this is built from the shared
     control base and the same coordinator-read-plus-actuate-through-client
     shape RainPointGenericValve already has.
 
-    Never optimistic (D-14): ``is_on`` is read only from the shared base's
+    Never optimistic: ``is_on`` is read only from the shared base's
     run-state property, so a command's effect only ever becomes visible once
     the coordinator's own data confirms it.
     """
