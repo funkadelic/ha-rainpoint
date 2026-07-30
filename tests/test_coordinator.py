@@ -243,6 +243,46 @@ class TestCoordinatorUpdate:
 
         assert mock_notify.called
 
+    def test_notification_neutralizes_the_cloud_model_but_keeps_the_payload_intact(self):
+        """The notification is Markdown, so the model is treated; the payload is not.
+
+        Running the placeholder sanitizer over the payload would strip "#" and
+        "|" and destroy the one thing in the notification that cannot be
+        regenerated, so it only loses what could close the code fence.
+        """
+        coord, _client = _make_coord()
+
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            _coord_module.RainPointCoordinator._notify_unknown_model(
+                coord,
+                model="[Evil](http://evil.example/x)",
+                model_code=None,
+                mid=200,
+                addr=1,
+                raw_value="10#E1BC00|1,-84;2`\n```",
+            )
+
+        message = mock_notify.call_args.args[1]
+        # The model can no longer render as a link.
+        assert "[Evil]" not in message
+        assert "://" not in message.split("Report this device")[0]
+        # The payload keeps every character a real one carries.
+        assert "10#E1BC00|1,-84;2" in message
+        # ...and loses only what would break out of the fence.
+        assert message.count("```") == 2
+
+    def test_notification_id_still_keys_on_the_raw_model(self):
+        """Sanitizing the copy must not re-key the dedup id, or a reload would
+        add a second notification instead of replacing the first."""
+        coord, _client = _make_coord()
+
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            _coord_module.RainPointCoordinator._notify_unknown_model(
+                coord, model="ODD*MODEL", model_code=None, mid=200, addr=1, raw_value="10#AA"
+            )
+
+        assert mock_notify.call_args.kwargs["notification_id"] == "rainpoint_unsupported_ODD*MODEL"
+
     @pytest.mark.asyncio
     async def test_update_unknown_model_notification_sent_once(self):
         """Notification for the same unknown model is sent only once."""

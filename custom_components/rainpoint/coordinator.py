@@ -1,6 +1,8 @@
 import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
@@ -63,7 +65,7 @@ from .const import (
     VALVE_MODELS,
     debug_with_version,
 )
-from .repairs import RainPointSilentDeviceIssues, SilentDeviceRecord, silent_device_issue_id
+from .repairs import RainPointSilentDeviceIssues, SilentDeviceRecord, _sanitize_placeholder, silent_device_issue_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -213,6 +215,26 @@ def _fit_param(params: dict, key: str, value: str) -> dict:
     if low == 0:
         return params
     return {**params, key: value[:low] + _ISSUE_FIELD_TRUNCATION_NOTE}
+
+
+_FENCE_BREAKING_RE = re.compile(r"[`\r\n]+")
+
+
+def _fence_safe(raw_value: Any) -> str:
+    """Make a cloud payload safe to drop inside a fenced code block.
+
+    _sanitize_placeholder is the wrong tool here and would destroy the thing
+    being reported: it strips "#", which is the prefix separator in
+    "10#E1BC00...", and "|", which separates fields in the ASCII framing some
+    firmwares use. The payload is the one item in this notification that
+    cannot be regenerated later, so it has to survive intact.
+
+    The only real exposure inside a fence is a value that closes it, so this
+    removes backticks and line breaks and nothing else. Everything a payload
+    legitimately contains (hex, "#", commas, semicolons, pipes) passes
+    through unchanged.
+    """
+    return _FENCE_BREAKING_RE.sub("", str(raw_value)) if raw_value is not None else ""
 
 
 def _build_new_device_issue_url(
@@ -734,15 +756,25 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # integration leaves the old notification in place and adds a
             # second one under "..._None" instead of replacing it.
             code_suffix = f"_{model_code}" if model_code is not None else ""
+            # Home Assistant renders a persistent notification as Markdown and
+            # both of these come from the cloud unvalidated, so the same
+            # reasoning that guards the Repairs cards applies here. Only the
+            # displayed copy is treated: the notification id stays keyed on the
+            # raw model so a reload still replaces its own notification rather
+            # than adding a second one, and the report link keeps the true
+            # model and payload because urlencode already makes them safe and a
+            # maintainer needs the real strings.
+            safe_model = _sanitize_placeholder(model)
+            safe_payload = _fence_safe(raw_value)
             report_url = _build_new_device_issue_url(model, raw_value, model_code)
             async_create(
                 self.hass,
-                f"RainPoint detected an unsupported sensor model: **{model}**{code_line}\n\n"
+                f"RainPoint detected an unsupported sensor model: **{safe_model}**{code_line}\n\n"
                 f"**[Report this device]({report_url})** to help add support. The link opens a "
                 f"New device support form with the model and payload already filled in; just add "
                 f"what the RainPoint app shows and submit.\n\n"
                 f"Prefer to file it by hand? Open {ISSUE_URL} and include this raw payload:\n"
-                f"```\n{raw_value}\n```\n\n"
+                f"```\n{safe_payload}\n```\n\n"
                 f"You can also find this data in the sensor's attributes in Home Assistant.",
                 title="RainPoint: Unsupported Sensor Detected",
                 notification_id=f"rainpoint_unsupported_{model}{code_suffix}",
