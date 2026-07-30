@@ -93,5 +93,6 @@ class TestNotReportingIssuePlaceholderParity:
         entry = _not_reporting_entry()
         supplied = self._supplied_placeholders()
         rendered = entry["description"].format(**supplied)
-        assert "{" not in rendered and "}" not in rendered
+        assert "{" not in rendered
+        assert "}" not in rendered
         assert entry["title"].format(**supplied)
