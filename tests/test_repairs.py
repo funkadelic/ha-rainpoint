@@ -323,6 +323,17 @@ class TestSanitizePlaceholder:
         """Renderers autolink WWW. as readily as www."""
         assert not _sanitize_placeholder("WWW.evil.example").lower().startswith("www.")
 
+    @pytest.mark.parametrize("value", ["www_.evil.example", "w#ww.evil.example", "WWW*.evil.example", "ww[w.evil.example"])
+    def test_character_deletion_cannot_assemble_an_autolink_prefix(self, value):
+        """The deletion pass must not reconstruct a prefix the break already passed.
+
+        Deleting a Markdown-active character can join text either side of it, so
+        "www_.evil" becomes "www.evil" during sanitizing. If the break ran first
+        it would see the separator, find no prefix, and let the assembled host
+        through.
+        """
+        assert not _sanitize_placeholder(value).lower().startswith("www.")
+
     def test_removes_the_address_at_sign(self):
         """The at sign is the other prefix a renderer turns into a link."""
         result = _sanitize_placeholder("admin@evil.example")

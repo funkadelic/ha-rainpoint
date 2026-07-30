@@ -1404,6 +1404,57 @@ class TestSilentIssueSurvivesHubOutage:
             assert delete.call_count == 0
 
     @pytest.mark.asyncio
+    async def test_an_empty_device_list_is_an_outage_not_a_mass_removal(self):
+        """The same clear-then-reraise cycle, entering by the device-list door.
+
+        getDeviceByHid answering code 0 with an empty data array drops every
+        hub, which would otherwise wipe each debounce counter and let the stale
+        sweep reap a still-valid issue, then re-raise it once the list came
+        back. An installation that had devices a moment ago did not lose all of
+        them at once.
+        """
+        coord, client = self._build()
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            for _ in range(3):
+                await _run(coord)
+            assert create.call_count == 1
+
+            client.get_devices_by_hid.return_value = []
+            await _run(coord)
+
+            assert delete.call_count == 0
+            assert self.ISSUE_ID in coord._silent_issues._active
+            # The counter has to survive too, or the device restarts its
+            # debounce from zero and goes quiet on the UI for three more polls.
+            assert coord._silent_poll_counts
+
+            client.get_devices_by_hid.return_value = [self._hub()]
+            await _run(coord)
+
+            assert create.call_count == 1
+            assert delete.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_an_account_with_nothing_tracked_still_reconciles_on_an_empty_list(self):
+        """The skip is conditional on there being state to protect.
+
+        A genuinely empty installation must keep reconciling, or a first poll
+        that legitimately returns nothing would stop the sweep from ever
+        running.
+        """
+        coord, client = self._build()
+        client.get_devices_by_hid.return_value = []
+
+        with patch.object(_repairs_module.ir, "async_delete_issue"):
+            await _run(coord)
+
+        assert coord._silent_poll_counts == {}
+
+    @pytest.mark.asyncio
     async def test_a_genuine_removal_after_an_outage_still_clears(self):
         """The skip is scoped to the outage poll, so removal still reaps the issue."""
         coord, client = self._build()

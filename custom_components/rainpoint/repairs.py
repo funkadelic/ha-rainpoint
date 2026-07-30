@@ -212,16 +212,23 @@ def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
     broken.
 
     Collapses every run of whitespace (including an embedded newline) to a
-    single space, breaks the bare-host prefix a renderer autolinks without any
-    surrounding syntax, deletes every Markdown-and-HTML-active character
-    (which also takes out the scheme separator and the address at sign),
+    single space, deletes every Markdown-and-HTML-active character (which also
+    takes out the scheme separator and the address at sign), breaks the
+    bare-host prefix a renderer autolinks without any surrounding syntax,
     strips, and caps length; falls back to the literal "unknown" when nothing
-    is left. The prefix substitution runs after the whitespace collapse so the
-    space it inserts is not collapsed away again.
+    is left.
+
+    Order matters and is the whole correctness of this function. The deletion
+    pass has to run BEFORE the autolink break, because deleting characters can
+    assemble a prefix that was not there when the text arrived: "www_.evil" and
+    "ww[w.evil" both become "www.evil" once the deletion removes the separator,
+    so a break that ran first would have already passed over them. Both passes
+    run after the whitespace collapse, so the space the break inserts is not
+    collapsed away again.
     """
     text = _WHITESPACE_RUN_RE.sub(" ", str(value))
-    text = _AUTOLINK_PREFIX_RE.sub(" ", text)
     text = text.translate(_MARKDOWN_HTML_TRANSLATION)
+    text = _AUTOLINK_PREFIX_RE.sub(" ", text)
     text = text.strip()[:limit]
     return text or "unknown"
 

@@ -593,8 +593,24 @@ class RainPointCoordinator(DataUpdateCoordinator):
                     absent_hubs.append(hub)
                 decoded_sensors.update(RainPointCoordinator._decode_hub_subdevices(self, hub, status))
 
-            RainPointCoordinator._prune_silent_state(self, hubs)
-            RainPointCoordinator._sync_silent_device_issues(self, decoded_sensors, absent_hubs)
+            # A poll that returned no hubs at all, for an installation that had
+            # some a moment ago, is a device-list outage rather than evidence
+            # that every device left. Pruning and reconciling against it would
+            # wipe each debounce counter and clear each still-valid issue, then
+            # re-raise it once the list came back: the same clear-then-reraise
+            # cycle the absent-hub signal above exists to prevent, entering
+            # through the device-list door instead of the status door. Skipping
+            # both is safe in the direction that matters, since a poll with no
+            # hubs also decodes no sensors and so can never raise anything.
+            if hubs or not self._silent_poll_counts:
+                RainPointCoordinator._prune_silent_state(self, hubs)
+                RainPointCoordinator._sync_silent_device_issues(self, decoded_sensors, absent_hubs)
+            else:
+                _LOGGER.warning(
+                    "Device list came back empty while %d sub-device(s) were being tracked; "
+                    "treating it as an outage and leaving not-reporting state untouched",
+                    len(self._silent_poll_counts),
+                )
 
             _LOGGER.info("Coordinator update complete: %d hubs, %d sensors", len(hubs), len(decoded_sensors))
             _LOGGER.debug(debug_with_version("Final data: hubs=%s, sensors=%s"), hubs, list(decoded_sensors.keys()))
@@ -749,7 +765,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
         variant = (model, model_code)
         if model and variant not in self._notified_unknown_models:
             self._notified_unknown_models.add(variant)
-            code_line = f" (modelCode `{model_code}`)" if model_code is not None else ""
+            # Sanitized for the same reason model is: modelCode is cloud-typed
+            # (int | str | None), it lands on a Markdown-rendered line, and a
+            # backtick in it would close the span it sits inside.
+            code_line = f" (modelCode `{_sanitize_placeholder(model_code)}`)" if model_code is not None else ""
             # Only suffix the notification id when a code is present. Devices
             # without a modelCode must keep the pre-existing
             # "rainpoint_unsupported_{model}" id, otherwise reloading the
