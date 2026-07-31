@@ -371,6 +371,14 @@ class _LateSensorEntityAdder:
         self._coordinator = coordinator
         self._async_add_entities = async_add_entities
         self._generic_enabled = generic_enabled
+        # Both sets are deliberately never pruned, unlike the coordinator's
+        # _silent_poll_counts, and the asymmetry is the point. That counter is
+        # per-poll state a returning device must restart from zero. These are a
+        # record of what has already been handed to Home Assistant, and a key
+        # leaving coordinator.data does not remove the entities registered for
+        # it, so forgetting the key would let the same unique_id be offered a
+        # second time if the key came back. Bounded by the number of distinct
+        # sensor keys the installation produces in one session.
         self._keys_with_model_entities: set[str] = set()
         self._keys_with_silent_entity: set[str] = set()
 

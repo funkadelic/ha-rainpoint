@@ -16,13 +16,81 @@ own constructors and call ``sub_device_attributes`` directly.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
+from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .device import build_sub_device_info
+
+
+class LateEntityAdder:
+    """Add entities for sensor keys that only become eligible after setup.
+
+    Entity creation is otherwise one-shot: each platform builds its list from
+    the single coordinator snapshot taken right after the first refresh, so
+    anything needing a later poll to exist is unreachable rather than merely
+    delayed. A device that is silent from the first poll, one that pairs
+    mid-session, and one whose zones only appear once it starts reporting all
+    fall in that gap. Registering this as a coordinator listener closes it.
+
+    Bookkeeping is on emitted unique_id rather than on sensor key, which is
+    what lets one adder serve a per-key platform and a per-zone one. A valve
+    that reports zone 1 now and zone 2 later must gain the second entity
+    without being handed the first again, and a repeated unique_id is an error
+    in Home Assistant.
+
+    The emitted set is deliberately never pruned. A key vanishing from the
+    coordinator does not remove the entities already registered for it, so
+    forgetting the key would let a later reappearance offer the same unique_id
+    a second time. It is bounded by the number of distinct entities the
+    installation has ever produced in one session.
+    """
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        async_add_entities: Callable[[list], None],
+        build: Callable[[str, dict], list],
+    ) -> None:
+        """Wrap a platform's per-key builder in add-once bookkeeping."""
+        self._coordinator = coordinator
+        self._async_add_entities = async_add_entities
+        self._build = build
+        self._emitted: set[str] = set()
+
+    def collect(self, key: str, info: dict) -> list:
+        """Return the not-yet-emitted entities for one sensor key.
+
+        The single place the bookkeeping is written, so the setup path and the
+        listener path cannot disagree about what already exists.
+        """
+        fresh = []
+        for entity in self._build(key, info):
+            unique_id = getattr(entity, "_attr_unique_id", None)
+            if unique_id is not None and unique_id in self._emitted:
+                continue
+            if unique_id is not None:
+                self._emitted.add(unique_id)
+            fresh.append(entity)
+        return fresh
+
+    @callback
+    def async_on_coordinator_update(self) -> None:
+        """Offer any entity that has become eligible since the last update."""
+        sensors_cfg = (self._coordinator.data or {}).get("sensors", {})
+        new: list = []
+        for key, info in sensors_cfg.items():
+            # One malformed record must not raise inside a listener, which
+            # would break the update for every other key rather than skip one.
+            if not isinstance(info, dict):
+                continue
+            new.extend(self.collect(key, info))
+        if new:
+            self._async_add_entities(new)
 
 
 def sub_device_attributes(coordinator: RainPointCoordinator, sensor_key: str) -> dict[str, Any]:
