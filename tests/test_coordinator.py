@@ -1525,6 +1525,42 @@ class TestSyncHubConnectivityIssues:
         assert records[0].disconnected is True
         assert records[0].missed_polls == _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS
 
+    def test_hub_model_rides_the_record_to_the_repairs_card(self):
+        """The card names the model, so it has to survive the translation step.
+
+        Read from the hub record's own "model" key, the same field the hub's
+        DeviceInfo carries, so the card and the device page cannot disagree.
+        """
+        coord, _ = _make_coord()
+        coord._hub_disconnect_poll_counts = {(100, 200): _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS - 1}
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        hub["model"] = "HWG023WBRF-V2"
+        hub_connectivity = {200: {"state": _coord_module.HUB_DISCONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert records[0].model == "HWG023WBRF-V2"
+
+    def test_absent_hub_model_reaches_the_record_as_none_not_empty_string(self):
+        """An empty model must arrive as None so the sanitizer's fallback fires.
+
+        An empty string would pass straight through and render blank
+        parentheses on the card.
+        """
+        coord, _ = _make_coord()
+        coord._hub_disconnect_poll_counts = {(100, 200): _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS - 1}
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        hub["model"] = ""
+        hub_connectivity = {200: {"state": _coord_module.HUB_DISCONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert records[0].model is None
+
     def test_unknown_state_emits_no_record_and_leaves_the_counter_untouched(self):
         """An unknown state is not evidence about the hub in either direction."""
         coord, _ = _make_coord()

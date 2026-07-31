@@ -569,7 +569,7 @@ class TestUnreachableIdsAreNotCleared:
         assert delete.call_count == 0
 
 
-def _make_hub_record(hid=100, mid=200, hub_name="Hub1", disconnected=True, missed_polls=3):
+def _make_hub_record(hid=100, mid=200, hub_name="Hub1", disconnected=True, missed_polls=3, model="HWG023WBRF-V2"):
     """Build a HubConnectivityRecord with sensible defaults for one hub."""
     return HubConnectivityRecord(
         hid=hid,
@@ -577,6 +577,7 @@ def _make_hub_record(hid=100, mid=200, hub_name="Hub1", disconnected=True, misse
         hub_name=hub_name,
         disconnected=disconnected,
         missed_polls=missed_polls,
+        model=model,
     )
 
 
@@ -608,8 +609,9 @@ class TestRainPointHubConnectivityIssues:
         assert kwargs["severity"] == repairs.ir.IssueSeverity.WARNING
         assert kwargs["translation_key"] == HUB_CONNECTIVITY_ISSUE_ID_PREFIX
         placeholders = kwargs["translation_placeholders"]
-        assert set(placeholders) == {"hub_name", "missed_polls"}
+        assert set(placeholders) == {"hub_name", "model", "missed_polls"}
         assert placeholders["hub_name"] == "Hub1"
+        assert placeholders["model"] == "HWG023WBRF-V2"
         assert placeholders["missed_polls"] == "3"
 
     def test_hub_name_reaches_the_placeholder_sanitized(self, issue_mocks):

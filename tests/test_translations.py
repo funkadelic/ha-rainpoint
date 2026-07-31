@@ -122,6 +122,7 @@ class TestHubDisconnectedIssuePlaceholderParity:
             hub_name="Hub1",
             disconnected=True,
             missed_polls=3,
+            model="HWG023WBRF-V2",
         )
         with patch.object(repairs.ir, "async_create_issue") as create:
             manager.async_sync([record])

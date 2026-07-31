@@ -1203,11 +1203,23 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # real hub name -- treat it as absent so the sanitizer's "unknown"
             # fallback fires instead of rendering a blank.
             hub_name = hub.get("name") or None
+            # Same field the hub's own DeviceInfo carries, so the card names the
+            # model the user sees on the device page rather than a second string.
+            hub_model = hub.get("model") or None
             state = (hub_connectivity.get(mid) or {}).get("state")
 
             if state == HUB_CONNECTED:
                 self._hub_disconnect_poll_counts.pop(key, None)
-                records.append(HubConnectivityRecord(hid=hid, mid=mid, hub_name=hub_name, disconnected=False, missed_polls=0))
+                records.append(
+                    HubConnectivityRecord(
+                        hid=hid,
+                        mid=mid,
+                        hub_name=hub_name,
+                        disconnected=False,
+                        missed_polls=0,
+                        model=hub_model,
+                    )
+                )
             elif state == HUB_DISCONNECTED:
                 count = self._hub_disconnect_poll_counts.get(key, 0) + 1
                 self._hub_disconnect_poll_counts[key] = count
@@ -1221,6 +1233,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                         hub_name=hub_name,
                         disconnected=True,
                         missed_polls=count,
+                        model=hub_model,
                     )
                 )
             else:

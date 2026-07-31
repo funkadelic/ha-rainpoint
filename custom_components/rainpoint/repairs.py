@@ -392,6 +392,7 @@ class HubConnectivityRecord:
     hub_name: str | None
     disconnected: bool
     missed_polls: int
+    model: str | None = None
 
 
 def hub_connectivity_issue_id(hid: Any, mid: int) -> str:
@@ -467,6 +468,7 @@ class RainPointHubConnectivityIssues:
                 translation_key=HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
                 translation_placeholders={
                     "hub_name": _sanitize_placeholder(record.hub_name),
+                    "model": _sanitize_placeholder(record.model),
                     "missed_polls": str(record.missed_polls),
                 },
             )
