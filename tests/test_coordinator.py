@@ -2922,6 +2922,7 @@ class TestApplyHubPushUpdate:
         _APPLY_HUB(coord, 200, False, 1717200000000)
 
         coord.async_update_listeners.assert_not_called()
+        coord._hub_connectivity_issues.async_clear.assert_not_called()
 
     def test_unknown_mid_is_dropped_without_mutating_or_notifying(self):
         hub = _push_hub()
@@ -2932,6 +2933,7 @@ class TestApplyHubPushUpdate:
 
         assert coord.data is original
         coord.async_update_listeners.assert_not_called()
+        coord._hub_connectivity_issues.async_clear.assert_not_called()
 
     def test_non_hub_record_is_dropped_without_mutating_or_notifying(self):
         """The Bluetooth wrapper record (every identity field empty) is found
@@ -2945,6 +2947,7 @@ class TestApplyHubPushUpdate:
 
         assert coord.data is original
         coord.async_update_listeners.assert_not_called()
+        coord._hub_connectivity_issues.async_clear.assert_not_called()
 
     def test_unconvertible_timestamp_declines_the_increment(self):
         """changed_ts=10**20 is out of datetime.fromtimestamp's representable
@@ -2960,6 +2963,7 @@ class TestApplyHubPushUpdate:
 
         assert coord.data["hub_connectivity"][200] is original_record
         coord.async_update_listeners.assert_not_called()
+        coord._hub_connectivity_issues.async_clear.assert_not_called()
 
     def test_merge_writes_three_key_record_and_preserves_sibling_identity(self):
         """The merge writes exactly state/changed_at/state_raw, carries
@@ -3000,9 +3004,8 @@ class TestApplyHubPushUpdate:
         assert coord.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
 
     def test_dropped_push_leaves_hub_disconnect_poll_counts_untouched(self):
-        """This plan carries no debounce/issue clearing yet (D-11 lands in a
-        later plan of this phase, once RainPointHubConnectivityIssues gains
-        async_clear); a drop must not touch that counter either way."""
+        """A drop must not touch the counter or the issue set either way,
+        regardless of whether the frame it dropped was connected or not."""
         hub = _push_hub()
         coord = _seed_push_coord(hub, sensors={})
         coord._hub_disconnect_poll_counts[(100, 200)] = 2
@@ -3010,6 +3013,31 @@ class TestApplyHubPushUpdate:
         _APPLY_HUB(coord, 999, False, 1717200000000)
 
         assert coord._hub_disconnect_poll_counts.get((100, 200)) == 2
+        coord._hub_connectivity_issues.async_clear.assert_not_called()
+
+    def test_connected_edge_pops_the_counter_and_clears_the_issue_once(self):
+        """D-10/D-11: a pushed connected edge against a hub whose counter
+        reads 2 pops that key and clears the Repairs card exactly once."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        coord._hub_disconnect_poll_counts[(100, 200)] = 2
+
+        _APPLY_HUB(coord, 200, True, 1717200000000)
+
+        assert (100, 200) not in coord._hub_disconnect_poll_counts
+        coord._hub_connectivity_issues.async_clear.assert_called_once_with(100, 200)
+
+    def test_disconnected_edge_leaves_the_counter_and_issue_untouched(self):
+        """D-09: raising the card stays poll-counted only, so a pushed
+        disconnect must never increment the counter or clear anything."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        coord._hub_disconnect_poll_counts[(100, 200)] = 2
+
+        _APPLY_HUB(coord, 200, False, 1717200000000)
+
+        assert coord._hub_disconnect_poll_counts[(100, 200)] == 2
+        coord._hub_connectivity_issues.async_clear.assert_not_called()
 
     @pytest.mark.parametrize(
         ("reason", "mid", "seed", "wrapper"),
@@ -3020,8 +3048,8 @@ class TestApplyHubPushUpdate:
         ],
     )
     def test_dropped_push_notifies_no_listener(self, reason, mid, seed, wrapper):
-        """Each early-return drop path must not notify listeners, since none
-        of them reach the merge that follows those drops."""
+        """Each early-return drop path must not notify listeners or clear the
+        issue, since none of them reach the merge that follows those drops."""
         if wrapper:
             hub = {"hid": 100, "mid": 346965, "did": "", "mac": "", "productKey": "", "model": "", "name": ""}
             coord = _seed_push_coord(hub, sensors={})
@@ -3035,6 +3063,7 @@ class TestApplyHubPushUpdate:
         _APPLY_HUB(coord, mid, False, 1717200000000)
 
         assert coord.async_update_listeners.call_count == 0, reason
+        assert coord._hub_connectivity_issues.async_clear.call_count == 0, reason
 
 
 class TestApplyHubPushUpdateOrderingGuard:
@@ -3060,6 +3089,7 @@ class TestApplyHubPushUpdateOrderingGuard:
 
         assert coord.data["hub_connectivity"][200] is held_record
         coord.async_update_listeners.assert_not_called()
+        coord._hub_connectivity_issues.async_clear.assert_not_called()
 
     def test_equal_pushed_edge_is_dropped_without_merging_or_notifying(self, caplog):
         """An equal moment is the same edge already held -- the common case
@@ -3078,6 +3108,7 @@ class TestApplyHubPushUpdateOrderingGuard:
 
         assert coord.data["hub_connectivity"][200] is held_record
         coord.async_update_listeners.assert_not_called()
+        coord._hub_connectivity_issues.async_clear.assert_not_called()
         assert any("already-recorded" in r.getMessage() or "already recorded" in r.getMessage() for r in caplog.records)
 
     def test_held_changed_at_none_falls_through_and_applies(self):
