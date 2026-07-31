@@ -2,6 +2,42 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.11.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.10.1...v1.11.0) (2026-07-31)
+
+
+### What's new
+
+- **A device that reports nothing no longer disappears.** If RainPoint lists a device on your account but never sends readings for it, the integration now says so instead of quietly skipping it. You get a notice under **Settings → Repairs** naming the device, plus a **Not Reporting** entity on the device's own page whose attributes carry a pre-filled report link. Both appear together, about four to six minutes after the device goes quiet, without restarting Home Assistant. This most often means the device is paired over Bluetooth only, is out of range, or is switched off. The notice clears on its own once readings resume, and a hub going offline will not make its healthy devices look silent.
+- **More from your valves.** **HTV210B** valves paired to a hub now report battery, signal strength and per-zone state. Valves in the HTV family gained a per-zone water usage reading, and sub-device pages now show firmware version and device ID.
+- **Better readings on existing hardware.** Battery levels are now read from the device's own battery datapoint, report times reflect when the device actually measured rather than when it was polled, and signal strength has been restored on valves that had stopped showing it.
+- **Unverified generic sensors now cover five curated readings** for devices without tested support here. This is off by default and stays opt-in: turn it on under **Settings → Devices & Services → RainPoint Cloud → Configure**, then **Enable unverified generic sensors**. These readings come from RainPoint's product catalog rather than a tested per-model decoder, so they are labeled unverified and are deliberately kept out of long-term statistics.
+
+
+### Added
+
+* add HTV210B valve support with per-zone state sensors ([#130](https://github.com/funkadelic/ha-rainpoint/issues/130)) ([161af01](https://github.com/funkadelic/ha-rainpoint/commit/161af01601d342dd1053488c1767f1f1f17790a8))
+* add per-zone water usage sensors for the HTV valve family ([#119](https://github.com/funkadelic/ha-rainpoint/issues/119)) ([0128c8d](https://github.com/funkadelic/ha-rainpoint/commit/0128c8da552df54844c95e8e824436bd2bce7099))
+* curate five readings for generic sensors, with a record width gate ([#132](https://github.com/funkadelic/ha-rainpoint/issues/132)) ([c014d97](https://github.com/funkadelic/ha-rainpoint/commit/c014d9780308bb07c97e845734f426cb08a4d7b0))
+* show firmware version and device id on sub-device pages ([#124](https://github.com/funkadelic/ha-rainpoint/issues/124)) ([e7fe968](https://github.com/funkadelic/ha-rainpoint/commit/e7fe968c067ec5eb8f28ebaedda03cab4f8c28c1))
+* surface sub-devices the cloud reports no status for ([#133](https://github.com/funkadelic/ha-rainpoint/issues/133)) ([6e4c522](https://github.com/funkadelic/ha-rainpoint/commit/6e4c522e7ad41519b777b00d920a2cf8471c53c2))
+
+
+### Fixed
+
+* log the raw value when a push is dropped ([#127](https://github.com/funkadelic/ha-rainpoint/issues/127)) ([8692a80](https://github.com/funkadelic/ha-rainpoint/commit/8692a803163591a3cd8480e47cc6fa7341547c9d))
+* narrow the trusted model set to decoders backed by real payloads ([#118](https://github.com/funkadelic/ha-rainpoint/issues/118)) ([515b14a](https://github.com/funkadelic/ha-rainpoint/commit/515b14ab29f41611168b742079d76b3aa235f00b))
+* read battery from the STA_BAT datapoint and decode device report time ([#123](https://github.com/funkadelic/ha-rainpoint/issues/123)) ([59be0a2](https://github.com/funkadelic/ha-rainpoint/commit/59be0a23337f5fbfff3ffcf8703b8fe5a3e8ab7e))
+* restore missing signal strength readings on some valves ([#129](https://github.com/funkadelic/ha-rainpoint/issues/129)) ([6ead038](https://github.com/funkadelic/ha-rainpoint/commit/6ead0387018e4665a8a51c368af7743f0cf9dc3a))
+* stop a Bluetooth parent record from displacing the real hub ([#125](https://github.com/funkadelic/ha-rainpoint/issues/125)) ([9d8dae4](https://github.com/funkadelic/ha-rainpoint/commit/9d8dae4c8e276ad32f93360883e516849f61b1e9))
+
+
+### Other Changes
+
+* add a hardware trial tool for cloud valve commands and record the Bluetooth valve result ([#131](https://github.com/funkadelic/ha-rainpoint/issues/131)) ([b840654](https://github.com/funkadelic/ha-rainpoint/commit/b8406549aed01fef0d27cce2e1556b8b065a74d1))
+* bump actions/labeler from 6.2.0 to 7.0.0 ([#121](https://github.com/funkadelic/ha-rainpoint/issues/121)) ([9e18eb2](https://github.com/funkadelic/ha-rainpoint/commit/9e18eb2705d461580c491e023da291456089909a))
+* bump astral-sh/setup-uv from 8.3.2 to 9.0.0 ([#122](https://github.com/funkadelic/ha-rainpoint/issues/122)) ([d8fa7a8](https://github.com/funkadelic/ha-rainpoint/commit/d8fa7a8c028018bedc8cdd4c53cc5b50e27cc8fb))
+* record tested device coverage including the HTV210B ([#126](https://github.com/funkadelic/ha-rainpoint/issues/126)) ([791266d](https://github.com/funkadelic/ha-rainpoint/commit/791266dc84216916f55258b9ef6f59603ed3d19a))
+
 ## [1.10.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.10.0...v1.10.1) (2026-07-26)
 
 
