@@ -37,6 +37,7 @@ SILENT_DATA_TYPE = _coord_module.SILENT_DATA_TYPE
 import custom_components.rainpoint.repairs as _repairs_module  # noqa: E402
 from custom_components.rainpoint.api import RainPointApiError, decode_htv145frf  # noqa: E402
 from custom_components.rainpoint.const import (  # noqa: E402
+    CONF_HIDS,
     MODEL_CO2,
     MODEL_DISPLAY_HUB,
     MODEL_FLOWMETER,
@@ -54,6 +55,7 @@ from custom_components.rainpoint.const import (  # noqa: E402
 from custom_components.rainpoint.entity import sub_device_attributes  # noqa: E402
 from custom_components.rainpoint.repairs import (  # noqa: E402
     RainPointSilentDeviceIssues,
+    hub_connectivity_issue_id,
     silent_device_issue_id,
 )
 from tests.payload_samples import (  # noqa: E402
@@ -94,6 +96,8 @@ def _make_coord(hids=None):
         _last_valve_command_at={},
         _silent_poll_counts={},
         _silent_issues=MagicMock(),
+        _hub_disconnect_poll_counts={},
+        _hub_connectivity_issues=MagicMock(),
         data={},
         hass=mock_hass,
         logger=MagicMock(),
@@ -1124,7 +1128,7 @@ class TestSilentSubDeviceEndToEnd:
 
         attrs = sub_device_attributes(coordinator, "100_200_1")
 
-        assert attrs == {"firmware_version": "1.0"}
+        assert attrs == {"firmware_version": "1.0", "hub_connected": None}
 
 
 class TestBuildSilentSubdevice:
@@ -1214,6 +1218,204 @@ class TestBuildSilentSubdevice:
         notify.assert_not_called()
 
 
+class TestHubConnectivity:
+    """Tests for _read_hub_connectivity and hub_connected_flag."""
+
+    def test_connected_value_one_yields_connected_state(self):
+        """A `connected` entry with value '1' maps to the connected constant."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state"] == _coord_module.HUB_CONNECTED
+
+    def test_connected_value_zero_yields_disconnected_state(self):
+        """A `connected` entry with value '0' maps to the disconnected constant."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "0"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state"] == _coord_module.HUB_DISCONNECTED
+
+    def test_absent_status_yields_unknown_with_no_other_fields(self):
+        """STATUS_ABSENT never coerces to disconnected; it is unknown with no timestamp or raw value."""
+        record = _coord_module._read_hub_connectivity(_coord_module.STATUS_ABSENT)
+        assert record == {
+            "state": _coord_module.HUB_CONNECTIVITY_UNKNOWN,
+            "changed_at": None,
+            "state_raw": None,
+        }
+
+    def test_no_connected_entry_in_arrived_status_yields_unknown(self):
+        """An arrived status with no `connected` id at all is unknown, not disconnected."""
+        status = {"subDeviceStatus": [{"id": "state", "value": "0,-52"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
+
+    def test_non_string_connected_value_yields_unknown(self):
+        """The cloud's own framing is a string; an int value must not be coerced to a definite state."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": 1}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
+
+    def test_changed_at_derived_from_connected_entry_time(self):
+        """The connected entry's `time` reaches changed_at as an ISO-8601 UTC string."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "0", "time": 1785464564888}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["changed_at"] == datetime.fromtimestamp(1785464564888 / 1000, tz=UTC).isoformat()
+
+    def test_changed_at_none_when_connected_entry_has_no_time(self):
+        """A `connected` entry with no time field leaves changed_at None rather than raising."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["changed_at"] is None
+
+    def test_state_raw_carries_the_whole_string_undecoded(self):
+        """The `state` id's whole value rides along unmodified, split into nothing."""
+        status = {
+            "subDeviceStatus": [
+                {"id": "connected", "value": "1"},
+                {"id": "state", "value": "0,-52"},
+            ]
+        }
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state_raw"] == "0,-52"
+
+    def test_state_raw_none_when_no_state_entry(self):
+        """A connected entry with no `state` entry leaves state_raw None."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state_raw"] is None
+
+    def test_non_dict_status_entry_is_skipped(self):
+        """A malformed subDeviceStatus entry that is not a dict is skipped, not crashed on."""
+        status = {"subDeviceStatus": [None, {"id": "connected", "value": "1"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state"] == _coord_module.HUB_CONNECTED
+
+    def test_changed_at_none_for_explicit_none_time(self):
+        """An explicit time=None is swallowed the same as a missing field."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1", "time": None}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["changed_at"] is None
+
+    def test_changed_at_none_for_non_numeric_time(self):
+        """A non-numeric time value cannot raise; it degrades to no timestamp."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1", "time": "not-a-number"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["changed_at"] is None
+
+    def test_changed_at_none_for_out_of_range_epoch(self):
+        """An epoch far outside datetime's representable range degrades to no timestamp."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1", "time": 99999999999999999999}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["changed_at"] is None
+
+    def test_hub_connected_flag_maps_tri_state(self):
+        """hub_connected_flag maps the tri-state to True/False/None."""
+        assert _coord_module.hub_connected_flag({"state": _coord_module.HUB_CONNECTED}) is True
+        assert _coord_module.hub_connected_flag({"state": _coord_module.HUB_DISCONNECTED}) is False
+        assert _coord_module.hub_connected_flag({"state": _coord_module.HUB_CONNECTIVITY_UNKNOWN}) is None
+
+    def test_hub_connected_flag_none_or_empty_record(self):
+        """A None record or an empty record both map to None, not an error."""
+        assert _coord_module.hub_connected_flag(None) is None
+        assert _coord_module.hub_connected_flag({}) is None
+
+    def test_hub_connectivity_record_returns_the_record_for_mid(self):
+        """A present record is handed back unchanged."""
+        record = {"state": _coord_module.HUB_CONNECTED, "changed_at": None, "state_raw": None}
+        coordinator = types.SimpleNamespace(data={"hub_connectivity": {7: record}})
+        assert _coord_module.hub_connectivity_record(coordinator, 7) is record
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            None,
+            {},
+            {"hub_connectivity": None},
+            {"hub_connectivity": {}},
+            {"hub_connectivity": {9: {"state": _coord_module.HUB_CONNECTED}}},
+            {"hub_connectivity": {7: None}},
+        ],
+        ids=["no-data", "no-key", "none-under-key", "empty-map", "other-mid", "none-record"],
+    )
+    def test_hub_connectivity_record_degrades_to_empty(self, data):
+        """Every partial snapshot yields {}, which hub_connected_flag reads as unknown.
+
+        The none-under-key case is the one a plain .get("hub_connectivity", {})
+        would not catch: the default only fires on a missing key, not on a key
+        holding None, so that lookup would raise on the following .get(mid).
+        """
+        coordinator = types.SimpleNamespace(data=data)
+        assert _coord_module.hub_connectivity_record(coordinator, 7) == {}
+        assert _coord_module.hub_connected_flag(_coord_module.hub_connectivity_record(coordinator, 7)) is None
+
+
+class TestHubConnectivityIntegration:
+    """hub_connectivity on the coordinator's returned dict (fourth top-level key)."""
+
+    @pytest.mark.asyncio
+    async def test_hub_connectivity_present_for_real_hub(self):
+        """A real hub's mid gets a shaped connectivity record on every poll."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(hid=100, mid=200)]
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": "1"}]}]
+
+        result = await _run(coord)
+
+        assert result["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
+
+    @pytest.mark.asyncio
+    async def test_hub_connectivity_absent_hub_yields_unknown(self):
+        """A hub whose status could not be obtained this poll reads unknown, never disconnected."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(mid=301)]
+        client.get_device_status.side_effect = aiohttp.ClientError("boom")
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
+
+        result = await _run(coord)
+
+        assert result["hub_connectivity"][301]["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
+
+    @pytest.mark.asyncio
+    async def test_bluetooth_wrapper_record_contributes_no_hub_connectivity_entry(self):
+        """A record whose identity fields are all empty strings gets no connectivity
+        record at all, not a falsy one -- the mid is simply absent from the dict."""
+        coord, client = _make_coord()
+        wrapper_hub = {
+            "hid": 100,
+            "mid": 346965,
+            "did": "",
+            "mac": "",
+            "productKey": "",
+            "model": "",
+            "name": "",
+            "subDevices": [{"addr": 1, "model": "HTV210B", "name": "BT Valve", "softVer": "1.0"}],
+        }
+        client.get_devices_by_hid.return_value = [wrapper_hub]
+        client.get_multiple_device_status.return_value = [{"mid": 346965, "subDeviceStatus": [{"id": "connected", "value": "1"}]}]
+
+        result = await _run(coord)
+
+        assert 346965 not in result["hub_connectivity"]
+
+    @pytest.mark.asyncio
+    async def test_multi_status_and_fallback_paths_produce_identical_hub_connectivity(self):
+        """Both status-fetch paths must shape the identical hub_connectivity record
+        for the same underlying payload, including the connected value and timestamp."""
+        raw_status = [{"id": "connected", "value": "0", "time": 1785464564888}]
+
+        coord1, client1 = _make_coord()
+        client1.get_devices_by_hid.return_value = [_make_hub(mid=200)]
+        client1.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": raw_status}]
+        result1 = await _run(coord1)
+
+        coord2, client2 = _make_coord()
+        client2.get_devices_by_hid.return_value = [_make_hub(mid=200)]
+        client2.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
+        client2.get_device_status.return_value = {"subDeviceStatus": raw_status}
+        result2 = await _run(coord2)
+
+        assert result1["hub_connectivity"] == result2["hub_connectivity"]
+
+
 class TestPruneSilentState:
     """Direct-call tests for _prune_silent_state (T-15-03)."""
 
@@ -1239,6 +1441,222 @@ class TestPruneSilentState:
         _coord_module.RainPointCoordinator._prune_silent_state(coord, [hub1, hub2])
 
         assert coord._silent_poll_counts == {"100_200_1": 1, "100_300_5": 2}
+
+
+class TestPruneHubConnectivityState:
+    """Direct-call tests for _prune_hub_connectivity_state."""
+
+    def test_drops_counter_for_a_hub_no_longer_listed(self):
+        """A hub that leaves the device list must not keep a debounce counter alive."""
+        coord, _ = _make_coord()
+        coord._hub_disconnect_poll_counts = {(100, 200): 2, (100, 300): 1}
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+
+        _coord_module.RainPointCoordinator._prune_hub_connectivity_state(coord, [hub])
+
+        assert coord._hub_disconnect_poll_counts == {(100, 200): 2}
+
+    def test_keeps_counters_for_hubs_still_listed(self):
+        """Pruning one hub's departure must not disturb another hub's counter."""
+        coord, _ = _make_coord()
+        coord._hub_disconnect_poll_counts = {(100, 200): 1, (100, 300): 2}
+        hub1 = _make_hub(mid=200)
+        hub1["hid"] = 100
+        hub2 = _make_hub(mid=300)
+        hub2["hid"] = 100
+
+        _coord_module.RainPointCoordinator._prune_hub_connectivity_state(coord, [hub1, hub2])
+
+        assert coord._hub_disconnect_poll_counts == {(100, 200): 1, (100, 300): 2}
+
+    def test_bluetooth_wrapper_record_is_never_treated_as_a_live_key(self):
+        """A stray counter under a wrapper's key (which should never exist in
+        practice) must not be kept alive by pruning either."""
+        coord, _ = _make_coord()
+        coord._hub_disconnect_poll_counts = {(100, 346965): 2}
+        wrapper_hub = {
+            "hid": 100,
+            "mid": 346965,
+            "did": "",
+            "mac": "",
+            "productKey": "",
+            "model": "",
+            "name": "",
+            "subDevices": [{"addr": 1, "model": "HTV210B", "name": "BT Valve", "softVer": "1.0"}],
+        }
+
+        _coord_module.RainPointCoordinator._prune_hub_connectivity_state(coord, [wrapper_hub])
+
+        assert coord._hub_disconnect_poll_counts == {}
+
+
+class TestSyncHubConnectivityIssues:
+    """Direct-call tests for _sync_hub_connectivity_issues: one HubConnectivityRecord
+    per real hub, translated correctly from the coordinator's own tri-state shape."""
+
+    def test_connected_hub_emits_a_non_disconnected_record_and_resets_the_counter(self):
+        """Recovery clears the counter back to zero, proven directly rather than
+        only through the reconcile call it feeds."""
+        coord, _ = _make_coord()
+        coord._hub_disconnect_poll_counts = {(100, 200): 2}
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        hub_connectivity = {200: {"state": _coord_module.HUB_CONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        coord._hub_connectivity_issues.async_sync.assert_called_once()
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert len(records) == 1
+        record = records[0]
+        assert record.hid == 100
+        assert record.mid == 200
+        assert record.disconnected is False
+        assert record.missed_polls == 0
+        assert (100, 200) not in coord._hub_disconnect_poll_counts
+
+    def test_disconnected_hub_below_threshold_increments_but_emits_no_record(self):
+        """One or two consecutive disconnected polls say nothing either way.
+
+        The counter still advances, but no record reaches the reconcile: a
+        below-threshold poll must not emit a non-disconnected record, because
+        that is indistinguishable from a confirmed-connected one by the time
+        it reaches the unconditional clear in repairs.py. The id goes into
+        unreachable_ids instead, so the poll neither raises nor clears.
+        """
+        coord, _ = _make_coord()
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        hub_connectivity = {200: {"state": _coord_module.HUB_DISCONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        assert coord._hub_disconnect_poll_counts[(100, 200)] == 1
+        (records,), kwargs = (
+            coord._hub_connectivity_issues.async_sync.call_args.args,
+            coord._hub_connectivity_issues.async_sync.call_args.kwargs,
+        )
+        assert records == []
+        assert kwargs["unreachable_ids"] == {hub_connectivity_issue_id(100, 200)}
+
+    def test_disconnected_hub_at_threshold_flags_disconnected(self):
+        """The third consecutive disconnected poll is where the flag flips true."""
+        coord, _ = _make_coord()
+        coord._hub_disconnect_poll_counts = {(100, 200): _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS - 1}
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        hub_connectivity = {200: {"state": _coord_module.HUB_DISCONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert records[0].disconnected is True
+        assert records[0].missed_polls == _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS
+
+    def test_hub_model_rides_the_record_to_the_repairs_card(self):
+        """The card names the model, so it has to survive the translation step.
+
+        Read from the hub record's own "model" key, the same field the hub's
+        DeviceInfo carries, so the card and the device page cannot disagree.
+        """
+        coord, _ = _make_coord()
+        coord._hub_disconnect_poll_counts = {(100, 200): _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS - 1}
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        hub["model"] = "HWG023WBRF-V2"
+        hub_connectivity = {200: {"state": _coord_module.HUB_DISCONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert records[0].model == "HWG023WBRF-V2"
+
+    def test_absent_hub_model_reaches_the_record_as_none_not_empty_string(self):
+        """An empty model must arrive as None so the sanitizer's fallback fires.
+
+        An empty string would pass straight through and render blank
+        parentheses on the card.
+        """
+        coord, _ = _make_coord()
+        coord._hub_disconnect_poll_counts = {(100, 200): _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS - 1}
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        hub["model"] = ""
+        hub_connectivity = {200: {"state": _coord_module.HUB_DISCONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert records[0].model is None
+
+    def test_unknown_state_emits_no_record_and_leaves_the_counter_untouched(self):
+        """An unknown state is not evidence about the hub in either direction."""
+        coord, _ = _make_coord()
+        coord._hub_disconnect_poll_counts = {(100, 200): 2}
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        hub_connectivity = {200: {"state": _coord_module.HUB_CONNECTIVITY_UNKNOWN}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        assert coord._hub_disconnect_poll_counts == {(100, 200): 2}
+        (records,), kwargs = (
+            coord._hub_connectivity_issues.async_sync.call_args.args,
+            coord._hub_connectivity_issues.async_sync.call_args.kwargs,
+        )
+        assert records == []
+        assert kwargs["unreachable_ids"] == {hub_connectivity_issue_id(100, 200)}
+
+    def test_missing_hub_connectivity_entry_is_treated_as_unknown(self):
+        """A real hub whose mid is altogether absent from hub_connectivity must
+        not be coerced to a definite state."""
+        coord, _ = _make_coord()
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], {})
+
+        assert coord._hub_disconnect_poll_counts == {}
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        kwargs = coord._hub_connectivity_issues.async_sync.call_args.kwargs
+        assert records == []
+        assert kwargs["unreachable_ids"] == {hub_connectivity_issue_id(100, 200)}
+
+    def test_bluetooth_wrapper_record_contributes_no_record_and_no_counter(self):
+        """The Bluetooth wrapper carries no cloud connection to report on."""
+        coord, _ = _make_coord()
+        wrapper_hub = {
+            "hid": 100,
+            "mid": 346965,
+            "did": "",
+            "mac": "",
+            "productKey": "",
+            "model": "",
+            "name": "",
+            "subDevices": [{"addr": 1, "model": "HTV210B", "name": "BT Valve", "softVer": "1.0"}],
+        }
+        hub_connectivity = {346965: {"state": _coord_module.HUB_DISCONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [wrapper_hub], hub_connectivity)
+
+        assert coord._hub_disconnect_poll_counts == {}
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert records == []
+
+    def test_empty_hub_name_is_treated_as_absent_not_an_empty_string(self):
+        """The cloud returns an empty string rather than omitting the field; the
+        sanitizer's "unknown" fallback should fire, not render a blank."""
+        coord, _ = _make_coord()
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        hub["name"] = ""
+        hub_connectivity = {200: {"state": _coord_module.HUB_CONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert records[0].hub_name is None
 
 
 class TestSyncSilentDeviceIssues:
@@ -1518,6 +1936,245 @@ class TestSilentIssueSurvivesHubOutage:
             assert delete.call_count == 1
             _hass, _domain, issue_id = delete.call_args.args
             assert issue_id == self.ISSUE_ID
+
+
+class TestHubConnectivitySurvivesDeviceListOutage:
+    """An active hub-connectivity issue and its debounce counter must survive a
+    poll in which the device list itself came back empty, mirroring
+    TestSilentIssueSurvivesHubOutage's device-list-door regression for the
+    not-reporting lifecycle."""
+
+    HUB_ISSUE_ID = hub_connectivity_issue_id(100, 200)
+
+    @staticmethod
+    def _hub():
+        """A single real hub with no sub-devices, hid injected by _collect_hubs
+        from _hids. No subDevices keeps the not-reporting lifecycle, which
+        shares the same ir.async_create_issue/async_delete_issue mocks, from
+        also firing and confusing the call-count assertions below."""
+        return {
+            "mid": 200,
+            "name": "Hub1",
+            "deviceName": "dev1",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [],
+        }
+
+    def _build(self):
+        """Return (coord, client) with a real hub-connectivity issue manager."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [self._hub()]
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": "0"}]}]
+        coord._hub_connectivity_issues = _repairs_module.RainPointHubConnectivityIssues(MagicMock())
+        return coord, client
+
+    @pytest.mark.asyncio
+    async def test_an_empty_device_list_leaves_the_counter_and_issue_untouched(self):
+        """getDeviceByHid answering with an empty data array must not wipe the
+        debounce counter or let the stale sweep reap a still-valid issue.
+
+        Below-threshold disconnected polls call the idempotent clear
+        unconditionally (mirroring the not-reporting lifecycle), so the
+        assertion is a delta across the outage poll rather than an absolute
+        zero: the outage poll itself must add no further delete calls.
+        """
+        coord, client = self._build()
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            for _ in range(3):
+                await _run(coord)
+            assert create.call_count == 1
+            deletes_before_outage = delete.call_count
+
+            client.get_devices_by_hid.return_value = []
+            await _run(coord)
+
+            assert delete.call_count == deletes_before_outage
+            assert self.HUB_ISSUE_ID in coord._hub_connectivity_issues._active
+            # The counter has to survive too, or the hub restarts its debounce
+            # from zero and the card disappears for three more polls.
+            assert coord._hub_disconnect_poll_counts
+
+            client.get_devices_by_hid.return_value = [self._hub()]
+            await _run(coord)
+
+            assert create.call_count == 1
+            assert delete.call_count == deletes_before_outage
+
+
+class TestHubConnectivityDebounceRealTimeline:
+    """Drives the real coordinator construct -> first refresh -> repeated
+    refresh sequence, asserting between every step, rather than proving the
+    debounce from an injected already-past-threshold coordinator.data
+    snapshot -- the specific pattern that shipped two critical defects under
+    100% branch coverage in a prior phase."""
+
+    @staticmethod
+    def _build(connected_value="1"):
+        """Return (coordinator, client) wired the way __init__.py wires it.
+
+        The hub carries no subDevices so the not-reporting lifecycle -- which
+        shares the same ir.async_create_issue/async_delete_issue mocks --
+        never fires and confuses this class's call-count assertions.
+        """
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 200,
+                "name": "Hub1",
+                "deviceName": "dev1",
+                "productKey": "pk1",
+                "homeName": "Home",
+                "subDevices": [],
+            }
+        ]
+        client.get_multiple_device_status.return_value = [
+            {"mid": 200, "subDeviceStatus": [{"id": "connected", "value": connected_value}]}
+        ]
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+
+        hass = MagicMock()
+        hass.data = {}
+
+        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
+        return coordinator, client
+
+    @staticmethod
+    def _set_connected(client, value):
+        """Mutate the next poll's connected value on an already-built client."""
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": value}]}]
+
+    @pytest.mark.asyncio
+    async def test_three_consecutive_disconnected_polls_raise_exactly_one_issue(self):
+        """The full debounce lifecycle: raise once at the threshold, no second
+        raise while it stays down, clear and reset on recovery, and prove the
+        reset is real by crossing the threshold again from zero."""
+        coordinator, client = self._build(connected_value="1")
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            assert create.call_count == 0
+
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()  # poll 1 disconnected: counter 1
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            assert create.call_count == 0
+
+            await coordinator.async_refresh()  # poll 2 disconnected: counter 2
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert create.call_count == 0
+
+            await coordinator.async_refresh()  # poll 3 disconnected: counter 3 -> raise
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            assert create.call_count == 1
+            _hass, _domain, issue_id = create.call_args.args
+            assert issue_id == hub_connectivity_issue_id(100, 200)
+
+            await coordinator.async_refresh()  # poll 4 disconnected: no second raise
+            assert create.call_count == 1
+
+            self._set_connected(client, "1")
+            deletes_before_recovery = delete.call_count
+            await coordinator.async_refresh()  # poll 5 connected: clears and resets
+            assert delete.call_count > deletes_before_recovery
+            assert create.call_count == 1
+            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()  # poll 6 disconnected: counter restarts at 1
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            assert create.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_poll_neither_raises_nor_advances_the_counter(self):
+        """A poll whose connected id is missing entirely is not evidence about
+        the hub in either direction, driven across a real refresh sequence."""
+        coordinator, client = self._build(connected_value="1")
+
+        with patch.object(_repairs_module.ir, "async_create_issue") as create:
+            await coordinator.async_config_entry_first_refresh()
+
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()
+            await coordinator.async_refresh()
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert create.call_count == 0
+
+            client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
+            await coordinator.async_refresh()  # unknown: counter must not move
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert create.call_count == 0
+
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()  # counter resumes from where it left off
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            assert create.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_restart_while_still_disconnected_does_not_clear_the_issue(self):
+        """A reload or restart mid-outage must not delete a still-accurate card.
+
+        The debounce counter and the manager's active set are both
+        per-instance, so a second coordinator built while the hub is still
+        down starts counting from one again. If those below-threshold polls
+        emitted a non-disconnected record, the unconditional clear in
+        repairs.py could not tell them apart from a genuine recovery and would
+        delete a card describing an outage that is still happening, leaving
+        the user with no notice until the new instance re-crossed the
+        threshold two polls later.
+
+        Driven as a real timeline across two coordinator instances sharing one
+        pair of issue-registry mocks, because the defect only exists in the
+        seam between them and is invisible to any single-instance test.
+        """
+        first, first_client = self._build(connected_value="1")
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            await first.async_config_entry_first_refresh()
+            self._set_connected(first_client, "0")
+            for _ in range(_coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS):
+                await first.async_refresh()
+            assert create.call_count == 1
+            deletes_before_restart = delete.call_count
+
+            # The restart: a brand new coordinator, hub still reporting "0".
+            second, second_client = self._build(connected_value="0")
+            assert second._hub_disconnect_poll_counts == {}
+
+            await second.async_config_entry_first_refresh()
+            assert second._hub_disconnect_poll_counts[(100, 200)] == 1
+            assert delete.call_count == deletes_before_restart
+
+            await second.async_refresh()
+            assert second._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert delete.call_count == deletes_before_restart
+
+            # Once the new instance confirms the outage itself it re-asserts
+            # the issue rather than having spent the gap with the card gone.
+            await second.async_refresh()
+            assert second._hub_disconnect_poll_counts[(100, 200)] == _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS
+            assert delete.call_count == deletes_before_restart
+            assert create.call_count == 2
+
+            # Recovery still clears, so suppressing the clear below threshold
+            # did not cost the only path that legitimately removes the card.
+            self._set_connected(second_client, "1")
+            await second.async_refresh()
+            assert delete.call_count > deletes_before_restart
+            assert (100, 200) not in second._hub_disconnect_poll_counts
 
 
 class TestLastSeenFromEntry:

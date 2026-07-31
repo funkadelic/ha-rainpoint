@@ -400,6 +400,34 @@ class TestLastUpdatedSensorBadTimestamp:
         assert sensor.native_value is None
 
 
+class TestDiagnosticSensorsToleranceOfHubConnectivity:
+    """A hub_connectivity record's presence, absence, or disconnected state
+    never changes what a diagnostic sensor reads or reports as available;
+    only the shared hub_connected attribute on the base class changes.
+    """
+
+    def _battery_sensor(self, hub_connectivity=None):
+        """Build a battery sensor, optionally with a hub_connectivity record set."""
+        coordinator = _make_coordinator(sensor_data={"battery_percent": 42})
+        sensor = RainPointBatterySensor(coordinator, "100_200_1", _make_sensor_info(), "100_200_1")
+        if hub_connectivity is not None:
+            sensor.coordinator.data["hub_connectivity"] = hub_connectivity
+        return sensor
+
+    def test_reading_and_availability_unaffected_by_a_disconnected_hub(self):
+        """A stale-but-present reading keeps reporting exactly as before an outage."""
+        sensor = self._battery_sensor(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
+        assert sensor.native_value == 42
+        assert sensor.available is True
+
+    def test_reading_unaffected_by_a_coordinator_snapshot_with_no_hub_connectivity_key(self):
+        """No hub_connectivity key at all is what every pre-existing fake in this suite supplies."""
+        sensor = self._battery_sensor(hub_connectivity=None)
+        assert "hub_connectivity" not in sensor.coordinator.data
+        assert sensor.native_value == 42
+        assert sensor.available is True
+
+
 class TestLooksLikeDeviceId:
     """Cover the _looks_like_device_id type guard."""
 

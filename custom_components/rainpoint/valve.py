@@ -25,7 +25,7 @@ from .const import (
     MODEL_VALVE_405,
     VALVE_MODELS,
 )
-from .coordinator import RainPointCoordinator
+from .coordinator import RainPointCoordinator, hub_connected_flag, hub_connectivity_record
 from .device import build_sub_device_info
 from .entity import LateEntityAdder, sub_device_attributes
 
@@ -142,6 +142,13 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
 
     @property
     def available(self) -> bool:
+        """Return whether this zone can currently accept an open/close command.
+
+        Availability is the conjunction of two independent signals, and both
+        are read fresh every poll with no debounce: a valve that claims to be
+        controllable against a hub the cloud has already reported as gone is
+        the specific lie this check exists to stop.
+        """
         sensors = self.coordinator.data.get("sensors", {})
         info = sensors.get(self._sensor_key)
         if not info:
@@ -149,7 +156,17 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
         decoded = info.get("data")
         if not decoded:
             return False
-        return decoded.get("hub_online", False)
+        # hub_online is payload-derived RF link state and is not replaced: it
+        # carries meaning for the sub-device that cloud reachability does not.
+        # But it is exactly as stale as the payload it rides on, so during a
+        # cloud outage the frozen payload keeps reporting a healthy link. The
+        # cloud's own per-poll connectivity report is required in addition.
+        # The gate is "is not False", not truthiness: None means the cloud's
+        # connectivity is unknown (absent, or no hub_connectivity record at
+        # all) and must leave availability alone; only an explicit False
+        # means the cloud reported this hub as disconnected.
+        cloud_connected = hub_connected_flag(hub_connectivity_record(self.coordinator, self._sensor_info.get("mid")))
+        return bool(decoded.get("hub_online", False)) and cloud_connected is not False
 
     @property
     def is_closed(self) -> bool | None:

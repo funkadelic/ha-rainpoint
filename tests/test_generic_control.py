@@ -723,6 +723,36 @@ class TestBuildGenericValveEntities:
         assert build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
 
+class TestGenericControlGateUnaffectedByHubConnectivity:
+    """The control admission gate reads only model, modelCode, and the
+    decoded "unknown" marker; the hub-level cloud connectivity signal plays
+    no part in it, proven against the real anchor variant. This module has
+    no available override to pin, unlike the trusted valve, whose gate
+    correction is scoped to valve.py alone: the read-back path is what
+    stays untouched here.
+    """
+
+    def _entities(self, hub_connectivity=None):
+        sensor_key = "100_200_1"
+        sensor_info = _anchor_sensor_info()
+        coordinator = _make_coordinator(sensor_key, sensor_info)
+        if hub_connectivity is not None:
+            coordinator.data["hub_connectivity"] = hub_connectivity
+        return build_generic_valve_entities(coordinator, sensor_key, sensor_info, sensor_key)
+
+    def test_admission_is_identical_whether_the_hub_is_disconnected_or_the_key_is_absent(self):
+        disconnected = self._entities(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
+        absent_key = self._entities(hub_connectivity=None)
+        assert [entity._attr_unique_id for entity in disconnected] == [entity._attr_unique_id for entity in absent_key]
+        assert len(disconnected) == 1
+
+    def test_admitted_valve_still_reads_its_run_state_on_a_disconnected_hub(self):
+        """The read-back path this control entity relies on is untouched by this phase."""
+        entities = self._entities(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
+        valve = entities[0]
+        assert valve.is_closed is False  # the default anchor fields (see _run_state_field(1, 1)) decode to open
+
+
 class TestBuildGenericSwitchEntities:
     def test_non_unknown_payload_yields_nothing(self):
         sensor_info = make_sensor_entry(model=SOCKET_MODEL, data={"type": "valve"})

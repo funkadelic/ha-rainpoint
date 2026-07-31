@@ -511,6 +511,52 @@ class TestMoisturePercentSensor:
         assert sensor.device_info["manufacturer"] == "RainPoint"
 
 
+class TestSensorPlatformToleranceOfHubConnectivity:
+    """A hub_connectivity record's presence, absence, or disconnected state
+    never changes a sensor's own reading or availability; only the
+    hub_connected attribute this platform's shared extra_state_attributes
+    already merges in changes.
+    """
+
+    def _moisture_sensor(self, hub_connectivity=None):
+        sensor = _make_sensor_base(
+            RainPointMoisturePercentSensor,
+            "100_200_1",
+            {"type": "moisture_simple", "moisture_percent": 42, "rssi_dbm": -80, "battery_percent": 75},
+        )
+        sensor._simple = True
+        sensor._attr_unique_id = "rainpoint_100_200_1_moisture_percent"
+        sensor._attr_name = "Test Sensor Moisture Percent"
+        if hub_connectivity is not None:
+            sensor.coordinator.data["hub_connectivity"] = hub_connectivity
+        return sensor
+
+    def test_reading_and_availability_unaffected_by_a_disconnected_hub(self):
+        """A stale-but-present reading keeps reporting exactly as before an outage."""
+        sensor = self._moisture_sensor(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
+        assert sensor.native_value == 42
+        assert sensor.available is True
+
+    def test_extra_state_attributes_carries_hub_connected_false_when_disconnected(self):
+        sensor = self._moisture_sensor(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
+        assert sensor.extra_state_attributes["hub_connected"] is False
+
+    def test_extra_state_attributes_tolerates_a_coordinator_snapshot_with_no_hub_connectivity_key(self):
+        """No hub_connectivity key at all is what every pre-existing fake in this suite supplies."""
+        sensor = self._moisture_sensor(hub_connectivity=None)
+        assert "hub_connectivity" not in sensor.coordinator.data
+        attrs = sensor.extra_state_attributes
+        assert attrs["hub_connected"] is None
+        assert sensor.native_value == 42
+
+    def test_not_reporting_sensor_stays_available_on_a_disconnected_hub(self):
+        """RainPointNotReportingSensor's own always-True override is unaffected."""
+        sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
+        sensor.coordinator.data["hub_connectivity"] = {200: {"state": "disconnected", "changed_at": None, "state_raw": None}}
+        assert sensor.available is True
+        assert sensor.extra_state_attributes["hub_connected"] is False
+
+
 class TestRainSensor:
     """Tests for RainPointRainSensor."""
 

@@ -191,6 +191,32 @@ class TestNumberEntity:
         assert attrs["timestamp_source"] == "server"
 
 
+class TestZoneDurationNumberHubConnectivityTolerance:
+    """A hub_connectivity record's presence, absence, or disconnected state
+    never changes this entity's own value or identity; only the hub_connected
+    key extra_state_attributes already carries through sub_device_attributes
+    changes.
+    """
+
+    def test_native_value_and_identity_unaffected_by_a_disconnected_hub(self):
+        num = _make_number(current_value=15.0)
+        num.coordinator.data["hub_connectivity"] = {200: {"state": "disconnected", "changed_at": None, "state_raw": None}}
+        assert num.native_value == 15.0
+        assert num._attr_unique_id == "rainpoint_100_200_1_zone1_duration"
+
+    def test_extra_state_attributes_carries_hub_connected_false_when_disconnected(self):
+        num = _make_number()
+        num.coordinator.data["hub_connectivity"] = {200: {"state": "disconnected", "changed_at": None, "state_raw": None}}
+        assert num.extra_state_attributes["hub_connected"] is False
+
+    def test_extra_state_attributes_tolerates_a_coordinator_snapshot_with_no_hub_connectivity_key(self):
+        num = _make_number()
+        assert "hub_connectivity" not in num.coordinator.data
+        attrs = num.extra_state_attributes
+        assert attrs["hub_connected"] is None
+        assert num.native_value == DURATION_DEFAULT_MINUTES
+
+
 class TestNumberConstructor:
     """Direct constructor coverage for __init__ (lines 78-90)."""
 
@@ -654,6 +680,31 @@ class TestGenericZoneDurationNumberBehavior:
 
         assert attrs["device_timestamp"] == "2024-06-01T00:00:00+00:00"
         assert attrs["timestamp_source"] == "server"
+
+
+class TestGenericZoneDurationNumberHubConnectivityTolerance:
+    """The generic companion entity shares its base class with the trusted
+    duration entity, so a disconnected hub or an absent hub_connectivity key
+    must leave its value and identity exactly as unaffected.
+    """
+
+    def _build(self, hub_connectivity=None):
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
+        coordinator = _make_generic_coordinator("100_200_1", sensor_info)
+        if hub_connectivity is not None:
+            coordinator.data["hub_connectivity"] = hub_connectivity
+        entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+        entity = entities[0]
+        entity.async_write_ha_state = MagicMock()
+        return entity
+
+    def test_native_value_unaffected_by_a_disconnected_hub(self):
+        entity = self._build(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
+        assert entity.native_value == DURATION_DEFAULT_MINUTES
+
+    def test_extra_state_attributes_carries_hub_connected_false_when_disconnected(self):
+        entity = self._build(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
+        assert entity.extra_state_attributes["hub_connected"] is False
 
 
 class TestNumberSetupEntryGenericControl:

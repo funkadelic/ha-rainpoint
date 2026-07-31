@@ -1113,6 +1113,48 @@ class TestSilentEntryRejectedByGenericSensorGate:
         assert build_generic_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
 
+class TestGenericSensorGateUnaffectedByHubConnectivity:
+    """The admission gate and each admitted entity's own read path consult
+    only model, modelCode, and decoded fields; the hub-level cloud
+    connectivity signal plays no part in either, proven against a real
+    admitted catalog variant rather than a synthetic one.
+    """
+
+    # HWG004WRF/34 is a real catalog variant the sensor gate admits (see
+    # TestCatalogEligibilityIsPinned.EXPECTED above), so a widened or
+    # narrowed admission here would show up against a known-good baseline
+    # rather than an unrelated gate failing first.
+    _MODEL = "HWG004WRF"
+    _MODEL_CODE = 34
+
+    def _build(self, hub_connectivity=None):
+        """Build the generic sensor entities for the real admitted variant above."""
+        sensor_info = make_sensor_entry(
+            hid=100, mid=200, addr=1, model=self._MODEL, sub_name="Outlet 1", data=_unknown_data(model=self._MODEL)
+        )
+        sensor_info["model_code"] = self._MODEL_CODE
+        coordinator = MagicMock()
+        coord_data = make_coordinator_data(sensors={"100_200_1": sensor_info})
+        if hub_connectivity is not None:
+            coord_data["hub_connectivity"] = hub_connectivity
+        coordinator.data = coord_data
+        return build_generic_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+
+    def test_admission_is_identical_whether_the_hub_is_disconnected_or_the_key_is_absent(self):
+        """A real admitted variant admits the same rows in both coordinator shapes."""
+        disconnected = self._build(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
+        absent_key = self._build(hub_connectivity=None)
+        assert [entity._attr_unique_id for entity in disconnected] == [entity._attr_unique_id for entity in absent_key]
+        assert len(disconnected) == 3  # STA_EVTIME, STA_RSSI, STA_WKSTATE
+
+    def test_admitted_entity_stays_available_on_a_disconnected_hub_and_reports_hub_connected_false(self):
+        """No generic sensor entity's availability moves because of hub cloud connectivity."""
+        entities = self._build(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
+        for entity in entities:
+            assert entity.available is True
+            assert entity.extra_state_attributes["hub_connected"] is False
+
+
 class TestCuratedTableIsReachable:
     """Every curated identity must be one the decode path can actually produce.
 

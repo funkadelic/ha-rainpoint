@@ -24,10 +24,26 @@ from .const import (
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
     PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
 )
-from .coordinator import RainPointCoordinator, first_hub_record
+from .coordinator import (
+    RainPointCoordinator,
+    first_hub_record,
+    hub_connected_flag,
+    hub_connectivity_record,
+    is_hub_record,
+)
 from .device import RainPointHubDevice
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _hub_records(coordinator: RainPointCoordinator) -> list[dict]:
+    """Return the coordinator's hub records as a list, tolerating a dict snapshot.
+
+    The dict-or-list tolerance lives here alone so both hub resolvers below
+    agree on what an empty or oddly shaped snapshot means.
+    """
+    hubs_cfg = (coordinator.data or {}).get("hubs", [])
+    return list(hubs_cfg.values()) if isinstance(hubs_cfg, dict) else list(hubs_cfg)
 
 
 def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client) -> list[dict]:
@@ -38,8 +54,7 @@ def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client)
     per configured hub would make every hub on a multi-hub account display the
     shared client's state, even though push only ever targets the bound hub.
     """
-    hubs_cfg = (coordinator.data or {}).get("hubs", [])
-    hubs = list(hubs_cfg.values()) if isinstance(hubs_cfg, dict) else list(hubs_cfg)
+    hubs = _hub_records(coordinator)
     if not hubs:
         return []
     bound_mid = getattr(mqtt_client, "hub_mid", None)
@@ -52,6 +67,16 @@ def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client)
     # occupy slot 0 without being a hub at all.
     fallback = first_hub_record(hubs)
     return [fallback] if fallback is not None else []
+
+
+def resolve_connectivity_hubs(coordinator: RainPointCoordinator) -> list[dict]:
+    """Return every real hub, for building one cloud-connectivity entity each.
+
+    Unlike resolve_push_diagnostic_hubs, which returns only the single hub
+    the shared MQTT client is bound to, this returns every real hub: cloud
+    connectivity is a per-hub fact, not a property of the single MQTT client.
+    """
+    return [hub for hub in _hub_records(coordinator) if is_hub_record(hub)]
 
 
 class RainPointHubSensorBase(CoordinatorEntity, SensorEntity, RainPointHubDevice):
@@ -146,6 +171,83 @@ class RainPointHubMACSensor(RainPointHubSensorBase):
     @property
     def native_value(self) -> str | None:
         return self._hub_info.get("mac")
+
+
+class RainPointHubConnectivityBinarySensor(CoordinatorEntity, BinarySensorEntity, RainPointHubDevice):
+    """Hub-level cloud connectivity: on while the RainPoint cloud reports this hub connected.
+
+    Reads the coordinator's already-shaped `hub_connectivity` field rather
+    than re-scanning subDeviceStatus itself; RainPointHubRSSISensor is the
+    precedent for reading a non-D status id out of the status response, not
+    the implementation this class copies. `state_raw` is carried undecoded:
+    its first field read '0' in every observed condition on both sides of a
+    real power cycle, so assigning it a meaning would be a guess shipped as
+    fact. Hub-level entities, this one included, are created once from the
+    first refresh snapshot like every other hub entity; state refresh after
+    setup still happens normally through the CoordinatorEntity listener this
+    base class registers -- only entity creation is one-shot.
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_should_poll = False
+
+    def __init__(self, coordinator: RainPointCoordinator, hub_info: dict) -> None:
+        """Build the connectivity entity with a per-hub unique id."""
+        CoordinatorEntity.__init__(self, coordinator)
+        RainPointHubDevice.__init__(self, hub_info)
+        # Carries both hid and mid, unlike the hid-only hub siblings above
+        # (device id, firmware, MAC, RF channel): a home can hold more than
+        # one hub, and those siblings would contend for one id. This
+        # divergence is deliberate; do not "fix" it back to match them.
+        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_connectivity"
+        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Cloud Connection"
+
+    @property
+    def _record(self) -> dict:
+        """Return this hub's connectivity record, or {} when none exists yet.
+
+        The partial-snapshot tolerance lives in hub_connectivity_record, shared
+        with the sub-device attributes and valve availability.
+        """
+        return hub_connectivity_record(self.coordinator, self._hub_info.get("mid"))
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True/False/None through the shared tri-state mapping."""
+        return hub_connected_flag(self._record)
+
+    @property
+    def icon(self) -> str:
+        """Return an icon that tracks the state rather than fixing one glyph.
+
+        A class-level _attr_icon would override the CONNECTIVITY device
+        class's own on/off pair, leaving a connected hub showing a
+        cloud-offline glyph, which reads as a false alarm on the one entity
+        whose whole job is an at-a-glance health check. Unknown shares the
+        offline glyph deliberately: is_on is None only when the cloud has not
+        said either way, and claiming a healthy cloud there would overstate
+        what is known.
+        """
+        return "mdi:cloud-check-variant" if self.is_on else "mdi:cloud-off-outline"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return the cloud change timestamp and the raw, undecoded state value.
+
+        Both keys are always present, with None values when the underlying
+        fields are absent, so the attribute never simply vanishes.
+        """
+        record = self._record
+        return {
+            "changed_at": record.get("changed_at"),
+            "state_raw": record.get("state_raw"),
+        }
+
+    @property
+    def available(self) -> bool:
+        """Always available: an unknown connectivity state renders as unknown, not missing."""
+        return True
 
 
 def _parse_hub_rssi(state_value) -> int | None:

@@ -65,7 +65,15 @@ from .const import (
     VALVE_MODELS,
     debug_with_version,
 )
-from .repairs import RainPointSilentDeviceIssues, SilentDeviceRecord, _sanitize_placeholder, silent_device_issue_id
+from .repairs import (
+    HubConnectivityRecord,
+    RainPointHubConnectivityIssues,
+    RainPointSilentDeviceIssues,
+    SilentDeviceRecord,
+    _sanitize_placeholder,
+    hub_connectivity_issue_id,
+    silent_device_issue_id,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -98,6 +106,22 @@ SILENT_DATA_TYPE = "silent"
 # surfaced as silent (~6 minutes at the 120s DEFAULT_SCAN_INTERVAL). Absorbs a
 # single-poll transient omission without hiding a genuinely silent device.
 SILENT_DEBOUNCE_POLLS = 3
+
+# Derived rather than independently tuned, so the coordinator holds one
+# debounce concept instead of two that could drift apart. The same roughly
+# six-minute window at the default scan interval absorbs a single blip
+# without being too late to be a useful discovery surface for a hub that has
+# genuinely fallen off the RainPoint cloud.
+HUB_DISCONNECT_DEBOUNCE_POLLS = SILENT_DEBOUNCE_POLLS
+
+# Hub-level cloud connectivity tri-state. Absent is never coerced to
+# disconnected: HUB_CONNECTIVITY_UNKNOWN covers three distinct causes -- older
+# firmware that omits the "connected" id, the Bluetooth wrapper record, and a
+# status response that never arrived this poll -- all of which are equally
+# "we do not know", not evidence that the hub dropped off the cloud.
+HUB_CONNECTED = "connected"
+HUB_DISCONNECTED = "disconnected"
+HUB_CONNECTIVITY_UNKNOWN = "unknown"
 
 # Decoder registry - maps device models to their decoder functions
 DECODER_REGISTRY = {
@@ -331,6 +355,126 @@ def is_hub_record(hub: dict) -> bool:
     return bool(hub.get("did") or hub.get("mac") or hub.get("productKey") or hub.get("model"))
 
 
+def _find_hub_status_entries(status: dict) -> tuple[dict | None, dict | None]:
+    """Return the hub-scoped (connected, state) entries from one status response.
+
+    Both ids are read in a single pass over subDeviceStatus -- the same list
+    RainPointHubRSSISensor already scans for `state`. They are hub-scoped
+    rather than per-addr, so no addr-keyed dict is built for them the way
+    _resolve_addr_from_sid builds one for D-prefixed sub-device ids.
+
+    A non-dict entry is skipped rather than trusted: the list is cloud-supplied
+    and nothing guarantees its shape.
+    """
+    connected_entry: dict | None = None
+    state_entry: dict | None = None
+    for entry in status.get("subDeviceStatus") or []:
+        if not isinstance(entry, dict):
+            continue
+        entry_id = entry.get("id")
+        if entry_id == "connected":
+            connected_entry = entry
+        elif entry_id == "state":
+            state_entry = entry
+    return connected_entry, state_entry
+
+
+def _connected_tri_state(connected_entry: dict | None) -> str:
+    """Map the `connected` entry to HUB_CONNECTED / HUB_DISCONNECTED / unknown.
+
+    Only the literal string values "1" and "0" map to a definite state. Every
+    other value, including a non-string and a missing entry, maps to unknown,
+    because a cloud that returns garbage should degrade to "we do not know"
+    rather than a false disconnected.
+    """
+    value = connected_entry.get("value") if connected_entry else None
+    if value == "1":
+        return HUB_CONNECTED
+    if value == "0":
+        return HUB_DISCONNECTED
+    return HUB_CONNECTIVITY_UNKNOWN
+
+
+def _connected_changed_at(connected_entry: dict | None) -> str | None:
+    """Return when the cloud last flipped `connected`, as an ISO-8601 UTC string.
+
+    None when the entry is absent or carries no usable time, so the attribute
+    reads as unknown rather than inventing a moment.
+    """
+    if connected_entry is None:
+        return None
+    changed_dt = _status_entry_time(connected_entry)
+    return changed_dt.isoformat() if changed_dt is not None else None
+
+
+def _read_hub_connectivity(status: dict) -> dict:
+    """Return the hub-level cloud connectivity record for one hub's status.
+
+    Returns exactly three keys: "state" (one of HUB_CONNECTED,
+    HUB_DISCONNECTED, HUB_CONNECTIVITY_UNKNOWN), "changed_at" (an ISO-8601 UTC
+    string naming when the cloud last flipped `connected`, or None), and
+    "state_raw" (the raw `state` id's value, undecoded, or None).
+
+    An absent status (this hub's status could not be obtained this poll)
+    yields the unknown record immediately with both other fields None --
+    absent must never be coerced to disconnected. The per-field rules live in
+    the three helpers above; this function is the assembly point and the one
+    place the record's shape is written down.
+    """
+    if isinstance(status, _AbsentStatus):
+        return {"state": HUB_CONNECTIVITY_UNKNOWN, "changed_at": None, "state_raw": None}
+
+    connected_entry, state_entry = _find_hub_status_entries(status)
+
+    # Carried undecoded on purpose: the first field read '0' in every observed
+    # condition on both sides of a real power cycle, so assigning it a meaning
+    # would be a guess shipped as fact. A non-string degrades to None.
+    state_raw = state_entry.get("value") if state_entry else None
+    if not isinstance(state_raw, str):
+        state_raw = None
+
+    return {
+        "state": _connected_tri_state(connected_entry),
+        "changed_at": _connected_changed_at(connected_entry),
+        "state_raw": state_raw,
+    }
+
+
+def hub_connectivity_record(coordinator, mid) -> dict:
+    """Return one hub's connectivity record from a coordinator snapshot, or {}.
+
+    The lookup lives here alone so the three surfaces that read it -- the hub
+    connectivity binary sensor, the sub-device attributes, and valve
+    availability -- cannot drift apart in how they tolerate a partial
+    snapshot. Every step degrades to {} rather than raising: no data at all,
+    no "hub_connectivity" key (what every pre-existing test fake in this
+    suite supplies), an explicit None stored under that key, and no record
+    for this mid. {} is what hub_connected_flag maps to "we do not know",
+    so an absent record never reads as disconnected.
+    """
+    connectivity = (coordinator.data or {}).get("hub_connectivity") or {}
+    return connectivity.get(mid) or {}
+
+
+def hub_connected_flag(record: dict | None) -> bool | None:
+    """Map a hub_connectivity record to True / False / None.
+
+    This is the single mapping site shared by the hub connectivity binary
+    sensor and the sub-device attribute helper (sub_device_attributes), so
+    the two surfaces cannot disagree about what "disconnected" means. A
+    falsy record (None, or a record with no recognized state) maps to None,
+    the same "we do not know" answer an unknown tri-state produces.
+    """
+    if not record:
+        return None
+    state = record.get("state")
+    if state == HUB_CONNECTED:
+        return True
+    if state == HUB_DISCONNECTED:
+        return False
+    return None
+
+
 def first_hub_record(hubs: list[dict]) -> dict | None:
     """Return the first real hub in API order, or None when there is none.
 
@@ -471,6 +615,8 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._last_valve_command_at: dict[tuple[str, int], datetime] = {}
         self._silent_poll_counts: dict[str, int] = {}
         self._silent_issues = RainPointSilentDeviceIssues(hass)
+        self._hub_disconnect_poll_counts: dict[tuple[Any, int], int] = {}
+        self._hub_connectivity_issues = RainPointHubConnectivityIssues(hass)
 
     def record_valve_command(self, sensor_key: str, zone_num: int) -> datetime:
         """Remember the latest successful valve command time for stale-poll protection."""
@@ -579,6 +725,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             status_by_mid: dict[int, dict] = {}
             decoded_sensors: dict[str, dict] = {}
             absent_hubs: list[dict] = []
+            hub_connectivity: dict[int, dict] = {}
 
             if hubs:
                 status_by_mid = await RainPointCoordinator._fetch_status_by_mid(self, hubs)
@@ -591,6 +738,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 status = status_by_mid.get(mid, STATUS_ABSENT)
                 if isinstance(status, _AbsentStatus):
                     absent_hubs.append(hub)
+                # The Bluetooth wrapper record has no cloud connection to report
+                # on, so it must contribute no connectivity record at all.
+                if is_hub_record(hub):
+                    hub_connectivity[mid] = _read_hub_connectivity(status)
                 decoded_sensors.update(RainPointCoordinator._decode_hub_subdevices(self, hub, status))
 
             # A poll that returned no hubs at all, for an installation that had
@@ -601,15 +752,20 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # cycle the absent-hub signal above exists to prevent, entering
             # through the device-list door instead of the status door. Skipping
             # both is safe in the direction that matters, since a poll with no
-            # hubs also decodes no sensors and so can never raise anything.
-            if hubs or not self._silent_poll_counts:
+            # hubs also decodes no sensors and so can never raise anything. The
+            # guard covers both the not-reporting and the hub-connectivity
+            # state, since an empty device list is the same outage for both.
+            if hubs or not (self._silent_poll_counts or self._hub_disconnect_poll_counts):
                 RainPointCoordinator._prune_silent_state(self, hubs)
                 RainPointCoordinator._sync_silent_device_issues(self, decoded_sensors, absent_hubs)
+                RainPointCoordinator._prune_hub_connectivity_state(self, hubs)
+                RainPointCoordinator._sync_hub_connectivity_issues(self, hubs, hub_connectivity)
             else:
                 _LOGGER.warning(
-                    "Device list came back empty while %d sub-device(s) were being tracked; "
-                    "treating it as an outage and leaving not-reporting state untouched",
+                    "Device list came back empty while %d sub-device(s) and %d hub(s) were being "
+                    "tracked; treating it as an outage and leaving connectivity state untouched",
                     len(self._silent_poll_counts),
+                    len(self._hub_disconnect_poll_counts),
                 )
 
             _LOGGER.info("Coordinator update complete: %d hubs, %d sensors", len(hubs), len(decoded_sensors))
@@ -619,6 +775,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 "hubs": hubs,
                 "status": status_by_mid,
                 "sensors": decoded_sensors,
+                "hub_connectivity": hub_connectivity,
             }
         except RainPointApiError as err:
             raise UpdateFailed(f"RainPoint API error: {err}") from err
@@ -1028,3 +1185,103 @@ class RainPointCoordinator(DataUpdateCoordinator):
             for entry in decoded_sensors.values()
         ]
         self._silent_issues.async_sync(records, unreachable_ids=unreachable_ids)
+
+    def _prune_hub_connectivity_state(self, hubs: list[dict]) -> None:
+        """Drop any hub-disconnect debounce counter for a hub no longer listed.
+
+        A hub removed from the account (unpaired, home restructured) must not
+        accumulate a counter forever, mirroring _prune_silent_state's
+        reasoning for sub-devices.
+        """
+        live_keys = {(hub["hid"], hub["mid"]) for hub in hubs if is_hub_record(hub)}
+        self._hub_disconnect_poll_counts = {
+            key: count for key, count in self._hub_disconnect_poll_counts.items() if key in live_keys
+        }
+
+    def _sync_hub_connectivity_issues(self, hubs: list[dict], hub_connectivity: dict[int, dict]) -> None:
+        """Reconcile the per-hub connectivity repair issue against this poll's tri-states.
+
+        Translates each real hub's tri-state into a plain HubConnectivityRecord
+        -- repairs.py holds no knowledge of this dict's shape. The Bluetooth
+        wrapper record is skipped via is_hub_record, the same gate every other
+        hub-level surface uses.
+
+        On the connected tri-state the debounce counter is popped back to
+        zero and a non-disconnected record is emitted, which is the one and
+        only path that clears a raised issue.
+
+        On the disconnected tri-state the counter is incremented, and a
+        record is emitted only once the counter reaches
+        HUB_DISCONNECT_DEBOUNCE_POLLS -- this is the debounce itself, and it
+        is why one or two consecutive disconnected polls raise nothing.
+        Below the threshold the hub's issue id goes into unreachable_ids
+        instead, exactly as the unknown tri-state does, so those polls
+        neither raise nor clear. Emitting a disconnected=False record there
+        would be a lie: the counter is per-instance, so a hub that is still
+        down across a restart or a reload starts counting from one again, and
+        a "not yet confirmed" record is indistinguishable from a "confirmed
+        connected" one by the time it reaches the unconditional clear in
+        repairs.py. That would delete a still-accurate card and take two more
+        polls to re-raise it. _build_silent_subdevice makes the same choice
+        for the same reason: say nothing until the debounce has decided.
+
+        On the unknown tri-state (including a hub whose mid is altogether
+        missing from hub_connectivity) no record is emitted and the counter is
+        left untouched in both directions; the hub's issue id is instead added
+        to a per-poll unreachable_ids set so the reconcile below suppresses
+        clearing it. This is a one-directional asymmetry: unknown suppresses
+        clearing and never suppresses raising, because a hub whose
+        connectivity is unknown produces no disconnected record to raise from
+        in the first place. unreachable_ids is a local built fresh every call,
+        never manager state.
+        """
+        records: list[HubConnectivityRecord] = []
+        unreachable_ids: set[str] = set()
+
+        for hub in hubs:
+            if not is_hub_record(hub):
+                continue
+            hid = hub["hid"]
+            mid = hub["mid"]
+            key = (hid, mid)
+            # An empty string is the cloud's way of omitting the field, not a
+            # real hub name -- treat it as absent so the sanitizer's "unknown"
+            # fallback fires instead of rendering a blank.
+            hub_name = hub.get("name") or None
+            # Same field the hub's own DeviceInfo carries, so the card names the
+            # model the user sees on the device page rather than a second string.
+            hub_model = hub.get("model") or None
+            state = (hub_connectivity.get(mid) or {}).get("state")
+
+            if state == HUB_CONNECTED:
+                self._hub_disconnect_poll_counts.pop(key, None)
+                records.append(
+                    HubConnectivityRecord(
+                        hid=hid,
+                        mid=mid,
+                        hub_name=hub_name,
+                        disconnected=False,
+                        missed_polls=0,
+                        model=hub_model,
+                    )
+                )
+            elif state == HUB_DISCONNECTED:
+                count = self._hub_disconnect_poll_counts.get(key, 0) + 1
+                self._hub_disconnect_poll_counts[key] = count
+                if count < HUB_DISCONNECT_DEBOUNCE_POLLS:
+                    unreachable_ids.add(hub_connectivity_issue_id(hid, mid))
+                    continue
+                records.append(
+                    HubConnectivityRecord(
+                        hid=hid,
+                        mid=mid,
+                        hub_name=hub_name,
+                        disconnected=True,
+                        missed_polls=count,
+                        model=hub_model,
+                    )
+                )
+            else:
+                unreachable_ids.add(hub_connectivity_issue_id(hid, mid))
+
+        self._hub_connectivity_issues.async_sync(records, unreachable_ids=unreachable_ids)

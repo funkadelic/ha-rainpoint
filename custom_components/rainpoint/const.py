@@ -86,6 +86,12 @@ GENERIC_CONTROL_ISSUE_ID_PREFIX = "generic_control_command_failed"
 # so a hub with several silent children raises one issue per child rather
 # than colliding on a single id.
 SILENT_DEVICE_ISSUE_ID_PREFIX = "device_not_reporting"
+# Both the repair issue's translation key and the stem of its per-hub issue
+# id (see repairs.hub_connectivity_issue_id). The issue id itself is the
+# dedup key: it is built as f"{HUB_CONNECTIVITY_ISSUE_ID_PREFIX}_{hid}_{mid}",
+# so a home holding several hubs raises one issue per hub rather than
+# colliding on a single id.
+HUB_CONNECTIVITY_ISSUE_ID_PREFIX = "hub_disconnected"
 # Committed, variant-keyed force-disable list. Each member is a
 # (model, modelCode-as-string) tuple, keyed exactly the way the product
 # catalog itself is keyed: get_catalog_entry's UNCODED_VARIANT sentinel ("*")

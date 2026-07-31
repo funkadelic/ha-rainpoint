@@ -10,6 +10,7 @@ import pytest
 from custom_components.rainpoint import (
     DOMAIN,
     _generic_control_row_removal_reason,
+    _generic_row_removal_reason,
     _remove_stale_generic_entities,
     async_reload_integration,
     async_setup,
@@ -1558,3 +1559,56 @@ class TestGenericSensorNamespaceNeverCollidesWithControlNamespace:
             assert GENERIC_CONTROL_UNIQUE_ID_MARKER not in unique_id_fragment, (
                 f"sensor identity {identity!r} would collide with the control namespace marker"
             )
+
+
+class TestHubConnectivityEntityUnaffectedByGenericRegistrySweeps:
+    """The hub-level Cloud Connection entity's unique_id carries neither the
+    sensor nor the control generic marker, so neither registry sweep toggle
+    can ever remove it, proven against the real reason functions rather
+    than a restated constant.
+    """
+
+    HUB_CONNECTIVITY_UNIQUE_ID = "rainpoint_hub_42_100_connectivity"
+
+    def test_sensor_toggle_off_does_not_match_the_connectivity_unique_id(self):
+        assert _generic_row_removal_reason(self.HUB_CONNECTIVITY_UNIQUE_ID, False, {}) is None
+
+    def test_sensor_toggle_on_does_not_match_the_connectivity_unique_id(self):
+        assert _generic_row_removal_reason(self.HUB_CONNECTIVITY_UNIQUE_ID, True, {}) is None
+
+    def test_control_toggle_off_does_not_match_the_connectivity_unique_id(self):
+        assert _generic_control_row_removal_reason(self.HUB_CONNECTIVITY_UNIQUE_ID, False, {}) is None
+
+    def test_control_toggle_on_does_not_match_the_connectivity_unique_id(self):
+        assert _generic_control_row_removal_reason(self.HUB_CONNECTIVITY_UNIQUE_ID, True, {}) is None
+
+    def test_full_sweep_with_both_toggles_off_leaves_the_connectivity_row_in_place(self):
+        """End-to-end through _remove_stale_generic_entities: both toggles off
+        would remove every generic-namespace row, and this row is not one."""
+        connectivity_row = SimpleNamespace(
+            entity_id="binary_sensor.rainpoint_hub_42_100_connectivity",
+            unique_id=self.HUB_CONNECTIVITY_UNIQUE_ID,
+            config_entry_id="this_entry",
+        )
+        removed: list[str] = []
+
+        class _FakeRegistry:
+            """Minimal registry stand-in recording every async_remove call."""
+
+            def async_remove(self, entity_id):
+                """Record the removed entity_id."""
+                removed.append(entity_id)
+
+        entry = MagicMock()
+        entry.entry_id = "this_entry"
+        entry.options = {}
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {}}
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", return_value=_FakeRegistry()),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", return_value=[connectivity_row]),
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        assert removed == []

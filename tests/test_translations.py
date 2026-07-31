@@ -18,6 +18,8 @@ import pytest
 import custom_components.rainpoint as rainpoint_pkg
 from custom_components.rainpoint import repairs
 from custom_components.rainpoint.repairs import (
+    HubConnectivityRecord,
+    RainPointHubConnectivityIssues,
     RainPointSilentDeviceIssues,
     SilentDeviceRecord,
 )
@@ -43,6 +45,11 @@ def _placeholders_in(text: str) -> set[str]:
 def _not_reporting_entry() -> dict:
     """The issues entry whose copy the code renders placeholders into."""
     return _load_en_translations()["issues"]["device_not_reporting"]
+
+
+def _hub_disconnected_entry() -> dict:
+    """The issues entry whose copy RainPointHubConnectivityIssues renders into."""
+    return _load_en_translations()["issues"]["hub_disconnected"]
 
 
 class TestIssueCopyStructure:
@@ -95,6 +102,42 @@ class TestNotReportingIssuePlaceholderParity:
     def test_copy_renders_with_the_supplied_values_and_leaves_no_brace(self):
         """Proves the parity holds under an actual render, not just by name comparison."""
         entry = _not_reporting_entry()
+        supplied = self._supplied_placeholders()
+        rendered = entry["description"].format(**supplied)
+        assert "{" not in rendered
+        assert "}" not in rendered
+        assert entry["title"].format(**supplied)
+
+
+class TestHubDisconnectedIssuePlaceholderParity:
+    """The copy's placeholders and the ones _raise_issue supplies must match."""
+
+    @staticmethod
+    def _supplied_placeholders() -> dict[str, str]:
+        """Raise a real issue and capture what the code passed to the registry."""
+        manager = RainPointHubConnectivityIssues(MagicMock())
+        record = HubConnectivityRecord(
+            hid=100,
+            mid=200,
+            hub_name="Hub1",
+            disconnected=True,
+            missed_polls=3,
+            model="HWG023WBRF-V2",
+        )
+        with patch.object(repairs.ir, "async_create_issue") as create:
+            manager.async_sync([record])
+        create.assert_called_once()
+        return create.call_args.kwargs["translation_placeholders"]
+
+    def test_copy_placeholders_match_the_ones_the_code_supplies(self):
+        """A mismatch in either direction ships a card with a literal brace or a blank."""
+        entry = _hub_disconnected_entry()
+        in_copy = _placeholders_in(entry["title"]) | _placeholders_in(entry["description"])
+        assert in_copy == set(self._supplied_placeholders())
+
+    def test_copy_renders_with_the_supplied_values_and_leaves_no_brace(self):
+        """Proves the parity holds under an actual render, not just by name comparison."""
+        entry = _hub_disconnected_entry()
         supplied = self._supplied_placeholders()
         rendered = entry["description"].format(**supplied)
         assert "{" not in rendered

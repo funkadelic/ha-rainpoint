@@ -111,6 +111,52 @@ class TestValveProperties:
         }
         assert valve.available is False
 
+    def test_available_when_hub_online_and_cloud_connected(self):
+        """hub_online True and the hub's record connected: available True,
+        unchanged from before this correction."""
+        valve = _make_valve(hub_online=True)
+        valve.coordinator.data["hub_connectivity"] = {200: {"state": "connected"}}
+        assert valve.available is True
+
+    def test_unavailable_when_hub_online_but_cloud_disconnected(self):
+        """hub_online True but the cloud already reports this hub as
+        disconnected: available False. This is the specific lie the cloud
+        connectivity gate exists to stop -- hub_online is payload-derived and
+        stays healthy off a frozen frame during an outage."""
+        valve = _make_valve(hub_online=True)
+        valve.coordinator.data["hub_connectivity"] = {200: {"state": "disconnected"}}
+        assert valve.available is False
+
+    def test_available_when_hub_online_and_cloud_connectivity_unknown(self):
+        """An unknown tri-state marks nothing unavailable: available stays
+        True."""
+        valve = _make_valve(hub_online=True)
+        valve.coordinator.data["hub_connectivity"] = {200: {"state": "unknown"}}
+        assert valve.available is True
+
+    def test_available_when_hub_online_and_no_hub_connectivity_key_at_all(self):
+        """No hub_connectivity key at all (every pre-existing test fake):
+        available stays True, exactly what it was before this plan."""
+        valve = _make_valve(hub_online=True)
+        assert "hub_connectivity" not in valve.coordinator.data
+        assert valve.available is True
+
+    def test_unavailable_when_hub_offline_even_though_cloud_connected(self):
+        """hub_online False with a connected cloud report: available False,
+        proving the payload-derived signal was not replaced by the cloud
+        read."""
+        valve = _make_valve(hub_online=False)
+        valve.coordinator.data["hub_connectivity"] = {200: {"state": "connected"}}
+        assert valve.available is False
+
+    def test_available_false_when_sensor_missing_even_with_connected_hub(self):
+        """The early sensor-missing return still wins; the new condition is
+        never reached."""
+        valve = _make_valve(hub_online=True)
+        valve.coordinator.data["hub_connectivity"] = {200: {"state": "connected"}}
+        valve._sensor_key = "missing"
+        assert valve.available is False
+
     def test_extra_state_attributes_includes_duration(self):
         """Zone with duration_seconds should appear in extra_state_attributes."""
         valve = _make_valve(zone_data={"open": True, "duration_seconds": 300, "state_raw": 1})
@@ -861,3 +907,72 @@ class TestValveEntitiesAppearWithinTheSession:
         # Steady state must not offer the same zones a second time.
         await coordinator.async_refresh()
         assert [e._zone_num for e in captured] == [1, 2]
+
+
+class TestValveAvailabilityRealTimeline:
+    """Drives the real construct -> first refresh -> platform setup ->
+    refresh sequence rather than an injected coordinator.data snapshot, so
+    the connected-to-disconnected transition is proven on an
+    already-constructed entity object."""
+
+    @staticmethod
+    def _hub_status(connected_value):
+        """One valve hub whose D01 sub-device reports open zones and whose
+        hub-level connected id carries the given value."""
+        return [
+            {
+                "mid": 200,
+                "subDeviceStatus": [
+                    {"id": "D01", "value": SAMPLE_HTV245_ASCII_PAYLOAD, "time": 1785420002247},
+                    {"id": "connected", "value": connected_value, "time": 1785420002247},
+                ],
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_connected_to_disconnected_transition_moves_available(self):
+        """Construct, first refresh with connected '1', platform setup,
+        assert available True, then a refresh with connected flipped to '0'
+        moves the same entity object to available False -- no reload, no
+        second setup."""
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 200,
+                "name": "Hub A",
+                "deviceName": "d",
+                "productKey": "pk",
+                "homeName": "H",
+                "subDevices": [{"addr": 1, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}],
+            }
+        ]
+        client.get_multiple_device_status.return_value = self._hub_status(connected_value="1")
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [100]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert len(captured) >= 1
+        valve = captured[0]
+        assert valve.available is True
+
+        client.get_multiple_device_status.return_value = self._hub_status(connected_value="0")
+        await coordinator.async_refresh()
+
+        assert valve.available is False

@@ -33,6 +33,7 @@ class TestSubDeviceAttributes:
             "device_timestamp": "2026-07-29T12:19:33+00:00",
             "timestamp_method": "rtc",
             "timestamp_source": "device",
+            "hub_connected": None,
         }
 
     def test_server_timestamp_fills_in_for_device_timestamp(self):
@@ -51,20 +52,23 @@ class TestSubDeviceAttributes:
         raised while its attributes were being built.
         """
         coordinator = _coordinator({"firmware_version": "1.4", "data": None})
-        assert sub_device_attributes(coordinator, "k") == {"firmware_version": "1.4"}
+        assert sub_device_attributes(coordinator, "k") == {"firmware_version": "1.4", "hub_connected": None}
 
     def test_missing_entry_yields_nothing(self):
-        """A sensor key the coordinator does not know yields no attributes."""
-        assert sub_device_attributes(_coordinator(None), "k") == {}
+        """A sensor key the coordinator does not know yields the hub_connected
+        marker alone: the key is never conditionally omitted, so a template
+        can test it without first testing for its existence."""
+        assert sub_device_attributes(_coordinator(None), "k") == {"hub_connected": None}
 
     def test_coordinator_without_data_yields_nothing(self):
-        """A coordinator that has not completed its first poll yields no attributes."""
-        assert sub_device_attributes(SimpleNamespace(data=None), "k") == {}
+        """A coordinator that has not completed its first poll still yields
+        the hub_connected marker, and must not raise."""
+        assert sub_device_attributes(SimpleNamespace(data=None), "k") == {"hub_connected": None}
 
     def test_absent_firmware_is_omitted(self):
         """An empty firmware string is treated as absent rather than reported."""
         coordinator = _coordinator({"firmware_version": "", "data": {}})
-        assert sub_device_attributes(coordinator, "k") == {}
+        assert sub_device_attributes(coordinator, "k") == {"hub_connected": None}
 
     def test_silent_entry_yields_firmware_alone(self):
         """A silent entry (D-09/D-11) carries neither a device nor a server
@@ -79,7 +83,123 @@ class TestSubDeviceAttributes:
                 "data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
             }
         )
-        assert sub_device_attributes(coordinator, "k") == {"firmware_version": "1.4"}
+        assert sub_device_attributes(coordinator, "k") == {"firmware_version": "1.4", "hub_connected": None}
+
+
+class TestHubConnectedAttribute:
+    """Tests for the hub_connected marker sub_device_attributes adds."""
+
+    def test_hub_connected_true_when_hub_reports_connected(self):
+        """A connected hub's cloud state yields hub_connected True."""
+        coordinator = SimpleNamespace(
+            data={
+                "sensors": {"k": {"mid": 200, "data": {}}},
+                "hub_connectivity": {200: {"state": "connected"}},
+            }
+        )
+        assert sub_device_attributes(coordinator, "k")["hub_connected"] is True
+
+    def test_hub_connected_false_when_hub_reports_disconnected(self):
+        """A disconnected hub's cloud state yields hub_connected False -- the
+        stale-reading marker a template can gate on without the integration
+        hiding the reading itself, which stays untouched."""
+        coordinator = SimpleNamespace(
+            data={
+                "sensors": {"k": {"mid": 200, "data": {}}},
+                "hub_connectivity": {200: {"state": "disconnected"}},
+            }
+        )
+        assert sub_device_attributes(coordinator, "k")["hub_connected"] is False
+
+    def test_hub_connected_none_when_hub_reports_unknown(self):
+        """An unknown tri-state yields hub_connected None, distinct from both
+        a definite connected and disconnected answer."""
+        coordinator = SimpleNamespace(
+            data={
+                "sensors": {"k": {"mid": 200, "data": {}}},
+                "hub_connectivity": {200: {"state": "unknown"}},
+            }
+        )
+        assert sub_device_attributes(coordinator, "k")["hub_connected"] is None
+
+    def test_hub_connected_none_when_no_hub_connectivity_key_at_all(self):
+        """A coordinator snapshot with no hub_connectivity key at all must not
+        raise, and answers None rather than a false positive or negative."""
+        coordinator = _coordinator({"mid": 200, "data": {}})
+        assert sub_device_attributes(coordinator, "k")["hub_connected"] is None
+
+    def test_hub_connected_none_when_sensor_entry_has_no_mid(self):
+        """A sensor entry with no mid key yields None rather than raising."""
+        coordinator = SimpleNamespace(
+            data={
+                "sensors": {"k": {"data": {}}},
+                "hub_connectivity": {200: {"state": "connected"}},
+            }
+        )
+        assert sub_device_attributes(coordinator, "k")["hub_connected"] is None
+
+
+class TestHubConnectedCrossPlatform:
+    """The hub_connected marker rides through every platform via the one
+    shared helper, with no per-platform change of its own."""
+
+    @staticmethod
+    def _disconnected_hub_coordinator(entry):
+        """Return a coordinator stub whose one hub reports disconnected."""
+        return MagicMock(
+            data={
+                "sensors": {"100_200_1": entry},
+                "hub_connectivity": {200: {"state": "disconnected"}},
+            }
+        )
+
+    def test_valve_entity_surfaces_hub_connected_false(self):
+        """RainPointValveEntity inherits hub_connected via sub_device_attributes."""
+        from custom_components.rainpoint.valve import RainPointValveEntity
+
+        sensor_info = {
+            "hid": 100,
+            "mid": 200,
+            "addr": 1,
+            "sub_name": "Valve Hub 1",
+            "model": "HTV245FRF",
+            "firmware_version": "1.0",
+        }
+        entry = {**sensor_info, "data": {"hub_online": True, "zones": {1: {"open": True}}}}
+        coordinator = self._disconnected_hub_coordinator(entry)
+
+        valve = RainPointValveEntity.__new__(RainPointValveEntity)
+        valve.coordinator = coordinator
+        valve._sensor_key = "100_200_1"
+        valve._sensor_info = sensor_info
+        valve._zone_num = 1
+
+        assert valve.extra_state_attributes["hub_connected"] is False
+
+    def test_sensor_entity_surfaces_hub_connected_false(self):
+        """RainPointSensorBase subclasses inherit hub_connected the same way."""
+        from custom_components.rainpoint.sensor import RainPointMoisturePercentSensor
+
+        sensor_info = {
+            "hid": 100,
+            "mid": 200,
+            "addr": 1,
+            "sub_name": "Test Sensor",
+            "model": "HCS026FRF",
+            "firmware_version": "1.0.0",
+            "raw_status": {},
+        }
+        entry = {**sensor_info, "data": {"type": "moisture_simple", "moisture_percent": 42}}
+        coordinator = self._disconnected_hub_coordinator(entry)
+
+        sensor = RainPointMoisturePercentSensor.__new__(RainPointMoisturePercentSensor)
+        sensor.coordinator = coordinator
+        sensor._sensor_key = "100_200_1"
+        sensor._sensor_info = sensor_info
+        sensor._base_slug = "100_200_1"
+        sensor._simple = True
+
+        assert sensor.extra_state_attributes["hub_connected"] is False
 
 
 class TestSubDeviceEntity:
@@ -116,6 +236,28 @@ class TestSubDeviceEntity:
 
         entity = self._entity({"sensors": {"k": {"data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"}}}})
         assert entity.available is False
+
+    def test_available_is_unchanged_by_a_disconnected_hub(self):
+        """Regression pin: RainPointSubDeviceEntity.available must NOT be
+        touched by hub cloud connectivity.
+
+        A future reader tempted to "finish the job" by propagating
+        hub_connected into availability
+        would silently reverse a decision made on hardware evidence: the
+        data self-heals within seconds of the hub reattaching, so flipping
+        every reading entity to unavailable during an outage would cost
+        every existing user history gaps and template errors for a
+        self-healing condition. The read path deliberately keeps its last
+        value throughout a hub outage; only the mid key on the sensor entry,
+        not the hub_connectivity record, is what this property ever reads.
+        """
+        entity = self._entity(
+            {
+                "sensors": {"k": {"mid": 200, "data": {"type": "valve"}}},
+                "hub_connectivity": {200: {"state": "disconnected"}},
+            }
+        )
+        assert entity.available is True
 
 
 class _FakeEntity:
