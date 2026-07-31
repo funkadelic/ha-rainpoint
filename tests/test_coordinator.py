@@ -2182,6 +2182,175 @@ class TestHubConnectivityDebounceRealTimeline:
             assert (100, 200) not in second._hub_disconnect_poll_counts
 
 
+class TestPollOnlyHubConnectivityParity:
+    """SC 6: with the push channel down and no pushed edge ever applied,
+    hub connectivity behaves exactly as Phase 16 shipped it. This class
+    does not duplicate TestHubConnectivityDebounceRealTimeline,
+    TestHubConnectivityIntegration or TestHubConnectivitySurvivesDeviceListOutage
+    (the per-behaviour proofs); it is the composed proof that the D-16
+    guard changed none of them, driven with no apply_hub_push_update call
+    anywhere in the class and no direct assignment to coordinator.data.
+
+    _guard_hub_connectivity_order is instrumented rather than trusted: a
+    spy wraps the real function for the duration of every poll-only
+    sequence below and asserts it returned its polled argument on every
+    single call, so a future change that made the guard fire without push
+    history goes red here rather than silently altering poll behaviour."""
+
+    @staticmethod
+    def _build(connected_value="1"):
+        """Return (coordinator, client) wired the way __init__.py wires it."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 200,
+                "name": "Hub1",
+                "deviceName": "dev1",
+                "productKey": "pk1",
+                "homeName": "Home",
+                "subDevices": [],
+            }
+        ]
+        client.get_multiple_device_status.return_value = [
+            {"mid": 200, "subDeviceStatus": [{"id": "connected", "value": connected_value}]}
+        ]
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+
+        hass = MagicMock()
+        hass.data = {}
+
+        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
+        return coordinator, client
+
+    @staticmethod
+    def _set_connected(client, value):
+        """Mutate the next poll's connected value on an already-built client."""
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": value}]}]
+
+    @staticmethod
+    def _spy_guard(calls):
+        """Return a side_effect callable that delegates to the real guard and
+        records (polled, prior, result) for every invocation."""
+        original = _coord_module._guard_hub_connectivity_order
+
+        def _wrapped(polled, prior):
+            result = original(polled, prior)
+            calls.append((polled, result))
+            return result
+
+        return _wrapped
+
+    @staticmethod
+    def _assert_guard_always_returned_polled(calls):
+        assert calls, "the guard must be called at least once for this assertion to mean anything"
+        for polled, result in calls:
+            assert result is polled
+
+    @pytest.mark.asyncio
+    async def test_full_raise_clear_reset_cycle_matches_phase_16_with_the_guard_inert(self):
+        """Connected; three disconnected polls raise exactly one card; a
+        fourth raises no second card; recovery clears and resets the
+        counter; a fresh outage crosses the threshold again from zero --
+        the same lifecycle TestHubConnectivityDebounceRealTimeline pins,
+        composed here as one proof that D-16 changed none of it."""
+        coordinator, client = self._build(connected_value="1")
+        guard_calls: list[tuple[dict, dict]] = []
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+            patch.object(_coord_module, "_guard_hub_connectivity_order", side_effect=self._spy_guard(guard_calls)),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            assert create.call_count == 0
+
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()  # poll 1 disconnected: counter 1
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            assert create.call_count == 0
+
+            await coordinator.async_refresh()  # poll 2 disconnected: counter 2
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert create.call_count == 0
+
+            await coordinator.async_refresh()  # poll 3 disconnected: counter 3 -> raise
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            assert create.call_count == 1
+            _hass, _domain, issue_id = create.call_args.args
+            assert issue_id == hub_connectivity_issue_id(100, 200)
+
+            await coordinator.async_refresh()  # poll 4 disconnected: no second raise
+            assert create.call_count == 1
+
+            self._set_connected(client, "1")
+            deletes_before_recovery = delete.call_count
+            await coordinator.async_refresh()  # poll 5 connected: clears and resets
+            assert delete.call_count > deletes_before_recovery
+            assert create.call_count == 1
+            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()  # poll 6 disconnected: counter restarts at 1
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            await coordinator.async_refresh()  # poll 7: counter 2
+            await coordinator.async_refresh()  # poll 8: counter 3 -> raise again
+            assert create.call_count == 2
+
+        self._assert_guard_always_returned_polled(guard_calls)
+
+    @pytest.mark.asyncio
+    async def test_unknown_poll_and_absent_status_move_neither_counter_nor_card_with_the_guard_inert(self):
+        """An unknown poll (connected id missing entirely) is not evidence in
+        either direction; an absent status (both fetch paths fail
+        transiently) yields the unknown tri-state, never disconnected --
+        Phase 16's absent-never-coerced-to-disconnected rule, unaffected by
+        the guard when there is no push history to hold anything against."""
+        coordinator, client = self._build(connected_value="1")
+        guard_calls: list[tuple[dict, dict]] = []
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_coord_module, "_guard_hub_connectivity_order", side_effect=self._spy_guard(guard_calls)),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()
+            await coordinator.async_refresh()
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert create.call_count == 0
+
+            # Unknown: the connected id is missing entirely this poll.
+            client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
+            await coordinator.async_refresh()
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert create.call_count == 0
+            assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
+
+            # Absent: both fetch paths fail transiently for this poll, so
+            # this hub's status was never obtained at all.
+            client.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
+            client.get_device_status.side_effect = aiohttp.ClientError("boom")
+            await coordinator.async_refresh()
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert create.call_count == 0
+            assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
+
+            # The counter resumes from where it left off, proving neither
+            # gap moment reset or advanced it.
+            client.get_multiple_device_status.side_effect = None
+            client.get_device_status.side_effect = None
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            assert create.call_count == 1
+
+        self._assert_guard_always_returned_polled(guard_calls)
+
+
 class TestHubConnectivityPushClearInterleavedTimeline:
     """D-09/D-10 interleaved over a real driven timeline: raising the card
     stays poll-counted only, a pushed reconnect clears it and the counter
