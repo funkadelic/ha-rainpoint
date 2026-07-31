@@ -1122,7 +1122,7 @@ class TestUnknownSensorAttributeCost:
         calls = []
 
         def _counting(model, model_code=None):
-            """Count how many entities of each class were offered."""
+            """Stand in for describe_generic_gate, recording every call it receives."""
             calls.append((model, model_code))
             return {"unmapped_generic_identities": ["STA_X"], "generic_gate_blocked_by": ["nope"]}
 
@@ -1157,7 +1157,7 @@ class TestUnknownSensorAttributeCost:
         calls = []
 
         def _counting(model, raw_value, model_code=None):
-            """Count how many entities of each class were offered."""
+            """Stand in for _build_new_device_issue_url, recording each raw_value it is given."""
             calls.append(raw_value)
             return f"https://example.invalid/{raw_value}"
 
@@ -1226,7 +1226,7 @@ class TestUnknownSensorControlGateAttribute:
         calls = []
 
         def _counting(model, model_code=None):
-            """Count how many entities of each class were offered."""
+            """Stand in for describe_control_gate, recording every call it receives."""
             calls.append((model, model_code))
             return {"generic_control_blocked_by": ["nope"]}
 
@@ -1511,7 +1511,7 @@ class TestZoneWaterUsageSensor:
         return next(e for e in entities if isinstance(e, RainPointZoneWaterUsageSensor))
 
     async def _setup(self, zones):
-        """Drive first refresh then platform setup, returning the registered listener."""
+        """Run platform setup against these zones, returning the entities it registered."""
         sensor_key = "100_200_1"
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: self._valve_entry(zones)}))
         hass, entry = _make_hass(coordinator)
@@ -1605,7 +1605,7 @@ class TestWiderValveFamilyUsageEntities:
 
     @staticmethod
     async def _setup(model, payload):
-        """Drive first refresh then platform setup, returning the registered listener."""
+        """Run platform setup for this model, returning only the water-usage entities it registered."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
@@ -1724,7 +1724,7 @@ class TestSilentSensorDispatch:
         return make_sensor_entry(hid=100, mid=200, addr=1, model=model, sub_name="BT Valve", data=data)
 
     async def _setup(self, entry):
-        """Drive first refresh then platform setup, returning the registered listener."""
+        """Run platform setup against this sensor entry, returning the entities it registered."""
         sensor_key = "100_200_1"
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: entry}))
         hass, entry_obj = _make_hass(coordinator)
@@ -1879,7 +1879,7 @@ class TestNotReportingSensor:
         calls = []
 
         def _counting(model, raw_value, model_code=None, *, payload_note=None):
-            """Count how many entities of each class were offered."""
+            """Stand in for _build_new_device_issue_url, recording the full argument tuple."""
             calls.append((model, raw_value, model_code, payload_note))
             return "https://example.invalid/report"
 
@@ -2151,6 +2151,22 @@ class TestLateSensorEntityAdder:
         added = captured[1:]
         assert any(isinstance(e, RainPointRawPayloadSensor) for e in added)
         assert len([e for e in captured if isinstance(e, RainPointNotReportingSensor)]) == 1
+
+    @pytest.mark.asyncio
+    async def test_setup_skips_a_malformed_record_without_dropping_the_valid_ones(self):
+        """A bad record at setup must not abort the platform, matching valve.py and number.py.
+
+        The listener has always filtered these; setup did not, so a single
+        non-dict record would raise inside _create_sensor_entities and cost the
+        installation every sensor entity rather than one.
+        """
+        good = "100_200_1"
+        _coordinator, captured, _add, _listener = await self._setup(
+            {"100_200_9": "not a dict", good: self._reporting_entry()},
+        )
+
+        assert captured
+        assert all(getattr(e, "_sensor_key", None) != "100_200_9" for e in captured)
 
     @pytest.mark.asyncio
     async def test_a_malformed_record_is_skipped_without_stopping_the_others(self):

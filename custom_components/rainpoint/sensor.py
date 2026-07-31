@@ -423,7 +423,7 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
-    sensors_cfg = coordinator.data.get("sensors", {})
+    sensors_cfg = {key: info for key, info in coordinator.data.get("sensors", {}).items() if isinstance(info, dict)}
     hubs_cfg = coordinator.data.get("hubs", [])
     generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
 
