@@ -461,6 +461,66 @@ class TestRainPointSilentDeviceIssues:
         assert domain == DOMAIN
         assert issue_id == silent_device_issue_id(100, 200, 1)
 
+    def test_recovery_from_a_raised_issue_logs_once(self, issue_mocks, caplog):
+        """The WARNING on raise needs a matching line on clear.
+
+        Mirrors RainPointHubConnectivityIssues; without it the log shows a
+        device going silent and never coming back.
+        """
+        manager = RainPointSilentDeviceIssues(MagicMock())
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_record()])
+            manager.async_sync([_make_record(silent=False)])
+
+        recovered = [r for r in caplog.records if "reporting again" in r.getMessage()]
+        assert len(recovered) == 1
+        assert silent_device_issue_id(100, 200, 1) in recovered[0].getMessage()
+
+    def test_healthy_device_polls_never_log_the_recovery_line(self, issue_mocks, caplog):
+        """The clear runs on every poll for every reporting device, so it is gated."""
+        manager = RainPointSilentDeviceIssues(MagicMock())
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            for _ in range(5):
+                manager.async_sync([_make_record(silent=False)])
+
+        assert not [r for r in caplog.records if "reporting again" in r.getMessage()]
+
+    def test_a_removed_device_is_not_logged_as_having_resumed_reporting(self, issue_mocks, caplog):
+        """The stale sweep is a removal, not a recovery, and must not claim otherwise.
+
+        stale_id is drawn from _active by construction, so the was_active gate
+        is always true on that path. A device dropped from the hub's
+        sub-device list would otherwise be logged as reporting again, telling
+        an operator reading the log the opposite of what happened.
+        """
+        manager = RainPointSilentDeviceIssues(MagicMock())
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_record()])
+            manager.async_sync([])
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert not [m for m in messages if "reporting again" in m]
+        assert [m for m in messages if "no longer listed on its hub" in m]
+
+    def test_push_arrival_clearing_does_not_log_per_message(self, issue_mocks, caplog):
+        """async_clear runs per pushed message, far more often than the poll.
+
+        Gating on the active set is what stops a chatty device turning the log
+        into one line per push for the rest of the session. The first call
+        after a raise still logs, because that one is a real recovery.
+        """
+        manager = RainPointSilentDeviceIssues(MagicMock())
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_record()])
+            for _ in range(10):
+                manager.async_clear(100, 200, 1)
+
+        assert len([r for r in caplog.records if "reporting again" in r.getMessage()]) == 1
+
     def test_never_active_record_still_issues_idempotent_delete(self, issue_mocks):
         """Clearing unconditionally is what stops a pre-reload issue stranding."""
         _create, delete = issue_mocks
@@ -706,6 +766,64 @@ class TestRainPointHubConnectivityIssues:
         manager.async_sync([record])
 
         delete.assert_called_once()
+
+    def test_recovery_from_a_raised_issue_logs_once(self, issue_mocks, caplog):
+        """The WARNING on raise needs a matching line on clear.
+
+        Without it the log shows an outage starting and never ending, which is
+        indistinguishable from an outage still running.
+        """
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_hub_record()])
+            manager.async_sync([_make_hub_record(disconnected=False)])
+
+        recovered = [r for r in caplog.records if "connectivity restored" in r.getMessage()]
+        assert len(recovered) == 1
+        assert hub_connectivity_issue_id(100, 200) in recovered[0].getMessage()
+
+    def test_healthy_hub_polls_never_log_the_recovery_line(self, issue_mocks, caplog):
+        """The clear runs on every connected poll, so the line must be gated.
+
+        Ungated it would print once per hub per scan interval forever, which is
+        the reason the delete itself stays unconditional but the log does not.
+        """
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            for _ in range(5):
+                manager.async_sync([_make_hub_record(disconnected=False)])
+
+        assert not [r for r in caplog.records if "connectivity restored" in r.getMessage()]
+
+    def test_a_removed_hub_is_not_logged_as_having_reconnected(self, issue_mocks, caplog):
+        """The stale sweep is a removal, not a reconnection, and must not claim otherwise.
+
+        Mirrors the silent-device case. A hub unpaired or lost to a home
+        restructure would otherwise be logged as connectivity restored.
+        """
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_hub_record()])
+            manager.async_sync([])
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert not [m for m in messages if "connectivity restored" in m]
+        assert [m for m in messages if "no longer listed on the account" in m]
+
+    def test_recovery_line_does_not_repeat_on_later_connected_polls(self, issue_mocks, caplog):
+        """One line per outage, not one per poll for the rest of the session."""
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_hub_record()])
+            manager.async_sync([_make_hub_record(disconnected=False)])
+            manager.async_sync([_make_hub_record(disconnected=False)])
+            manager.async_sync([_make_hub_record(disconnected=False)])
+
+        assert len([r for r in caplog.records if "connectivity restored" in r.getMessage()]) == 1
 
     def test_registry_error_is_swallowed_and_logged(self, issue_mocks, caplog):
         """A failing diagnostic surface must never break the poll that drives it."""

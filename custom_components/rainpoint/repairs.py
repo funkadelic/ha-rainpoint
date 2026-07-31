@@ -214,6 +214,14 @@ _WHITESPACE_RUN_RE = re.compile(r"\s+")
 # with no scheme and no surrounding syntax to strip.
 _AUTOLINK_PREFIX_RE = re.compile(r"www\.", re.IGNORECASE)
 
+# Why a raised issue is being cleared, which decides what the recovery log
+# line says. Both managers reach _clear_issue from two structurally different
+# places: a record that reports the thing healthy again, and a stale-set sweep
+# for an id no record mentions at all. The second is a removal from the
+# account, not a recovery, and one message cannot honestly describe both.
+_CLEAR_REASON_RECOVERED = "recovered"
+_CLEAR_REASON_REMOVED = "removed"
+
 
 def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
     """Neutralize a cloud-supplied string before it reaches a Repairs translation placeholder.
@@ -301,7 +309,11 @@ class RainPointSilentDeviceIssues:
             else:
                 self._clear_issue(issue_id)
         for stale_id in self._active - mentioned - set(unreachable_ids):
-            self._clear_issue(stale_id)
+            # Drawn from _active, so this device was mentioned by an earlier
+            # poll and is not mentioned now: it left the sub-device list
+            # rather than resumed reporting. Logging it as recovery would
+            # assert the opposite of what happened.
+            self._clear_issue(stale_id, reason=_CLEAR_REASON_REMOVED)
 
     def async_clear(self, hid: Any, mid: int, addr: int) -> None:
         """Clear one device's issue explicitly; the push-arrival half of the lifecycle.
@@ -363,16 +375,43 @@ class RainPointSilentDeviceIssues:
                 issue_exc,
             )
 
-    def _clear_issue(self, issue_id: str) -> None:
+    def _clear_issue(self, issue_id: str, *, reason: str = _CLEAR_REASON_RECOVERED) -> None:
         """Delete one device's issue, unconditionally rather than only when active.
 
         A fresh instance after a reload has no record of an issue a prior
         session raised, so guarding on the active set would strand it forever.
         Deleting an unknown id is already a no-op.
+
+        The log line is gated on the id having been active, which is the one
+        thing the delete itself is deliberately not gated on. Every poll
+        reaches this method for every reporting device, and async_clear
+        reaches it for every pushed message, so an ungated line would print
+        per device per message forever; gated, it fires once per raised-then-
+        resolved transition and pairs with the WARNING from _raise_issue.
+
+        The reason decides what that line claims. A record-driven clear is a
+        recovery; the stale-set sweep in async_sync is a device that left the
+        sub-device list, which is not the same event and must not be reported
+        as one. Note the gate cannot fire at all for an issue raised before a
+        restart, since _active is per-instance: the delete is still correct
+        there, but the log carries only the outages that began in this
+        session. RainPointHubConnectivityIssues._clear_issue is the same shape
+        for the same reasons; keep the two in step.
         """
+        was_active = issue_id in self._active
         self._active.discard(issue_id)
         try:
             ir.async_delete_issue(self._hass, DOMAIN, issue_id)
+            if was_active and reason == _CLEAR_REASON_RECOVERED:
+                _LOGGER.info(
+                    "RainPoint device is reporting again; clearing repair issue (id=%s)",
+                    issue_id,
+                )
+            elif was_active:
+                _LOGGER.info(
+                    "RainPoint device is no longer listed on its hub; clearing repair issue (id=%s)",
+                    issue_id,
+                )
         except Exception as issue_exc:
             _LOGGER.debug(
                 "Failed to delete the not-reporting repair issue (id=%s): %s",
@@ -452,7 +491,11 @@ class RainPointHubConnectivityIssues:
             else:
                 self._clear_issue(issue_id)
         for stale_id in self._active - mentioned - set(unreachable_ids):
-            self._clear_issue(stale_id)
+            # Drawn from _active, so this hub was mentioned by an earlier poll
+            # and is not mentioned now: it left the account rather than
+            # reconnected. Logging it as recovery would assert the opposite of
+            # what happened.
+            self._clear_issue(stale_id, reason=_CLEAR_REASON_REMOVED)
 
     def _raise_issue(self, issue_id: str, record: HubConnectivityRecord) -> None:
         """Raise one hub's issue, at most once per active period.
@@ -495,16 +538,44 @@ class RainPointHubConnectivityIssues:
                 issue_exc,
             )
 
-    def _clear_issue(self, issue_id: str) -> None:
+    def _clear_issue(self, issue_id: str, *, reason: str = _CLEAR_REASON_RECOVERED) -> None:
         """Delete one hub's issue, unconditionally rather than only when active.
 
         A fresh instance after a reload has no record of an issue a prior
         session raised, so guarding on the active set would strand it forever.
         Deleting an unknown id is already a no-op.
+
+        The log line is gated on the id having been active, which is the one
+        thing the delete itself is deliberately not gated on. Every connected
+        poll reaches this method for every healthy hub, so an ungated line
+        would print once per hub every scan interval forever; gated, it fires
+        once per raised-then-resolved transition and pairs with the WARNING
+        from _raise_issue, so the log carries both ends of an outage instead
+        of only its start.
+
+        The reason decides what that line claims. A record-driven clear is a
+        reconnection; the stale-set sweep in async_sync is a hub that left the
+        account, which is not the same event and must not be reported as one.
+        Note the gate cannot fire at all for an issue raised before a restart,
+        since _active is per-instance: the delete is still correct there, but
+        the log carries only the outages that began in this session.
+        RainPointSilentDeviceIssues._clear_issue is the same shape for the
+        same reasons; keep the two in step.
         """
+        was_active = issue_id in self._active
         self._active.discard(issue_id)
         try:
             ir.async_delete_issue(self._hass, DOMAIN, issue_id)
+            if was_active and reason == _CLEAR_REASON_RECOVERED:
+                _LOGGER.info(
+                    "RainPoint hub connectivity restored; clearing repair issue (id=%s)",
+                    issue_id,
+                )
+            elif was_active:
+                _LOGGER.info(
+                    "RainPoint hub is no longer listed on the account; clearing repair issue (id=%s)",
+                    issue_id,
+                )
         except Exception as issue_exc:
             _LOGGER.debug(
                 "Failed to delete the hub connectivity repair issue (id=%s): %s",
