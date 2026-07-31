@@ -954,15 +954,32 @@ class RainPointCoordinator(DataUpdateCoordinator):
             decoded_sensors: dict[str, dict] = {}
             absent_hubs: list[dict] = []
             hub_connectivity: dict[int, dict] = {}
-            # D-16: the prior snapshot both _fetch_status_by_mid paths' guard
-            # reads from, hoisted once rather than per hub. Degrades to {} the
-            # same way hub_connectivity_record already does, so a first poll
-            # after startup (self.data is falsy) or a snapshot that never
-            # gained a hub_connectivity key both resolve to no prior record.
-            prior_connectivity = (self.data or {}).get("hub_connectivity") or {}
 
             if hubs:
                 status_by_mid = await RainPointCoordinator._fetch_status_by_mid(self, hubs)
+
+            # D-16: the prior snapshot both _fetch_status_by_mid paths' guard
+            # reads from, hoisted once rather than per hub. Read as late as
+            # possible -- here, after every await above (_collect_hubs and
+            # _fetch_status_by_mid) has already yielded control back to the
+            # event loop -- because apply_hub_push_update is synchronous and
+            # can run to completion during either of those awaits. Hoisting
+            # this read any earlier would let a push landing in that window
+            # go unseen by the guard below, then get silently discarded when
+            # this poll's return value replaces self.data wholesale.
+            #
+            # Everything from here to the return below is synchronous: no
+            # further await exists in this method, so this read is not just
+            # "as late as possible" but the last point at which a
+            # concurrently-arriving push could be missed. If a future change
+            # adds an await between this line and the return (or makes one of
+            # the helpers called below async), that reasoning stops holding
+            # and this comment needs revisiting alongside it. Degrades to {}
+            # the same way hub_connectivity_record already does, so a first
+            # poll after startup (self.data is falsy) or a snapshot that
+            # never gained a hub_connectivity key both resolve to no prior
+            # record.
+            prior_connectivity = (self.data or {}).get("hub_connectivity") or {}
 
             for hub in hubs:
                 mid = hub["mid"]

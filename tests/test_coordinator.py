@@ -1,5 +1,6 @@
 """Tests for RainPointCoordinator: data fetching, decoder dispatch, fallback, and error handling."""
 
+import asyncio
 import json
 import logging
 import types
@@ -3865,6 +3866,114 @@ class TestHubConnectivityGuardComposition:
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
             assert (100, 200) not in coordinator._hub_disconnect_poll_counts
             assert delete.call_count > deletes_before
+
+
+class TestHubConnectivityPushDuringInFlightPoll:
+    """WR-01 regression: a hub connectivity push landing while a poll is
+    suspended inside its awaited fetch must survive that poll's completion,
+    not get silently discarded when DataUpdateCoordinator replaces self.data
+    wholesale with the poll's return value.
+
+    _async_update_data reads its D-16 prior_connectivity snapshot as late as
+    possible -- after _fetch_status_by_mid's await, immediately before the
+    per-hub loop -- specifically so a push landing during that awaited
+    network round-trip is visible to the ordering guard. Hoisting the read
+    any earlier (the pre-fix shape, before the await) lets the guard evaluate
+    a stale prior, and this test's push gets silently reverted."""
+
+    _BASE_TS = 1785521850011  # matches SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO
+    _PUSH_TS = _BASE_TS + 100_000  # strictly newer than _BASE_TS
+
+    @staticmethod
+    def _build():
+        """Return (coordinator, client) wired the way __init__.py wires it,
+        with get_multiple_device_status returning a non-blocking connected
+        status at _BASE_TS by default (used for the first refresh)."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 200,
+                "name": "Hub1",
+                "deviceName": "dev1",
+                "productKey": "pk1",
+                "homeName": "Home",
+                "subDevices": [],
+            }
+        ]
+        client.get_multiple_device_status.return_value = [
+            {
+                "mid": 200,
+                "subDeviceStatus": [
+                    {
+                        "id": "connected",
+                        "value": "1",
+                        "time": TestHubConnectivityPushDuringInFlightPoll._BASE_TS,
+                    }
+                ],
+            }
+        ]
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+
+        hass = MagicMock()
+        hass.data = {}
+
+        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
+        return coordinator, client
+
+    @pytest.mark.asyncio
+    async def test_a_push_landing_mid_await_survives_the_completed_poll(self):
+        """Construct -> first refresh (connected at _BASE_TS) -> start a
+        second poll whose fetch call blocks on an event -> push a disconnect
+        at a strictly newer moment while that poll is suspended inside the
+        fetch -> release the fetch, whose own status is still connected at
+        the lagging _BASE_TS -> the completed poll must show the pushed
+        disconnect, not silently revert to what the lagging REST view
+        reported."""
+        coordinator, client = self._build()
+        await coordinator.async_config_entry_first_refresh()
+        assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
+
+        release_event = asyncio.Event()
+        entered_fetch = asyncio.Event()
+
+        async def _blocking_status(_device_list):
+            entered_fetch.set()
+            await release_event.wait()
+            return [
+                {
+                    "mid": 200,
+                    "subDeviceStatus": [{"id": "connected", "value": "1", "time": self._BASE_TS}],
+                }
+            ]
+
+        client.get_multiple_device_status.side_effect = _blocking_status
+
+        poll_task = asyncio.create_task(coordinator.async_refresh())
+        await asyncio.wait_for(entered_fetch.wait(), timeout=1)
+
+        # The poll is now suspended inside _fetch_status_by_mid's awaited
+        # client call. apply_hub_push_update is synchronous, so it runs to
+        # completion in exactly this window, merging a disconnected record
+        # into self.data before the poll ever resumes.
+        _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, False, self._PUSH_TS)
+        assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
+
+        release_event.set()
+        await asyncio.wait_for(poll_task, timeout=1)
+
+        record = coordinator.data["hub_connectivity"][200]
+        expected_changed_at = _coord_module._status_entry_time({"time": self._PUSH_TS}).isoformat()
+        assert record["state"] == _coord_module.HUB_DISCONNECTED
+        assert record["changed_at"] == expected_changed_at
+
+        # _hub_disconnect_poll_counts stays consistent with the record this
+        # same poll just wrote: exactly one poll has now reconciled against a
+        # disconnected record for this hub, matching the state above rather
+        # than a stale count left over from a snapshot the push never reached.
+        assert coordinator._hub_disconnect_poll_counts.get((100, 200)) == 1
 
 
 class TestHubPushTracerEndToEnd:
