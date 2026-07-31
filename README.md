@@ -106,10 +106,25 @@ For each device the coordinator discovers, the integration creates:
 
 - **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API. A device that returns no readings at all gets a single **Not Reporting** diagnostic entity instead, and no Raw Payload sensor, because there is no payload to show.
 - **Valve entities**: one per irrigation zone, for the valve hub models listed in the table above. The HTV210B is not one of them: its zone state is read-only, as described under [Supported devices](#supported-devices).
-- **Number entities**: one per zone for configuring zone run duration (1–60 minutes), on those same valve hub models.
+- **Number entities**: one per zone for configuring zone run duration (1 to 60 minutes), on those same valve hub models.
 - **Hub diagnostic sensors**: RSSI, battery, firmware version, last-updated timestamp.
+- **Hub Cloud Connection**: one binary sensor per hub, on when RainPoint's cloud currently reports that hub as reachable. It exists whether or not [push](#real-time-push-updates-opt-in) is enabled.
 
 All entities are grouped under their parent hub device in the Home Assistant device registry.
+
+---
+
+## When a hub goes offline
+
+Each hub's **Cloud Connection** entity reflects whether RainPoint's cloud currently reports that hub as reachable, refreshed on every poll (every two minutes by default).
+
+If a hub stays unreachable for three checks in a row, roughly six minutes, Home Assistant also raises a **Settings → Repairs** notice naming the hub, so a brief blip doesn't flap a card on and off. Valve controls for devices on that hub become unavailable within a single check, since a command cannot reach hardware the cloud itself cannot reach.
+
+Every other reading on that hub keeps showing its last known value, and that deserves its own explanation. RainPoint keeps serving the last reading it received for every device on an offline hub, for as long as the outage lasts, rather than reporting that a device has gone quiet. That means a reading can look perfectly current in Home Assistant while the hub behind it has actually been offline for hours: the moisture, temperature, or rainfall value shown is the last one RainPoint delivered, not necessarily a fresh one. The integration leaves those readings visible rather than hiding them, because the data catches up within seconds of the hub reconnecting, and marking devices unavailable for a condition that clears itself would leave gaps in your history and break any automation or template built around a device going offline.
+
+To tell whether what you're looking at is current, check two things: the hub's own **Cloud Connection** entity, and the `hub_connected` attribute Home Assistant now attaches to every entity on that hub's devices. `hub_connected` is `true` when the cloud reports the hub connected, `false` when it reports the hub offline, and absent when the cloud hasn't said either way yet. A dashboard card or an automation condition can check this attribute directly to flag a reading that might be stale.
+
+Everything above clears on its own within seconds of the hub reconnecting: the Repairs notice closes, the Cloud Connection entity turns back on, valve controls return, and no reload is needed.
 
 ---
 
