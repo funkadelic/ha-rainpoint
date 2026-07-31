@@ -355,30 +355,17 @@ def is_hub_record(hub: dict) -> bool:
     return bool(hub.get("did") or hub.get("mac") or hub.get("productKey") or hub.get("model"))
 
 
-def _read_hub_connectivity(status: dict) -> dict:
-    """Return the hub-level cloud connectivity record for one hub's status.
+def _find_hub_status_entries(status: dict) -> tuple[dict | None, dict | None]:
+    """Return the hub-scoped (connected, state) entries from one status response.
 
-    Reads the hub-scoped `connected` and `state` ids directly out of
-    subDeviceStatus in a single pass -- the same list RainPointHubRSSISensor
-    already scans for `state`. These ids are hub-scoped rather than per-addr,
-    so no addr-keyed dict is built for them the way _resolve_addr_from_sid
-    builds one for D-prefixed sub-device ids.
+    Both ids are read in a single pass over subDeviceStatus -- the same list
+    RainPointHubRSSISensor already scans for `state`. They are hub-scoped
+    rather than per-addr, so no addr-keyed dict is built for them the way
+    _resolve_addr_from_sid builds one for D-prefixed sub-device ids.
 
-    Returns exactly three keys: "state" (one of HUB_CONNECTED,
-    HUB_DISCONNECTED, HUB_CONNECTIVITY_UNKNOWN), "changed_at" (an ISO-8601 UTC
-    string naming when the cloud last flipped `connected`, or None), and
-    "state_raw" (the raw `state` id's value, undecoded, or None).
-
-    An absent status (this hub's status could not be obtained this poll)
-    yields the unknown record immediately with both other fields None --
-    absent must never be coerced to disconnected. Only the literal string
-    values "1" and "0" map to a definite state; every other value, including
-    a non-string, maps to unknown, because a cloud that returns garbage
-    should degrade to "we do not know" rather than a false disconnected.
+    A non-dict entry is skipped rather than trusted: the list is cloud-supplied
+    and nothing guarantees its shape.
     """
-    if isinstance(status, _AbsentStatus):
-        return {"state": HUB_CONNECTIVITY_UNKNOWN, "changed_at": None, "state_raw": None}
-
     connected_entry: dict | None = None
     state_entry: dict | None = None
     for entry in status.get("subDeviceStatus") or []:
@@ -389,26 +376,68 @@ def _read_hub_connectivity(status: dict) -> dict:
             connected_entry = entry
         elif entry_id == "state":
             state_entry = entry
+    return connected_entry, state_entry
 
+
+def _connected_tri_state(connected_entry: dict | None) -> str:
+    """Map the `connected` entry to HUB_CONNECTED / HUB_DISCONNECTED / unknown.
+
+    Only the literal string values "1" and "0" map to a definite state. Every
+    other value, including a non-string and a missing entry, maps to unknown,
+    because a cloud that returns garbage should degrade to "we do not know"
+    rather than a false disconnected.
+    """
     value = connected_entry.get("value") if connected_entry else None
     if value == "1":
-        state = HUB_CONNECTED
-    elif value == "0":
-        state = HUB_DISCONNECTED
-    else:
-        state = HUB_CONNECTIVITY_UNKNOWN
+        return HUB_CONNECTED
+    if value == "0":
+        return HUB_DISCONNECTED
+    return HUB_CONNECTIVITY_UNKNOWN
 
-    changed_at = None
-    if connected_entry is not None:
-        changed_dt = _status_entry_time(connected_entry)
-        if changed_dt is not None:
-            changed_at = changed_dt.isoformat()
 
+def _connected_changed_at(connected_entry: dict | None) -> str | None:
+    """Return when the cloud last flipped `connected`, as an ISO-8601 UTC string.
+
+    None when the entry is absent or carries no usable time, so the attribute
+    reads as unknown rather than inventing a moment.
+    """
+    if connected_entry is None:
+        return None
+    changed_dt = _status_entry_time(connected_entry)
+    return changed_dt.isoformat() if changed_dt is not None else None
+
+
+def _read_hub_connectivity(status: dict) -> dict:
+    """Return the hub-level cloud connectivity record for one hub's status.
+
+    Returns exactly three keys: "state" (one of HUB_CONNECTED,
+    HUB_DISCONNECTED, HUB_CONNECTIVITY_UNKNOWN), "changed_at" (an ISO-8601 UTC
+    string naming when the cloud last flipped `connected`, or None), and
+    "state_raw" (the raw `state` id's value, undecoded, or None).
+
+    An absent status (this hub's status could not be obtained this poll)
+    yields the unknown record immediately with both other fields None --
+    absent must never be coerced to disconnected. The per-field rules live in
+    the three helpers above; this function is the assembly point and the one
+    place the record's shape is written down.
+    """
+    if isinstance(status, _AbsentStatus):
+        return {"state": HUB_CONNECTIVITY_UNKNOWN, "changed_at": None, "state_raw": None}
+
+    connected_entry, state_entry = _find_hub_status_entries(status)
+
+    # Carried undecoded on purpose: the first field read '0' in every observed
+    # condition on both sides of a real power cycle, so assigning it a meaning
+    # would be a guess shipped as fact. A non-string degrades to None.
     state_raw = state_entry.get("value") if state_entry else None
     if not isinstance(state_raw, str):
         state_raw = None
 
-    return {"state": state, "changed_at": changed_at, "state_raw": state_raw}
+    return {
+        "state": _connected_tri_state(connected_entry),
+        "changed_at": _connected_changed_at(connected_entry),
+        "state_raw": state_raw,
+    }
 
 
 def hub_connected_flag(record: dict | None) -> bool | None:
