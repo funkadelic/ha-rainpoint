@@ -537,7 +537,7 @@ class RainPointHubConnectivityIssues:
             # session.
             self._active.add(issue_id)
             _LOGGER.warning(
-                "RainPoint hub hid=%s mid=%s has been unreachable from the cloud for %s polls; raising repair issue",
+                "RainPoint hub hid=%s mid=%s has been unreachable from the cloud for at least %s polls; raising repair issue",
                 record.hid,
                 record.mid,
                 record.missed_polls,
