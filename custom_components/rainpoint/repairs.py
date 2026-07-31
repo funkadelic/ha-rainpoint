@@ -183,6 +183,11 @@ class SilentDeviceRecord:
     hub_name: str | None
     missed_polls: int
     silent: bool
+    # False when the cloud parks this device under a placeholder parent record
+    # rather than a real hub, which is what a Bluetooth-only pairing looks
+    # like. Distinguishes "there is no hub" from "the hub's name is missing",
+    # which the card would otherwise render identically as "unknown".
+    hub_paired: bool = True
 
 
 def silent_device_issue_id(hid: Any, mid: int, addr: int) -> str:
@@ -301,6 +306,13 @@ class RainPointSilentDeviceIssues:
         Every cloud-supplied placeholder is sanitized on the way in: Home
         Assistant renders this card as Markdown, so an unfiltered model or hub
         name could plant a link in it.
+
+        A device with no hub renders the literal "none" rather than going
+        through the sanitizer, whose "unknown" fallback would be a worse
+        answer: the card goes on to suggest pairing the device to a hub, so
+        naming its hub "unknown" reads as lost state instead of the truth,
+        which is that there is no hub to name. The literal is ours, not the
+        cloud's, so it needs no sanitizing.
         """
         if issue_id in self._active:
             return
@@ -315,7 +327,7 @@ class RainPointSilentDeviceIssues:
                 translation_placeholders={
                     "model": _sanitize_placeholder(record.model),
                     "address": _sanitize_placeholder(record.addr),
-                    "hub_name": _sanitize_placeholder(record.hub_name),
+                    "hub_name": _sanitize_placeholder(record.hub_name) if record.hub_paired else "none",
                     "missed_polls": str(record.missed_polls),
                 },
             )

@@ -1018,6 +1018,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 hub_name=entry.get("hub_name"),
                 missed_polls=(entry.get("data") or {}).get("missed_polls", 0),
                 silent=(entry.get("data") or {}).get("type") == SILENT_DATA_TYPE,
+                # A real hub always carries both of these; the placeholder
+                # record the cloud parks a Bluetooth-only device under carries
+                # neither, along with an empty name that would otherwise reach
+                # the card as "unknown". Read as "is there a hub at all",
+                # which is a different question from "what is it called".
+                hub_paired=bool(entry.get("product_key") or entry.get("device_name")),
             )
             for entry in decoded_sensors.values()
         ]

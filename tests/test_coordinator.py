@@ -1283,6 +1283,46 @@ class TestSyncSilentDeviceIssues:
         assert reporting_record.silent is False
         assert reporting_record.missed_polls == 0
 
+    def test_hub_paired_is_false_only_for_the_placeholder_parent_record(self):
+        """The record must say whether a hub exists, not just what it is called.
+
+        The cloud parks a Bluetooth-only device under a parent carrying no
+        product_key and no device_name, alongside an empty name. A real hub
+        always carries both. Without this flag the Repairs card cannot tell
+        that apart from a hub whose name is simply missing, and renders both
+        as "unknown".
+        """
+        coord, _ = _make_coord()
+        decoded_sensors = {
+            "100_346965_1": {
+                "hid": 100,
+                "mid": 346965,
+                "addr": 1,
+                "model": "HTV210B",
+                "hub_name": "",
+                "product_key": "",
+                "device_name": "",
+                "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
+            },
+            "100_200_2": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 2,
+                "model": MODEL_MOISTURE_SIMPLE,
+                "hub_name": "Hub1",
+                "product_key": "a3QrDxYPTM2",
+                "device_name": "MAC-A84674BB91F0",
+                "data": {"type": "moisture"},
+            },
+        }
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors, [])
+
+        (records,) = coord._silent_issues.async_sync.call_args.args
+        by_key = {(r.hid, r.mid, r.addr): r for r in records}
+        assert by_key[(100, 346965, 1)].hub_paired is False
+        assert by_key[(100, 200, 2)].hub_paired is True
+
     def test_empty_decoded_sensors_syncs_an_empty_record_list(self):
         """A poll that decoded nothing still reconciles, so stale issues clear."""
         coord, _ = _make_coord()

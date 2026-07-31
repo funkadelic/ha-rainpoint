@@ -254,7 +254,7 @@ class TestWatchdogTimer:
         delete.assert_called_once()
 
 
-def _make_record(hid=100, mid=200, addr=1, model="HTV210B", hub_name="Hub1", missed_polls=3, silent=True):
+def _make_record(hid=100, mid=200, addr=1, model="HTV210B", hub_name="Hub1", missed_polls=3, silent=True, hub_paired=True):
     """Build a SilentDeviceRecord with sensible defaults for one device."""
     return SilentDeviceRecord(
         hid=hid,
@@ -264,6 +264,7 @@ def _make_record(hid=100, mid=200, addr=1, model="HTV210B", hub_name="Hub1", mis
         hub_name=hub_name,
         missed_polls=missed_polls,
         silent=silent,
+        hub_paired=hub_paired,
     )
 
 
@@ -379,6 +380,37 @@ class TestRainPointSilentDeviceIssues:
         assert placeholders["address"] == "1"
         assert placeholders["hub_name"] == "Hub1"
         assert placeholders["missed_polls"] == "3"
+
+    def test_a_device_with_no_hub_names_none_rather_than_unknown(self, issue_mocks):
+        """The Bluetooth wrapper case must not render its hub as "unknown".
+
+        The cloud parks a Bluetooth-only device under a placeholder parent
+        whose name is an empty string, which the sanitizer would turn into its
+        "unknown" fallback. That is the wrong answer here: the card goes on to
+        suggest pairing the device to a hub, so "unknown" reads as lost state
+        rather than as the absence of a hub. Observed rendering as
+        "Hub: unknown" on hardware before this was fixed.
+        """
+        create, _delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+
+        manager.async_sync([_make_record(hub_name="", hub_paired=False)])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "none"
+
+    def test_a_hub_paired_device_with_no_name_still_reports_unknown(self, issue_mocks):
+        """A missing name on a real hub is genuinely unknown and must stay that way.
+
+        The pair to the test above: only the absence of a hub earns "none",
+        so the sanitizer's fallback still has to fire for a hub that exists
+        but did not tell us what it is called.
+        """
+        create, _delete = issue_mocks
+        manager = RainPointSilentDeviceIssues(MagicMock())
+
+        manager.async_sync([_make_record(hub_name="", hub_paired=True)])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "unknown"
 
     def test_second_sync_with_same_record_does_not_recreate(self, issue_mocks):
         """A device staying silent must not raise a second issue every poll."""
