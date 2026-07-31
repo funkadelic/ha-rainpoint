@@ -1285,6 +1285,24 @@ class TestHubConnectivity:
         record = _coord_module._read_hub_connectivity(status)
         assert record["state"] == _coord_module.HUB_CONNECTED
 
+    def test_changed_at_none_for_explicit_none_time(self):
+        """An explicit time=None is swallowed the same as a missing field."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1", "time": None}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["changed_at"] is None
+
+    def test_changed_at_none_for_non_numeric_time(self):
+        """A non-numeric time value cannot raise; it degrades to no timestamp."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1", "time": "not-a-number"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["changed_at"] is None
+
+    def test_changed_at_none_for_out_of_range_epoch(self):
+        """An epoch far outside datetime's representable range degrades to no timestamp."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1", "time": 99999999999999999999}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["changed_at"] is None
+
     def test_hub_connected_flag_maps_tri_state(self):
         """hub_connected_flag maps the tri-state to True/False/None."""
         assert _coord_module.hub_connected_flag({"state": _coord_module.HUB_CONNECTED}) is True
@@ -1322,6 +1340,47 @@ class TestHubConnectivityIntegration:
         result = await _run(coord)
 
         assert result["hub_connectivity"][301]["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
+
+    @pytest.mark.asyncio
+    async def test_bluetooth_wrapper_record_contributes_no_hub_connectivity_entry(self):
+        """A record whose identity fields are all empty strings gets no connectivity
+        record at all, not a falsy one -- the mid is simply absent from the dict."""
+        coord, client = _make_coord()
+        wrapper_hub = {
+            "hid": 100,
+            "mid": 346965,
+            "did": "",
+            "mac": "",
+            "productKey": "",
+            "model": "",
+            "name": "",
+            "subDevices": [{"addr": 1, "model": "HTV210B", "name": "BT Valve", "softVer": "1.0"}],
+        }
+        client.get_devices_by_hid.return_value = [wrapper_hub]
+        client.get_multiple_device_status.return_value = [{"mid": 346965, "subDeviceStatus": [{"id": "connected", "value": "1"}]}]
+
+        result = await _run(coord)
+
+        assert 346965 not in result["hub_connectivity"]
+
+    @pytest.mark.asyncio
+    async def test_multi_status_and_fallback_paths_produce_identical_hub_connectivity(self):
+        """Both status-fetch paths must shape the identical hub_connectivity record
+        for the same underlying payload, including the connected value and timestamp."""
+        raw_status = [{"id": "connected", "value": "0", "time": 1785464564888}]
+
+        coord1, client1 = _make_coord()
+        client1.get_devices_by_hid.return_value = [_make_hub(mid=200)]
+        client1.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": raw_status}]
+        result1 = await _run(coord1)
+
+        coord2, client2 = _make_coord()
+        client2.get_devices_by_hid.return_value = [_make_hub(mid=200)]
+        client2.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
+        client2.get_device_status.return_value = {"subDeviceStatus": raw_status}
+        result2 = await _run(coord2)
+
+        assert result1["hub_connectivity"] == result2["hub_connectivity"]
 
 
 class TestPruneSilentState:

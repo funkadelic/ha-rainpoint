@@ -181,6 +181,27 @@ class TestRainPointHubConnectivityBinarySensor:
         entity = self._make(coord=coord, hub_info=hub_info)
         assert entity.is_on is None
 
+    def test_is_on_none_when_coordinator_data_is_empty_dict(self):
+        coord = MagicMock()
+        coord.data = {}
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 200
+        entity = self._make(coord=coord, hub_info=hub_info)
+        assert entity.is_on is None
+
+    def test_is_on_none_and_attributes_present_when_hub_connectivity_key_absent(self):
+        """A coordinator snapshot carrying hubs and sensors but no hub_connectivity
+        key at all -- the shape every pre-existing test fake in this suite produces,
+        so it is the shape most likely to break in a live reload after a partial
+        upgrade."""
+        coord = MagicMock()
+        coord.data = {"hubs": [], "sensors": {}}
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 200
+        entity = self._make(coord=coord, hub_info=hub_info)
+        assert entity.is_on is None
+        assert entity.extra_state_attributes == {"changed_at": None, "state_raw": None}
+
     def test_extra_state_attributes_carries_both_keys_even_when_absent(self):
         """Both keys are present with None values, not simply missing."""
         hub_info = _make_hub_info()
