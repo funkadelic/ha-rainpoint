@@ -124,7 +124,7 @@ Every other reading on that hub keeps showing its last known value, and that des
 
 To tell whether what you're looking at is current, check two things: the hub's own **Cloud Connection** entity, and the `hub_connected` attribute Home Assistant now attaches to every entity on that hub's devices. `hub_connected` is `true` when the cloud reports the hub connected, `false` when it reports the hub offline, and absent when the cloud hasn't said either way yet. A dashboard card or an automation condition can check this attribute directly to flag a reading that might be stale.
 
-Everything above clears on its own within seconds of the hub reconnecting: the Repairs notice closes, the Cloud Connection entity turns back on, valve controls return, and no reload is needed.
+Everything above clears on its own by the next scheduled check after the hub reconnects, so allow up to two minutes: the Repairs notice closes, the Cloud Connection entity turns back on, valve controls return, and no reload is needed.
 
 ---
 
