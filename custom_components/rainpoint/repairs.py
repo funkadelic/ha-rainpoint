@@ -26,6 +26,14 @@ Two independent lifecycles live here:
   coordinator's data shape: it is driven by plain ``SilentDeviceRecord``
   instances built by the coordinator, and reconciled from the coordinator's
   own poll and push triggers rather than a timer of its own.
+
+- ``RainPointHubConnectivityIssues`` re-keys the same raise-once /
+  clear-on-recovery shape again, this time onto the hub itself rather than a
+  sub-device: one issue per hub the RainPoint cloud reports as disconnected
+  for a sustained run of polls. Like its sibling it holds no knowledge of the
+  coordinator's data shape, is driven by plain ``HubConnectivityRecord``
+  instances the coordinator builds, and is reconciled from the coordinator's
+  poll loop only.
 """
 
 from __future__ import annotations
@@ -45,6 +53,7 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
     DOMAIN,
+    HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
     PUSH_WATCHDOG_ISSUE_ID,
     PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS,
@@ -363,6 +372,136 @@ class RainPointSilentDeviceIssues:
         except Exception as issue_exc:
             _LOGGER.debug(
                 "Failed to delete the not-reporting repair issue (id=%s): %s",
+                issue_id,
+                issue_exc,
+            )
+
+
+@dataclass(frozen=True)
+class HubConnectivityRecord:
+    """One hub's current cloud-connectivity state, as plain data for the Repairs surface.
+
+    This is deliberately not the coordinator's own hub_connectivity dict
+    entry: the coordinator translates its data into this shape before calling
+    ``RainPointHubConnectivityIssues.async_sync``, so this module never has to
+    know that dict's layout, matching the ``SilentDeviceRecord`` rationale.
+    """
+
+    hid: Any
+    mid: int
+    hub_name: str | None
+    disconnected: bool
+    missed_polls: int
+
+
+def hub_connectivity_issue_id(hid: Any, mid: int) -> str:
+    """Return the per-hub issue id; this string is itself the dedup key."""
+    return f"{HUB_CONNECTIVITY_ISSUE_ID_PREFIX}_{hid}_{mid}"
+
+
+class RainPointHubConnectivityIssues:
+    """Raises and clears one Repairs issue per hub the RainPoint cloud reports as gone.
+
+    Re-keys the raise-once / clear-on-recovery shape of
+    RainPointSilentDeviceIssues onto the hub rather than the sub-device: a
+    home can have several hubs, and each needs to name itself on its own
+    card. Driven by the coordinator's poll reconcile only -- push is not a
+    connectivity input in this phase -- and holds no knowledge of the
+    coordinator's data shape, exactly like its sibling.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Start with an empty active set, which is per-instance by design.
+
+        A reload builds a fresh instance with no memory of what a prior
+        session raised, which is why _clear_issue deletes unconditionally
+        rather than only when it believes the issue is active.
+        """
+        self._hass = hass
+        self._active: set[str] = set()
+
+    def async_sync(self, records: list[HubConnectivityRecord], *, unreachable_ids: Iterable[str] = frozenset()) -> None:
+        """Reconcile the active issue set against one poll's worth of records.
+
+        A disconnected record raises its issue once (deduped on _active). A
+        connected record clears its issue unconditionally rather than only
+        when active, for the same reload-survives-a-restart reason
+        RainPointSilentDeviceIssues.async_sync gives. Any id still active that
+        no record mentions at all is normally cleared, so a hub that leaves
+        the device list entirely does not leave an orphaned issue behind.
+
+        An id listed in unreachable_ids is the third case: it is left exactly
+        as it is, neither raised nor cleared, because the coordinator could
+        not determine that hub's connectivity this poll, and an unknown
+        tri-state is not evidence about the hub. Those ids are opaque
+        strings, so this module still needs no knowledge of the coordinator's
+        data shape. The parameter is keyword-only and defaults to empty, so
+        the class stays usable, and callable in tests, without it.
+        """
+        mentioned: set[str] = set()
+        for record in records:
+            issue_id = hub_connectivity_issue_id(record.hid, record.mid)
+            mentioned.add(issue_id)
+            if record.disconnected:
+                self._raise_issue(issue_id, record)
+            else:
+                self._clear_issue(issue_id)
+        for stale_id in self._active - mentioned - set(unreachable_ids):
+            self._clear_issue(stale_id)
+
+    def _raise_issue(self, issue_id: str, record: HubConnectivityRecord) -> None:
+        """Raise one hub's issue, at most once per active period.
+
+        The hub name is sanitized on the way in: Home Assistant renders this
+        card as Markdown, so an unfiltered hub name could plant a link in it.
+        """
+        if issue_id in self._active:
+            return
+        try:
+            ir.async_create_issue(
+                self._hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
+                translation_placeholders={
+                    "hub_name": _sanitize_placeholder(record.hub_name),
+                    "missed_polls": str(record.missed_polls),
+                },
+            )
+            # Marked active only once the registry accepted it. Marking before
+            # the call would strand a hub whose first raise failed: the dedup
+            # guard above would suppress every later attempt, so a transient
+            # registry error would silence that hub for the rest of the
+            # session.
+            self._active.add(issue_id)
+            _LOGGER.warning(
+                "RainPoint hub hid=%s mid=%s has been unreachable from the cloud for %s polls; raising repair issue",
+                record.hid,
+                record.mid,
+                record.missed_polls,
+            )
+        except Exception as issue_exc:
+            _LOGGER.debug(
+                "Failed to create the hub connectivity repair issue (id=%s): %s",
+                issue_id,
+                issue_exc,
+            )
+
+    def _clear_issue(self, issue_id: str) -> None:
+        """Delete one hub's issue, unconditionally rather than only when active.
+
+        A fresh instance after a reload has no record of an issue a prior
+        session raised, so guarding on the active set would strand it forever.
+        Deleting an unknown id is already a no-op.
+        """
+        self._active.discard(issue_id)
+        try:
+            ir.async_delete_issue(self._hass, DOMAIN, issue_id)
+        except Exception as issue_exc:
+            _LOGGER.debug(
+                "Failed to delete the hub connectivity repair issue (id=%s): %s",
                 issue_id,
                 issue_exc,
             )

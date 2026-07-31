@@ -12,6 +12,7 @@ import pytest
 from custom_components.rainpoint import repairs
 from custom_components.rainpoint.const import (
     DOMAIN,
+    HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
     PUSH_WATCHDOG_ISSUE_ID,
     PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS,
@@ -19,10 +20,13 @@ from custom_components.rainpoint.const import (
     SILENT_DEVICE_ISSUE_ID_PREFIX,
 )
 from custom_components.rainpoint.repairs import (
+    HubConnectivityRecord,
+    RainPointHubConnectivityIssues,
     RainPointPushWatchdog,
     RainPointSilentDeviceIssues,
     SilentDeviceRecord,
     _sanitize_placeholder,
+    hub_connectivity_issue_id,
     silent_device_issue_id,
 )
 
@@ -560,6 +564,210 @@ class TestUnreachableIdsAreNotCleared:
 
         manager.async_sync([_make_record()], unreachable_ids={other_id})
         manager.async_sync([_make_record()], unreachable_ids={other_id})
+
+        assert create.call_count == 1
+        assert delete.call_count == 0
+
+
+def _make_hub_record(hid=100, mid=200, hub_name="Hub1", disconnected=True, missed_polls=3):
+    """Build a HubConnectivityRecord with sensible defaults for one hub."""
+    return HubConnectivityRecord(
+        hid=hid,
+        mid=mid,
+        hub_name=hub_name,
+        disconnected=disconnected,
+        missed_polls=missed_polls,
+    )
+
+
+class TestHubConnectivityIssueId:
+    """The issue id doubles as the per-hub dedup key, so its shape is a contract."""
+
+    def test_id_shape(self):
+        """Pinned because the id is persisted and drives dedup across polls."""
+        assert hub_connectivity_issue_id(100, 200) == f"{HUB_CONNECTIVITY_ISSUE_ID_PREFIX}_100_200"
+
+
+class TestRainPointHubConnectivityIssues:
+    """Raise-once / dedupe / clear-on-recovery, re-keyed per hub."""
+
+    def test_first_sync_with_disconnected_record_creates_issue_once(self, issue_mocks):
+        """The raise-once half of the lifecycle."""
+        create, _delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+        record = _make_hub_record()
+
+        manager.async_sync([record])
+
+        create.assert_called_once()
+        _hass, domain, issue_id = create.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == hub_connectivity_issue_id(100, 200)
+        kwargs = create.call_args.kwargs
+        assert kwargs["is_fixable"] is False
+        assert kwargs["severity"] == repairs.ir.IssueSeverity.WARNING
+        assert kwargs["translation_key"] == HUB_CONNECTIVITY_ISSUE_ID_PREFIX
+        placeholders = kwargs["translation_placeholders"]
+        assert set(placeholders) == {"hub_name", "missed_polls"}
+        assert placeholders["hub_name"] == "Hub1"
+        assert placeholders["missed_polls"] == "3"
+
+    def test_hub_name_reaches_the_placeholder_sanitized(self, issue_mocks):
+        """T-16-04: a hostile hub name must not survive into the card.
+
+        Feeds inputs an attacker would actually construct, not an
+        already-clean specimen: a separator embedded inside a bare host
+        prefix, a scheme separator, and bracketed link syntax.
+        """
+        create, _delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        manager.async_sync([_make_hub_record(hub_name="ww[w.evil.example")])
+        assert not create.call_args.kwargs["translation_placeholders"]["hub_name"].lower().startswith("www.")
+
+        manager.async_sync([_make_hub_record(mid=201, hub_name="http://evil.example/phish")])
+        sanitized = create.call_args.kwargs["translation_placeholders"]["hub_name"]
+        assert ":" not in sanitized
+        assert "/" not in sanitized
+
+        manager.async_sync([_make_hub_record(mid=202, hub_name="[Click here](http://evil.example)")])
+        sanitized = create.call_args.kwargs["translation_placeholders"]["hub_name"]
+        assert "[" not in sanitized
+        assert "]" not in sanitized
+        assert "(" not in sanitized
+        assert ")" not in sanitized
+
+    def test_second_sync_with_same_record_does_not_recreate(self, issue_mocks):
+        """A hub staying disconnected must not raise a second issue every poll."""
+        create, _delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+        record = _make_hub_record()
+
+        manager.async_sync([record])
+        manager.async_sync([record])
+
+        create.assert_called_once()
+
+    def test_flipping_to_connected_deletes_the_issue(self, issue_mocks):
+        """Recovery clears the issue without waiting for anything else."""
+        create, delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+        record = _make_hub_record()
+
+        manager.async_sync([record])
+        create.assert_called_once()
+
+        recovered = _make_hub_record(disconnected=False)
+        manager.async_sync([recovered])
+
+        delete.assert_called_once()
+        _hass, domain, issue_id = delete.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == hub_connectivity_issue_id(100, 200)
+
+    def test_omitting_a_previously_active_record_still_clears_it(self, issue_mocks):
+        """A hub that disappears from the device list entirely is not in the
+        next poll's records at all; its issue must still be cleared."""
+        create, delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+        record = _make_hub_record()
+
+        manager.async_sync([record])
+        create.assert_called_once()
+
+        manager.async_sync([])
+
+        delete.assert_called_once()
+        _hass, domain, issue_id = delete.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == hub_connectivity_issue_id(100, 200)
+
+    def test_never_active_record_still_issues_idempotent_delete(self, issue_mocks):
+        """Clearing unconditionally is what stops a pre-reload issue stranding."""
+        _create, delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+        record = _make_hub_record(disconnected=False)
+
+        manager.async_sync([record])
+
+        delete.assert_called_once()
+
+    def test_registry_error_is_swallowed_and_logged(self, issue_mocks, caplog):
+        """A failing diagnostic surface must never break the poll that drives it."""
+        create, delete = issue_mocks
+        create.side_effect = RuntimeError("registry unavailable")
+        delete.side_effect = RuntimeError("registry unavailable")
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_hub_record()])
+            manager.async_sync([_make_hub_record(disconnected=False)])
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Failed to create the hub connectivity repair issue" in m for m in messages)
+        assert any("Failed to delete the hub connectivity repair issue" in m for m in messages)
+
+    def test_a_failed_raise_is_retried_on_the_next_poll(self, issue_mocks):
+        """A hub must not be silenced for the session by one registry error."""
+        create, _delete = issue_mocks
+        create.side_effect = [RuntimeError("registry unavailable"), None]
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        manager.async_sync([_make_hub_record()])
+        manager.async_sync([_make_hub_record()])
+
+        assert create.call_count == 2
+
+
+class TestHubConnectivityUnreachableIdsAreNotCleared:
+    """An id whose owning hub's connectivity could not be determined this poll
+    is left exactly as it is."""
+
+    def test_unmentioned_but_unreachable_id_is_not_cleared(self, issue_mocks):
+        """The unknown-tri-state case: no record mentions it, so the stale
+        sweep must skip it rather than read the silence as a recovery."""
+        create, delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+        issue_id = hub_connectivity_issue_id(100, 200)
+
+        manager.async_sync([_make_hub_record()])
+        create.assert_called_once()
+
+        manager.async_sync([], unreachable_ids={issue_id})
+
+        assert delete.call_count == 0
+
+    def test_unmentioned_and_reachable_id_is_still_cleared(self, issue_mocks):
+        """The contrast case, proving the skip is scoped to the unreachable set."""
+        _create, delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        manager.async_sync([_make_hub_record()])
+        manager.async_sync([], unreachable_ids=set())
+
+        assert delete.call_count == 1
+        _hass, _domain, issue_id = delete.call_args.args
+        assert issue_id == hub_connectivity_issue_id(100, 200)
+
+    def test_unreachable_id_that_is_not_active_produces_nothing(self, issue_mocks):
+        """Skipping an unreachable id must not invent work for one never raised."""
+        create, delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        manager.async_sync([], unreachable_ids={hub_connectivity_issue_id(100, 999)})
+
+        assert create.call_count == 0
+        assert delete.call_count == 0
+
+    def test_a_mentioned_disconnected_record_still_raises_once_alongside_an_unreachable_id(self, issue_mocks):
+        """Another hub's unknown connectivity must not suppress a raise for a hub
+        that is genuinely disconnected."""
+        create, delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+        other_id = hub_connectivity_issue_id(100, 300)
+
+        manager.async_sync([_make_hub_record()], unreachable_ids={other_id})
+        manager.async_sync([_make_hub_record()], unreachable_ids={other_id})
 
         assert create.call_count == 1
         assert delete.call_count == 0
