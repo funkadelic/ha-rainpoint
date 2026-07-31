@@ -220,7 +220,7 @@ class TestRainPointHubConnectivityBinarySensor:
         assert entity.available is True
 
     def test_unique_id_carries_both_hid_and_mid(self):
-        """Deliberately diverges from the hid-only hub siblings (D-11)."""
+        """Deliberately diverges from the hid-only hub siblings."""
         hub_info = _make_hub_info(hid=100)
         hub_info["mid"] = 200
         entity = self._make(hub_info=hub_info)

@@ -120,9 +120,9 @@ class TestValveProperties:
 
     def test_unavailable_when_hub_online_but_cloud_disconnected(self):
         """hub_online True but the cloud already reports this hub as
-        disconnected: available False. This is the specific lie D-02 exists
-        to stop -- hub_online is payload-derived and stays healthy off a
-        frozen frame during an outage."""
+        disconnected: available False. This is the specific lie the cloud
+        connectivity gate exists to stop -- hub_online is payload-derived and
+        stays healthy off a frozen frame during an outage."""
         valve = _make_valve(hub_online=True)
         valve.coordinator.data["hub_connectivity"] = {200: {"state": "disconnected"}}
         assert valve.available is False
@@ -910,9 +910,9 @@ class TestValveEntitiesAppearWithinTheSession:
 
 
 class TestValveAvailabilityRealTimeline:
-    """D-02/D-06: drives the real construct -> first refresh -> platform
-    setup -> refresh sequence rather than an injected coordinator.data
-    snapshot, so the connected-to-disconnected transition is proven on an
+    """Drives the real construct -> first refresh -> platform setup ->
+    refresh sequence rather than an injected coordinator.data snapshot, so
+    the connected-to-disconnected transition is proven on an
     already-constructed entity object."""
 
     @staticmethod

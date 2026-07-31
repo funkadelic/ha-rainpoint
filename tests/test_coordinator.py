@@ -1516,7 +1516,7 @@ class TestSyncHubConnectivityIssues:
         assert records[0].missed_polls == _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS
 
     def test_unknown_state_emits_no_record_and_leaves_the_counter_untouched(self):
-        """D-08: unknown is not evidence about the hub in either direction."""
+        """An unknown state is not evidence about the hub in either direction."""
         coord, _ = _make_coord()
         coord._hub_disconnect_poll_counts = {(100, 200): 2}
         hub = _make_hub(mid=200)

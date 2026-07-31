@@ -87,7 +87,7 @@ class TestSubDeviceAttributes:
 
 
 class TestHubConnectedAttribute:
-    """Tests for the hub_connected marker sub_device_attributes adds (D-03)."""
+    """Tests for the hub_connected marker sub_device_attributes adds."""
 
     def test_hub_connected_true_when_hub_reports_connected(self):
         """A connected hub's cloud state yields hub_connected True."""
@@ -102,7 +102,7 @@ class TestHubConnectedAttribute:
     def test_hub_connected_false_when_hub_reports_disconnected(self):
         """A disconnected hub's cloud state yields hub_connected False -- the
         stale-reading marker a template can gate on without the integration
-        hiding the reading itself (D-01 stays untouched)."""
+        hiding the reading itself, which stays untouched."""
         coordinator = SimpleNamespace(
             data={
                 "sensors": {"k": {"mid": 200, "data": {}}},
@@ -238,12 +238,11 @@ class TestSubDeviceEntity:
         assert entity.available is False
 
     def test_available_is_unchanged_by_a_disconnected_hub(self):
-        """Regression pin for D-01: RainPointSubDeviceEntity.available must
-        NOT be touched by hub cloud connectivity.
+        """Regression pin: RainPointSubDeviceEntity.available must NOT be
+        touched by hub cloud connectivity.
 
-        This is the boundary the phase's plan review flagged as the one
-        thing that actually closes D-01 out. A future reader tempted to
-        "finish the job" by propagating hub_connected into availability
+        A future reader tempted to "finish the job" by propagating
+        hub_connected into availability
         would silently reverse a decision made on hardware evidence: the
         data self-heals within seconds of the hub reattaching, so flipping
         every reading entity to unavailable during an outage would cost
