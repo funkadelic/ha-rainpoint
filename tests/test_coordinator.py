@@ -1487,8 +1487,15 @@ class TestSyncHubConnectivityIssues:
         assert record.missed_polls == 0
         assert (100, 200) not in coord._hub_disconnect_poll_counts
 
-    def test_disconnected_hub_below_threshold_increments_but_stays_unflagged(self):
-        """One or two consecutive disconnected polls must not flag disconnected."""
+    def test_disconnected_hub_below_threshold_increments_but_emits_no_record(self):
+        """One or two consecutive disconnected polls say nothing either way.
+
+        The counter still advances, but no record reaches the reconcile: a
+        below-threshold poll must not emit a non-disconnected record, because
+        that is indistinguishable from a confirmed-connected one by the time
+        it reaches the unconditional clear in repairs.py. The id goes into
+        unreachable_ids instead, so the poll neither raises nor clears.
+        """
         coord, _ = _make_coord()
         hub = _make_hub(mid=200)
         hub["hid"] = 100
@@ -1497,9 +1504,12 @@ class TestSyncHubConnectivityIssues:
         _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
 
         assert coord._hub_disconnect_poll_counts[(100, 200)] == 1
-        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
-        assert records[0].disconnected is False
-        assert records[0].missed_polls == 1
+        (records,), kwargs = (
+            coord._hub_connectivity_issues.async_sync.call_args.args,
+            coord._hub_connectivity_issues.async_sync.call_args.kwargs,
+        )
+        assert records == []
+        assert kwargs["unreachable_ids"] == {hub_connectivity_issue_id(100, 200)}
 
     def test_disconnected_hub_at_threshold_flags_disconnected(self):
         """The third consecutive disconnected poll is where the flag flips true."""
@@ -2044,6 +2054,62 @@ class TestHubConnectivityDebounceRealTimeline:
             await coordinator.async_refresh()  # counter resumes from where it left off
             assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
             assert create.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_restart_while_still_disconnected_does_not_clear_the_issue(self):
+        """A reload or restart mid-outage must not delete a still-accurate card.
+
+        The debounce counter and the manager's active set are both
+        per-instance, so a second coordinator built while the hub is still
+        down starts counting from one again. If those below-threshold polls
+        emitted a non-disconnected record, the unconditional clear in
+        repairs.py could not tell them apart from a genuine recovery and would
+        delete a card describing an outage that is still happening, leaving
+        the user with no notice until the new instance re-crossed the
+        threshold two polls later.
+
+        Driven as a real timeline across two coordinator instances sharing one
+        pair of issue-registry mocks, because the defect only exists in the
+        seam between them and is invisible to any single-instance test.
+        """
+        first, first_client = self._build(connected_value="1")
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            await first.async_config_entry_first_refresh()
+            self._set_connected(first_client, "0")
+            for _ in range(_coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS):
+                await first.async_refresh()
+            assert create.call_count == 1
+            deletes_before_restart = delete.call_count
+
+            # The restart: a brand new coordinator, hub still reporting "0".
+            second, second_client = self._build(connected_value="0")
+            assert second._hub_disconnect_poll_counts == {}
+
+            await second.async_config_entry_first_refresh()
+            assert second._hub_disconnect_poll_counts[(100, 200)] == 1
+            assert delete.call_count == deletes_before_restart
+
+            await second.async_refresh()
+            assert second._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert delete.call_count == deletes_before_restart
+
+            # Once the new instance confirms the outage itself it re-asserts
+            # the issue rather than having spent the gap with the card gone.
+            await second.async_refresh()
+            assert second._hub_disconnect_poll_counts[(100, 200)] == _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS
+            assert delete.call_count == deletes_before_restart
+            assert create.call_count == 2
+
+            # Recovery still clears, so suppressing the clear below threshold
+            # did not cost the only path that legitimately removes the card.
+            self._set_connected(second_client, "1")
+            await second.async_refresh()
+            assert delete.call_count > deletes_before_restart
+            assert (100, 200) not in second._hub_disconnect_poll_counts
 
 
 class TestLastSeenFromEntry:

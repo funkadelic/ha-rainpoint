@@ -1162,11 +1162,23 @@ class RainPointCoordinator(DataUpdateCoordinator):
         hub-level surface uses.
 
         On the connected tri-state the debounce counter is popped back to
-        zero and a non-disconnected record is emitted. On the disconnected
-        tri-state the counter is incremented and a record is always emitted,
-        whose disconnected flag only flips true once the counter reaches
+        zero and a non-disconnected record is emitted, which is the one and
+        only path that clears a raised issue.
+
+        On the disconnected tri-state the counter is incremented, and a
+        record is emitted only once the counter reaches
         HUB_DISCONNECT_DEBOUNCE_POLLS -- this is the debounce itself, and it
         is why one or two consecutive disconnected polls raise nothing.
+        Below the threshold the hub's issue id goes into unreachable_ids
+        instead, exactly as the unknown tri-state does, so those polls
+        neither raise nor clear. Emitting a disconnected=False record there
+        would be a lie: the counter is per-instance, so a hub that is still
+        down across a restart or a reload starts counting from one again, and
+        a "not yet confirmed" record is indistinguishable from a "confirmed
+        connected" one by the time it reaches the unconditional clear in
+        repairs.py. That would delete a still-accurate card and take two more
+        polls to re-raise it. _build_silent_subdevice makes the same choice
+        for the same reason: say nothing until the debounce has decided.
 
         On the unknown tri-state (including a hub whose mid is altogether
         missing from hub_connectivity) no record is emitted and the counter is
@@ -1199,12 +1211,15 @@ class RainPointCoordinator(DataUpdateCoordinator):
             elif state == HUB_DISCONNECTED:
                 count = self._hub_disconnect_poll_counts.get(key, 0) + 1
                 self._hub_disconnect_poll_counts[key] = count
+                if count < HUB_DISCONNECT_DEBOUNCE_POLLS:
+                    unreachable_ids.add(hub_connectivity_issue_id(hid, mid))
+                    continue
                 records.append(
                     HubConnectivityRecord(
                         hid=hid,
                         mid=mid,
                         hub_name=hub_name,
-                        disconnected=count >= HUB_DISCONNECT_DEBOUNCE_POLLS,
+                        disconnected=True,
                         missed_polls=count,
                     )
                 )
