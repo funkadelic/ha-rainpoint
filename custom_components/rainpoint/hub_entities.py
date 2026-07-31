@@ -30,6 +30,16 @@ from .device import RainPointHubDevice
 _LOGGER = logging.getLogger(__name__)
 
 
+def _hub_records(coordinator: RainPointCoordinator) -> list[dict]:
+    """Return the coordinator's hub records as a list, tolerating a dict snapshot.
+
+    The dict-or-list tolerance lives here alone so both hub resolvers below
+    agree on what an empty or oddly shaped snapshot means.
+    """
+    hubs_cfg = (coordinator.data or {}).get("hubs", [])
+    return list(hubs_cfg.values()) if isinstance(hubs_cfg, dict) else list(hubs_cfg)
+
+
 def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client) -> list[dict]:
     """Return the hub(s) the push diagnostics belong to.
 
@@ -38,8 +48,7 @@ def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client)
     per configured hub would make every hub on a multi-hub account display the
     shared client's state, even though push only ever targets the bound hub.
     """
-    hubs_cfg = (coordinator.data or {}).get("hubs", [])
-    hubs = list(hubs_cfg.values()) if isinstance(hubs_cfg, dict) else list(hubs_cfg)
+    hubs = _hub_records(coordinator)
     if not hubs:
         return []
     bound_mid = getattr(mqtt_client, "hub_mid", None)
@@ -61,9 +70,7 @@ def resolve_connectivity_hubs(coordinator: RainPointCoordinator) -> list[dict]:
     the shared MQTT client is bound to, this returns every real hub: cloud
     connectivity is a per-hub fact, not a property of the single MQTT client.
     """
-    hubs_cfg = (coordinator.data or {}).get("hubs", [])
-    hubs = list(hubs_cfg.values()) if isinstance(hubs_cfg, dict) else list(hubs_cfg)
-    return [hub for hub in hubs if is_hub_record(hub)]
+    return [hub for hub in _hub_records(coordinator) if is_hub_record(hub)]
 
 
 class RainPointHubSensorBase(CoordinatorEntity, SensorEntity, RainPointHubDevice):
