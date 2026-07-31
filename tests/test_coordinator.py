@@ -1214,6 +1214,116 @@ class TestBuildSilentSubdevice:
         notify.assert_not_called()
 
 
+class TestHubConnectivity:
+    """Tests for _read_hub_connectivity and hub_connected_flag."""
+
+    def test_connected_value_one_yields_connected_state(self):
+        """A `connected` entry with value '1' maps to the connected constant."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state"] == _coord_module.HUB_CONNECTED
+
+    def test_connected_value_zero_yields_disconnected_state(self):
+        """A `connected` entry with value '0' maps to the disconnected constant."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "0"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state"] == _coord_module.HUB_DISCONNECTED
+
+    def test_absent_status_yields_unknown_with_no_other_fields(self):
+        """STATUS_ABSENT never coerces to disconnected; it is unknown with no timestamp or raw value."""
+        record = _coord_module._read_hub_connectivity(_coord_module.STATUS_ABSENT)
+        assert record == {
+            "state": _coord_module.HUB_CONNECTIVITY_UNKNOWN,
+            "changed_at": None,
+            "state_raw": None,
+        }
+
+    def test_no_connected_entry_in_arrived_status_yields_unknown(self):
+        """An arrived status with no `connected` id at all is unknown, not disconnected."""
+        status = {"subDeviceStatus": [{"id": "state", "value": "0,-52"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
+
+    def test_non_string_connected_value_yields_unknown(self):
+        """The cloud's own framing is a string; an int value must not be coerced to a definite state."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": 1}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
+
+    def test_changed_at_derived_from_connected_entry_time(self):
+        """The connected entry's `time` reaches changed_at as an ISO-8601 UTC string."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "0", "time": 1785464564888}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["changed_at"] == datetime.fromtimestamp(1785464564888 / 1000, tz=UTC).isoformat()
+
+    def test_changed_at_none_when_connected_entry_has_no_time(self):
+        """A `connected` entry with no time field leaves changed_at None rather than raising."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["changed_at"] is None
+
+    def test_state_raw_carries_the_whole_string_undecoded(self):
+        """The `state` id's whole value rides along unmodified, split into nothing."""
+        status = {
+            "subDeviceStatus": [
+                {"id": "connected", "value": "1"},
+                {"id": "state", "value": "0,-52"},
+            ]
+        }
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state_raw"] == "0,-52"
+
+    def test_state_raw_none_when_no_state_entry(self):
+        """A connected entry with no `state` entry leaves state_raw None."""
+        status = {"subDeviceStatus": [{"id": "connected", "value": "1"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state_raw"] is None
+
+    def test_non_dict_status_entry_is_skipped(self):
+        """A malformed subDeviceStatus entry that is not a dict is skipped, not crashed on."""
+        status = {"subDeviceStatus": [None, {"id": "connected", "value": "1"}]}
+        record = _coord_module._read_hub_connectivity(status)
+        assert record["state"] == _coord_module.HUB_CONNECTED
+
+    def test_hub_connected_flag_maps_tri_state(self):
+        """hub_connected_flag maps the tri-state to True/False/None."""
+        assert _coord_module.hub_connected_flag({"state": _coord_module.HUB_CONNECTED}) is True
+        assert _coord_module.hub_connected_flag({"state": _coord_module.HUB_DISCONNECTED}) is False
+        assert _coord_module.hub_connected_flag({"state": _coord_module.HUB_CONNECTIVITY_UNKNOWN}) is None
+
+    def test_hub_connected_flag_none_or_empty_record(self):
+        """A None record or an empty record both map to None, not an error."""
+        assert _coord_module.hub_connected_flag(None) is None
+        assert _coord_module.hub_connected_flag({}) is None
+
+
+class TestHubConnectivityIntegration:
+    """hub_connectivity on the coordinator's returned dict (fourth top-level key)."""
+
+    @pytest.mark.asyncio
+    async def test_hub_connectivity_present_for_real_hub(self):
+        """A real hub's mid gets a shaped connectivity record on every poll."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(hid=100, mid=200)]
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": "1"}]}]
+
+        result = await _run(coord)
+
+        assert result["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
+
+    @pytest.mark.asyncio
+    async def test_hub_connectivity_absent_hub_yields_unknown(self):
+        """A hub whose status could not be obtained this poll reads unknown, never disconnected."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(mid=301)]
+        client.get_device_status.side_effect = aiohttp.ClientError("boom")
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
+
+        result = await _run(coord)
+
+        assert result["hub_connectivity"][301]["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
+
+
 class TestPruneSilentState:
     """Direct-call tests for _prune_silent_state (T-15-03)."""
 

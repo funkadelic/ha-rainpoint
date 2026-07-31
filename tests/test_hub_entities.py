@@ -10,11 +10,13 @@ from custom_components.rainpoint.const import PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX
 from custom_components.rainpoint.hub_entities import (
     RainPointHubBroadcastSwitch,
     RainPointHubChannelSelect,
+    RainPointHubConnectivityBinarySensor,
     RainPointHubDeviceIDSensor,
     RainPointHubFirmwareSensor,
     RainPointHubMACSensor,
     RainPointHubRSSISensor,
     RainPointPushLastMessageSensor,
+    resolve_connectivity_hubs,
     resolve_push_diagnostic_hubs,
 )
 
@@ -98,6 +100,118 @@ class TestResolvePushDiagnosticHubs:
         client = MagicMock()
         client.hub_mid = 222
         assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 222}]
+
+
+class TestResolveConnectivityHubs:
+    """resolve_connectivity_hubs returns every real hub (unlike the push-diagnostic resolver)."""
+
+    @staticmethod
+    def _coord(hubs):
+        coord = MagicMock()
+        coord.data = {"hubs": hubs}
+        return coord
+
+    def test_no_hubs_returns_empty(self):
+        assert resolve_connectivity_hubs(self._coord([])) == []
+
+    def test_none_data_returns_empty(self):
+        coord = MagicMock()
+        coord.data = None
+        assert resolve_connectivity_hubs(coord) == []
+
+    def test_returns_every_real_hub(self):
+        hubs = [{"mid": 111, "did": "d111"}, {"mid": 222, "did": "d222"}]
+        assert resolve_connectivity_hubs(self._coord(hubs)) == hubs
+
+    def test_excludes_the_bluetooth_wrapper_record(self):
+        """A record whose every identity field is an empty string yields no entity."""
+        hubs = [{"mid": 346965, "did": "", "mac": "", "productKey": "", "model": ""}, {"mid": 236547, "did": "17053410"}]
+        assert resolve_connectivity_hubs(self._coord(hubs)) == [{"mid": 236547, "did": "17053410"}]
+
+    def test_accepts_dict_shaped_hubs(self):
+        hubs = {"a": {"mid": 111, "did": "d1"}, "b": {"mid": 222, "did": "d2"}}
+        assert resolve_connectivity_hubs(self._coord(hubs)) == [{"mid": 111, "did": "d1"}, {"mid": 222, "did": "d2"}]
+
+
+class TestRainPointHubConnectivityBinarySensor:
+    """Tests for the hub-level cloud connectivity binary sensor entity."""
+
+    def _make(self, coord=None, hub_info=None):
+        """Make helper."""
+        coord = _make_coordinator() if coord is None else coord
+        hub_info = _make_hub_info() if hub_info is None else hub_info
+        entity = RainPointHubConnectivityBinarySensor.__new__(RainPointHubConnectivityBinarySensor)
+        RainPointHubConnectivityBinarySensor.__init__(entity, coord, hub_info)
+        return entity
+
+    def _make_with_record(self, mid, record):
+        """Build an entity whose coordinator carries a hub_connectivity record for mid."""
+        coord = _make_coordinator()
+        coord.data["hub_connectivity"] = {mid: record}
+        hub_info = _make_hub_info()
+        hub_info["mid"] = mid
+        return self._make(coord=coord, hub_info=hub_info)
+
+    def test_is_on_true_when_connected(self):
+        entity = self._make_with_record(200, {"state": "connected", "changed_at": None, "state_raw": None})
+        assert entity.is_on is True
+
+    def test_is_on_false_when_disconnected(self):
+        entity = self._make_with_record(200, {"state": "disconnected", "changed_at": None, "state_raw": None})
+        assert entity.is_on is False
+
+    def test_is_on_none_when_unknown(self):
+        entity = self._make_with_record(200, {"state": "unknown", "changed_at": None, "state_raw": None})
+        assert entity.is_on is None
+
+    def test_is_on_none_when_no_record_for_mid(self):
+        """A coordinator snapshot with a hub_connectivity key that omits this mid."""
+        coord = _make_coordinator()
+        coord.data["hub_connectivity"] = {}
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 200
+        entity = self._make(coord=coord, hub_info=hub_info)
+        assert entity.is_on is None
+
+    def test_is_on_none_when_coordinator_data_is_none(self):
+        coord = MagicMock()
+        coord.data = None
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 200
+        entity = self._make(coord=coord, hub_info=hub_info)
+        assert entity.is_on is None
+
+    def test_extra_state_attributes_carries_both_keys_even_when_absent(self):
+        """Both keys are present with None values, not simply missing."""
+        hub_info = _make_hub_info()
+        hub_info["mid"] = 200
+        entity = self._make(hub_info=hub_info)
+        assert entity.extra_state_attributes == {"changed_at": None, "state_raw": None}
+
+    def test_extra_state_attributes_reads_changed_at_and_state_raw(self):
+        entity = self._make_with_record(
+            200, {"state": "connected", "changed_at": "2026-07-30T19:22:44+00:00", "state_raw": "0,-52"}
+        )
+        assert entity.extra_state_attributes == {"changed_at": "2026-07-30T19:22:44+00:00", "state_raw": "0,-52"}
+
+    def test_available_is_true(self):
+        entity = self._make()
+        assert entity.available is True
+
+    def test_unique_id_carries_both_hid_and_mid(self):
+        """Deliberately diverges from the hid-only hub siblings (D-11)."""
+        hub_info = _make_hub_info(hid=100)
+        hub_info["mid"] = 200
+        entity = self._make(hub_info=hub_info)
+        assert entity._attr_unique_id == "rainpoint_hub_100_200_connectivity"
+
+    def test_name_ends_with_cloud_connection(self):
+        entity = self._make()
+        assert entity._attr_name.endswith("Cloud Connection")
+
+    def test_entity_category_is_diagnostic(self):
+        entity = self._make()
+        assert entity._attr_entity_category == "diagnostic"
 
 
 class TestRainPointHubRSSISensor:
