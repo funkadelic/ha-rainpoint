@@ -27,6 +27,7 @@ import logging
 import random
 import time
 from collections.abc import Callable
+from typing import NamedTuple
 
 import paho.mqtt.client as paho_mqtt
 from homeassistant.core import HomeAssistant, callback
@@ -35,6 +36,10 @@ from ..const import (
     MQTT_BROKER_HOST_TEMPLATE,
     MQTT_BROKER_PORT,
     MQTT_KEEPALIVE,
+    MQTT_PUSH_HUB_FRAME_MID_WIDTH,
+    MQTT_PUSH_HUB_FRAME_PREFIX,
+    MQTT_PUSH_HUB_FRAME_SECTIONS,
+    MQTT_PUSH_HUB_FRAME_TERMINATOR,
     MQTT_PUSH_MAX_PAYLOAD_BYTES,
     MQTT_PUSH_METHOD,
     MQTT_PUSH_PARAMS_KEY,
@@ -147,6 +152,100 @@ def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
     except (ValueError, TypeError):
         # json.loads failures and any defensive type error -> drop the message.
         return []
+
+
+class _HubFrame(NamedTuple):
+    """One recognized hub-level connectivity frame (D-05).
+
+    mid_tail is section 1 as parsed -- the caller's cross-check value only
+    (D-06); it is never handed to the coordinator. connected and changed_ts
+    are the two fields apply_hub_push_update actually consumes.
+    """
+
+    mid_tail: str
+    connected: bool
+    changed_ts: int
+
+
+def _parse_hub_frame(payload: bytes) -> _HubFrame | None:
+    """Parse a pipe-delimited hub connectivity frame into a typed record.
+
+    Fully fail-safe: any oversized, malformed, or structurally odd payload
+    yields None rather than raising, matching _parse_push_envelope's contract.
+
+    Two exception scopes, not one -- this is load-bearing. _parse_push_envelope
+    can put json.loads first because every payload it handles is JSON; the hub
+    frame is not. The captured disconnect frame
+    "#P260731181730000016822282236547|0|1785521850011|112882164350#" is not
+    valid JSON, so a single-outer-try transcription of that helper's shape
+    would raise ValueError on the very first statement and return None for the
+    exact frame this helper exists to read -- a silent, total feature kill.
+    The JSON probe below is therefore its own inner try, scoped to nothing but
+    the json.loads call, so a non-JSON payload falls through to the bare
+    candidate instead of unwinding the whole function.
+
+    Both the bare and JSON-wrapped routes are handled and neither is dropped
+    as redundant: the 2026-07-31 capture is recorded as bare pipe-delimited
+    text because it was read off the existing drop-path preview, and whether
+    the broker also wraps this family in the standard AliCloud envelope like
+    the sub-device family is not settled by that one capture. Handling both
+    costs one branch and removes the gamble.
+    """
+    if len(payload) > MQTT_PUSH_MAX_PAYLOAD_BYTES:
+        return None
+    text = payload.decode("utf-8", "replace").strip()
+
+    # Candidate resolution: default to the bare text; only a JSON envelope
+    # carrying the confirmed method name replaces it with the inner param
+    # string. Every other outcome -- non-JSON, wrong method, params not a
+    # dict, param value not a string -- leaves the candidate as the bare text,
+    # so a genuinely bare frame is never punished for failing a JSON probe it
+    # was never shaped to pass.
+    candidate = text
+    try:
+        outer = json.loads(text)
+    except (ValueError, TypeError):
+        outer = None
+    if isinstance(outer, dict) and outer.get("method") == MQTT_PUSH_METHOD:
+        params = outer.get("params")
+        if isinstance(params, dict):
+            param_str = params.get(MQTT_PUSH_PARAMS_KEY)
+            if param_str is None and len(params) == 1:
+                param_str = next(iter(params.values()))
+            if isinstance(param_str, str):
+                candidate = param_str
+
+    # The captured frame ends with a single terminator, which would stop
+    # section 4 parsing as an integer. Strip exactly one trailing terminator
+    # when present before splitting; the leading "#" is retained and is
+    # covered by the MQTT_PUSH_HUB_FRAME_PREFIX clause below. Stripping
+    # exactly one is never wrong in the fail-safe direction: a doubled
+    # terminator just fails the section-4 int() parse below.
+    if candidate.endswith(MQTT_PUSH_HUB_FRAME_TERMINATOR):
+        candidate = candidate[: -len(MQTT_PUSH_HUB_FRAME_TERMINATOR)]
+
+    sections = candidate.split(MQTT_PUSH_SECTION_DELIMITER)
+
+    # D-05's five clauses, each its own early return so the failing clause is
+    # nameable in a diagnostic rather than folded into one combined boolean.
+    if any(section.lstrip().startswith("{") for section in sections):
+        return None
+    if len(sections) != MQTT_PUSH_HUB_FRAME_SECTIONS:
+        return None
+    if not sections[0].startswith(MQTT_PUSH_HUB_FRAME_PREFIX):
+        return None
+    if sections[1] not in ("0", "1"):
+        return None
+    try:
+        changed_ts = int(sections[2])
+        # Section 4 is propVer: validated so the frame's shape can be
+        # trusted, then discarded (D-13 rejected it as the ordering key), so
+        # it never enters the return surface as a field with no consumer.
+        int(sections[3])
+    except ValueError:
+        return None
+
+    return _HubFrame(mid_tail=sections[0], connected=sections[1] == "1", changed_ts=changed_ts)
 
 
 # Supervisor backoff: only the DELAY is capped, never
@@ -608,29 +707,75 @@ class RainPointMqttClient:
         self._dispatch_push(topic, payload)
 
     def _dispatch_push(self, topic: str, payload: bytes) -> None:
-        """Parse the payload and route each sub-device reading to the coordinator.
+        """Parse the payload and route it to the coordinator entry point that
+        owns its frame family.
 
-        A payload that carries no decodable sub-device update is dropped quietly.
-        apply_push_update is the only coordinator method this client ever calls,
-        and the per-hub mid is supplied from construction (never parsed from the
-        payload or the ephemeral observer topic). The drop path logs a truncated
-        payload preview at DEBUG so unrecognized downlinks can be diagnosed;
-        handled sub-device pushes never have their contents logged.
+        Two frame families arrive on the same downlink and are routed to two
+        different coordinator entry points, and never to both: a D-prefixed
+        sub-device JSON envelope goes to apply_push_update (unchanged, and
+        kept first so the hot path is byte-equivalent to before this frame
+        family existed); a pipe-delimited hub connectivity frame goes to
+        apply_hub_push_update. Anything recognized as neither is dropped; the
+        drop path logs a truncated payload preview at DEBUG so an
+        unrecognized downlink can still be diagnosed. Handled pushes of
+        either family never have their contents logged.
         """
         updates = _parse_push_envelope(payload)
-        if not updates:
-            if _LOGGER.isEnabledFor(logging.DEBUG):
+        if updates:
+            if self._coordinator is None:
+                _LOGGER.debug("RainPoint MQTT push received before coordinator wiring; dropping")
+                return
+            for sid, raw_value, device_ts in updates:
+                self._coordinator.apply_push_update(self._hub_mid, sid, raw_value, device_ts)
+            return
+
+        frame = _parse_hub_frame(payload)
+        if frame is not None:
+            own = str(self._hub_mid)
+            if len(own) == MQTT_PUSH_HUB_FRAME_MID_WIDTH:
+                # Exact comparison of the fixed-width tail slot: neither a
+                # shorter nor a longer neighboring mid at this width can
+                # satisfy it.
+                tail_matches = frame.mid_tail[-MQTT_PUSH_HUB_FRAME_MID_WIDTH:] == own
+            else:
+                # No capture has produced a mid of any other width. Falling
+                # back to a suffix test degrades the guarantee rather than
+                # dropping every frame and silently disabling the feature for
+                # an unobserved width. Residual, accepted: on this path a
+                # proper-suffix mid can still satisfy it; that is acceptable
+                # because the observer topic is per-hub and cross-delivery is
+                # hypothetical (T-17-02).
+                tail_matches = frame.mid_tail.endswith(own)
                 _LOGGER.debug(
-                    "RainPoint MQTT push carried no sub-device update: topic=%s payload=%s",
-                    topic,
-                    _payload_preview(payload),
+                    "RainPoint MQTT hub frame mid cross-check used the suffix fallback (hub_mid=%s width=%s, expected width=%s)",
+                    own,
+                    len(own),
+                    MQTT_PUSH_HUB_FRAME_MID_WIDTH,
                 )
+            if not tail_matches:
+                _LOGGER.debug(
+                    "RainPoint MQTT hub frame mid mismatch: frame_tail=%s hub_mid=%s",
+                    frame.mid_tail,
+                    own,
+                )
+                return
+            if self._coordinator is None:
+                _LOGGER.debug("RainPoint MQTT push received before coordinator wiring; dropping")
+                return
+            # frame.mid_tail is never passed on: the mid handed to the
+            # coordinator is always self._hub_mid from construction, never one
+            # parsed out of the payload. The cross-check above is a defense
+            # in depth against a broker that ever cross-delivers, not a
+            # source of the mid (D-06).
+            self._coordinator.apply_hub_push_update(self._hub_mid, frame.connected, frame.changed_ts)
             return
-        if self._coordinator is None:
-            _LOGGER.debug("RainPoint MQTT push received before coordinator wiring; dropping")
-            return
-        for sid, raw_value, device_ts in updates:
-            self._coordinator.apply_push_update(self._hub_mid, sid, raw_value, device_ts)
+
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "RainPoint MQTT push carried no sub-device update: topic=%s payload=%s",
+                topic,
+                _payload_preview(payload),
+            )
 
     async def async_disconnect(self) -> None:
         """Cancel and await the supervisor task, then stop the paho loop and

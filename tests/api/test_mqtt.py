@@ -12,6 +12,11 @@ import pytest
 
 import custom_components.rainpoint.api.mqtt as mqtt_module
 from custom_components.rainpoint.api.mqtt import RainPointMqttClient, RainPointMqttError
+from tests.payload_samples import (
+    SAMPLE_HUB_DISCONNECT_FRAME,
+    SAMPLE_HUB_FRAME_MID,
+    SAMPLE_HUB_RECONNECT_FRAME,
+)
 
 FAKE_DEVICE_SECRET = "SEKRIT-value-9f3a"
 
@@ -554,6 +559,174 @@ class TestPushEnvelopeParsing:
             ("D01", "11#ab", 1784707302285),
             ("D02", "11#cd", 1784707302285),
         ]
+
+
+class TestHubFrameParsing:
+    """_parse_hub_frame as a pure function: fully fail-safe (D-05), and
+    fail-safe via two exception scopes rather than one (the load-bearing fix
+    a literal transcription of _parse_push_envelope's shape would have missed)."""
+
+    def test_bare_capture_parses_with_no_json_wrapper(self):
+        """The exact 2026-07-31 capture, bare, with no JSON wrapper at all,
+        must parse -- this is the frame the two-exception-scope structure
+        exists to read, and pins the load-bearing requirement against
+        regression. A single-outer-try transcription of _parse_push_envelope's
+        shape would raise ValueError on json.loads and return None here."""
+        frame = mqtt_module._parse_hub_frame(SAMPLE_HUB_DISCONNECT_FRAME.encode())
+        assert frame is not None
+        assert frame.connected is False
+        assert frame.changed_ts == 1785521850011
+
+    def test_reconnect_frame_parses_connected_true(self):
+        """The reconstructed reconnect frame parses with connected True."""
+        frame = mqtt_module._parse_hub_frame(SAMPLE_HUB_RECONNECT_FRAME.encode())
+        assert frame is not None
+        assert frame.connected is True
+        assert frame.changed_ts == 1785523062039
+
+    def test_json_wrapped_capture_parses_to_the_identical_frame(self):
+        """The same frame carried inside an AliCloud envelope converges on the
+        identical _HubFrame as the bare route -- both routes are required and
+        neither is redundant."""
+        payload = json.dumps({"method": "thing.service.property.set", "params": {"param": SAMPLE_HUB_DISCONNECT_FRAME}}).encode()
+        frame = mqtt_module._parse_hub_frame(payload)
+        assert frame == mqtt_module._parse_hub_frame(SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+    def test_json_wrapped_single_unnamed_param_fallback(self):
+        """A params dict with exactly one entry under a non-'param' key is
+        still used, mirroring _parse_push_envelope's identical fallback."""
+        payload = json.dumps(
+            {"method": "thing.service.property.set", "params": {"anything": SAMPLE_HUB_DISCONNECT_FRAME}}
+        ).encode()
+        frame = mqtt_module._parse_hub_frame(payload)
+        assert frame is not None
+        assert frame.connected is False
+
+    def test_missing_trailing_terminator_still_parses(self):
+        """The terminator strip only fires when present; its absence is not an error."""
+        no_terminator = SAMPLE_HUB_DISCONNECT_FRAME[:-1]
+        frame = mqtt_module._parse_hub_frame(no_terminator.encode())
+        assert frame is not None
+        assert frame.changed_ts == 1785521850011
+
+    def test_oversized_payload_is_dropped(self):
+        """The MQTT_PUSH_MAX_PAYLOAD_BYTES bound is applied before any parse."""
+        oversized = SAMPLE_HUB_DISCONNECT_FRAME.encode() + b"0" * mqtt_module.MQTT_PUSH_MAX_PAYLOAD_BYTES
+        assert mqtt_module._parse_hub_frame(oversized) is None
+
+    def test_non_utf8_bytes_do_not_raise(self):
+        """Undecodable bytes degrade via 'replace' rather than raising, and the
+        resulting garbled text simply fails shape recognition."""
+        assert mqtt_module._parse_hub_frame(b"\xff\xfe\x00#P|0|1|2#") is None
+
+    @pytest.mark.parametrize(
+        ("mutated", "reason"),
+        [
+            ("{" + SAMPLE_HUB_DISCONNECT_FRAME, "brace-prefixed section"),
+            ("#P1|0|2#", "wrong section count (3)"),
+            ("#P1|0|2|3|4#", "wrong section count (5)"),
+            ("P260731181730000016822282236547|0|1785521850011|112882164350#", "missing #P prefix"),
+            ("#P260731181730000016822282236547|2|1785521850011|112882164350#", "section 2 not literal 0/1"),
+            ("#P260731181730000016822282236547|0|not-an-int|112882164350#", "section 3 not int"),
+            ("#P260731181730000016822282236547|0|1785521850011|not-an-int#", "section 4 not int"),
+        ],
+    )
+    def test_each_d05_clause_failing_yields_none(self, mutated, reason):
+        """Each of D-05's five clauses, failing independently, drops the frame."""
+        assert mqtt_module._parse_hub_frame(mutated.encode()) is None, reason
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            json.dumps([1, 2, 3]).encode(),  # valid JSON, not a dict
+            json.dumps({"method": "other.method", "params": {"param": SAMPLE_HUB_DISCONNECT_FRAME}}).encode(),
+            json.dumps({"method": "thing.service.property.set", "params": "not-a-dict"}).encode(),
+            json.dumps({"method": "thing.service.property.set", "params": {"a": "x", "b": "y"}}).encode(),
+            json.dumps({"method": "thing.service.property.set", "params": {"param": 123}}).encode(),
+        ],
+    )
+    def test_candidate_resolution_falls_through_to_bare_text_and_still_fails_shape(self, payload):
+        """Every non-standard envelope shape leaves the candidate as the raw
+        JSON text, which is not a hub frame either, so the result is None --
+        proving the candidate-resolution branches degrade safely rather than
+        raising or accidentally matching."""
+        assert mqtt_module._parse_hub_frame(payload) is None
+
+
+class TestHubFrameRouting:
+    """_dispatch_push routes a recognized hub frame to apply_hub_push_update,
+    always with the client's own construction-supplied mid, never the frame's
+    parsed mid_tail (D-06)."""
+
+    def test_hub_frame_reaches_apply_hub_push_update_with_the_clients_own_mid(self):
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
+
+        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        coordinator.apply_hub_push_update.assert_called_once_with(SAMPLE_HUB_FRAME_MID, False, 1785521850011)
+        coordinator.apply_push_update.assert_not_called()
+
+    def test_differing_six_digit_mid_drops_without_calling_either_entry_point(self):
+        """The equal-width exact-slice path: a genuinely different 6-digit mid
+        cannot satisfy the fixed-width comparison."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=999999)
+
+        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        coordinator.apply_hub_push_update.assert_not_called()
+        coordinator.apply_push_update.assert_not_called()
+
+    def test_fallback_width_mismatch_drops(self):
+        """own is 7 digits, not the observed 6-digit width, so the suffix
+        fallback applies -- and still correctly rejects a genuinely different
+        tail."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=1236547)
+
+        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        coordinator.apply_hub_push_update.assert_not_called()
+
+    def test_fallback_width_admits_a_proper_suffix_mid_as_documented_residual(self):
+        """own is 5 digits, not the observed 6-digit width, and happens to be a
+        proper suffix of the frame's real mid: the fallback path admits it.
+        This is T-17-02's documented, accepted residual for an unobserved mid
+        width -- degrading to a weaker check beats dropping every frame and
+        silently disabling the feature for that width."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=36547)
+
+        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        coordinator.apply_hub_push_update.assert_called_once_with(36547, False, 1785521850011)
+
+    def test_coordinator_not_wired_drops_a_recognized_hub_frame(self, caplog):
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator=None, hub_mid=SAMPLE_HUB_FRAME_MID)
+
+        with caplog.at_level(logging.DEBUG):
+            client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        assert any("before coordinator wiring" in r.message for r in caplog.records)
+
+    def test_sub_device_envelope_and_hub_frame_each_route_to_exactly_one_entry_point(self):
+        """The companion invariant test named in the plan's assumption-delta
+        decision: a sub-device envelope reaches only apply_push_update and a
+        hub frame reaches only apply_hub_push_update, never both -- it goes
+        red the instant a future change lets one payload reach both."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
+
+        subdevice_payload = _captured_push_payload({"D01": "11#" + "0a1b" * 28})
+        client._dispatch_push("topic", subdevice_payload)
+        coordinator.apply_push_update.assert_called_once()
+        coordinator.apply_hub_push_update.assert_not_called()
+
+        coordinator.reset_mock()
+        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+        coordinator.apply_hub_push_update.assert_called_once()
+        coordinator.apply_push_update.assert_not_called()
 
 
 class TestAsyncDisconnect:

@@ -539,6 +539,24 @@ def _status_entry_time(status_entry: dict) -> datetime | None:
         return None
 
 
+def _changed_at_datetime(record: dict | None) -> datetime | None:
+    """Return a hub_connectivity record's changed_at as a UTC datetime, or None.
+
+    None for a falsy record, a changed_at that is not a string, or a string
+    that fails to parse as ISO-8601. Consumed by the push-side ordering guard
+    (D-13/D-14/D-15) and the poll-side D-16 guard (plan 17-03).
+    """
+    if not record:
+        return None
+    changed_at = record.get("changed_at")
+    if not isinstance(changed_at, str):
+        return None
+    try:
+        return datetime.fromisoformat(changed_at)
+    except (ValueError, TypeError):
+        return None
+
+
 def _last_seen_from_entry(previous: dict | None) -> str | None:
     """Return an ISO-8601 last-seen timestamp carried by a previous sensor entry, or None.
 
@@ -673,6 +691,91 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # Notify listeners WITHOUT async_set_updated_data so the poll interval
         # timer is never reset; the 120s poll keeps running as the fallback.
         self.async_update_listeners()
+
+    def apply_hub_push_update(self, mid: int, connected: bool, changed_ts: int) -> None:
+        """Merge a pushed hub-level connectivity edge into coordinator data.
+
+        The second sanctioned push entry point (D-01), alongside
+        apply_push_update: a hub frame carries no addr, no decoder, and
+        touches neither the sensors nor the status branch, so it shares none
+        of that method's merge logic even though it mirrors its drop ladder
+        and copy-on-write/notify shape.
+
+        Mirrors apply_push_update's before-first-poll and unknown-mid drops,
+        and adds one drop with no equivalent there: a resolved hub that fails
+        is_hub_record, because the Bluetooth wrapper record contributes no
+        connectivity record on the poll path, and writing one here would
+        create a record the next poll deletes.
+
+        This plan carries no ordering guard and no debounce/issue clearing:
+        D-13/D-14/D-15's ordering guard and D-11's explicit
+        `_hub_disconnect_poll_counts.pop` / `_hub_connectivity_issues.async_clear`
+        calls land in a later plan of this phase, once `async_clear` exists
+        on `RainPointHubConnectivityIssues`.
+        """
+        data = self.data
+        if not data:
+            _LOGGER.debug(
+                "Dropping hub push before first poll: mid=%s connected=%s changed_ts=%s",
+                mid,
+                connected,
+                changed_ts,
+            )
+            return
+
+        hub = next((h for h in data.get("hubs", []) if h.get("mid") == mid), None)
+        if hub is None:
+            _LOGGER.debug("Dropping hub push for unknown mid=%s connected=%s changed_ts=%s", mid, connected, changed_ts)
+            return
+
+        if not is_hub_record(hub):
+            _LOGGER.debug("Dropping hub push for non-hub record mid=%s connected=%s changed_ts=%s", mid, connected, changed_ts)
+            return
+
+        changed_dt = _status_entry_time({"time": changed_ts})
+        if changed_dt is None:
+            # Deliberate divergence from the poll path's D-08: a poll is a
+            # complete observation, so an unconvertible timestamp there
+            # honestly degrades to unknown. A push is an increment on top of
+            # a poll, so the honest answer here is to decline the increment
+            # rather than knock a good held value down to unknown.
+            _LOGGER.debug(
+                "Dropping hub push with unconvertible changed_ts=%s for mid=%s connected=%s",
+                changed_ts,
+                mid,
+                connected,
+            )
+            return
+
+        held = ((data.get("hub_connectivity") or {}).get(mid)) or {}
+        record = {
+            "state": HUB_CONNECTED if connected else HUB_DISCONNECTED,
+            "changed_at": changed_dt.isoformat(),
+            # Carried forward from the held record, untouched (D-03/D-17): the
+            # frame does not carry the raw `state` id, so a pushed edge must
+            # neither invent this field nor blank a poll-established
+            # diagnostic for up to 120s.
+            "state_raw": held.get("state_raw"),
+        }
+        RainPointCoordinator._merge_push_hub_connectivity(self, mid, record)
+
+        # Notify listeners WITHOUT async_set_updated_data so the poll interval
+        # timer is never reset; the 120s poll keeps running as the fallback.
+        self.async_update_listeners()
+
+    def _merge_push_hub_connectivity(self, mid: int, record: dict) -> None:
+        """Copy-on-write merge of one pushed hub connectivity record into self.data.
+
+        Replaces only hub_connectivity[mid], shallow-copying the top-level
+        dict and the hub_connectivity sub-dict along the way so every sibling
+        mid keeps its object identity and hubs/sensors/status are carried by
+        reference. Assigns the rebuilt top-level dict back to self.data.
+        """
+        data = dict(self.data)
+        hub_connectivity = dict(data.get("hub_connectivity", {}))
+        hub_connectivity[mid] = record
+        data["hub_connectivity"] = hub_connectivity
+        self.data = data
 
     def _merge_push_sensor_entry(
         self,

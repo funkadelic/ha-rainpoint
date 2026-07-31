@@ -38,6 +38,7 @@ import custom_components.rainpoint.repairs as _repairs_module  # noqa: E402
 from custom_components.rainpoint.api import RainPointApiError, decode_htv145frf  # noqa: E402
 from custom_components.rainpoint.const import (  # noqa: E402
     CONF_HIDS,
+    DOMAIN,
     MODEL_CO2,
     MODEL_DISPLAY_HUB,
     MODEL_FLOWMETER,
@@ -63,6 +64,8 @@ from tests.payload_samples import (  # noqa: E402
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
+    SAMPLE_HUB_DISCONNECT_FRAME,
+    SAMPLE_HUB_FRAME_MID,
     SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
 )
 
@@ -2876,6 +2879,225 @@ class TestApplyPushUpdate:
 
         assert coord._silent_poll_counts.get("100_200_1") == 2, reason
         coord._silent_issues.async_clear.assert_not_called()
+
+
+class TestChangedAtDatetime:
+    """_changed_at_datetime: the ordering primitive Task 2 and plan 17-03
+    consume. Not yet wired into any caller in this plan, so it is tested
+    directly."""
+
+    def test_none_record_yields_none(self):
+        assert _coord_module._changed_at_datetime(None) is None
+
+    def test_empty_record_yields_none(self):
+        assert _coord_module._changed_at_datetime({}) is None
+
+    def test_non_string_changed_at_yields_none(self):
+        assert _coord_module._changed_at_datetime({"changed_at": 12345}) is None
+
+    def test_unparseable_string_yields_none(self):
+        assert _coord_module._changed_at_datetime({"changed_at": "not-a-timestamp"}) is None
+
+    def test_valid_iso_string_parses(self):
+        record = {"changed_at": "2026-07-31T18:17:30.011000+00:00"}
+        assert _coord_module._changed_at_datetime(record) == datetime.fromisoformat("2026-07-31T18:17:30.011000+00:00")
+
+
+_APPLY_HUB = _coord_module.RainPointCoordinator.apply_hub_push_update
+
+
+class TestApplyHubPushUpdate:
+    """apply_hub_push_update: the second sanctioned push entry point (D-01).
+    Copy-on-write merge of one hub connectivity record, notifying listeners
+    without resetting the poll timer, and dropping misses via a ladder that
+    mirrors apply_push_update's."""
+
+    def test_push_before_first_poll_is_dropped(self):
+        coord, _ = _make_coord()
+        coord.data = None
+        coord.async_update_listeners = MagicMock()
+
+        _APPLY_HUB(coord, 200, False, 1717200000000)
+
+        coord.async_update_listeners.assert_not_called()
+
+    def test_unknown_mid_is_dropped_without_mutating_or_notifying(self):
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        original = coord.data
+
+        _APPLY_HUB(coord, 999, False, 1717200000000)
+
+        assert coord.data is original
+        coord.async_update_listeners.assert_not_called()
+
+    def test_non_hub_record_is_dropped_without_mutating_or_notifying(self):
+        """The Bluetooth wrapper record (every identity field empty) is found
+        by mid but fails is_hub_record, so it contributes no connectivity
+        record -- writing one here would create a record the next poll deletes."""
+        wrapper_hub = {"hid": 100, "mid": 346965, "did": "", "mac": "", "productKey": "", "model": "", "name": ""}
+        coord = _seed_push_coord(wrapper_hub, sensors={})
+        original = coord.data
+
+        _APPLY_HUB(coord, 346965, True, 1717200000000)
+
+        assert coord.data is original
+        coord.async_update_listeners.assert_not_called()
+
+    def test_unconvertible_timestamp_declines_the_increment(self):
+        """changed_ts=10**20 is out of datetime.fromtimestamp's representable
+        range (D-08): the held record is left byte-identical and listeners
+        are not notified, deliberately diverging from the poll path's
+        unknown-on-malformed rule."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        coord.data["hub_connectivity"] = {200: {"state": _coord_module.HUB_CONNECTED, "changed_at": "x", "state_raw": "raw"}}
+        original_record = coord.data["hub_connectivity"][200]
+
+        _APPLY_HUB(coord, 200, False, 10**20)
+
+        assert coord.data["hub_connectivity"][200] is original_record
+        coord.async_update_listeners.assert_not_called()
+
+    def test_merge_writes_three_key_record_and_preserves_sibling_identity(self):
+        """The merge writes exactly state/changed_at/state_raw, carries
+        state_raw forward from the held record (D-03), preserves sibling mid
+        object identity, carries hubs by reference, and notifies listeners
+        exactly once without resetting the poll timer."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        sibling_record = {"state": _coord_module.HUB_CONNECTED, "changed_at": "y", "state_raw": "sib"}
+        coord.data["hub_connectivity"] = {
+            200: {"state": _coord_module.HUB_CONNECTED, "changed_at": "old", "state_raw": "held-raw"},
+            999: sibling_record,
+        }
+        original_hubs = coord.data["hubs"]
+
+        _APPLY_HUB(coord, 200, False, 1717200000000)
+
+        record = coord.data["hub_connectivity"][200]
+        assert record == {
+            "state": _coord_module.HUB_DISCONNECTED,
+            "changed_at": datetime.fromtimestamp(1717200000000 / 1000, tz=UTC).isoformat(),
+            "state_raw": "held-raw",
+        }
+        assert coord.data["hub_connectivity"][999] is sibling_record
+        assert coord.data["hubs"] is original_hubs
+        coord.async_update_listeners.assert_called_once()
+        coord.async_set_updated_data.assert_not_called()
+
+    def test_merge_with_no_held_record_writes_state_raw_none(self):
+        """A first-ever push for a mid with no prior connectivity record
+        writes state_raw None rather than raising on the missing key."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+
+        _APPLY_HUB(coord, 200, True, 1717200000000)
+
+        assert coord.data["hub_connectivity"][200]["state_raw"] is None
+        assert coord.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
+
+    def test_dropped_push_leaves_hub_disconnect_poll_counts_untouched(self):
+        """This plan carries no debounce/issue clearing yet (D-11 lands in a
+        later plan of this phase, once RainPointHubConnectivityIssues gains
+        async_clear); a drop must not touch that counter either way."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        coord._hub_disconnect_poll_counts[(100, 200)] = 2
+
+        _APPLY_HUB(coord, 999, False, 1717200000000)
+
+        assert coord._hub_disconnect_poll_counts.get((100, 200)) == 2
+
+    @pytest.mark.parametrize(
+        ("reason", "mid", "seed", "wrapper"),
+        [
+            ("before first poll", 200, False, False),
+            ("unknown mid", 999, True, False),
+            ("non-hub record", 346965, True, True),
+        ],
+    )
+    def test_dropped_push_notifies_no_listener(self, reason, mid, seed, wrapper):
+        """Each early-return drop path must not notify listeners, since none
+        of them reach the merge that follows those drops."""
+        if wrapper:
+            hub = {"hid": 100, "mid": 346965, "did": "", "mac": "", "productKey": "", "model": "", "name": ""}
+            coord = _seed_push_coord(hub, sensors={})
+        elif seed:
+            coord = _seed_push_coord(_push_hub(), sensors={})
+        else:
+            coord, _ = _make_coord()
+            coord.data = None
+            coord.async_update_listeners = MagicMock()
+
+        _APPLY_HUB(coord, mid, False, 1717200000000)
+
+        assert coord.async_update_listeners.call_count == 0, reason
+
+
+class TestHubPushTracerEndToEnd:
+    """Drives construct -> first refresh -> platform setup -> one push
+    dispatch in real order, proving the pushed disconnect reaches the Phase
+    16 connectivity entity with no intervening poll (SC 1)."""
+
+    @pytest.mark.asyncio
+    async def test_pushed_disconnect_reaches_the_connectivity_entity_with_no_poll_between(self):
+        from custom_components.rainpoint.api.mqtt import RainPointMqttClient
+        from custom_components.rainpoint.binary_sensor import async_setup_entry as binary_setup_entry
+        from custom_components.rainpoint.hub_entities import RainPointHubConnectivityBinarySensor
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": SAMPLE_HUB_FRAME_MID,
+                "hid": 100,
+                "name": "Hub1",
+                "deviceName": "dev1",
+                "productKey": "pk1",
+                "homeName": "Home",
+                "subDevices": [],
+            }
+        ]
+        client.get_multiple_device_status.return_value = [
+            {"mid": SAMPLE_HUB_FRAME_MID, "subDeviceStatus": [{"id": "connected", "value": "1"}]}
+        ]
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"test_entry": {}}}
+
+        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
+        await coordinator.async_config_entry_first_refresh()
+
+        hass.data[DOMAIN]["test_entry"]["coordinator"] = coordinator
+        hass.data[DOMAIN]["test_entry"]["mqtt_client"] = None
+
+        captured = []
+        add = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await binary_setup_entry(hass, entry, add)
+
+        connectivity_entities = [e for e in captured if isinstance(e, RainPointHubConnectivityBinarySensor)]
+        assert len(connectivity_entities) == 1
+        entity = connectivity_entities[0]
+        assert entity.is_on is True
+
+        mqtt_client = RainPointMqttClient(
+            hass,
+            client,
+            entry=entry,
+            hub_device_name="dev1",
+            hub_product_key="pk1",
+            coordinator=coordinator,
+            hub_mid=SAMPLE_HUB_FRAME_MID,
+        )
+        mqtt_client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        # Same entity object, no second setup call, no reload, no
+        # async_refresh anywhere in this test.
+        assert entity.is_on is False
 
 
 class TestIssueUrlLengthBudget:

@@ -261,3 +261,24 @@ SAMPLE_HTV210B_TLV_PAYLOAD = (
     "11#37FF0D0000000018DC0117E1B40119D8001AD8001D201E2021B70000000022B7000000002"
     "5AF0000000026AF00000000299F000000002A9F0000000038FF0D00000000FEFF0F1527FB19"
 )
+
+# Verbatim pipe-delimited hub-level connectivity frames from the 2026-07-31 UAT
+# on v1.12.0b1, both delivered on thing/service/property/set. Section 1
+# decomposes as the "#P" prefix, a 12-digit YYMMDDHHMMSS stamp, "0000", the
+# 8-digit account id 16822282, and the 6-digit mid 236547; section 2 is the
+# connected flag; section 3 is the change timestamp that later appeared
+# verbatim as the poll's `connected` entry `time`; section 4 is a propVer
+# matching the next poll's.
+SAMPLE_HUB_DISCONNECT_FRAME = "#P260731181730000016822282236547|0|1785521850011|112882164350#"
+# Reconstructed from the disconnect frame's shape: 17-CONTEXT.md records the
+# reconnect frame elided as "...|1|1785523062039|112882164351#". The
+# reconstruction is arithmetically consistent: 1785523062039 ms is
+# 2026-07-31T18:37:42.039+00:00, matching the measured 11:37:42 local
+# reconnect edge, and the delta from the disconnect frame's 1785521850011 ms
+# is exactly 20m12s -- the measured 11:17:30 -> 11:37:42 gap.
+SAMPLE_HUB_RECONNECT_FRAME = "#P260731183742000016822282236547|1|1785523062039|112882164351#"
+# The mid and expected ISO changed_at strings both frames above decode to, so
+# tests assert against one shared definition rather than repeating literals.
+SAMPLE_HUB_FRAME_MID = 236547
+SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO = "2026-07-31T18:17:30.011000+00:00"
+SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO = "2026-07-31T18:37:42.039000+00:00"
