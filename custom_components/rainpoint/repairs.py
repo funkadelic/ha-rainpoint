@@ -230,7 +230,9 @@ def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
     takes out the scheme separator and the address at sign), breaks the
     bare-host prefix a renderer autolinks without any surrounding syntax,
     strips, and caps length; falls back to the literal "unknown" when nothing
-    is left.
+    is left. None short-circuits to that same fallback rather than being
+    stringified: str(None) is "None", which survives every pass above and would
+    print a Python repr into a card a user reads.
 
     Order matters and is the whole correctness of this function. The deletion
     pass has to run BEFORE the autolink break, because deleting characters can
@@ -240,6 +242,8 @@ def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
     run after the whitespace collapse, so the space the break inserts is not
     collapsed away again.
     """
+    if value is None:
+        return "unknown"
     text = _WHITESPACE_RUN_RE.sub(" ", str(value))
     text = text.translate(_MARKDOWN_HTML_TRANSLATION)
     text = _AUTOLINK_PREFIX_RE.sub(" ", text)

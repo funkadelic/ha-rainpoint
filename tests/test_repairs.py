@@ -569,7 +569,7 @@ class TestUnreachableIdsAreNotCleared:
         assert delete.call_count == 0
 
 
-def _make_hub_record(hid=100, mid=200, hub_name="Hub1", disconnected=True, missed_polls=3, model="HWG023WBRF-V2"):
+def _make_hub_record(hid=100, mid=200, hub_name="Hub1", disconnected=True, missed_polls=3, model: str | None = "HWG023WBRF-V2"):
     """Build a HubConnectivityRecord with sensible defaults for one hub."""
     return HubConnectivityRecord(
         hid=hid,
@@ -613,6 +613,19 @@ class TestRainPointHubConnectivityIssues:
         assert placeholders["hub_name"] == "Hub1"
         assert placeholders["model"] == "HWG023WBRF-V2"
         assert placeholders["missed_polls"] == "3"
+
+    def test_absent_model_falls_back_rather_than_rendering_blank_parens(self, issue_mocks):
+        """A hub record with no model must still render a readable card.
+
+        The model rides the same sanitizer as the hub name, so an absent value
+        becomes the literal "unknown" instead of leaving empty parentheses.
+        """
+        create, _delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        manager.async_sync([_make_hub_record(model=None)])
+
+        assert create.call_args.kwargs["translation_placeholders"]["model"] == "unknown"
 
     def test_hub_name_reaches_the_placeholder_sanitized(self, issue_mocks):
         """T-16-04: a hostile hub name must not survive into the card.
