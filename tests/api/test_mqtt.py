@@ -155,8 +155,10 @@ class TestMessageReceiptLogging:
         await client.async_disconnect()
 
     @pytest.mark.asyncio
-    async def test_undecodable_push_logs_payload_preview_on_drop_path(self, caplog):
-        """A message with no sub-device update logs a payload preview at DEBUG for diagnosis."""
+    async def test_first_unrecognized_shape_logs_payload_preview_at_info(self, caplog):
+        """The first payload of a distinct unrecognized shape logs a preview
+        at INFO for diagnosis (D-07): DEBUG-only preview is precisely the
+        condition that hid the hub connectivity frames for a whole milestone."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -164,30 +166,34 @@ class TestMessageReceiptLogging:
         await client.async_start()
         await _settle()
 
-        # A hub property/set downlink (not a sub-device status push) is dropped.
+        # A hub property/set downlink (not a sub-device status push, not a
+        # hub connectivity frame) is dropped.
         payload = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
         msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
 
-        with caplog.at_level(logging.DEBUG):
+        with caplog.at_level(logging.INFO):
             client._on_message(fake_paho, None, msg)
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 
-        drop_records = [r for r in caplog.records if "carried no sub-device update" in r.message]
-        assert len(drop_records) == 1
-        assert "BroadcastTime" in drop_records[0].message
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
+        assert len(info_records) == 1
+        assert "BroadcastTime" in info_records[0].message
 
         await client.async_disconnect()
 
     @pytest.mark.asyncio
-    async def test_undecodable_push_skips_preview_above_debug(self, caplog):
-        """Above DEBUG, the drop-path preview is skipped (the isEnabledFor guard's off branch).
+    async def test_repeat_of_the_same_unrecognized_shape_skips_preview_above_debug(self, caplog):
+        """A second payload of an already-seen unrecognized shape is
+        DEBUG-only: above DEBUG, the preview call is skipped (the
+        isEnabledFor guard's off branch).
 
-        The logger level is pinned to INFO explicitly so this covers the guard's
-        skip branch deterministically, regardless of ambient log state or test order.
-        Asserting that _payload_preview never runs is what proves the guard skipped
-        the work; an absent log record alone would also be satisfied by the logger
-        filtering a record whose arguments had already been evaluated.
+        The logger level is pinned to INFO explicitly so this covers the
+        guard's skip branch deterministically, regardless of ambient log
+        state or test order. Asserting that _payload_preview never runs is
+        what proves the guard skipped the work; an absent log record alone
+        would also be satisfied by the logger filtering a record whose
+        arguments had already been evaluated.
         """
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
@@ -199,6 +205,11 @@ class TestMessageReceiptLogging:
         payload = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
         msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
 
+        # First occurrence establishes the shape as seen; not under test here.
+        client._on_message(fake_paho, None, msg)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
         with (
             patch.object(mqtt_module, "_payload_preview", wraps=mqtt_module._payload_preview) as preview,
             caplog.at_level(logging.INFO, logger="custom_components.rainpoint.api.mqtt"),
@@ -208,7 +219,7 @@ class TestMessageReceiptLogging:
             await asyncio.sleep(0)
 
         assert preview.call_count == 0
-        assert not any("carried no sub-device update" in r.message for r in caplog.records)
+        assert not any(r.levelno == logging.DEBUG for r in caplog.records)
 
         await client.async_disconnect()
 
@@ -727,6 +738,56 @@ class TestHubFrameRouting:
         client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
         coordinator.apply_hub_push_update.assert_called_once()
         coordinator.apply_push_update.assert_not_called()
+
+
+class TestUnrecognisedShapeLogging:
+    """D-07: the first payload of a distinct unrecognized shape logs once at
+    INFO with a truncated preview; repeats of that shape stay DEBUG; the
+    per-client bookkeeping is hard-capped so it cannot grow unbounded."""
+
+    def test_shape_key_classifies_by_structure_not_content(self):
+        """Two payloads with the same section-count/class shape but
+        different content classify to the same key."""
+        key_a = mqtt_module._shape_key(b'{"method":"a","params":{"x":1}}')
+        key_b = mqtt_module._shape_key(b'{"method":"b","params":{"y":2}}')
+        assert key_a == key_b
+
+    def test_shape_key_differs_for_a_different_section_count(self):
+        key_two_sections = mqtt_module._shape_key(b"a|b")
+        key_three_sections = mqtt_module._shape_key(b"a|b|c")
+        assert key_two_sections != key_three_sections
+
+    def test_first_shape_logs_info_repeat_logs_debug_new_shape_logs_info_again(self, caplog):
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator)
+        shape_a = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
+        shape_a_repeat = b'{"method":"thing.service.property.set","params":{"BroadcastTime":2}}'
+        shape_b = b"not-a-json-payload-at-all"
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.mqtt"):
+            client._dispatch_push("topic", shape_a)
+            client._dispatch_push("topic", shape_a_repeat)
+            client._dispatch_push("topic", shape_b)
+
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
+        assert len(info_records) == 2
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert len(debug_records) == 1
+
+    def test_unrecognized_shape_cap_stops_growth_and_further_info_records(self, caplog):
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator)
+        limit = mqtt_module.MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.mqtt"):
+            for i in range(limit + 2):
+                # A distinct pipe-count per iteration guarantees a distinct shape key.
+                payload = "|".join(["x"] * (i + 1)).encode()
+                client._dispatch_push("topic", payload)
+
+        assert len(client._unrecognised_shapes) == limit
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
+        assert len(info_records) == limit
 
 
 class TestAsyncDisconnect:

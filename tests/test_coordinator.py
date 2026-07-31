@@ -64,8 +64,10 @@ from tests.payload_samples import (  # noqa: E402
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
+    SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO,
     SAMPLE_HUB_DISCONNECT_FRAME,
     SAMPLE_HUB_FRAME_MID,
+    SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO,
     SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
 )
 
@@ -3033,6 +3035,89 @@ class TestApplyHubPushUpdate:
         _APPLY_HUB(coord, mid, False, 1717200000000)
 
         assert coord.async_update_listeners.call_count == 0, reason
+
+
+class TestApplyHubPushUpdateOrderingGuard:
+    """apply_hub_push_update's ordering guard (D-13/D-14/D-15): the pushed
+    change moment is compared against the held record's changed_at, ordering
+    both channels against one identical value. Strictly newer wins; an equal
+    or older moment is a no-op; a held moment that cannot be established
+    (None, absent, or unparseable) always falls through to apply."""
+
+    def test_strictly_older_pushed_edge_is_dropped_without_merging_or_notifying(self):
+        """The example from the plan: held changed_at is the 18:37:42
+        reconnect moment; the 18:17:30 disconnect frame arrives late."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        held_record = {
+            "state": _coord_module.HUB_CONNECTED,
+            "changed_at": SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO,
+            "state_raw": "held-raw",
+        }
+        coord.data["hub_connectivity"] = {200: held_record}
+
+        _APPLY_HUB(coord, 200, False, 1785521850011)
+
+        assert coord.data["hub_connectivity"][200] is held_record
+        coord.async_update_listeners.assert_not_called()
+
+    def test_equal_pushed_edge_is_dropped_without_merging_or_notifying(self, caplog):
+        """An equal moment is the same edge already held -- the common case
+        where the poll picks up the very edge the push already delivered."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        held_record = {
+            "state": _coord_module.HUB_DISCONNECTED,
+            "changed_at": SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO,
+            "state_raw": "held-raw",
+        }
+        coord.data["hub_connectivity"] = {200: held_record}
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.coordinator"):
+            _APPLY_HUB(coord, 200, False, 1785521850011)
+
+        assert coord.data["hub_connectivity"][200] is held_record
+        coord.async_update_listeners.assert_not_called()
+        assert any("already-recorded" in r.getMessage() or "already recorded" in r.getMessage() for r in caplog.records)
+
+    def test_held_changed_at_none_falls_through_and_applies(self):
+        """There is no recorded moment for the pushed edge to be older than."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        coord.data["hub_connectivity"] = {
+            200: {"state": _coord_module.HUB_CONNECTED, "changed_at": None, "state_raw": "held-raw"}
+        }
+
+        _APPLY_HUB(coord, 200, False, 1785521850011)
+
+        record = coord.data["hub_connectivity"][200]
+        assert record["state"] == _coord_module.HUB_DISCONNECTED
+        assert record["changed_at"] == SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO
+        coord.async_update_listeners.assert_called_once()
+
+    def test_no_held_record_falls_through_and_applies(self):
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+
+        _APPLY_HUB(coord, 200, False, 1785521850011)
+
+        assert coord.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
+        coord.async_update_listeners.assert_called_once()
+
+    def test_unparseable_held_changed_at_falls_through_and_applies(self):
+        """Refusing here would make push a permanent no-op on any firmware
+        whose connected entry carries no usable time (D-15)."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        coord.data["hub_connectivity"] = {
+            200: {"state": _coord_module.HUB_CONNECTED, "changed_at": "not-a-timestamp", "state_raw": "held-raw"}
+        }
+
+        _APPLY_HUB(coord, 200, False, 1785521850011)
+
+        record = coord.data["hub_connectivity"][200]
+        assert record["state"] == _coord_module.HUB_DISCONNECTED
+        coord.async_update_listeners.assert_called_once()
 
 
 class TestHubPushTracerEndToEnd:
