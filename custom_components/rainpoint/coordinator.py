@@ -748,6 +748,35 @@ class RainPointCoordinator(DataUpdateCoordinator):
             return
 
         held = ((data.get("hub_connectivity") or {}).get(mid)) or {}
+
+        # Ordering guard (D-13/D-14/D-15). The change timestamp is the
+        # ordering key, compared against the held record's own changed_at:
+        # the poll path already stores that field from the same cloud field,
+        # so both channels order against one identical value rather than two
+        # parallel clocks.
+        held_moment = _changed_at_datetime(held)
+        if held_moment is not None:
+            if changed_dt < held_moment:
+                _LOGGER.debug(
+                    "Dropping older hub push: mid=%s pushed=%s held=%s",
+                    mid,
+                    changed_dt.isoformat(),
+                    held_moment.isoformat(),
+                )
+                return
+            if changed_dt == held_moment:
+                # The common case: the poll routinely picks up the very edge
+                # the push already delivered. Applying it would rewrite an
+                # identical record and fire listeners for nothing.
+                _LOGGER.debug("Dropping already-recorded hub push: mid=%s moment=%s", mid, changed_dt.isoformat())
+                return
+        # A held moment of None, an absent held record, and an unparseable
+        # held changed_at all fall through to apply (D-15): there is no
+        # recorded moment for the pushed edge to be older than, and refusing
+        # would make push a permanent no-op on any firmware whose connected
+        # entry carries no usable time, silently disabling the feature with
+        # no way for the user to tell.
+
         record = {
             "state": HUB_CONNECTED if connected else HUB_DISCONNECTED,
             "changed_at": changed_dt.isoformat(),

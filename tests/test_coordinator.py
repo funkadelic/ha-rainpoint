@@ -3104,6 +3104,26 @@ class TestApplyHubPushUpdateOrderingGuard:
         assert coord.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
         coord.async_update_listeners.assert_called_once()
 
+    def test_strictly_newer_pushed_edge_against_a_valid_older_held_moment_applies(self):
+        """D-14's "strictly newer wins" from the winning side: a held record
+        with a genuine, parseable, older changed_at is not a barrier."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        coord.data["hub_connectivity"] = {
+            200: {
+                "state": _coord_module.HUB_DISCONNECTED,
+                "changed_at": SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO,
+                "state_raw": "held-raw",
+            }
+        }
+
+        _APPLY_HUB(coord, 200, True, 1785523062039)
+
+        record = coord.data["hub_connectivity"][200]
+        assert record["state"] == _coord_module.HUB_CONNECTED
+        assert record["changed_at"] == SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO
+        coord.async_update_listeners.assert_called_once()
+
     def test_unparseable_held_changed_at_falls_through_and_applies(self):
         """Refusing here would make push a permanent no-op on any firmware
         whose connected entry carries no usable time (D-15)."""

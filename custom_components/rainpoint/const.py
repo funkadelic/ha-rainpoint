@@ -147,6 +147,11 @@ MQTT_PUSH_HUB_FRAME_SECTIONS = 4
 MQTT_PUSH_HUB_FRAME_TERMINATOR = "#"
 MQTT_PUSH_HUB_FRAME_MID_WIDTH = 6
 
+# Hard cap on the per-client one-shot-per-shape unrecognised-downlink
+# bookkeeping (D-07). Keeps the set bounded against a hostile or chatty
+# downlink; a shape count past this logs at DEBUG instead of INFO.
+MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT = 32
+
 # Push observability: hub-level diagnostic entities that surface the live push
 # connection state and the age of the last received message. The unique_id is
 # built by appending these suffixes to the hub's base unique_id, so they stay

@@ -48,6 +48,7 @@ from ..const import (
     MQTT_PUSH_TIME_FIELD,
     MQTT_PUSH_VALUE_FIELD,
     MQTT_TLS_CA_CERT,
+    MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT,
 )
 from .client import RainPointClient
 
@@ -248,6 +249,49 @@ def _parse_hub_frame(payload: bytes) -> _HubFrame | None:
     return _HubFrame(mid_tail=sections[0], connected=sections[1] == "1", changed_ts=changed_ts)
 
 
+# Bounded prefix a shape classification decodes -- large enough to see the
+# first several pipe sections of any payload observed so far, small enough
+# that classifying a hostile oversized payload never forces a full decode.
+_SHAPE_KEY_PREFIX_BYTES = 256
+# Only the first few sections are classified individually; a payload with
+# many more sections still yields one key (its total section count plus this
+# many class letters), keeping the key's own size bounded regardless of how
+# many sections the payload actually has.
+_SHAPE_KEY_MAX_CLASSIFIED_SECTIONS = 8
+
+
+def _section_class(section: str) -> str:
+    """Classify one pipe-delimited section into a single letter.
+
+    Structural only -- never derived from the section's actual content past
+    this coarse bucket, so the key cannot be used to reconstruct the payload.
+    """
+    if not section:
+        return "E"  # empty
+    if section.lstrip().startswith("{"):
+        return "J"  # JSON-shaped
+    if section.isdigit():
+        return "D"  # all-digits
+    return "O"  # other
+
+
+def _shape_key(payload: bytes) -> str:
+    """Classify a payload's structural shape for D-07's one-shot-per-shape log.
+
+    Built from the total pipe-delimited section count plus a per-section
+    class letter for at most the first _SHAPE_KEY_MAX_CLASSIFIED_SECTIONS
+    sections. Classification keeps cardinality bounded by construction (a
+    small alphabet of classes over a short prefix);
+    MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT bounds the per-client bookkeeping this
+    feeds absolutely. Never hashes or otherwise carries raw payload content.
+    """
+    prefix = payload[:_SHAPE_KEY_PREFIX_BYTES]
+    text = prefix.decode("utf-8", "replace")
+    sections = text.split(MQTT_PUSH_SECTION_DELIMITER)
+    classes = "".join(_section_class(s) for s in sections[:_SHAPE_KEY_MAX_CLASSIFIED_SECTIONS])
+    return f"{len(sections)}:{classes}"
+
+
 # Supervisor backoff: only the DELAY is capped, never
 # the attempt count. 30s base doubling up to a 480s ceiling (within the 300-600s
 # band), with +-10-30% jitter to avoid a synchronized reconnect storm.
@@ -317,6 +361,11 @@ class RainPointMqttClient:
         self._message_count = 0
         self._last_message_at: float | None = None
         self._connected = False
+        # D-07 one-shot-per-shape bookkeeping: dies with the client rather
+        # than living for the process, and is bounded absolutely by
+        # MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT regardless of how chatty the
+        # downlink gets.
+        self._unrecognised_shapes: set[str] = set()
         # Observability seam: listeners registered by the diagnostic entities so
         # they re-render on connect/disconnect/message. coordinator.async_update_listeners
         # does not fire on these transitions (the live state is not in coordinator.data),
@@ -770,9 +819,27 @@ class RainPointMqttClient:
             self._coordinator.apply_hub_push_update(self._hub_mid, frame.connected, frame.changed_ts)
             return
 
-        if _LOGGER.isEnabledFor(logging.DEBUG):
+        # D-07: the first payload of a distinct unrecognized shape logs once
+        # at INFO with a truncated preview, so the next undiscovered downlink
+        # shape is visible in an ordinary log rather than requiring a debug
+        # session -- DEBUG-only preview is exactly the condition that hid the
+        # hub connectivity frames for a whole milestone. Repeats of an
+        # already-seen shape stay DEBUG, keeping the existing isEnabledFor
+        # guard around the preview call so an ordinary unconsumed downlink
+        # still costs nothing under default logging. WARNING on every
+        # unrecognized frame was rejected: it would turn a normal class of
+        # unconsumed downlink into recurring noise for every user.
+        shape_key = _shape_key(payload)
+        if shape_key not in self._unrecognised_shapes and len(self._unrecognised_shapes) < MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT:
+            self._unrecognised_shapes.add(shape_key)
+            _LOGGER.info(
+                "RainPoint MQTT push carried an unrecognized downlink shape: topic=%s payload=%s",
+                topic,
+                _payload_preview(payload),
+            )
+        elif _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(
-                "RainPoint MQTT push carried no sub-device update: topic=%s payload=%s",
+                "RainPoint MQTT push carried no sub-device or hub update: topic=%s payload=%s",
                 topic,
                 _payload_preview(payload),
             )

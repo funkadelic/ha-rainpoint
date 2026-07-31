@@ -209,6 +209,7 @@ class TestMessageReceiptLogging:
         client._on_message(fake_paho, None, msg)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        caplog.clear()
 
         with (
             patch.object(mqtt_module, "_payload_preview", wraps=mqtt_module._payload_preview) as preview,
@@ -756,6 +757,13 @@ class TestUnrecognisedShapeLogging:
         key_two_sections = mqtt_module._shape_key(b"a|b")
         key_three_sections = mqtt_module._shape_key(b"a|b|c")
         assert key_two_sections != key_three_sections
+
+    def test_section_class_covers_every_bucket(self):
+        """The empty and all-digits buckets have no other exercising path."""
+        assert mqtt_module._section_class("") == "E"
+        assert mqtt_module._section_class("{not-really-json") == "J"
+        assert mqtt_module._section_class("112882164350") == "D"
+        assert mqtt_module._section_class("not-digits-or-json") == "O"
 
     def test_first_shape_logs_info_repeat_logs_debug_new_shape_logs_info_again(self, caplog):
         coordinator = MagicMock()
