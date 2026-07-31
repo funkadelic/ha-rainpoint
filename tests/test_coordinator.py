@@ -1128,7 +1128,7 @@ class TestSilentSubDeviceEndToEnd:
 
         attrs = sub_device_attributes(coordinator, "100_200_1")
 
-        assert attrs == {"firmware_version": "1.0"}
+        assert attrs == {"firmware_version": "1.0", "hub_connected": None}
 
 
 class TestBuildSilentSubdevice:

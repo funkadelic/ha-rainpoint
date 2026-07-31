@@ -23,7 +23,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
+from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator, hub_connected_flag
 from .device import build_sub_device_info
 
 
@@ -103,6 +103,16 @@ def sub_device_attributes(coordinator: RainPointCoordinator, sensor_key: str) ->
     per-platform copies in valve.py and number.py fed straight into a membership
     test and raised on. An absent or None reading yields the firmware attribute
     alone here.
+
+    Also carries a ``hub_connected`` marker (``True``/``False``/``None``),
+    resolved from the same ``hub_connected_flag`` helper the hub connectivity
+    entity uses, so the two surfaces cannot disagree. This is what lets a
+    dashboard card or a template gate on a known-stale reading without the
+    integration deciding to hide it. It deliberately does not affect
+    availability: a hub outage self-heals within seconds of reattachment, and
+    hiding every reading would cost history gaps and template errors for a
+    transient condition. The key is always present, even when nothing else
+    is, so a template can test it without first testing for its existence.
     """
     attrs: dict[str, Any] = {}
     info = (coordinator.data or {}).get("sensors", {}).get(sensor_key) or {}
@@ -119,6 +129,10 @@ def sub_device_attributes(coordinator: RainPointCoordinator, sensor_key: str) ->
     elif "server_timestamp" in data:
         attrs["device_timestamp"] = data["server_timestamp"]
         attrs["timestamp_source"] = data.get("timestamp_source", "server")
+
+    mid = info.get("mid")
+    hub_connectivity = (coordinator.data or {}).get("hub_connectivity", {})
+    attrs["hub_connected"] = hub_connected_flag(hub_connectivity.get(mid))
 
     return attrs
 
