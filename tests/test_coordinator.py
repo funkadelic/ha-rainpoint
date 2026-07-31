@@ -3328,6 +3328,376 @@ class TestApplyHubPushUpdateOrderingGuard:
         coord.async_update_listeners.assert_called_once()
 
 
+class TestGuardHubConnectivityOrder:
+    """_guard_hub_connectivity_order (D-16): the poll-side ordering guard
+    applied at the single _async_update_data call site. A strictly older
+    poll record must not overwrite a newer held one; state_raw always takes
+    the latest polled value regardless of whether the guard fired (D-17)."""
+
+    def test_older_poll_is_held_off_by_a_newer_held_record(self):
+        """The example from the plan: held changed_at is the 18:37:42
+        reconnect moment and stays connected; the 18:17:30 disconnect poll
+        arrives late and only state_raw comes from it."""
+        polled = _coord_module._read_hub_connectivity(
+            {
+                "subDeviceStatus": [
+                    {"id": "connected", "value": "0", "time": 1785521850011},
+                    {"id": "state", "value": "poll-raw"},
+                ]
+            }
+        )
+        prior = {
+            "state": _coord_module.HUB_CONNECTED,
+            "changed_at": SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO,
+            "state_raw": "held-raw",
+        }
+
+        result = _coord_module._guard_hub_connectivity_order(polled, prior)
+
+        assert result["state"] == _coord_module.HUB_CONNECTED
+        assert result["changed_at"] == SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO
+        assert result["state_raw"] == "poll-raw"
+
+    def test_strictly_newer_poll_wins_whole(self):
+        """A poll whose moment is genuinely newer than the held record is
+        not a barrier -- the polled record wins whole, all three keys."""
+        polled = _coord_module._read_hub_connectivity(
+            {"subDeviceStatus": [{"id": "connected", "value": "1", "time": 1785523062039}]}
+        )
+        prior = {
+            "state": _coord_module.HUB_DISCONNECTED,
+            "changed_at": SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO,
+            "state_raw": "held-raw",
+        }
+
+        result = _coord_module._guard_hub_connectivity_order(polled, prior)
+
+        assert result is polled
+
+    def test_exactly_equal_moment_poll_wins_whole(self):
+        """An equal moment is the same edge already held; only strictly
+        older is held off."""
+        polled = _coord_module._read_hub_connectivity(
+            {"subDeviceStatus": [{"id": "connected", "value": "0", "time": 1785521850011}]}
+        )
+        prior = {
+            "state": _coord_module.HUB_DISCONNECTED,
+            "changed_at": SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO,
+            "state_raw": "held-raw",
+        }
+
+        result = _coord_module._guard_hub_connectivity_order(polled, prior)
+
+        assert result is polled
+
+    def test_prior_changed_at_none_polled_wins_whole(self):
+        """A held record with no recorded moment has nothing for the polled
+        moment to be older than."""
+        polled = _coord_module._read_hub_connectivity(
+            {"subDeviceStatus": [{"id": "connected", "value": "0", "time": 1785521850011}]}
+        )
+        prior = {"state": _coord_module.HUB_CONNECTED, "changed_at": None, "state_raw": "held-raw"}
+
+        result = _coord_module._guard_hub_connectivity_order(polled, prior)
+
+        assert result is polled
+
+    def test_prior_changed_at_unparseable_polled_wins_whole(self):
+        """An unparseable held changed_at degrades the same as a missing one."""
+        polled = _coord_module._read_hub_connectivity(
+            {"subDeviceStatus": [{"id": "connected", "value": "0", "time": 1785521850011}]}
+        )
+        prior = {"state": _coord_module.HUB_CONNECTED, "changed_at": "not-a-timestamp", "state_raw": "held-raw"}
+
+        result = _coord_module._guard_hub_connectivity_order(polled, prior)
+
+        assert result is polled
+
+    def test_polled_moment_none_with_a_valid_held_moment_polled_wins_whole(self):
+        """The poll's connected entry carries no usable time at all, so the
+        polled moment is None; unordered is not strictly older."""
+        polled = _coord_module._read_hub_connectivity({"subDeviceStatus": [{"id": "connected", "value": "0"}]})
+        prior = {
+            "state": _coord_module.HUB_CONNECTED,
+            "changed_at": SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO,
+            "state_raw": "held-raw",
+        }
+
+        result = _coord_module._guard_hub_connectivity_order(polled, prior)
+
+        assert result is polled
+
+    def test_absent_status_wins_whole_even_over_a_newer_held_record(self):
+        """The unknown record from an absent status wins whole -- Phase 16's
+        absent-never-disconnected rule is not something this guard may
+        quietly change."""
+        polled = _coord_module._read_hub_connectivity(_coord_module.STATUS_ABSENT)
+        prior = {
+            "state": _coord_module.HUB_CONNECTED,
+            "changed_at": SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO,
+            "state_raw": "held-raw",
+        }
+
+        result = _coord_module._guard_hub_connectivity_order(polled, prior)
+
+        assert result is polled
+
+    def test_no_prior_snapshot_at_all_polled_wins_and_no_lookup_raises(self):
+        """The first poll after startup has no prior snapshot at all."""
+        polled = _coord_module._read_hub_connectivity(
+            {"subDeviceStatus": [{"id": "connected", "value": "1", "time": 1785523062039}]}
+        )
+
+        result = _coord_module._guard_hub_connectivity_order(polled, None)
+
+        assert result is polled
+
+    @pytest.mark.asyncio
+    async def test_guard_fires_identically_on_the_fallback_fetch_path(self):
+        """Both fetch paths funnel into status_by_mid at the one guard call
+        site in _async_update_data (mirrors test_update_fallback_to_individual_calls),
+        so a held pushed edge survives a lagging poll delivered via
+        _fallback_per_hub_status exactly as it would via multipleDeviceStatus."""
+        coord, client = _make_coord()
+        coord.data = {
+            "hub_connectivity": {
+                200: {
+                    "state": _coord_module.HUB_CONNECTED,
+                    "changed_at": SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO,
+                    "state_raw": "held-raw",
+                }
+            }
+        }
+        client.get_devices_by_hid.return_value = [_make_hub(hid=100, mid=200)]
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("transport error")
+        client.get_device_status.return_value = {"subDeviceStatus": [{"id": "connected", "value": "0", "time": 1785521850011}]}
+
+        result = await _run(coord)
+
+        record = result["hub_connectivity"][200]
+        assert record["state"] == _coord_module.HUB_CONNECTED
+        assert record["changed_at"] == SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO
+
+
+class TestGuardHubConnectivityOrderRealTimeline:
+    """The D-16 guard proven against a real prior snapshot -- construct ->
+    first refresh -> a pushed edge -> a further poll -- rather than a
+    hand-built prior dict, for at least three of the pure-function cases
+    TestGuardHubConnectivityOrder already covers directly."""
+
+    # Reuses the captured frame's own moments (tests/payload_samples.py)
+    # rather than deriving new literals: the later one matches
+    # SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO, the earlier one matches
+    # SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO.
+    _NEWER_TS = 1785523062039
+    _OLDER_TS = 1785521850011
+    _EVEN_NEWER_TS = _NEWER_TS + 5000
+
+    @staticmethod
+    def _build():
+        """Return (coordinator, client) wired the way __init__.py wires it."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 200,
+                "name": "Hub1",
+                "deviceName": "dev1",
+                "productKey": "pk1",
+                "homeName": "Home",
+                "subDevices": [],
+            }
+        ]
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": "1"}]}]
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+
+        hass = MagicMock()
+        hass.data = {}
+
+        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
+        return coordinator, client
+
+    @staticmethod
+    def _set_connected(client, value, time_ms=None):
+        entry = {"id": "connected", "value": value}
+        if time_ms is not None:
+            entry["time"] = time_ms
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [entry]}]
+
+    @pytest.mark.asyncio
+    async def test_a_lagging_disconnected_poll_cannot_revert_a_newer_pushed_reconnect(self):
+        """Case 1: a held pushed connected record survives a poll whose
+        connected time is strictly older."""
+        coordinator, client = self._build()
+        await coordinator.async_config_entry_first_refresh()
+
+        _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, True, self._NEWER_TS)
+        assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
+
+        self._set_connected(client, "0", time_ms=self._OLDER_TS)
+        await coordinator.async_refresh()
+
+        record = coordinator.data["hub_connectivity"][200]
+        assert record["state"] == _coord_module.HUB_CONNECTED
+        assert record["changed_at"] == SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO
+
+    @pytest.mark.asyncio
+    async def test_a_strictly_newer_poll_overrides_a_held_pushed_edge(self):
+        """Case 2: a poll whose moment is genuinely newer than the held
+        pushed edge wins whole, including state_raw."""
+        coordinator, client = self._build()
+        await coordinator.async_config_entry_first_refresh()
+
+        _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, False, self._OLDER_TS)
+        assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
+
+        self._set_connected(client, "1", time_ms=self._NEWER_TS)
+        await coordinator.async_refresh()
+
+        record = coordinator.data["hub_connectivity"][200]
+        assert record["state"] == _coord_module.HUB_CONNECTED
+        assert record["changed_at"] == SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO
+
+    @pytest.mark.asyncio
+    async def test_the_first_poll_after_startup_has_no_prior_snapshot_and_does_not_raise(self):
+        """Case 3: no prior snapshot exists at all on the very first poll --
+        the guard's prior_connectivity.get(mid) lookup on an empty dict must
+        not raise, and the polled record wins."""
+        coordinator, _client = self._build()
+
+        await coordinator.async_config_entry_first_refresh()
+
+        assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
+
+
+class TestHubConnectivityGuardComposition:
+    """The D-16 guard composes with _sync_hub_connectivity_issues in both
+    directions (the fifth point of _guard_hub_connectivity_order's
+    docstring). Deliberately separate from
+    TestHubConnectivityPushClearInterleavedTimeline (17-02), which pins
+    D-09/D-10's push-side clear rather than the poll-side guard's
+    interaction with the debounce reconcile.
+
+    This class's fixture carries no subDevices, exactly as
+    TestHubConnectivityDebounceRealTimeline._build does and for the same
+    reason: the not-reporting lifecycle shares the same
+    ir.async_create_issue/async_delete_issue mocks these tests assert call
+    counts against."""
+
+    _NEWER_TS = 1785523062039
+    _OLDER_TS = 1785521850011
+    _EVEN_NEWER_TS = _NEWER_TS + 5000
+
+    @staticmethod
+    def _build():
+        """Return (coordinator, client) wired the way __init__.py wires it."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 200,
+                "name": "Hub1",
+                "deviceName": "dev1",
+                "productKey": "pk1",
+                "homeName": "Home",
+                "subDevices": [],
+            }
+        ]
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": "1"}]}]
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+
+        hass = MagicMock()
+        hass.data = {}
+
+        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
+        return coordinator, client
+
+    @staticmethod
+    def _set_connected(client, value, time_ms=None):
+        entry = {"id": "connected", "value": value}
+        if time_ms is not None:
+            entry["time"] = time_ms
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [entry]}]
+
+    @pytest.mark.asyncio
+    async def test_held_pushed_connected_against_lagging_disconnected_polls_raises_no_card(self):
+        """Direction one: a held pushed connected record leaves
+        _hub_disconnect_poll_counts without an incremented entry for that
+        hub across three consecutive lagging disconnected polls, and raises
+        no card."""
+        coordinator, client = self._build()
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            assert create.call_count == 0
+
+            _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, True, self._NEWER_TS)
+            assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
+
+            for _ in range(3):
+                self._set_connected(client, "0", time_ms=self._OLDER_TS)
+                await coordinator.async_refresh()
+
+            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert create.call_count == 0
+            assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
+
+    @pytest.mark.asyncio
+    async def test_held_pushed_disconnected_against_lagging_connected_polls_raises_on_the_third(self):
+        """Direction two, the mirror, and the one most worth pinning: a held
+        pushed disconnected record drives the poll-counted debounce even
+        though no poll independently observed the hub as disconnected. The
+        counter reaches 1, 2, then 3 across three lagging connected polls,
+        a card is raised exactly once on the third, and a fourth poll whose
+        connected time has advanced past the pushed moment ends the hold,
+        wins whole, clears the card and removes the counter key -- proving
+        the hold is bounded by the REST timestamp rather than permanent."""
+        coordinator, client = self._build()
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            assert create.call_count == 0
+
+            _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, False, self._NEWER_TS)
+            assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
+
+            self._set_connected(client, "1", time_ms=self._OLDER_TS)
+            await coordinator.async_refresh()  # poll 1: held disconnected, counter 1
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            assert create.call_count == 0
+
+            await coordinator.async_refresh()  # poll 2: held disconnected, counter 2
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert create.call_count == 0
+
+            await coordinator.async_refresh()  # poll 3: held disconnected, counter 3 -> raise
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            assert create.call_count == 1
+            _hass, _domain, issue_id = create.call_args.args
+            assert issue_id == hub_connectivity_issue_id(100, 200)
+
+            # This is the poll that no longer lags: its own connected time
+            # has advanced past the pushed disconnect moment, so the guard
+            # stops holding and the connected record wins whole.
+            deletes_before = delete.call_count
+            self._set_connected(client, "1", time_ms=self._EVEN_NEWER_TS)
+            await coordinator.async_refresh()  # poll 4: wins whole, clears
+
+            assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
+            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert delete.call_count > deletes_before
+
+
 class TestHubPushTracerEndToEnd:
     """Drives construct -> first refresh -> platform setup -> one push
     dispatch in real order, proving the pushed disconnect reaches the Phase

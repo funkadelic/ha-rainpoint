@@ -440,6 +440,73 @@ def _read_hub_connectivity(status: dict) -> dict:
     }
 
 
+def _guard_hub_connectivity_order(polled: dict, prior: dict | None) -> dict:
+    """Hold a strictly older poll's connectivity half against a newer held one (D-16).
+
+    Applied at the single _async_update_data call site both fetch paths
+    funnel through, immediately after _read_hub_connectivity. Kept as a
+    separate merge step rather than a parameter threaded into
+    _read_hub_connectivity, so that function stays a pure function of one
+    status dict and its 13 existing tests need no edit.
+
+    First, why the guard exists. If the REST view lags the push, the next
+    poll can carry the old connectivity flag and revert a newer pushed edge,
+    producing a visible flip-back that reverts again two minutes later. That
+    is the same stale-overwrites-fresh defect class this phase exists to
+    close, entering through the poll side instead of the push side.
+
+    Second, why only strictly older is held. An equal moment is the same
+    edge already held, so returning polled changes nothing observable
+    either way. An unordered pair, meaning either side carries no usable
+    time, is not evidence of staleness, so the poll wins in both the equal
+    and the unordered case. That is what keeps the poll authoritative: the
+    guard only ever holds a moment it can prove is older.
+
+    Third, D-17: state_raw always takes the latest polled value regardless
+    of whether the guard fired. The guard exists to stop a stale
+    connectivity flag winning, and state_raw is an unrelated diagnostic the
+    push never carries, so discarding it would blank the raw state
+    attribute for a full cycle every time the guard fires. This pairs with
+    the push side's D-03 from the other direction: neither path destroys
+    the field the other owns.
+
+    Fourth, the absent case. An absent status yields the unknown record
+    from _read_hub_connectivity and this guard takes it whole, because
+    absent carries no moment of its own and so is never strictly older than
+    anything held. Phase 16's rule that an absent status is unknown rather
+    than disconnected is not something this guard may quietly change.
+
+    Fifth, and this is the point a reader is most likely to be surprised
+    by, so it is stated plainly rather than left to be discovered: the
+    guarded record returned here is what _sync_hub_connectivity_issues
+    reconciles against, so the guard composes with the poll-side debounce
+    in both directions. When a held pushed connected state is kept against
+    a lagging disconnected poll, the reconcile sees connected and pops the
+    counter. When a held pushed disconnected state is kept against a
+    lagging connected poll, the reconcile sees disconnected and increments,
+    and because the guard writes the held changed_at into the record it
+    returns, the hold repeats on every following poll until the REST view's
+    own connected time advances past the held moment. Three such polls
+    therefore raise a card that no poll independently observed as
+    disconnected. That is the intended consequence of treating a newer held
+    value as fresher than a lagging poll, and it is not the push path
+    incrementing a counter: apply_hub_push_update never touches
+    _hub_disconnect_poll_counts on a disconnected edge, the poll reconcile
+    counts the guarded record it was handed. A later reader should not read
+    this as a defect in the push path and "fix" it by exempting held
+    records from the reconcile.
+    """
+    prior_moment = _changed_at_datetime(prior)
+    polled_moment = _changed_at_datetime(polled)
+    if prior_moment is not None and polled_moment is not None and polled_moment < prior_moment:
+        return {
+            "state": prior["state"],
+            "changed_at": prior["changed_at"],
+            "state_raw": polled.get("state_raw"),
+        }
+    return polled
+
+
 def hub_connectivity_record(coordinator, mid) -> dict:
     """Return one hub's connectivity record from a coordinator snapshot, or {}.
 
@@ -887,6 +954,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
             decoded_sensors: dict[str, dict] = {}
             absent_hubs: list[dict] = []
             hub_connectivity: dict[int, dict] = {}
+            # D-16: the prior snapshot both _fetch_status_by_mid paths' guard
+            # reads from, hoisted once rather than per hub. Degrades to {} the
+            # same way hub_connectivity_record already does, so a first poll
+            # after startup (self.data is falsy) or a snapshot that never
+            # gained a hub_connectivity key both resolve to no prior record.
+            prior_connectivity = (self.data or {}).get("hub_connectivity") or {}
 
             if hubs:
                 status_by_mid = await RainPointCoordinator._fetch_status_by_mid(self, hubs)
@@ -900,9 +973,16 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 if isinstance(status, _AbsentStatus):
                     absent_hubs.append(hub)
                 # The Bluetooth wrapper record has no cloud connection to report
-                # on, so it must contribute no connectivity record at all.
+                # on, so it must contribute no connectivity record at all. Both
+                # the multipleDeviceStatus path and the _fallback_per_hub_status
+                # path funnel into status_by_mid above, so applying the D-16
+                # guard at this one site is what makes the two fetch paths
+                # observe an identical ordering rule; a second guard site would
+                # be the way they could drift apart.
                 if is_hub_record(hub):
-                    hub_connectivity[mid] = _read_hub_connectivity(status)
+                    hub_connectivity[mid] = _guard_hub_connectivity_order(
+                        _read_hub_connectivity(status), prior_connectivity.get(mid)
+                    )
                 decoded_sensors.update(RainPointCoordinator._decode_hub_subdevices(self, hub, status))
 
             # A poll that returned no hubs at all, for an installation that had
