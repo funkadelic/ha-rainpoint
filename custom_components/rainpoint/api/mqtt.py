@@ -755,6 +755,18 @@ class RainPointMqttClient:
         self._notify_state_listeners()
         self._dispatch_push(topic, payload)
 
+    def _drop_if_no_coordinator(self) -> bool:
+        """Return True (after logging) if a push arrived before coordinator wiring.
+
+        Shared by every recognized frame family in _dispatch_push so the
+        "not wired yet" check and its log message live in one place rather
+        than being copied per branch.
+        """
+        if self._coordinator is None:
+            _LOGGER.debug("RainPoint MQTT push received before coordinator wiring; dropping")
+            return True
+        return False
+
     def _dispatch_push(self, topic: str, payload: bytes) -> None:
         """Parse the payload and route it to the coordinator entry point that
         owns its frame family.
@@ -771,8 +783,7 @@ class RainPointMqttClient:
         """
         updates = _parse_push_envelope(payload)
         if updates:
-            if self._coordinator is None:
-                _LOGGER.debug("RainPoint MQTT push received before coordinator wiring; dropping")
+            if self._drop_if_no_coordinator():
                 return
             for sid, raw_value, device_ts in updates:
                 self._coordinator.apply_push_update(self._hub_mid, sid, raw_value, device_ts)
@@ -808,8 +819,7 @@ class RainPointMqttClient:
                     own,
                 )
                 return
-            if self._coordinator is None:
-                _LOGGER.debug("RainPoint MQTT push received before coordinator wiring; dropping")
+            if self._drop_if_no_coordinator():
                 return
             # frame.mid_tail is never passed on: the mid handed to the
             # coordinator is always self._hub_mid from construction, never one
