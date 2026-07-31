@@ -976,3 +976,90 @@ class TestValveAvailabilityRealTimeline:
         await coordinator.async_refresh()
 
         assert valve.available is False
+
+
+class TestValveAvailabilityPushedReconnect:
+    """SC 3: a pushed reconnect must close the valve-availability gate at
+    push latency, with no async_refresh() between the pushed dispatch and
+    the read that follows it. Companion to TestValveAvailabilityRealTimeline
+    above (poll-only) and to TestHubConnectivityPushClearInterleavedTimeline
+    in tests/test_coordinator.py, which asserts the Repairs-card
+    raise/clear call counts on a fixture that deliberately carries no
+    sub-device -- this class's fixture reports the valve sub-device on
+    every poll instead, so the two never collide. Do not assert
+    ir.async_create_issue / ir.async_delete_issue call counts here, and do
+    not merge the two classes back together."""
+
+    @staticmethod
+    def _hub_status(connected_value):
+        """One valve hub whose D01 sub-device reports open zones on every
+        poll (never silent) and whose hub-level connected id carries the
+        given value."""
+        return [
+            {
+                "mid": 200,
+                "subDeviceStatus": [
+                    {"id": "D01", "value": SAMPLE_HTV245_ASCII_PAYLOAD, "time": 1785420002247},
+                    {"id": "connected", "value": connected_value, "time": 1785420002247},
+                ],
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_pushed_reconnect_flips_availability_and_hub_connected_before_any_poll(self):
+        """Construct, first refresh connected, platform setup, poll to
+        disconnected (unavailable), then a pushed reconnect with no
+        async_refresh() in between moves the same entity object to
+        available True and its hub_connected attribute to True."""
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 200,
+                "name": "Hub A",
+                "deviceName": "d",
+                "productKey": "pk",
+                "homeName": "H",
+                "subDevices": [{"addr": 1, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}],
+            }
+        ]
+        client.get_multiple_device_status.return_value = self._hub_status(connected_value="1")
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [100]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert len(captured) >= 1
+        valve = captured[0]
+        assert valve.available is True
+
+        client.get_multiple_device_status.return_value = self._hub_status(connected_value="0")
+        await coordinator.async_refresh()
+
+        assert valve.available is False
+        assert valve.extra_state_attributes["hub_connected"] is False
+
+        # The pushed reconnect: the third pipe-delimited field of
+        # SAMPLE_HUB_RECONNECT_FRAME (tests/payload_samples.py), strictly
+        # newer than the held poll moment (1785420002247 ms) so the ordering
+        # guard admits it. No async_refresh() runs between this dispatch and
+        # the reads below.
+        coordinator.apply_hub_push_update(200, True, 1785523062039)
+
+        assert valve.available is True
+        assert valve.extra_state_attributes["hub_connected"] is True

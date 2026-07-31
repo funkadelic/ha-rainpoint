@@ -2182,6 +2182,145 @@ class TestHubConnectivityDebounceRealTimeline:
             assert (100, 200) not in second._hub_disconnect_poll_counts
 
 
+class TestHubConnectivityPushClearInterleavedTimeline:
+    """D-09/D-10 interleaved over a real driven timeline: raising the card
+    stays poll-counted only, a pushed reconnect clears it and the counter
+    immediately, and a hub that goes down again starts a fresh three-poll
+    count. Companion to tests/test_valve.py's
+    TestValveAvailabilityPushedReconnect, which carries every valve-
+    availability and hub_connected-attribute assertion for the same pushed
+    edge instead of duplicating them here.
+
+    This class's fixture deliberately carries no subDevices, exactly as
+    TestHubConnectivityDebounceRealTimeline._build does and for the same
+    reason: the not-reporting lifecycle shares the same
+    ir.async_create_issue / ir.async_delete_issue mocks this class asserts
+    call counts against, and a declared sub-device that goes silent for
+    three consecutive polls would raise its own issue on those same mocks at
+    exactly the poll this class asserts is the only create call. Do not
+    declare a sub-device here and do not merge this class with
+    TestValveAvailabilityPushedReconnect."""
+
+    # The third pipe-delimited field of SAMPLE_HUB_RECONNECT_FRAME
+    # (tests/payload_samples.py), reused here as the ordering key for a
+    # driven push timeline rather than re-deriving new literals. Later pushes
+    # advance the moment by whole seconds so the ordering guard is genuinely
+    # exercised, not bypassed by an untouched value.
+    _RECONNECT_TS = 1785523062039
+    _DISCONNECT_TS_1 = _RECONNECT_TS + 1000
+    _DISCONNECT_TS_2 = _RECONNECT_TS + 2000
+
+    @staticmethod
+    def _build(connected_value="1"):
+        """Return (coordinator, client) wired the way __init__.py wires it.
+
+        The hub carries no subDevices for the reason given in the class
+        docstring; mirrors TestHubConnectivityDebounceRealTimeline._build.
+        """
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 200,
+                "name": "Hub1",
+                "deviceName": "dev1",
+                "productKey": "pk1",
+                "homeName": "Home",
+                "subDevices": [],
+            }
+        ]
+        client.get_multiple_device_status.return_value = [
+            {"mid": 200, "subDeviceStatus": [{"id": "connected", "value": connected_value}]}
+        ]
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+
+        hass = MagicMock()
+        hass.data = {}
+
+        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
+        return coordinator, client
+
+    @staticmethod
+    def _set_connected(client, value):
+        """Mutate the next poll's connected value on an already-built client."""
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": value}]}]
+
+    @staticmethod
+    def _push_hub_edge(coordinator, connected, changed_ts):
+        """Dispatch a hub connectivity edge into apply_hub_push_update via
+        class-level dispatch, matching the repo's standing test idiom."""
+        _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, connected, changed_ts)
+
+    @pytest.mark.asyncio
+    async def test_pushed_reconnect_clears_immediately_and_the_next_outage_restarts_the_count(self):
+        """The full interleaved sequence: three disconnected polls raise the
+        card, a pushed reconnect clears it and the counter before any further
+        poll, back-to-back pushed disconnects flip the entity but raise
+        nothing and touch no counter, and a fresh three-poll outage is
+        required to raise the card a second time -- proving the counter
+        genuinely restarted rather than resumed."""
+        coordinator, client = self._build(connected_value="1")
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            assert create.call_count == 0
+
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()  # poll 1 disconnected: counter 1
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            assert create.call_count == 0
+
+            await coordinator.async_refresh()  # poll 2 disconnected: counter 2
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert create.call_count == 0
+
+            await coordinator.async_refresh()  # poll 3 disconnected: counter 3 -> raise
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            assert create.call_count == 1
+
+            # The pushed reconnect: cleared before any further poll runs.
+            deletes_before_push = delete.call_count
+            self._push_hub_edge(coordinator, True, self._RECONNECT_TS)
+            assert delete.call_count == deletes_before_push + 1
+            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
+
+            # A pushed disconnect delivered mid-sequence flips the entity
+            # immediately but must not touch the counter or raise a card, no
+            # matter how many arrive back to back (D-09).
+            self._push_hub_edge(coordinator, False, self._DISCONNECT_TS_1)
+            assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
+            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert create.call_count == 1
+
+            self._push_hub_edge(coordinator, False, self._DISCONNECT_TS_2)
+            assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
+            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert create.call_count == 1
+
+            # The second outage: three fresh disconnected polls are required
+            # to raise again, proving the counter genuinely restarted at
+            # zero rather than resuming from wherever the pushed edges left
+            # it.
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()  # poll 4 disconnected: counter 1
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            assert create.call_count == 1
+
+            await coordinator.async_refresh()  # poll 5 disconnected: counter 2
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert create.call_count == 1
+
+            await coordinator.async_refresh()  # poll 6 disconnected: counter 3 -> raise again
+            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            assert create.call_count == 2
+
+
 class TestLastSeenFromEntry:
     """Direct-call tests covering every resolution path of _last_seen_from_entry."""
 
@@ -2671,6 +2810,24 @@ class TestApplyPushUpdate:
         assert coord.data["status"][200]["subDeviceStatus"][0]["time"] == device_ts
         coord.async_update_listeners.assert_called_once()
         coord.async_set_updated_data.assert_not_called()
+
+    def test_sub_device_push_leaves_hub_connectivity_object_identical(self):
+        """D-12: only the connectivity frame changes connectivity. A pushed
+        sub-device reading must not move hub_connectivity in either
+        direction, even though it updates the sensor entry it targets --
+        silence cannot imply disconnected, and the rule's inverse (a fresh
+        reading implies connected) would be equally meaningless. Matches the
+        repo's standing never-write-state-it-has-not-read discipline."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+        connectivity = {200: {"state": _coord_module.HUB_CONNECTED, "changed_at": "x", "state_raw": "raw"}}
+        coord.data["hub_connectivity"] = connectivity
+        device_ts = int(datetime(2024, 6, 1, tzinfo=UTC).timestamp() * 1000)
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, device_ts)
+
+        assert coord.data["hub_connectivity"] is connectivity
+        assert coord.data["sensors"]["100_200_1"]["data"] is not None
 
     def test_push_status_entry_appended_when_absent(self):
         """A push for a mid with no prior status branch appends a fresh entry."""
