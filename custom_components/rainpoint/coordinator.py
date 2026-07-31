@@ -707,11 +707,15 @@ class RainPointCoordinator(DataUpdateCoordinator):
         connectivity record on the poll path, and writing one here would
         create a record the next poll deletes.
 
-        This plan carries no ordering guard and no debounce/issue clearing:
-        D-13/D-14/D-15's ordering guard and D-11's explicit
-        `_hub_disconnect_poll_counts.pop` / `_hub_connectivity_issues.async_clear`
-        calls land in a later plan of this phase, once `async_clear` exists
-        on `RainPointHubConnectivityIssues`.
+        The ordering guard below (D-13/D-14/D-15) decides whether the pushed
+        edge is applied at all. On a connected edge that is applied, this
+        method also explicitly pops `_hub_disconnect_poll_counts` and calls
+        `_hub_connectivity_issues.async_clear` (D-10/D-11): the merge is
+        copy-on-write over coordinator data and touches neither, so clearing
+        has to be explicit here, exactly as apply_push_update already does
+        for the silent-device pair. A pushed disconnected edge leaves both
+        untouched (D-09): raising the card stays poll-counted only, so "3
+        consecutive polls" keeps meaning literally that.
         """
         data = self.data
         if not data:
@@ -787,6 +791,31 @@ class RainPointCoordinator(DataUpdateCoordinator):
             "state_raw": held.get("state_raw"),
         }
         RainPointCoordinator._merge_push_hub_connectivity(self, mid, record)
+
+        if connected:
+            # Connected-edge clear (D-10/D-11). The merge above is
+            # copy-on-write over coordinator data and touches no debounce or
+            # issue state, so clearing has to be explicit here rather than
+            # folded into the merge, exactly as apply_push_update already
+            # does for _silent_poll_counts / _silent_issues.async_clear.
+            # _sync_hub_connectivity_issues is deliberately not driven from
+            # here: it is built around a full per-poll sweep over hubs that
+            # produces a record for every hub, so a single-hub push edge
+            # would mean either faking a poll or splitting the function, and
+            # it would re-run the unknown/unreachable logic for hubs the
+            # push said nothing about.
+            #
+            # The asymmetry is intentional. Clearing early for a hub the
+            # cloud already says is back is safe and self-correcting -- the
+            # next poll re-raises if it was wrong -- while raising early is
+            # not, which is the flap-raises-a-card case Phase 16 already
+            # rejected. So a pushed disconnected edge leaves both the
+            # counter and the issue untouched (D-09): the counter stays
+            # poll-counted only, so "3 consecutive polls" keeps meaning
+            # literally that and the coordinator holds one debounce concept
+            # rather than two.
+            self._hub_disconnect_poll_counts.pop((hub["hid"], mid), None)
+            self._hub_connectivity_issues.async_clear(hub["hid"], mid)
 
         # Notify listeners WITHOUT async_set_updated_data so the poll interval
         # timer is never reset; the 120s poll keeps running as the fallback.
