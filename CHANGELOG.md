@@ -5,6 +5,14 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.11.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.10.1...v1.11.0) (2026-07-31)
 
 
+### What's new
+
+- **A device that reports nothing no longer disappears.** If RainPoint lists a device on your account but never sends readings for it, the integration now says so instead of quietly skipping it. You get a notice under **Settings → Repairs** naming the device, plus a **Not Reporting** entity on the device's own page whose attributes carry a pre-filled report link. Both appear together, about four to six minutes after the device goes quiet, without restarting Home Assistant. This most often means the device is paired over Bluetooth only, is out of range, or is switched off. The notice clears on its own once readings resume, and a hub going offline will not make its healthy devices look silent.
+- **More from your valves.** **HTV210B** valves paired to a hub now report battery, signal strength and per-zone state. Valves in the HTV family gained a per-zone water usage reading, and sub-device pages now show firmware version and device ID.
+- **Better readings on existing hardware.** Battery levels are now read from the device's own battery datapoint, report times reflect when the device actually measured rather than when it was polled, and signal strength has been restored on valves that had stopped showing it.
+- **Unverified generic sensors now cover five curated readings** for devices without tested support here. This is off by default and stays opt-in: turn it on under **Settings → Devices & Services → RainPoint Cloud → Configure**, then **Enable unverified generic sensors**. These readings come from RainPoint's product catalog rather than a tested per-model decoder, so they are labeled unverified and are deliberately kept out of long-term statistics.
+
+
 ### Added
 
 * add HTV210B valve support with per-zone state sensors ([#130](https://github.com/funkadelic/ha-rainpoint/issues/130)) ([161af01](https://github.com/funkadelic/ha-rainpoint/commit/161af01601d342dd1053488c1767f1f1f17790a8))
