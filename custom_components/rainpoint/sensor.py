@@ -13,7 +13,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfVolume
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import _USAGE_GALLONS_PER_COUNT
@@ -39,7 +39,13 @@ from .const import (
     MODEL_VALVE_345,
     MODEL_VALVE_405,
 )
-from .coordinator import RainPointCoordinator, _build_new_device_issue_url, is_hub_record
+from .coordinator import (
+    NO_STATUS_PAYLOAD_MARKER,
+    SILENT_DATA_TYPE,
+    RainPointCoordinator,
+    _build_new_device_issue_url,
+    is_hub_record,
+)
 from .diagnostic_sensors import (
     RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
@@ -317,6 +323,16 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
         base_slug,
     )
 
+    if (info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
+        # Must run before the factory lookup: a silent entry has no payload of
+        # any kind, but MODEL_HTV210B -- the device that motivated this phase --
+        # HAS a factory (_make_htv210b_entities), and reaching it here would
+        # emit a battery/RSSI pair that reads available with a native_value of
+        # None, exactly the "looks wired up while reading nothing" outcome D-02
+        # forbids. No generic entities and no Raw Payload sensor either: there
+        # is nothing for either to hold.
+        return [RainPointNotReportingSensor(coordinator, key, info, base_slug)]
+
     factory = _MODEL_FACTORIES.get(model)
     if factory is not None:
         entities = list(factory(coordinator, key, info, base_slug))
@@ -333,6 +349,72 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
     return entities
 
 
+class _LateSensorEntityAdder:
+    """Add a sub-device's entities the first time its key is worth entities.
+
+    Entity construction used to happen exactly once, from the single snapshot
+    taken right after the first refresh. A device the hub lists but the cloud
+    never reports on only turns into a "silent" entry after three consecutive
+    polls, so its diagnostic entity could never be built inside a running
+    session. Registering this as a coordinator listener closes that gap.
+
+    Two add-once sets rather than one, and that split is load bearing. A device
+    that was reporting when the platform was set up and later goes quiet must
+    still gain its Not Reporting entity, and a device that was silent and later
+    starts reporting must still gain its real model entities. Neither may be
+    handed what it already has, because a repeated unique_id is an error in
+    Home Assistant.
+    """
+
+    def __init__(self, coordinator, async_add_entities, generic_enabled: bool):
+        """Init helper."""
+        self._coordinator = coordinator
+        self._async_add_entities = async_add_entities
+        self._generic_enabled = generic_enabled
+        # Both sets are deliberately never pruned, unlike the coordinator's
+        # _silent_poll_counts, and the asymmetry is the point. That counter is
+        # per-poll state a returning device must restart from zero. These are a
+        # record of what has already been handed to Home Assistant, and a key
+        # leaving coordinator.data does not remove the entities registered for
+        # it, so forgetting the key would let the same unique_id be offered a
+        # second time if the key came back. Bounded by the number of distinct
+        # sensor keys the installation produces in one session.
+        self._keys_with_model_entities: set[str] = set()
+        self._keys_with_silent_entity: set[str] = set()
+
+    def collect(self, key: str, info: dict) -> list:
+        """Return the entities to add for one sensor key, recording that they were added.
+
+        The single place the add-once bookkeeping is written, so the setup path
+        and the listener path cannot disagree about what already exists.
+        """
+        if (info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
+            if key in self._keys_with_silent_entity:
+                return []
+            self._keys_with_silent_entity.add(key)
+        else:
+            if key in self._keys_with_model_entities:
+                return []
+            self._keys_with_model_entities.add(key)
+        return list(_create_sensor_entities(self._coordinator, key, info, self._generic_enabled))
+
+    @callback
+    def async_on_coordinator_update(self) -> None:
+        """Add entities for any sensor key that has become eligible since the last update."""
+        sensors_cfg = (self._coordinator.data or {}).get("sensors", {})
+        new: list = []
+        for key, info in sensors_cfg.items():
+            # Matches the defensive filter valve.py and switch.py already apply
+            # at setup. It matters more here: this runs on every coordinator
+            # update, and raising inside the listener would break the update
+            # for every other key rather than just skipping one bad record.
+            if not isinstance(info, dict):
+                continue
+            new.extend(self.collect(key, info))
+        if new:
+            self._async_add_entities(new)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -341,14 +423,19 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
-    sensors_cfg = coordinator.data.get("sensors", {})
+    sensors_cfg = {key: info for key, info in coordinator.data.get("sensors", {}).items() if isinstance(info, dict)}
     hubs_cfg = coordinator.data.get("hubs", [])
     generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
+
+    adder = _LateSensorEntityAdder(coordinator, async_add_entities, generic_enabled)
 
     entities: list[RainPointSensorBase] = []
     entities.extend(_create_hub_entities(coordinator, hubs_cfg))
     for key, info in sensors_cfg.items():
-        entities.extend(_create_sensor_entities(coordinator, key, info, generic_enabled))
+        # Routed through the adder so the setup snapshot seeds the same
+        # bookkeeping the listener reads, which is what keeps the two paths
+        # from ever offering the same unique_id twice.
+        entities.extend(adder.collect(key, info))
 
     # The push last-message age entity only exists when push is enabled (it reads
     # the MQTT client's liveness clock, not coordinator.data).
@@ -359,6 +446,11 @@ async def async_setup_entry(
 
     if entities:
         async_add_entities(entities)
+
+    # Registered unconditionally: a hub whose every child is silent from the
+    # first poll produces zero entities here, and that is precisely the install
+    # the late-add path exists for.
+    entry.async_on_unload(coordinator.async_add_listener(adder.async_on_coordinator_update))
 
 
 class RainPointSensorBase(RainPointSubDeviceEntity, SensorEntity):
@@ -1157,6 +1249,81 @@ class RainPointUnknownSensor(RainPointSensorBase):
             "then add what the RainPoint app shows for this device."
         )
 
+        return attrs
+
+
+class RainPointNotReportingSensor(RainPointSensorBase):
+    """Diagnostic sensor for a sub-device the hub lists but no status response ever mentions.
+
+    "never_reported" means this integration has observed no reading from this
+    device since it started; "stopped_reporting" means it observed one at
+    last_seen and has since stopped. That distinction stays true across a
+    Home Assistant restart, which a bare "never seen" state would not report
+    honestly (D-02). No state class is set, matching RainPointUnknownSensor:
+    an entity with no readable state must never enter long-term statistics.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options: ClassVar[list[str]] = ["never_reported", "stopped_reporting"]
+    _attr_icon = "mdi:message-off-outline"
+
+    # The report link's inputs (model, modelCode) are fixed once this entity is
+    # constructed, so it is computed once and reused rather than rebuilt on
+    # every attribute read. Declared on the class so an instance built without
+    # __init__ still starts from an empty memo, matching RainPointUnknownSensor.
+    _report_url: str | None = None
+
+    def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
+        """Name the entity after the sub-device the hub lists, not the model.
+
+        A silent device has no reading to identify it by, so the hub's own
+        name for it is the only label a user will recognise.
+        """
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_not_reporting"
+        sub_name = sensor_info.get("sub_name") or "Device"
+        self._attr_name = f"{sub_name} Not Reporting"
+
+    @property
+    def available(self) -> bool:
+        """Always available: reporting the absence of a reading is this entity's job."""
+        return True
+
+    @property
+    def native_value(self) -> str | None:
+        """Report which kind of silence this is, or nothing once it recovers.
+
+        A recovered device keeps this entity (nothing removes it) but its
+        entry no longer carries silent_state, so the state goes empty rather
+        than reporting a stale "not reporting".
+        """
+        data = self._sensor_data or {}
+        return data.get("silent_state")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Carry the report link and the evidence a maintainer needs with it."""
+        attrs = super().extra_state_attributes
+        data = self._sensor_data or {}
+        attrs["model"] = data.get("model")
+        attrs["last_seen"] = data.get("last_seen")
+        attrs["missed_polls"] = data.get("missed_polls")
+
+        # The same one-click report path an unsupported-payload device gets,
+        # except the payload field states plainly that there is no payload
+        # (D-15): the absence of one is itself the finding a maintainer needs.
+        if self._report_url is None:
+            model = self._sensor_info.get("model")
+            model_code = self._sensor_info.get("model_code")
+            self._report_url = _build_new_device_issue_url(
+                model or "unknown", None, model_code, payload_note=NO_STATUS_PAYLOAD_MARKER
+            )
+        attrs["report_url"] = self._report_url
+        attrs["instructions"] = (
+            "This device is listed by RainPoint but returns no readings. Opening report_url files a "
+            "pre-filled support request that already states the device reports no status."
+        )
         return attrs
 
 

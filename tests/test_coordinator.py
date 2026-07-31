@@ -32,7 +32,9 @@ assert "_async_update_data" in _coord_module.RainPointCoordinator.__dict__, (
 _async_update_data_fn = _coord_module.RainPointCoordinator.__dict__["_async_update_data"]
 
 DECODER_REGISTRY = _coord_module.DECODER_REGISTRY
+SILENT_DATA_TYPE = _coord_module.SILENT_DATA_TYPE
 
+import custom_components.rainpoint.repairs as _repairs_module  # noqa: E402
 from custom_components.rainpoint.api import RainPointApiError, decode_htv145frf  # noqa: E402
 from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_CO2,
@@ -48,6 +50,11 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_VALVE_345,
     MODEL_VALVE_405,
     MODEL_VALVE_HUB,
+)
+from custom_components.rainpoint.entity import sub_device_attributes  # noqa: E402
+from custom_components.rainpoint.repairs import (  # noqa: E402
+    RainPointSilentDeviceIssues,
+    silent_device_issue_id,
 )
 from tests.payload_samples import (  # noqa: E402
     CATALOG_ANCHOR_MODEL,
@@ -85,6 +92,8 @@ def _make_coord(hids=None):
         _hids=hids if hids is not None else [100],
         _notified_unknown_models=set(),
         _last_valve_command_at={},
+        _silent_poll_counts={},
+        _silent_issues=MagicMock(),
         data={},
         hass=mock_hass,
         logger=MagicMock(),
@@ -234,6 +243,46 @@ class TestCoordinatorUpdate:
 
         assert mock_notify.called
 
+    def test_notification_neutralizes_the_cloud_model_but_keeps_the_payload_intact(self):
+        """The notification is Markdown, so the model is treated; the payload is not.
+
+        Running the placeholder sanitizer over the payload would strip "#" and
+        "|" and destroy the one thing in the notification that cannot be
+        regenerated, so it only loses what could close the code fence.
+        """
+        coord, _client = _make_coord()
+
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            _coord_module.RainPointCoordinator._notify_unknown_model(
+                coord,
+                model="[Evil](http://evil.example/x)",
+                model_code=None,
+                mid=200,
+                addr=1,
+                raw_value="10#E1BC00|1,-84;2`\n```",
+            )
+
+        message = mock_notify.call_args.args[1]
+        # The model can no longer render as a link.
+        assert "[Evil]" not in message
+        assert "://" not in message.split("Report this device")[0]
+        # The payload keeps every character a real one carries.
+        assert "10#E1BC00|1,-84;2" in message
+        # ...and loses only what would break out of the fence.
+        assert message.count("```") == 2
+
+    def test_notification_id_still_keys_on_the_raw_model(self):
+        """Sanitizing the copy must not re-key the dedup id, or a reload would
+        add a second notification instead of replacing the first."""
+        coord, _client = _make_coord()
+
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            _coord_module.RainPointCoordinator._notify_unknown_model(
+                coord, model="ODD*MODEL", model_code=None, mid=200, addr=1, raw_value="10#AA"
+            )
+
+        assert mock_notify.call_args.kwargs["notification_id"] == "rainpoint_unsupported_ODD*MODEL"
+
     @pytest.mark.asyncio
     async def test_update_unknown_model_notification_sent_once(self):
         """Notification for the same unknown model is sent only once."""
@@ -355,6 +404,39 @@ class TestCoordinatorUpdate:
 
         assert "gate_diagnostics=" in url
         assert "not+in+the+product+catalog" in url
+
+    def test_build_new_device_issue_url_payload_note_fills_primary_payload(self):
+        """payload_note lands in primary_payload verbatim, not left blank (D-15)."""
+        url = _coord_module._build_new_device_issue_url("HTV210B", None, 360, payload_note=_coord_module.NO_STATUS_PAYLOAD_MARKER)
+
+        primary_payload_value = url.split("primary_payload=")[1].split("&")[0]
+        assert primary_payload_value != ""
+        assert "returns+no+status" in url
+        assert "model_code=360" in url
+
+    def test_build_new_device_issue_url_payload_note_suppresses_auto_decode(self):
+        """A payload_note skips the auto-decode step even when raw_value is also a decodable payload.
+
+        decode_generic cannot read prose, so running it against a marker string
+        would waste a decode to produce nothing; payload_note takes over the
+        primary_payload field entirely and auto_decoded must not appear.
+        """
+        url = _coord_module._build_new_device_issue_url(
+            "HTV210B",
+            SAMPLE_HTV245_TLV_PAYLOAD,
+            payload_note=_coord_module.NO_STATUS_PAYLOAD_MARKER,
+        )
+
+        assert "auto_decoded=" not in url
+        assert "returns+no+status" in url
+
+    def test_build_new_device_issue_url_omitting_payload_note_is_unaffected(self):
+        """Existing callers that pass no payload_note keep byte-identical output."""
+        without_kwarg = _coord_module._build_new_device_issue_url("HTV210B", None, 123)
+        with_default = _coord_module._build_new_device_issue_url("HTV210B", None, 123, payload_note=None)
+
+        assert without_kwarg == with_default
+        assert "auto_decoded=" not in without_kwarg
 
     def test_format_gate_diagnostics_lists_unmapped_readings_and_every_reason(self, monkeypatch):
         """Both the uncurated-reading list and all block reasons are rendered, not just one."""
@@ -891,6 +973,7 @@ class TestCoordinatorEdgeBranches:
 
         # Second fallback call per-hub: first hub raises a transport error, second returns empty
         def per_hub(mid):
+            """Stand in for the per-hub status fallback the coordinator tries next."""
             if mid == 301:
                 raise aiohttp.ClientError("per-hub transport boom")
             return {"subDeviceStatus": []}
@@ -904,6 +987,566 @@ class TestCoordinatorEdgeBranches:
         # (hub1 fallback produced empty list; hub2 explicitly returned empty list).
         assert len(result["hubs"]) == 2
         assert result["sensors"] == {}
+
+
+class TestSilentSubDeviceEndToEnd:
+    """Full-pipeline coverage for the status-less sub-device path (D-04..D-11)."""
+
+    @pytest.mark.asyncio
+    async def test_one_and_two_omitted_polls_yield_no_entry(self):
+        """An addr omitted from an arrived status for fewer than 3 polls contributes nothing (D-04/D-07)."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(mid=200)]
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
+
+        result = await _run(coord)
+        assert "100_200_1" not in result["sensors"]
+        coord.data = result
+
+        result = await _run(coord)
+        assert "100_200_1" not in result["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_third_consecutive_omission_yields_silent_entry(self):
+        """The third consecutive arrived-but-omitted poll surfaces a "silent" entry (D-07/D-09)."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(mid=200)]
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
+
+        for _ in range(2):
+            coord.data = await _run(coord)
+        result = await _run(coord)
+
+        entry = result["sensors"]["100_200_1"]
+        assert entry["data"]["type"] == SILENT_DATA_TYPE
+        assert entry["data"]["missed_polls"] == 3
+        assert entry["data"]["silent_state"] == "never_reported"
+        assert entry["raw_status"] == {}
+
+    @pytest.mark.asyncio
+    async def test_a_reading_resets_the_counter_so_a_later_omission_restarts_at_one(self):
+        """Any reading for an addr resets its debounce counter to zero (D-07)."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(mid=200)]
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
+
+        for _ in range(2):
+            coord.data = await _run(coord)
+        assert coord._silent_poll_counts["100_200_1"] == 2
+
+        client.get_multiple_device_status.return_value = _make_status()
+        coord.data = await _run(coord)
+        assert "100_200_1" not in coord._silent_poll_counts
+
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
+        result = await _run(coord)
+        assert coord._silent_poll_counts["100_200_1"] == 1
+        assert "100_200_1" not in result["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_hub_status_absent_yields_no_silent_entries_while_sibling_hub_decodes(self):
+        """A hub whose status could not be obtained contributes zero silent entries
+        for any of its children, while a sibling hub in the same poll still decodes
+        its healthy children normally (D-06)."""
+        coord, client = _make_coord()
+        outage_hub = _make_hub(mid=301, model=MODEL_MOISTURE_SIMPLE)
+        healthy_hub = _make_hub(mid=302, model=MODEL_MOISTURE_SIMPLE)
+        client.get_devices_by_hid.return_value = [outage_hub, healthy_hub]
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
+
+        def per_hub(mid):
+            """Stand in for the per-hub status fallback the coordinator tries next."""
+            if mid == 301:
+                raise aiohttp.ClientError("outage")
+            return {"subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD}]}
+
+        client.get_device_status.side_effect = per_hub
+
+        result = await _run(coord)
+
+        assert "100_301_1" not in result["sensors"]
+        assert result["sensors"]["100_302_1"]["data"] is not None
+        assert "100_301_1" not in coord._silent_poll_counts
+
+    @pytest.mark.asyncio
+    async def test_fallback_transport_error_records_status_absent(self):
+        """A transport error in the per-hub fallback records STATUS_ABSENT, not an
+        arrived-empty status, so the hub-outage distinction survives one level
+        below _async_update_data (D-05/D-06)."""
+        coord, client = _make_coord()
+        hub = _make_hub(mid=301)
+        client.get_device_status.side_effect = aiohttp.ClientError("boom")
+
+        result = await _coord_module.RainPointCoordinator._fallback_per_hub_status(coord, [hub])
+
+        assert result[301] is _coord_module.STATUS_ABSENT
+
+    @pytest.mark.asyncio
+    async def test_mid_omitted_from_successful_multi_status_is_filled_arrived_empty(self):
+        """A mid the multipleDeviceStatus response simply did not mention is filled
+        with an arrived-but-empty status, not treated as an outage, so its
+        children still reach the silent debounce (D-05)."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(mid=301)]
+        # The response array is non-empty (truthy) but never mentions mid 301.
+        client.get_multiple_device_status.return_value = [{"mid": 999, "subDeviceStatus": []}]
+
+        for _ in range(2):
+            coord.data = await _run(coord)
+        result = await _run(coord)
+
+        assert result["sensors"]["100_301_1"]["data"]["type"] == SILENT_DATA_TYPE
+
+    def test_silent_data_type_is_not_unknown(self):
+        """Trust boundary (D-10): the two type strings must never collapse into one.
+
+        type == "unknown" is the admission ticket for build_generic_entities and
+        generic_control._build_generic_entities; if "silent" ever equalled
+        "unknown" a device the cloud reports nothing about would become eligible
+        for a generic valve entity. The full gate-call assertion lands in plan 15-03.
+        """
+        assert SILENT_DATA_TYPE != "unknown"
+
+    def test_silent_entry_raw_status_empty_dict_does_not_raise_sub_device_attributes(self):
+        """A silent entry's raw_status={} is tolerated by the shared attribute
+        reader; only the firmware attribute is returned, without raising (D-11)."""
+        coordinator = types.SimpleNamespace(
+            data={
+                "sensors": {
+                    "100_200_1": {
+                        "firmware_version": "1.0",
+                        "raw_status": {},
+                        "data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported", "last_seen": None},
+                    }
+                }
+            }
+        )
+
+        attrs = sub_device_attributes(coordinator, "100_200_1")
+
+        assert attrs == {"firmware_version": "1.0"}
+
+
+class TestBuildSilentSubdevice:
+    """Direct-call tests for _build_silent_subdevice and _prune_silent_state."""
+
+    @staticmethod
+    def _hub_and_sub():
+        """One hub record carrying a single sub-device at the given addr."""
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        sub = hub["subDevices"][0]
+        return hub, sub
+
+    def test_below_threshold_returns_none(self):
+        """One or two misses are absorbed as a transient, not surfaced."""
+        coord, _ = _make_coord()
+        hub, sub = self._hub_and_sub()
+
+        result = _coord_module.RainPointCoordinator._build_silent_subdevice(coord, hub, 200, 1, sub, "100_200_1")
+
+        assert result is None
+        assert coord._silent_poll_counts["100_200_1"] == 1
+
+    def test_never_reported_when_no_prior_entry(self):
+        """No prior reading means the device has never been seen at all."""
+        coord, _ = _make_coord()
+        hub, sub = self._hub_and_sub()
+        coord._silent_poll_counts["100_200_1"] = 2  # about to cross the threshold
+
+        result = _coord_module.RainPointCoordinator._build_silent_subdevice(coord, hub, 200, 1, sub, "100_200_1")
+
+        assert result["data"]["silent_state"] == "never_reported"
+        assert result["data"]["last_seen"] is None
+        assert result["data"]["missed_polls"] == 3
+        assert result["raw_status"] == {}
+
+    def test_stopped_reporting_when_prior_entry_had_a_reading(self):
+        """A device that used to report gets the honest 'stopped' wording."""
+        coord, _ = _make_coord()
+        hub, sub = self._hub_and_sub()
+        coord._silent_poll_counts["100_200_1"] = 2
+        coord.data = {
+            "sensors": {
+                "100_200_1": {
+                    "data": {"device_timestamp": "2026-01-01T00:00:00+00:00"},
+                    "raw_status": {},
+                }
+            }
+        }
+
+        result = _coord_module.RainPointCoordinator._build_silent_subdevice(coord, hub, 200, 1, sub, "100_200_1")
+
+        assert result["data"]["silent_state"] == "stopped_reporting"
+        assert result["data"]["last_seen"] == "2026-01-01T00:00:00+00:00"
+
+    def test_carried_last_seen_survives_a_second_silent_poll_unchanged(self):
+        """last_seen must not drift forward while the device stays silent."""
+        coord, _ = _make_coord()
+        hub, sub = self._hub_and_sub()
+        coord._silent_poll_counts["100_200_1"] = 2
+        coord.data = {
+            "sensors": {
+                "100_200_1": {
+                    "data": {"device_timestamp": "2026-01-01T00:00:00+00:00"},
+                    "raw_status": {},
+                }
+            }
+        }
+        first = _coord_module.RainPointCoordinator._build_silent_subdevice(coord, hub, 200, 1, sub, "100_200_1")
+        coord.data = {"sensors": {"100_200_1": first}}
+
+        second = _coord_module.RainPointCoordinator._build_silent_subdevice(coord, hub, 200, 1, sub, "100_200_1")
+
+        assert second["data"]["last_seen"] == "2026-01-01T00:00:00+00:00"
+        assert second["data"]["missed_polls"] == 4
+
+    def test_notify_unknown_model_not_called_on_silent_path(self):
+        """The silent path bypasses _decode_one_subdevice entirely, so the
+        unknown-model notification is never reachable from it (D-17)."""
+        coord, _ = _make_coord()
+        hub, sub = self._hub_and_sub()
+        coord._silent_poll_counts["100_200_1"] = 2
+
+        with patch.object(_coord_module.RainPointCoordinator, "_notify_unknown_model") as notify:
+            _coord_module.RainPointCoordinator._build_silent_subdevice(coord, hub, 200, 1, sub, "100_200_1")
+
+        notify.assert_not_called()
+
+
+class TestPruneSilentState:
+    """Direct-call tests for _prune_silent_state (T-15-03)."""
+
+    def test_drops_counter_for_a_device_no_longer_listed(self):
+        """A device that leaves the hub must not keep a debounce counter alive."""
+        coord, _ = _make_coord()
+        coord._silent_poll_counts = {"100_200_1": 2, "100_200_2": 1}
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+
+        _coord_module.RainPointCoordinator._prune_silent_state(coord, [hub])
+
+        assert coord._silent_poll_counts == {"100_200_1": 2}
+
+    def test_keeps_counters_for_devices_still_listed_across_multiple_hubs(self):
+        """Pruning one hub's departed device must not disturb another hub's."""
+        coord, _ = _make_coord()
+        coord._silent_poll_counts = {"100_200_1": 1, "100_300_5": 2}
+        hub1 = _make_hub(mid=200)
+        hub1["hid"] = 100
+        hub2 = {"hid": 100, "mid": 300, "subDevices": [{"addr": 5, "model": MODEL_MOISTURE_SIMPLE}]}
+
+        _coord_module.RainPointCoordinator._prune_silent_state(coord, [hub1, hub2])
+
+        assert coord._silent_poll_counts == {"100_200_1": 1, "100_300_5": 2}
+
+
+class TestSyncSilentDeviceIssues:
+    """Direct-call tests for _sync_silent_device_issues: one SilentDeviceRecord
+    per sensor entry, translated correctly from the coordinator's own shape."""
+
+    def test_builds_one_record_per_entry_with_correct_silent_flag_and_missed_polls(self):
+        """The coordinator-to-repairs translation carries the whole poll."""
+        coord, _ = _make_coord()
+        decoded_sensors = {
+            "100_200_1": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 1,
+                "model": "HTV210B",
+                "hub_name": "Hub1",
+                "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
+            },
+            "100_200_2": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 2,
+                "model": MODEL_MOISTURE_SIMPLE,
+                "hub_name": "Hub1",
+                "data": {"type": "moisture"},
+            },
+        }
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors, [])
+
+        coord._silent_issues.async_sync.assert_called_once()
+        (records,) = coord._silent_issues.async_sync.call_args.args
+        by_key = {(r.hid, r.mid, r.addr): r for r in records}
+
+        silent_record = by_key[(100, 200, 1)]
+        assert silent_record.silent is True
+        assert silent_record.missed_polls == 3
+        assert silent_record.model == "HTV210B"
+        assert silent_record.hub_name == "Hub1"
+
+        reporting_record = by_key[(100, 200, 2)]
+        assert reporting_record.silent is False
+        assert reporting_record.missed_polls == 0
+
+    def test_hub_paired_is_false_only_for_the_placeholder_parent_record(self):
+        """The record must say whether a hub exists, not just what it is called.
+
+        The cloud parks a Bluetooth-only device under a parent carrying no
+        product_key and no device_name, alongside an empty name. A real hub
+        always carries both. Without this flag the Repairs card cannot tell
+        that apart from a hub whose name is simply missing, and renders both
+        as "unknown".
+        """
+        coord, _ = _make_coord()
+        decoded_sensors = {
+            "100_346965_1": {
+                "hid": 100,
+                "mid": 346965,
+                "addr": 1,
+                "model": "HTV210B",
+                "hub_name": "",
+                "product_key": "",
+                "device_name": "",
+                "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
+            },
+            "100_200_2": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 2,
+                "model": MODEL_MOISTURE_SIMPLE,
+                "hub_name": "Hub1",
+                "product_key": "a3QrDxYPTM2",
+                "device_name": "MAC-A84674BB91F0",
+                "data": {"type": "moisture"},
+            },
+        }
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors, [])
+
+        (records,) = coord._silent_issues.async_sync.call_args.args
+        by_key = {(r.hid, r.mid, r.addr): r for r in records}
+        assert by_key[(100, 346965, 1)].hub_paired is False
+        assert by_key[(100, 200, 2)].hub_paired is True
+
+    def test_empty_decoded_sensors_syncs_an_empty_record_list(self):
+        """A poll that decoded nothing still reconciles, so stale issues clear."""
+        coord, _ = _make_coord()
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, {}, [])
+
+        coord._silent_issues.async_sync.assert_called_once_with([], unreachable_ids=set())
+
+    def test_does_not_call_notify_unknown_model(self):
+        """D-17: the silent path adds no call site for the unknown-model notification."""
+        coord, _ = _make_coord()
+        decoded_sensors = {
+            "100_200_1": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 1,
+                "model": "HTV210B",
+                "hub_name": "Hub1",
+                "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
+            }
+        }
+        coord._notify_unknown_model = MagicMock()
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors, [])
+
+        coord._notify_unknown_model.assert_not_called()
+
+    def test_an_absent_hub_contributes_every_one_of_its_children_as_unreachable(self):
+        """Two children, so the comprehension is proven to cover more than the first."""
+        coord, _ = _make_coord()
+        absent_hub = {
+            "hid": 100,
+            "mid": 200,
+            "subDevices": [{"addr": 1}, {"addr": 2}],
+        }
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, {}, [absent_hub])
+
+        _records, kwargs = coord._silent_issues.async_sync.call_args
+        assert kwargs["unreachable_ids"] == {
+            silent_device_issue_id(100, 200, 1),
+            silent_device_issue_id(100, 200, 2),
+        }
+
+
+class TestSilentIssueSurvivesHubOutage:
+    """An active not-reporting issue must survive a poll in which its hub was unreachable.
+
+    Drives the real poll sequence through _async_update_data against a real
+    RainPointSilentDeviceIssues rather than pre-seeding an active set, because
+    the defect was that a routine transport failure looked identical to a
+    device leaving the hub's sub-device list, producing a clear-then-reraise
+    cycle that broke the raised-once guarantee.
+    """
+
+    ISSUE_ID = silent_device_issue_id(100, 200, 1)
+
+    @staticmethod
+    def _hub(addrs=(1,)):
+        """A hub record listing the given addrs as children."""
+        return {
+            "mid": 200,
+            "name": "Hub1",
+            "deviceName": "dev1",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [{"addr": addr, "model": "HTV210B", "name": f"Sub{addr}", "softVer": "1.0"} for addr in addrs],
+        }
+
+    @staticmethod
+    def _arrived_empty():
+        """A status response that arrived and named nobody."""
+        return [{"mid": 200, "subDeviceStatus": []}]
+
+    def _build(self):
+        """Return (coord, client) with a real issue manager and a silent child."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [self._hub()]
+        client.get_multiple_device_status.return_value = self._arrived_empty()
+        coord._silent_issues = RainPointSilentDeviceIssues(MagicMock())
+        return coord, client
+
+    @staticmethod
+    def _go_unreachable(client):
+        """Make both the batch call and the per-hub fallback fail at the transport layer."""
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
+        client.get_device_status.side_effect = aiohttp.ClientError("boom")
+
+    def _restore(self, client):
+        """Undo _go_unreachable."""
+        client.get_multiple_device_status.side_effect = None
+        client.get_device_status.side_effect = None
+        client.get_multiple_device_status.return_value = self._arrived_empty()
+
+    @pytest.mark.asyncio
+    async def test_outage_poll_neither_clears_nor_reraises_the_issue(self):
+        """The regression this fix exists for: an outage is not evidence about a device."""
+        coord, client = self._build()
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            for _ in range(3):
+                await _run(coord)
+            assert create.call_count == 1
+
+            self._go_unreachable(client)
+            await _run(coord)
+
+            assert delete.call_count == 0
+            assert self.ISSUE_ID in coord._silent_issues._active
+
+            self._restore(client)
+            await _run(coord)
+
+            # The raised-once guarantee itself, not a proxy for it.
+            assert create.call_count == 1
+            assert delete.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_an_empty_device_list_is_an_outage_not_a_mass_removal(self):
+        """The same clear-then-reraise cycle, entering by the device-list door.
+
+        getDeviceByHid answering code 0 with an empty data array drops every
+        hub, which would otherwise wipe each debounce counter and let the stale
+        sweep reap a still-valid issue, then re-raise it once the list came
+        back. An installation that had devices a moment ago did not lose all of
+        them at once.
+        """
+        coord, client = self._build()
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            for _ in range(3):
+                await _run(coord)
+            assert create.call_count == 1
+
+            client.get_devices_by_hid.return_value = []
+            await _run(coord)
+
+            assert delete.call_count == 0
+            assert self.ISSUE_ID in coord._silent_issues._active
+            # The counter has to survive too, or the device restarts its
+            # debounce from zero and goes quiet on the UI for three more polls.
+            assert coord._silent_poll_counts
+
+            client.get_devices_by_hid.return_value = [self._hub()]
+            await _run(coord)
+
+            assert create.call_count == 1
+            assert delete.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_an_account_with_nothing_tracked_still_reconciles_on_an_empty_list(self):
+        """The skip is conditional on there being state to protect.
+
+        A genuinely empty installation must keep reconciling, or a first poll
+        that legitimately returns nothing would stop the sweep from ever
+        running.
+        """
+        coord, client = self._build()
+        client.get_devices_by_hid.return_value = []
+
+        with patch.object(_repairs_module.ir, "async_delete_issue"):
+            await _run(coord)
+
+        assert coord._silent_poll_counts == {}
+
+    @pytest.mark.asyncio
+    async def test_a_genuine_removal_after_an_outage_still_clears(self):
+        """The skip is scoped to the outage poll, so removal still reaps the issue."""
+        coord, client = self._build()
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            for _ in range(3):
+                await _run(coord)
+            assert create.call_count == 1
+
+            self._go_unreachable(client)
+            await _run(coord)
+            assert delete.call_count == 0
+
+            self._restore(client)
+            client.get_devices_by_hid.return_value = [self._hub(addrs=())]
+            await _run(coord)
+
+            assert delete.call_count == 1
+            _hass, _domain, issue_id = delete.call_args.args
+            assert issue_id == self.ISSUE_ID
+
+
+class TestLastSeenFromEntry:
+    """Direct-call tests covering every resolution path of _last_seen_from_entry."""
+
+    def test_none_previous_returns_none(self):
+        """Nothing known means nothing to carry forward."""
+        assert _coord_module._last_seen_from_entry(None) is None
+
+    def test_previous_silent_entry_carries_last_seen_forward(self):
+        """The carried timestamp is the whole point of distinguishing the two silent states."""
+        previous = {"data": {"type": SILENT_DATA_TYPE, "last_seen": "2026-01-01T00:00:00+00:00"}}
+        assert _coord_module._last_seen_from_entry(previous) == "2026-01-01T00:00:00+00:00"
+
+    def test_previous_real_entry_uses_device_timestamp(self):
+        """The device's own clock is preferred over the server's."""
+        previous = {"data": {"device_timestamp": "2026-02-01T00:00:00+00:00"}, "raw_status": {"time": 1}}
+        assert _coord_module._last_seen_from_entry(previous) == "2026-02-01T00:00:00+00:00"
+
+    def test_previous_real_entry_falls_back_to_raw_status_time(self):
+        """Without a device timestamp the status time is the best available."""
+        previous = {"data": {}, "raw_status": {"time": 1700000000000}}
+        expected = datetime.fromtimestamp(1700000000000 / 1000, tz=UTC).isoformat()
+        assert _coord_module._last_seen_from_entry(previous) == expected
+
+    def test_previous_entry_with_nothing_usable_returns_none(self):
+        """An entry with no timestamp at all must not invent one."""
+        previous = {"data": {}, "raw_status": {}}
+        assert _coord_module._last_seen_from_entry(previous) is None
 
 
 class TestCoordinatorConstructor:
@@ -1510,6 +2153,72 @@ class TestApplyPushUpdate:
         zone1 = coord.data["sensors"]["100_200_1"]["data"]["zones"][1]
         assert zone1["open"] is True
         assert zone1["state_raw"] == 1
+
+    def test_push_clears_debounce_counter_for_the_sensor_key(self):
+        """A push for a sensor key with a live debounce count leaves it absent afterward."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+        coord._silent_poll_counts["100_200_1"] = 2
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        assert "100_200_1" not in coord._silent_poll_counts
+
+    def test_push_clears_the_repair_issue_with_hid_mid_addr(self):
+        """The same push calls async_clear once with the device's hid, mid and addr."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        coord._silent_issues.async_clear.assert_called_once_with(100, 200, 1)
+
+    def test_push_replaces_a_silent_entry_with_a_decoded_one(self):
+        """A pushed frame for a currently-silent sensor key replaces it; the type
+        string is no longer the silent sentinel."""
+        hub = _push_hub()
+        silent_entry = {
+            "hid": 100,
+            "mid": 200,
+            "addr": 1,
+            "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
+        }
+        coord = _seed_push_coord(hub, sensors={"100_200_1": silent_entry})
+        coord._silent_poll_counts["100_200_1"] = 3
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        updated = coord.data["sensors"]["100_200_1"]["data"]
+        assert updated["type"] != SILENT_DATA_TYPE
+        assert "zones" in updated
+        assert "100_200_1" not in coord._silent_poll_counts
+        coord._silent_issues.async_clear.assert_called_once_with(100, 200, 1)
+
+    @pytest.mark.parametrize(
+        ("reason", "mid", "sid", "seed"),
+        [
+            ("before first poll", 200, "D1", False),
+            ("unknown mid", 999, "D1", True),
+            ("unresolvable sid", 200, "state", True),
+            ("unknown addr", 200, "D9", True),
+        ],
+    )
+    def test_dropped_push_clears_neither_counter_nor_issue(self, reason, mid, sid, seed):
+        """Each early-return drop path in apply_push_update must not clear
+        _silent_poll_counts or call async_clear, since none of them reach the
+        merge that follows those drops."""
+        if seed:
+            coord = _seed_push_coord(_push_hub(addr=1), sensors={"100_200_1": {"data": None}})
+        else:
+            coord, _ = _make_coord()
+            coord.data = None
+            coord.async_update_listeners = MagicMock()
+        coord._silent_poll_counts["100_200_1"] = 2
+
+        _APPLY(coord, mid, sid, "11#DEADBEEFCAFE", 1717200000000)
+
+        assert coord._silent_poll_counts.get("100_200_1") == 2, reason
+        coord._silent_issues.async_clear.assert_not_called()
 
 
 class TestIssueUrlLengthBudget:

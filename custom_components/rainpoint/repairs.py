@@ -1,29 +1,42 @@
-"""Push-channel liveness watchdog.
+"""The integration's Settings > Repairs surfaces.
 
-Surfaces a disconnected push channel as a dismissible Settings > Repairs issue
-and clears it on recovery, so a sustained outage cannot hide behind the polling
-fallback. It catches disconnection-based death; a channel that stays connected
-but silently stops delivering data is not flagged (see _channel_functional).
+Two independent lifecycles live here:
 
-Detection-only by design: it never reconnects (the supervisor owns reconnect)
-and never changes the poll cadence. It reads the same connection state and
-last-message liveness clock the MQTT client already tracks -- it does not add a
-second timer or a second liveness clock.
+- ``RainPointPushWatchdog`` surfaces a disconnected push channel as a
+  dismissible Repairs issue and clears it on recovery, so a sustained outage
+  cannot hide behind the polling fallback. It catches disconnection-based
+  death; a channel that stays connected but silently stops delivering data is
+  not flagged (see _channel_functional). Detection-only by design: it never
+  reconnects (the supervisor owns reconnect) and never changes the poll
+  cadence. It reads the same connection state and last-message liveness clock
+  the MQTT client already tracks -- it does not add a second timer or a
+  second liveness clock.
 
-The channel is considered alive while it is connected or has delivered any
-message within the message window (an undecodable message still proves the pipe
-is alive). A repair issue is raised only after the channel has stayed
-non-functional continuously past the dead-after threshold, and only once per
-dead->alive transition, mirroring the once-per-cause restraint the coordinator
-uses for unknown-model notifications. Transient blips below the threshold stay
-log-only and never raise an issue or spam notifications.
+  The channel is considered alive while it is connected or has delivered any
+  message within the message window (an undecodable message still proves the
+  pipe is alive). A repair issue is raised only after the channel has stayed
+  non-functional continuously past the dead-after threshold, and only once
+  per dead->alive transition, mirroring the once-per-cause restraint the
+  coordinator uses for unknown-model notifications. Transient blips below the
+  threshold stay log-only and never raise an issue or spam notifications.
+
+- ``RainPointSilentDeviceIssues`` re-keys that same raise-once /
+  clear-on-recovery shape from a single well-known issue id to one issue per
+  sub-device the cloud has stopped reporting on. It holds no knowledge of the
+  coordinator's data shape: it is driven by plain ``SilentDeviceRecord``
+  instances built by the coordinator, and reconciled from the coordinator's
+  own poll and push triggers rather than a timer of its own.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import time
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -36,6 +49,7 @@ from .const import (
     PUSH_WATCHDOG_ISSUE_ID,
     PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS,
     PUSH_WATCHDOG_SCAN_INTERVAL_SECONDS,
+    SILENT_DEVICE_ISSUE_ID_PREFIX,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -150,3 +164,205 @@ class RainPointPushWatchdog:
             translation_key=PUSH_WATCHDOG_ISSUE_ID,
         )
         _LOGGER.warning("RainPoint push channel has been down past the threshold; raising repair issue")
+
+
+@dataclass(frozen=True)
+class SilentDeviceRecord:
+    """One sub-device's current silence state, as plain data for the Repairs surface.
+
+    This is deliberately not the coordinator's own sensors dict entry: the
+    coordinator translates its data into this shape before calling
+    ``RainPointSilentDeviceIssues.async_sync``, so this module never has to
+    know that dict's layout.
+    """
+
+    hid: Any
+    mid: int
+    addr: int
+    model: str | None
+    hub_name: str | None
+    missed_polls: int
+    silent: bool
+    # False when the cloud parks this device under a placeholder parent record
+    # rather than a real hub, which is what a Bluetooth-only pairing looks
+    # like. Distinguishes "there is no hub" from "the hub's name is missing",
+    # which the card would otherwise render identically as "unknown".
+    hub_paired: bool = True
+
+
+def silent_device_issue_id(hid: Any, mid: int, addr: int) -> str:
+    """Return the per-device issue id; this string is itself the dedup key."""
+    return f"{SILENT_DEVICE_ISSUE_ID_PREFIX}_{hid}_{mid}_{addr}"
+
+
+# Markdown- and HTML-active characters stripped from a value before it reaches
+# a Repairs translation placeholder: backtick, angle brackets, square
+# brackets, parentheses, pipe, backslash, asterisk, underscore, and hash, plus
+# the colon, forward slash and at sign that make a bare address linkable.
+_MARKDOWN_HTML_TRANSLATION = str.maketrans("", "", "`<>[]()|\\*_#:/@")
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
+# The bare-host form some Markdown renderers autolink on the prefix alone,
+# with no scheme and no surrounding syntax to strip.
+_AUTOLINK_PREFIX_RE = re.compile(r"www\.", re.IGNORECASE)
+
+
+def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
+    """Neutralize a cloud-supplied string before it reaches a Repairs translation placeholder.
+
+    model, hub_name and addr all originate from the RainPoint cloud
+    unvalidated and are rendered by Home Assistant into a Repairs card as
+    Markdown, so an unsanitised value could plant a clickable link, an image,
+    or raw HTML there. The goal is that no output of this function can be
+    rendered as a link at all, not merely that bracketed link syntax is
+    broken.
+
+    Collapses every run of whitespace (including an embedded newline) to a
+    single space, deletes every Markdown-and-HTML-active character (which also
+    takes out the scheme separator and the address at sign), breaks the
+    bare-host prefix a renderer autolinks without any surrounding syntax,
+    strips, and caps length; falls back to the literal "unknown" when nothing
+    is left.
+
+    Order matters and is the whole correctness of this function. The deletion
+    pass has to run BEFORE the autolink break, because deleting characters can
+    assemble a prefix that was not there when the text arrived: "www_.evil" and
+    "ww[w.evil" both become "www.evil" once the deletion removes the separator,
+    so a break that ran first would have already passed over them. Both passes
+    run after the whitespace collapse, so the space the break inserts is not
+    collapsed away again.
+    """
+    text = _WHITESPACE_RUN_RE.sub(" ", str(value))
+    text = text.translate(_MARKDOWN_HTML_TRANSLATION)
+    text = _AUTOLINK_PREFIX_RE.sub(" ", text)
+    text = text.strip()[:limit]
+    return text or "unknown"
+
+
+class RainPointSilentDeviceIssues:
+    """Raises and clears one Repairs issue per silent sub-device.
+
+    Re-keys the raise-once / clear-on-recovery shape of RainPointPushWatchdog
+    from a single well-known issue id to one issue per {hid}_{mid}_{addr}: a
+    hub can have several silent children at once, and each needs to name its
+    own model and address. Driven by the coordinator's poll reconcile and by
+    explicit push-arrival clearing rather than a timer of its own -- the
+    coordinator already has both triggers to call it from.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Start with an empty active set, which is per-instance by design.
+
+        A reload builds a fresh instance with no memory of what a prior
+        session raised, which is why _clear_issue deletes unconditionally
+        rather than only when it believes the issue is active.
+        """
+        self._hass = hass
+        self._active: set[str] = set()
+
+    def async_sync(self, records: list[SilentDeviceRecord], *, unreachable_ids: Iterable[str] = frozenset()) -> None:
+        """Reconcile the active issue set against one poll's worth of records.
+
+        A silent record raises its issue once (deduped on _active). A
+        non-silent record clears its issue unconditionally rather than only
+        when active: a fresh instance after a restart has no memory of an
+        issue a prior session raised, so guarding on _active would strand it
+        forever, and async_delete_issue is already a no-op for an unknown id.
+        Any id still active that no record mentions at all is normally
+        cleared, so a device that leaves the hub's sub-device list entirely
+        does not leave an orphaned issue behind.
+
+        An id listed in unreachable_ids is the third case: it is left exactly
+        as it is, neither raised nor cleared, because the hub that owns it
+        could not be reached this poll and an outage is not evidence about any
+        particular device. Those ids are opaque strings, so this module still
+        needs no knowledge of the coordinator's data shape. The parameter is
+        keyword-only and defaults to empty, so the class stays usable, and
+        callable in tests, without it.
+        """
+        mentioned: set[str] = set()
+        for record in records:
+            issue_id = silent_device_issue_id(record.hid, record.mid, record.addr)
+            mentioned.add(issue_id)
+            if record.silent:
+                self._raise_issue(issue_id, record)
+            else:
+                self._clear_issue(issue_id)
+        for stale_id in self._active - mentioned - set(unreachable_ids):
+            self._clear_issue(stale_id)
+
+    def async_clear(self, hid: Any, mid: int, addr: int) -> None:
+        """Clear one device's issue explicitly; the push-arrival half of the lifecycle.
+
+        A pushed reading already overwrites the silent sensor entry for free,
+        but the active-issue set is separate state the merge does not touch,
+        so the coordinator's push path calls this directly rather than
+        waiting for the next poll's reconcile.
+        """
+        self._clear_issue(silent_device_issue_id(hid, mid, addr))
+
+    def _raise_issue(self, issue_id: str, record: SilentDeviceRecord) -> None:
+        """Raise one device's issue, at most once per active period.
+
+        Every cloud-supplied placeholder is sanitized on the way in: Home
+        Assistant renders this card as Markdown, so an unfiltered model or hub
+        name could plant a link in it.
+
+        A device with no hub renders the literal "none" rather than going
+        through the sanitizer, whose "unknown" fallback would be a worse
+        answer: the card goes on to suggest pairing the device to a hub, so
+        naming its hub "unknown" reads as lost state instead of the truth,
+        which is that there is no hub to name. The literal is ours, not the
+        cloud's, so it needs no sanitizing.
+        """
+        if issue_id in self._active:
+            return
+        try:
+            ir.async_create_issue(
+                self._hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=SILENT_DEVICE_ISSUE_ID_PREFIX,
+                translation_placeholders={
+                    "model": _sanitize_placeholder(record.model),
+                    "address": _sanitize_placeholder(record.addr),
+                    "hub_name": _sanitize_placeholder(record.hub_name) if record.hub_paired else "none",
+                    "missed_polls": str(record.missed_polls),
+                },
+            )
+            # Marked active only once the registry accepted it. Marking before
+            # the call would strand a device whose first raise failed: the
+            # dedup guard above would suppress every later attempt, so a
+            # transient registry error would silence that device for the rest
+            # of the session.
+            self._active.add(issue_id)
+            _LOGGER.warning(
+                "RainPoint sub-device addr=%s (model=%s) has not reported for %s polls; raising repair issue",
+                record.addr,
+                record.model,
+                record.missed_polls,
+            )
+        except Exception as issue_exc:
+            _LOGGER.debug(
+                "Failed to create the not-reporting repair issue (id=%s): %s",
+                issue_id,
+                issue_exc,
+            )
+
+    def _clear_issue(self, issue_id: str) -> None:
+        """Delete one device's issue, unconditionally rather than only when active.
+
+        A fresh instance after a reload has no record of an issue a prior
+        session raised, so guarding on the active set would strand it forever.
+        Deleting an unknown id is already a no-op.
+        """
+        self._active.discard(issue_id)
+        try:
+            ir.async_delete_issue(self._hass, DOMAIN, issue_id)
+        except Exception as issue_exc:
+            _LOGGER.debug(
+                "Failed to delete the not-reporting repair issue (id=%s): %s",
+                issue_id,
+                issue_exc,
+            )

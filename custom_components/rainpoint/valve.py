@@ -27,7 +27,7 @@ from .const import (
 )
 from .coordinator import RainPointCoordinator
 from .device import build_sub_device_info
-from .entity import sub_device_attributes
+from .entity import LateEntityAdder, sub_device_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,51 +46,52 @@ async def async_setup_entry(
 
     # Skip any record that is not a dict so one malformed sub-device entry
     # cannot raise out of a builder loop and drop already-accumulated trusted
-    # entities. Both the trusted loop and the generic-control loop below read
-    # this mapping.
+    # entities.
     sensors_cfg = {key: info for key, info in coordinator.data.get("sensors", {}).items() if isinstance(info, dict)}
-    # Widened from list[RainPointValveEntity]: the opt-in generic-control
-    # branch below extends this same list with RainPointGenericValve
-    # instances, which are ValveEntity subclasses but not RainPointValveEntity
-    # subclasses.
+    generic_enabled = entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False)
+
+    def build(key: str, info: dict) -> list:
+        """Return every valve entity one sensor key currently supports.
+
+        Widened from list[RainPointValveEntity]: the opt-in generic-control
+        branch extends this with RainPointGenericValve instances, which are
+        ValveEntity subclasses but not RainPointValveEntity subclasses.
+        """
+        built: list = []
+        if info.get("model") in VALVE_MODELS:
+            zones: dict = (info.get("data") or {}).get("zones", {})
+            # One entity per zone that reported in the payload. Zones absent
+            # from the payload are not created, which avoids phantom entities
+            # when a device reports fewer zones than its model name implies.
+            for zone_num in sorted(zones.keys()):
+                built.append(RainPointValveEntity(coordinator, key, info, zone_num))
+                _LOGGER.debug("Creating valve entity: key=%s zone=%s model=%s", key, zone_num, info.get("model"))
+
+        if generic_enabled:
+            # Deferred import: generic_control reaches sensor.py's
+            # RainPointSensorBase transitively through generic_entities, so a
+            # top-level import here would pull the whole sensor platform into
+            # this module's import graph.
+            from .generic_control import build_generic_valve_entities
+
+            base_slug = f"{info.get('hid', '')}_{info.get('mid', '')}_{info.get('addr', '')}"
+            built.extend(build_generic_valve_entities(coordinator, key, info, base_slug))
+        return built
+
+    adder = LateEntityAdder(coordinator, async_add_entities, build)
+
     entities: list = []
-
     for key, info in sensors_cfg.items():
-        model = info.get("model")
-        if model not in VALVE_MODELS:
-            continue
-
-        decoded = info.get("data") or {}
-        zones: dict = decoded.get("zones", {})
-
-        # Create one valve entity per zone that reported in the payload.
-        # Zones absent from the payload are not created - avoids phantom entities
-        # if the device reports fewer zones than the model name implies.
-        for zone_num in sorted(zones.keys()):
-            entities.append(RainPointValveEntity(coordinator, key, info, zone_num))
-            _LOGGER.debug(
-                "Creating valve entity: key=%s zone=%s model=%s",
-                key,
-                zone_num,
-                info.get("model"),
-            )
-
-    if entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False):
-        # Deferred import: generic_control reaches sensor.py's
-        # RainPointSensorBase transitively through generic_entities, so a
-        # top-level import here would pull the whole sensor platform into
-        # this module's import graph.
-        from .generic_control import build_generic_valve_entities
-
-        for key, info in sensors_cfg.items():
-            hid = info.get("hid", "")
-            mid = info.get("mid", "")
-            addr = info.get("addr", "")
-            base_slug = f"{hid}_{mid}_{addr}"
-            entities.extend(build_generic_valve_entities(coordinator, key, info, base_slug))
+        entities.extend(adder.collect(key, info))
 
     if entities:
         async_add_entities(entities)
+
+    # Registered unconditionally. A valve that is silent at setup reports no
+    # zones, so it produces nothing here, and that is exactly the install this
+    # path exists for: its entities appear when it starts reporting, with no
+    # reload.
+    entry.async_on_unload(coordinator.async_add_listener(adder.async_on_coordinator_update))
 
 
 class RainPointValveEntity(CoordinatorEntity, ValveEntity):

@@ -15,6 +15,11 @@ body:
         See `DEBUG_VALVE_PAYLOAD.md` for how to capture payloads. The short version:
         enable the per-device **"Raw Payload"** diagnostic sensor (disabled by default),
         then read its value from the entity's attributes or the logs.
+
+        **Device returning no readings at all?** If you got here from a **"Not Reporting"**
+        entity, there is no payload to capture and the payload field below is already
+        filled in for you saying so. That is the finding, so please still file this:
+        tell us what the RainPoint app shows for the device and how it is paired.
   - type: input
     id: model
     attributes:
@@ -73,7 +78,8 @@ body:
       description: >
         Paste the raw payload from the "Raw Payload" diagnostic sensor with the device
         idle - valve closed, or the sensor sitting at a normal reading. Include the
-        `10#` or `11#` prefix exactly as shown.
+        `10#` or `11#` prefix exactly as shown. If this arrived pre-filled saying the
+        device returns no status, leave it exactly as it is.
       placeholder: "10#E1BC00DC01D80020B700000000AD00009F95110000FF0F5D81D019"
       render: text
     validations:
@@ -178,7 +184,7 @@ body:
     attributes:
       label: Before submitting
       options:
-        - label: I enabled the disabled-by-default "Raw Payload" diagnostic sensor to capture the payload(s) above.
+        - label: I captured the payload(s) above from the disabled-by-default "Raw Payload" diagnostic sensor, or this device returns no status and I described what the RainPoint app shows.
           required: true
         - label: I searched existing issues and this model is not already requested or supported.
           required: true

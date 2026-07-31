@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from custom_components.rainpoint.entity import RainPointSubDeviceEntity, sub_device_attributes
+from custom_components.rainpoint.entity import LateEntityAdder, RainPointSubDeviceEntity, sub_device_attributes
 
 
 def _coordinator(entry):
@@ -66,6 +66,21 @@ class TestSubDeviceAttributes:
         coordinator = _coordinator({"firmware_version": "", "data": {}})
         assert sub_device_attributes(coordinator, "k") == {}
 
+    def test_silent_entry_yields_firmware_alone(self):
+        """A silent entry (D-09/D-11) carries neither a device nor a server
+        timestamp key, so it must not raise and must yield the firmware
+        attribute alone, same as a bare None reading."""
+        from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+
+        coordinator = _coordinator(
+            {
+                "firmware_version": "1.4",
+                "raw_status": {},
+                "data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
+            }
+        )
+        assert sub_device_attributes(coordinator, "k") == {"firmware_version": "1.4"}
+
 
 class TestSubDeviceEntity:
     """Tests for RainPointSubDeviceEntity."""
@@ -92,3 +107,92 @@ class TestSubDeviceEntity:
         entity = self._entity({"sensors": {"k": {"data": {"type": "valve"}}}})
         assert entity._sensor_data == {"type": "valve"}
         assert entity.available is True
+
+    def test_silent_entry_reads_as_unavailable(self):
+        """A silent entry's data is truthy, but must still read as unavailable:
+        a battery/RSSI/generic entity bound to this key must not look wired up
+        while reading nothing (D-02/D-12)."""
+        from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+
+        entity = self._entity({"sensors": {"k": {"data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"}}}})
+        assert entity.available is False
+
+
+class _FakeEntity:
+    """Minimal stand-in carrying only the attribute the adder dedupes on."""
+
+    def __init__(self, unique_id):
+        """Record the unique id the adder will read."""
+        self._attr_unique_id = unique_id
+
+
+class TestLateEntityAdder:
+    """Add-once bookkeeping and the coordinator listener behind late creation."""
+
+    @staticmethod
+    def _adder(sensors, build):
+        """Wire an adder over a coordinator stub, returning it with the sink."""
+        coordinator = SimpleNamespace(data={"sensors": sensors})
+        added = []
+        adder = LateEntityAdder(coordinator, added.extend, build)
+        return coordinator, adder, added
+
+    def test_collect_returns_entities_once_and_never_again(self):
+        """A repeated unique_id is an error in Home Assistant, so it cannot recur."""
+        _c, adder, _added = self._adder({}, lambda k, i: [_FakeEntity("a"), _FakeEntity("b")])
+
+        first = adder.collect("k", {})
+        second = adder.collect("k", {})
+
+        assert [e._attr_unique_id for e in first] == ["a", "b"]
+        assert second == []
+
+    def test_a_key_gaining_a_second_zone_gets_only_the_new_entity(self):
+        """The per-zone case the sensor platform's key-based bookkeeping cannot express."""
+        zones = ["z1"]
+        _c, adder, _added = self._adder({}, lambda k, i: [_FakeEntity(z) for z in zones])
+
+        adder.collect("k", {})
+        zones.append("z2")
+        second = adder.collect("k", {})
+
+        assert [e._attr_unique_id for e in second] == ["z2"]
+
+    def test_an_entity_without_a_unique_id_is_never_deduped(self):
+        """Nothing to key on means nothing to suppress; letting it through is safer."""
+        _c, adder, _added = self._adder({}, lambda k, i: [_FakeEntity(None)])
+
+        assert len(adder.collect("k", {})) == 1
+        assert len(adder.collect("k", {})) == 1
+
+    def test_listener_adds_a_key_that_became_eligible_after_setup(self):
+        """The whole point: entity creation is otherwise frozen at first refresh."""
+        sensors = {}
+        _coordinator, adder, added = self._adder(sensors, lambda k, i: [_FakeEntity(k)])
+
+        adder.async_on_coordinator_update()
+        assert added == []
+
+        sensors["late"] = {}
+        adder.async_on_coordinator_update()
+
+        assert [e._attr_unique_id for e in added] == ["late"]
+
+    def test_listener_skips_a_malformed_record_and_keeps_the_rest(self):
+        """One bad record must not break late creation for every other device."""
+        sensors = {"bad": "not a dict", "good": {}}
+        _c, adder, added = self._adder(sensors, lambda k, i: [_FakeEntity(k)])
+
+        adder.async_on_coordinator_update()
+
+        assert [e._attr_unique_id for e in added] == ["good"]
+
+    def test_listener_tolerates_a_coordinator_with_no_data(self):
+        """A refresh that failed leaves data None; the listener still runs."""
+        coordinator = SimpleNamespace(data=None)
+        added = []
+        adder = LateEntityAdder(coordinator, added.extend, lambda k, i: [_FakeEntity(k)])
+
+        adder.async_on_coordinator_update()
+
+        assert added == []

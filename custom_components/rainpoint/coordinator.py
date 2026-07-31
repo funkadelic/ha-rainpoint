@@ -1,6 +1,8 @@
 import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
@@ -63,10 +65,39 @@ from .const import (
     VALVE_MODELS,
     debug_with_version,
 )
+from .repairs import RainPointSilentDeviceIssues, SilentDeviceRecord, _sanitize_placeholder, silent_device_issue_id
 
 _LOGGER = logging.getLogger(__name__)
 
 STALE_VALVE_POLL_GUARD = timedelta(minutes=5)
+
+
+class _AbsentStatus(dict):
+    """Marker meaning "no status response arrived for this hub" (D-05/D-06).
+
+    Subclasses dict rather than using a bare sentinel object because
+    _merge_push_sensor_entry and every other status reader do
+    dict(status.get(mid, ...)) and similar dict operations; those must keep
+    working unchanged. Callers distinguish it with isinstance(status, _AbsentStatus)
+    rather than an equality check, since its contents are indistinguishable from
+    a real "status arrived and reported nobody" dict.
+    """
+
+
+# The single module-level instance every absent-status call site shares.
+STATUS_ABSENT = _AbsentStatus({"subDeviceStatus": []})
+
+# The coordinator data["type"] value for a sub-device the hub lists but no
+# status response has ever mentioned. Deliberately distinct from "unknown":
+# type == "unknown" is the admission ticket for the opt-in generic sensor and
+# generic control paths, and a device the cloud reports nothing about must
+# never become eligible for a generic valve entity.
+SILENT_DATA_TYPE = "silent"
+
+# Consecutive arrived-but-omitted polls required before a status-less addr is
+# surfaced as silent (~6 minutes at the 120s DEFAULT_SCAN_INTERVAL). Absorbs a
+# single-poll transient omission without hiding a genuinely silent device.
+SILENT_DEBOUNCE_POLLS = 3
 
 # Decoder registry - maps device models to their decoder functions
 DECODER_REGISTRY = {
@@ -98,6 +129,13 @@ DECODER_REGISTRY = {
 # accept query params keyed by each field's `id`, so the reporter lands on this
 # form with the model and idle payload already populated.
 NEW_DEVICE_ISSUE_TEMPLATE = "new_device.yml"
+
+# Explicit marker for a silent device's report link: there is no payload to
+# capture, and the absence of one is itself the finding, so the primary_payload
+# field states that plainly instead of arriving blank.
+NO_STATUS_PAYLOAD_MARKER = (
+    "This device pairs to the hub but returns no status to the RainPoint cloud. There is no payload to capture."
+)
 
 
 def _format_generic_fields(generic: dict | None) -> str:
@@ -179,7 +217,33 @@ def _fit_param(params: dict, key: str, value: str) -> dict:
     return {**params, key: value[:low] + _ISSUE_FIELD_TRUNCATION_NOTE}
 
 
-def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: int | str | None = None) -> str:
+_FENCE_BREAKING_RE = re.compile(r"[`\r\n]+")
+
+
+def _fence_safe(raw_value: Any) -> str:
+    """Make a cloud payload safe to drop inside a fenced code block.
+
+    _sanitize_placeholder is the wrong tool here and would destroy the thing
+    being reported: it strips "#", which is the prefix separator in
+    "10#E1BC00...", and "|", which separates fields in the ASCII framing some
+    firmwares use. The payload is the one item in this notification that
+    cannot be regenerated later, so it has to survive intact.
+
+    The only real exposure inside a fence is a value that closes it, so this
+    removes backticks and line breaks and nothing else. Everything a payload
+    legitimately contains (hex, "#", commas, semicolons, pipes) passes
+    through unchanged.
+    """
+    return _FENCE_BREAKING_RE.sub("", str(raw_value)) if raw_value is not None else ""
+
+
+def _build_new_device_issue_url(
+    model: str,
+    raw_value: str | None,
+    model_code: int | str | None = None,
+    *,
+    payload_note: str | None = None,
+) -> str:
     """Return a GitHub New-device-support URL pre-filled with what the integration already knows.
 
     The reporter only has to add what the RainPoint app shows and submit, instead
@@ -203,18 +267,27 @@ def _build_new_device_issue_url(model: str, raw_value: str | None, model_code: i
     at all. The payload is left out and named in the form instead, so the
     reporter is told to paste it from the device's raw payload sensor rather
     than being handed a link GitHub refuses.
+
+    payload_note replaces the raw payload with an explicit statement when there
+    is no payload to begin with (a silent sub-device, D-15): decode_generic
+    cannot read prose, so the auto-decode step is skipped entirely rather than
+    run against text it was never meant to parse.
     """
     params = {
         "template": NEW_DEVICE_ISSUE_TEMPLATE,
         "title": f"Add support for {model}",
         "model": model,
-        "primary_payload": raw_value or "",
+        "primary_payload": payload_note if payload_note is not None else (raw_value or ""),
     }
     if model_code is not None:
         params["model_code"] = str(model_code)
     if len(_url_for_params(params)) > ISSUE_URL_MAX_LENGTH:
         return _url_for_params({**params, "primary_payload": _ISSUE_PAYLOAD_TOO_LONG_NOTE})
-    auto_decoded = _format_generic_fields(decode_generic(raw_value, model=model, model_code=model_code)) if raw_value else ""
+    auto_decoded = (
+        _format_generic_fields(decode_generic(raw_value, model=model, model_code=model_code))
+        if raw_value and payload_note is None
+        else ""
+    )
     if auto_decoded:
         params = _fit_param(params, "auto_decoded", auto_decoded)
     gate_diagnostics = _format_gate_diagnostics(model, model_code)
@@ -234,6 +307,11 @@ def _resolve_addr_from_sid(sid: str) -> int | None:
         return int(sid[1:])
     except ValueError:
         return None
+
+
+def _sensor_key(hid, mid: int, addr: int) -> str:
+    """Return the canonical sensor key, the single definition every caller shares."""
+    return f"{hid}_{mid}_{addr}"
 
 
 def is_hub_record(hub: dict) -> bool:
@@ -317,6 +395,27 @@ def _status_entry_time(status_entry: dict) -> datetime | None:
         return None
 
 
+def _last_seen_from_entry(previous: dict | None) -> str | None:
+    """Return an ISO-8601 last-seen timestamp carried by a previous sensor entry, or None.
+
+    Resolution order: a previous silent entry carries its own last_seen forward
+    unchanged (it never had a real reading to time itself by); otherwise a real
+    entry's device_timestamp is used when present; otherwise the raw_status
+    arrival time is used as a last resort. Returns None only when the device
+    has never reported anything at all.
+    """
+    if not previous:
+        return None
+    data = previous.get("data") or {}
+    if data.get("type") == SILENT_DATA_TYPE:
+        return data.get("last_seen")
+    device_timestamp = data.get("device_timestamp")
+    if device_timestamp:
+        return device_timestamp
+    entry_time = _status_entry_time(previous.get("raw_status") or {})
+    return entry_time.isoformat() if entry_time else None
+
+
 def _valve_zone_poll_is_stale(poll_time: datetime | None, last_command_time: datetime, now: datetime) -> bool:
     """Return True when a poll should be treated as older than the last command.
 
@@ -370,6 +469,8 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._hids = entry.data.get(CONF_HIDS, [])
         self._notified_unknown_models: set[tuple[str | None, int | None]] = set()
         self._last_valve_command_at: dict[tuple[str, int], datetime] = {}
+        self._silent_poll_counts: dict[str, int] = {}
+        self._silent_issues = RainPointSilentDeviceIssues(hass)
 
     def record_valve_command(self, sensor_key: str, zone_num: int) -> datetime:
         """Remember the latest successful valve command time for stale-poll protection."""
@@ -417,6 +518,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
         status_entry = {"id": sid, "value": raw_value, "time": device_ts}
         sensor_key, sensor_entry = RainPointCoordinator._decode_one_subdevice(self, hub, mid, addr, sub, status_entry)
         RainPointCoordinator._merge_push_sensor_entry(self, mid, sid, sensor_key, sensor_entry, status_entry)
+        # _merge_push_sensor_entry's contract is a copy-on-write merge of
+        # coordinator data; the debounce counter and the not-reporting repair
+        # issue are separate state it does not touch, so clearing both on push
+        # arrival has to be explicit here rather than folded into the merge.
+        self._silent_poll_counts.pop(sensor_key, None)
+        self._silent_issues.async_clear(hub["hid"], mid, addr)
         # Notify listeners WITHOUT async_set_updated_data so the poll interval
         # timer is never reset; the 120s poll keeps running as the fallback.
         self.async_update_listeners()
@@ -443,7 +550,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
         data["sensors"] = sensors
 
         status = dict(data.get("status", {}))
-        mid_status = dict(status.get(mid, {"subDeviceStatus": []}))
+        # Merely "no prior status recorded for this mid to merge into yet" --
+        # unrelated to the D-05 absent-vs-omitted distinction, which concerns
+        # the fetch layer's status_by_mid, not this push-side merge target.
+        # STATUS_ABSENT's contents are the same shape, so reusing the shared
+        # sentinel here is equivalent and avoids a second copy of the literal.
+        mid_status = dict(status.get(mid, STATUS_ABSENT))
         sub_status = list(mid_status.get("subDeviceStatus", []))
         for index, existing in enumerate(sub_status):
             if existing.get("id") == sid:
@@ -466,14 +578,39 @@ class RainPointCoordinator(DataUpdateCoordinator):
             hubs = await RainPointCoordinator._collect_hubs(self)
             status_by_mid: dict[int, dict] = {}
             decoded_sensors: dict[str, dict] = {}
+            absent_hubs: list[dict] = []
 
             if hubs:
                 status_by_mid = await RainPointCoordinator._fetch_status_by_mid(self, hubs)
 
             for hub in hubs:
                 mid = hub["mid"]
-                status = status_by_mid.get(mid, {"subDeviceStatus": []})
+                # STATUS_ABSENT is an unreachable safety net once _fetch_status_by_mid
+                # covers every hub mid (D-05): a mid genuinely missing here would mean
+                # its status was never obtained this poll, not that it arrived empty.
+                status = status_by_mid.get(mid, STATUS_ABSENT)
+                if isinstance(status, _AbsentStatus):
+                    absent_hubs.append(hub)
                 decoded_sensors.update(RainPointCoordinator._decode_hub_subdevices(self, hub, status))
+
+            # A poll that returned no hubs at all, for an installation that had
+            # some a moment ago, is a device-list outage rather than evidence
+            # that every device left. Pruning and reconciling against it would
+            # wipe each debounce counter and clear each still-valid issue, then
+            # re-raise it once the list came back: the same clear-then-reraise
+            # cycle the absent-hub signal above exists to prevent, entering
+            # through the device-list door instead of the status door. Skipping
+            # both is safe in the direction that matters, since a poll with no
+            # hubs also decodes no sensors and so can never raise anything.
+            if hubs or not self._silent_poll_counts:
+                RainPointCoordinator._prune_silent_state(self, hubs)
+                RainPointCoordinator._sync_silent_device_issues(self, decoded_sensors, absent_hubs)
+            else:
+                _LOGGER.warning(
+                    "Device list came back empty while %d sub-device(s) were being tracked; "
+                    "treating it as an outage and leaving not-reporting state untouched",
+                    len(self._silent_poll_counts),
+                )
 
             _LOGGER.info("Coordinator update complete: %d hubs, %d sensors", len(hubs), len(decoded_sensors))
             _LOGGER.debug(debug_with_version("Final data: hubs=%s, sensors=%s"), hubs, list(decoded_sensors.keys()))
@@ -552,6 +689,13 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 status_array = device_data.get("subDeviceStatus", [])
                 status_by_mid[mid] = {"subDeviceStatus": status_array}
                 _LOGGER.debug(debug_with_version("Fetched status for mid=%s using multipleDeviceStatus"), mid)
+            # The call succeeded, so a hub mid the response did not mention is
+            # evidence about that hub (arrived, reported nobody), not an outage
+            # (D-05). Filling it in here is what makes the absent-vs-omitted
+            # split correct for the exact case that motivated this phase: a
+            # hub whose status came back but never named one of its addrs.
+            for hub in hubs:
+                status_by_mid.setdefault(hub["mid"], {"subDeviceStatus": []})
             return status_by_mid
 
         # Plain conditional fallback path: empty / None / transient-error multi-status all
@@ -580,7 +724,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 raise
             except (aiohttp.ClientError, TimeoutError) as individual_e:
                 _LOGGER.error("Transport error getting status for mid=%s: %s", mid, individual_e)
-                status_by_mid[mid] = {"subDeviceStatus": []}
+                # This hub's status was not obtained this poll -- an outage, not
+                # evidence that it reported nobody -- so it must contribute no
+                # silent entries for any of its children (D-06).
+                status_by_mid[mid] = STATUS_ABSENT
         return status_by_mid
 
     def _notify_unknown_model(
@@ -618,22 +765,35 @@ class RainPointCoordinator(DataUpdateCoordinator):
         variant = (model, model_code)
         if model and variant not in self._notified_unknown_models:
             self._notified_unknown_models.add(variant)
-            code_line = f" (modelCode `{model_code}`)" if model_code is not None else ""
+            # Sanitized for the same reason model is: modelCode is cloud-typed
+            # (int | str | None), it lands on a Markdown-rendered line, and a
+            # backtick in it would close the span it sits inside.
+            code_line = f" (modelCode `{_sanitize_placeholder(model_code)}`)" if model_code is not None else ""
             # Only suffix the notification id when a code is present. Devices
             # without a modelCode must keep the pre-existing
             # "rainpoint_unsupported_{model}" id, otherwise reloading the
             # integration leaves the old notification in place and adds a
             # second one under "..._None" instead of replacing it.
             code_suffix = f"_{model_code}" if model_code is not None else ""
+            # Home Assistant renders a persistent notification as Markdown and
+            # both of these come from the cloud unvalidated, so the same
+            # reasoning that guards the Repairs cards applies here. Only the
+            # displayed copy is treated: the notification id stays keyed on the
+            # raw model so a reload still replaces its own notification rather
+            # than adding a second one, and the report link keeps the true
+            # model and payload because urlencode already makes them safe and a
+            # maintainer needs the real strings.
+            safe_model = _sanitize_placeholder(model)
+            safe_payload = _fence_safe(raw_value)
             report_url = _build_new_device_issue_url(model, raw_value, model_code)
             async_create(
                 self.hass,
-                f"RainPoint detected an unsupported sensor model: **{model}**{code_line}\n\n"
+                f"RainPoint detected an unsupported sensor model: **{safe_model}**{code_line}\n\n"
                 f"**[Report this device]({report_url})** to help add support. The link opens a "
                 f"New device support form with the model and payload already filled in; just add "
                 f"what the RainPoint app shows and submit.\n\n"
                 f"Prefer to file it by hand? Open {ISSUE_URL} and include this raw payload:\n"
-                f"```\n{raw_value}\n```\n\n"
+                f"```\n{safe_payload}\n```\n\n"
                 f"You can also find this data in the sensor's attributes in Home Assistant.",
                 title="RainPoint: Unsupported Sensor Detected",
                 notification_id=f"rainpoint_unsupported_{model}{code_suffix}",
@@ -681,7 +841,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
         _attach_device_timestamp(decoded, status_entry)
 
-        sensor_key = f"{hub['hid']}_{mid}_{addr}"
+        sensor_key = _sensor_key(hub["hid"], mid, addr)
         decoded = self._preserve_recent_valve_command_state(
             sensor_key,
             model,
@@ -740,27 +900,131 @@ class RainPointCoordinator(DataUpdateCoordinator):
         return preserved
 
     def _decode_hub_subdevices(self, hub: dict, status: dict) -> dict[str, dict]:
-        """Walk the sub_status entries for one hub and return a {sensor_key: sensor_entry} dict."""
+        """Walk this hub's own sub-device list and return a {sensor_key: sensor_entry} dict.
+
+        Driven by addr_map (the addrs the hub itself lists), not by the status
+        response: an addr the hub lists but the status response omits still
+        gets a debounced "silent" entry (D-06/D-09), which a loop driven from
+        the status response could never produce -- that asymmetry was the
+        actual defect. A status entry whose sid resolves to an addr the hub
+        does not list is still dropped, and an unresolvable sid is still
+        ignored, exactly as before.
+
+        An absent status (this hub's status could not be obtained this poll)
+        contributes nothing at all for any of its children (D-06): that is an
+        outage, not evidence about any particular addr.
+        """
         mid = hub["mid"]
         _LOGGER.debug(debug_with_version("Processing hub mid=%s with status"), mid)
 
-        sub_status = {s["id"]: s for s in status.get("subDeviceStatus", [])}
-        _LOGGER.debug(debug_with_version("Parsed sub_status for mid=%s: %s keys"), mid, len(sub_status))
+        if isinstance(status, _AbsentStatus):
+            _LOGGER.debug(debug_with_version("Status absent for mid=%s; contributing nothing"), mid)
+            return {}
 
-        # Map addr -> subDevice
-        addr_map = {sd["addr"]: sd for sd in hub.get("subDevices", [])}
-
-        decoded_sensors: dict[str, dict] = {}
-        for sid, s in sub_status.items():
+        status_by_addr: dict[int, dict] = {}
+        for sid, s in {s["id"]: s for s in status.get("subDeviceStatus", [])}.items():
             addr = _resolve_addr_from_sid(sid)
             if addr is None:
                 continue
+            status_by_addr[addr] = s
+        _LOGGER.debug(debug_with_version("Parsed status_by_addr for mid=%s: %s keys"), mid, len(status_by_addr))
 
-            sub = addr_map.get(addr)
-            if not sub:
-                continue
+        # Map addr -> subDevice, the primary loop (promoted from sub_status).
+        addr_map = {sd["addr"]: sd for sd in hub.get("subDevices", [])}
 
-            sensor_key, sensor_entry = RainPointCoordinator._decode_one_subdevice(self, hub, mid, addr, sub, s)
-            decoded_sensors[sensor_key] = sensor_entry
+        decoded_sensors: dict[str, dict] = {}
+        for addr, sub in addr_map.items():
+            sensor_key = _sensor_key(hub["hid"], mid, addr)
+            s = status_by_addr.get(addr)
+            if s is not None:
+                sensor_key, sensor_entry = RainPointCoordinator._decode_one_subdevice(self, hub, mid, addr, sub, s)
+                # A real reading resets the debounce counter (D-07).
+                self._silent_poll_counts.pop(sensor_key, None)
+            else:
+                sensor_entry = RainPointCoordinator._build_silent_subdevice(self, hub, mid, addr, sub, sensor_key)
+            if sensor_entry is not None:
+                decoded_sensors[sensor_key] = sensor_entry
 
         return decoded_sensors
+
+    def _build_silent_subdevice(
+        self,
+        hub: dict,
+        mid: int,
+        addr: int,
+        sub: dict,
+        sensor_key: str,
+    ) -> dict | None:
+        """Return a "silent" sensor entry once an addr has been omitted for
+        SILENT_DEBOUNCE_POLLS consecutive arrived-but-silent polls, else None.
+
+        Bypasses _decode_one_subdevice entirely: there is no payload to decode,
+        so there is nothing to run _notify_unknown_model against either.
+        """
+        count = self._silent_poll_counts.get(sensor_key, 0) + 1
+        self._silent_poll_counts[sensor_key] = count
+        if count < SILENT_DEBOUNCE_POLLS:
+            return None
+
+        previous = (self.data or {}).get("sensors", {}).get(sensor_key)
+        last_seen = _last_seen_from_entry(previous)
+        decoded = {
+            "type": SILENT_DATA_TYPE,
+            "model": sub.get("model"),
+            "silent_state": "stopped_reporting" if last_seen else "never_reported",
+            "last_seen": last_seen,
+            "missed_polls": count,
+        }
+        # status_entry={} per D-09/D-11: every downstream raw_status reader
+        # already tolerates a missing "value"/"time" pair.
+        return _build_sensor_entry(hub, sub, mid, addr, {}, decoded)
+
+    def _prune_silent_state(self, hubs: list[dict]) -> None:
+        """Drop any debounce counter for an addr no hub currently lists.
+
+        Runs every poll so a device that leaves subDevices (unpaired, removed)
+        cannot accumulate a counter forever (T-15-03).
+        """
+        live_keys = {_sensor_key(hub["hid"], hub["mid"], sd["addr"]) for hub in hubs for sd in hub.get("subDevices", [])}
+        self._silent_poll_counts = {key: count for key, count in self._silent_poll_counts.items() if key in live_keys}
+
+    def _sync_silent_device_issues(self, decoded_sensors: dict[str, dict], absent_hubs: list[dict]) -> None:
+        """Reconcile the per-device not-reporting repair issue against this poll's sensors.
+
+        Translates this poll's sensor entries into plain SilentDeviceRecord
+        instances -- repairs.py holds no knowledge of this dict's shape.
+        Deliberately calls no unknown-model notification: that one only
+        fires for a payload that decoded to "unknown", and a silent entry has
+        no payload to decode at all. The repair issue is the notification for
+        this case.
+
+        absent_hubs carries the hubs whose status could not be obtained this
+        poll. Such a hub contributes no decoded sensors at all, so without it
+        its still-silent children look identical to children that left the
+        sub-device list, and their issues would be cleared here and re-raised
+        on the next successful poll. The asymmetry only ever suppresses
+        clearing, never raising: a hub that cannot be reached also produces no
+        silent entries, so there is nothing to raise from in the first place.
+        """
+        unreachable_ids = {
+            silent_device_issue_id(hub["hid"], hub["mid"], sd["addr"]) for hub in absent_hubs for sd in hub.get("subDevices", [])
+        }
+        records = [
+            SilentDeviceRecord(
+                hid=entry["hid"],
+                mid=entry["mid"],
+                addr=entry["addr"],
+                model=entry.get("model"),
+                hub_name=entry.get("hub_name"),
+                missed_polls=(entry.get("data") or {}).get("missed_polls", 0),
+                silent=(entry.get("data") or {}).get("type") == SILENT_DATA_TYPE,
+                # A real hub always carries both of these; the placeholder
+                # record the cloud parks a Bluetooth-only device under carries
+                # neither, along with an empty name that would otherwise reach
+                # the card as "unknown". Read as "is there a hub at all",
+                # which is a different question from "what is it called".
+                hub_paired=bool(entry.get("product_key") or entry.get("device_name")),
+            )
+            for entry in decoded_sensors.values()
+        ]
+        self._silent_issues.async_sync(records, unreachable_ids=unreachable_ids)

@@ -23,7 +23,7 @@ from .const import (
 )
 from .coordinator import RainPointCoordinator
 from .device import build_sub_device_info
-from .entity import sub_device_attributes
+from .entity import LateEntityAdder, sub_device_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,39 +41,42 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
-    sensors_cfg = coordinator.data.get("sensors", {})
-    # Widened from list[RainPointZoneDurationNumber]: the opt-in
-    # generic-control branch below extends this same list with
-    # RainPointGenericZoneDurationNumber instances, mirroring how valve.py
-    # and switch.py widen their own entity lists for the same reason.
+    sensors_cfg = {key: info for key, info in coordinator.data.get("sensors", {}).items() if isinstance(info, dict)}
+    generic_enabled = entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False)
+
+    def build(key: str, info: dict) -> list:
+        """Return every duration entity one sensor key currently supports.
+
+        Widened from list[RainPointZoneDurationNumber]: the opt-in
+        generic-control branch extends this with
+        RainPointGenericZoneDurationNumber instances, mirroring how valve.py
+        and switch.py widen their own entity lists for the same reason.
+        """
+        built: list = []
+        if info.get("model") in VALVE_MODELS:
+            zones: dict = (info.get("data") or {}).get("zones", {})
+            for zone_num in sorted(zones.keys()):
+                built.append(RainPointZoneDurationNumber(coordinator, key, info, zone_num))
+                _LOGGER.debug("Creating duration number entity: key=%s zone=%s", key, zone_num)
+
+        if generic_enabled:
+            base_slug = f"{info.get('hid', '')}_{info.get('mid', '')}_{info.get('addr', '')}"
+            built.extend(build_generic_duration_entities(coordinator, key, info, base_slug))
+        return built
+
+    adder = LateEntityAdder(coordinator, async_add_entities, build)
+
     entities: list = []
-
     for key, info in sensors_cfg.items():
-        model = info.get("model")
-        if model not in VALVE_MODELS:
-            continue
-
-        decoded = info.get("data") or {}
-        zones: dict = decoded.get("zones", {})
-
-        for zone_num in sorted(zones.keys()):
-            entities.append(RainPointZoneDurationNumber(coordinator, key, info, zone_num))
-            _LOGGER.debug(
-                "Creating duration number entity: key=%s zone=%s",
-                key,
-                zone_num,
-            )
-
-    if entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False):
-        for key, info in sensors_cfg.items():
-            hid = info.get("hid", "")
-            mid = info.get("mid", "")
-            addr = info.get("addr", "")
-            base_slug = f"{hid}_{mid}_{addr}"
-            entities.extend(build_generic_duration_entities(coordinator, key, info, base_slug))
+        entities.extend(adder.collect(key, info))
 
     if entities:
         async_add_entities(entities)
+
+    # Registered unconditionally, for the same reason valve.py does: a valve
+    # that reports no zones at setup produces nothing here, and its duration
+    # companions have to appear alongside the valve entities they configure.
+    entry.async_on_unload(coordinator.async_add_listener(adder.async_on_coordinator_update))
 
 
 class _RainPointDurationNumberBase(CoordinatorEntity, NumberEntity, RestoreEntity):

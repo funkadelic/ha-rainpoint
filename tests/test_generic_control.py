@@ -22,6 +22,7 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_245,
     VALVE_MODELS,
 )
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 from custom_components.rainpoint.generic_control import (
     CONTROL_IDENTITY_ALLOWLIST,
     DEFAULT_CONTROL_DURATION_SECONDS,
@@ -607,6 +608,13 @@ class TestCountGenericControlEligibleDevices:
 
         assert count_generic_control_eligible_devices(data) == (1, 1)
 
+    def test_a_silent_device_is_not_counted_as_unsupported(self):
+        """A device with no status at all is not an unsupported model (D-10/D-12);
+        counting it here would misstate the control toggle's real effect in the options copy."""
+        data = {"sensors": {"a": {"model": ANCHOR_MODEL, "model_code": ANCHOR_MODEL_CODE, "data": {"type": SILENT_DATA_TYPE}}}}
+
+        assert count_generic_control_eligible_devices(data) == (0, 0)
+
     def test_malformed_coordinator_data_degrades_to_zero_rather_than_raising(self):
         assert count_generic_control_eligible_devices({"sensors": 5}) == (0, 0)
 
@@ -658,6 +666,18 @@ class TestBuildGenericValveEntities:
 
         assert len(entities) == 1
         assert isinstance(entities[0], RainPointGenericValve)
+
+    def test_silent_entry_yields_no_valve_even_for_the_anchor_the_gate_otherwise_admits(self):
+        """D-10: proves the type-string gate rejects a silent entry rather than an
+        unrelated gate failing first, since ANCHOR_MODEL/ANCHOR_MODEL_CODE is the
+        real catalog variant the control gate otherwise passes (see
+        test_fully_eligible_anchor_yields_one_valve above). Closes T-15-01.
+        """
+        sensor_info = _anchor_sensor_info()
+        sensor_info["data"] = {"type": SILENT_DATA_TYPE}
+        coordinator = _make_coordinator("100_200_1", sensor_info)
+
+        assert build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
     def test_socket_identity_yields_no_valve(self):
         """HWG004WRF/34 admits a CTL_SOCK datapoint at the gate; the valve
@@ -731,6 +751,18 @@ class TestBuildGenericSwitchEntities:
 
         assert len(entities) == 1
         assert isinstance(entities[0], RainPointGenericSwitch)
+
+    def test_silent_entry_yields_no_switch_even_for_the_anchor_the_gate_otherwise_admits(self):
+        """D-10: SOCKET_MODEL/SOCKET_MODEL_CODE is the real catalog variant the
+        control gate otherwise passes for a switch (see
+        test_fully_eligible_anchor_yields_one_switch above); this proves the
+        type-string gate, not an unrelated one, rejects a silent entry. Closes T-15-01.
+        """
+        sensor_info = _socket_sensor_info()
+        sensor_info["data"] = {"type": SILENT_DATA_TYPE}
+        coordinator = _make_coordinator("300_400_1", sensor_info)
+
+        assert build_generic_switch_entities(coordinator, "300_400_1", sensor_info, "300_400_1") == []
 
     def test_valve_identity_yields_no_switch(self):
         sensor_info = _anchor_sensor_info()
@@ -1570,6 +1602,38 @@ class TestGenericControlCommandFailedRepairIssue:
         assert kwargs["translation_key"] == GENERIC_CONTROL_ISSUE_ID_PREFIX
         assert kwargs["translation_placeholders"]["model"] == sensor_info["model"]
         assert "code 5" in kwargs["translation_placeholders"]["error"]
+
+    def test_neither_placeholder_can_plant_a_link_in_the_card(self):
+        """Both values are unvalidated and both land in Markdown-rendered copy.
+
+        model comes from the cloud catalog and the error text can quote a
+        cloud response body, so both get the same treatment the not-reporting
+        card's placeholders get (T-15-05).
+        """
+        with patch.object(generic_control_module.ir, "async_create_issue") as create:
+            generic_control_module._create_command_failed_issue(
+                MagicMock(),
+                "[Click here](http://evil.example/x)",
+                RainPointApiError("failed: code 5, see https://evil.example/phish"),
+            )
+
+        placeholders = create.call_args.kwargs["translation_placeholders"]
+        assert set(placeholders) == {"model", "error"}
+        for value in placeholders.values():
+            assert not any(ch in value for ch in "[]()<>`|*_#")
+            assert "://" not in value
+
+    def test_a_long_error_is_capped_without_losing_its_opening(self):
+        """Uncapped, a cloud response body would swamp the card; capped at the
+        placeholder default, a real message loses its useful half."""
+        with patch.object(generic_control_module.ir, "async_create_issue") as create:
+            generic_control_module._create_command_failed_issue(
+                MagicMock(), "HWG004WRF", RainPointApiError("code 5 " + "x" * 500)
+            )
+
+        error = create.call_args.kwargs["translation_placeholders"]["error"]
+        assert len(error) == generic_control_module._ERROR_PLACEHOLDER_LIMIT
+        assert error.startswith("code 5")
 
     @pytest.mark.asyncio
     async def test_two_failures_same_model_and_code_produce_the_same_issue_id(self):

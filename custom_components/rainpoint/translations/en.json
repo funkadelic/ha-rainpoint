@@ -2,11 +2,15 @@
   "issues": {
     "push_channel_down": {
       "title": "Real-time push updates are not being received",
-      "description": "The real-time push connection to RainPoint has been down for a while, so changes from your devices may be delayed. Your devices keep updating because polling every couple of minutes is still running as a fallback. If this keeps happening, try reloading the integration, or turn push updates off and back on in the integration options."
+      "description": "The real-time push connection to RainPoint has been down for a while, so changes from your devices may be delayed.\n\nYour devices keep updating regardless: polling every couple of minutes is still running as a fallback.\n\nIf this keeps happening, try one of:\n\n- Reload the integration.\n- Turn push updates off and back on in the integration's options."
     },
     "generic_control_command_failed": {
       "title": "A generic control command failed",
-      "description": "RainPoint rejected a control command sent to {model} through generic control: {error}. Generic control uses an unverified mapping from RainPoint's product catalog rather than a tested per-model decoder, so this device's behavior is not fully proven. As far as this integration can tell, the device's state was not changed by the failed command. If this keeps happening, you can turn generic control off in the integration's options."
+      "description": "RainPoint rejected a control command sent through generic control.\n\n- **Model:** {model}\n- **Error:** {error}\n\nGeneric control uses an unverified mapping from RainPoint's product catalog rather than a tested per-model decoder, so this device's behavior is not fully proven.\n\nAs far as this integration can tell, the device's state was not changed by the failed command.\n\nIf this keeps happening, you can turn generic control off in the integration's options."
+    },
+    "device_not_reporting": {
+      "title": "A device is not reporting",
+      "description": "RainPoint lists this device on your account, but the cloud has returned no readings for it across the last {missed_polls} checks, which run a couple of minutes apart.\n\n- **Model:** {model}\n- **Address:** {address}\n- **Hub:** {hub_name}\n\nThis can happen when a device is paired over Bluetooth only, is out of range, or is switched off. The integration keeps checking and will clear this notice on its own once readings resume.\n\nIf this is a Bluetooth device, check whether it can also pair to a RainPoint hub. A Bluetooth-only device reports nothing to the cloud, so there is nothing for this integration to read; paired to a hub, the same device usually reports its readings and you will see far more of it here. Opening and closing it from Home Assistant may still be unavailable depending on the model, though that may come in a future release.\n\nA **Not Reporting** entity was added for this device at the same time as this notice. You will find it on the device's own page under Diagnostic, and its attributes carry a pre-filled report link if you believe the device should be reporting."
     }
   },
   "config": {

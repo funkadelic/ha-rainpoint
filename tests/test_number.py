@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.rainpoint.const import CONF_GENERIC_CONTROL_ENABLED, DOMAIN, MODEL_VALVE_345
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 from custom_components.rainpoint.number import (
     DURATION_DEFAULT_MINUTES,
     DURATION_MAX_MINUTES,
@@ -413,6 +414,37 @@ class TestNumberSetupEntry:
         hass = MagicMock()
         entry = MagicMock()
         entry.entry_id = "e"
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        added = MagicMock()
+        await async_setup_entry(hass, entry, added)
+
+        added.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_creates_no_number_for_a_silent_entry(self):
+        """A valve model with no status at all (raw_status={}, D-11/D-12) has no
+        zones to walk, so it produces no duration number entity."""
+        from custom_components.rainpoint.number import async_setup_entry
+
+        coord = MagicMock()
+        coord.data = {
+            "sensors": {
+                "1_2_3": {
+                    "hid": 1,
+                    "mid": 2,
+                    "addr": 3,
+                    "sub_name": "Hub",
+                    "model": "HTV245FRF",
+                    "raw_status": {},
+                    "data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
+                }
+            }
+        }
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {}
         hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
 
         added = MagicMock()

@@ -65,6 +65,7 @@ from .generic_entities import (
     _usable_port,
     has_declared_width,
 )
+from .repairs import _sanitize_placeholder
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -104,6 +105,12 @@ RUN_STATE_IDENTITY = "STA_WKSTATE"
 # rather than to a fixed position, since the sentence prefix is not part of
 # any contract this module owns.
 _RESPONSE_CODE_PATTERN = re.compile(r"code\s+(-?\d+)")
+
+# Length cap for the error text on the command-failed card. Deliberately
+# larger than _sanitize_placeholder's default: the error is the only
+# diagnostic that card carries, and 64 characters cuts a real one mid-message,
+# while an uncapped cloud response body would swamp the card.
+_ERROR_PLACEHOLDER_LIMIT = 200
 
 
 def _response_code_from_error(exc: Exception) -> str:
@@ -149,7 +156,16 @@ def _create_command_failed_issue(hass: Any, model: str | None, exc: Exception) -
             is_fixable=False,
             severity=ir.IssueSeverity.ERROR,
             translation_key=GENERIC_CONTROL_ISSUE_ID_PREFIX,
-            translation_placeholders={"model": model_label, "error": str(exc)},
+            # Both values reach a Repairs card that Home Assistant renders as
+            # Markdown, and both are unvalidated: model comes from the cloud
+            # catalog and the error text can quote a cloud response body. Same
+            # treatment as the not-reporting card. The error gets a longer cap
+            # than the placeholder default because it is the only diagnostic
+            # the card carries, and 64 characters truncates a real one.
+            translation_placeholders={
+                "model": _sanitize_placeholder(model_label),
+                "error": _sanitize_placeholder(exc, limit=_ERROR_PLACEHOLDER_LIMIT),
+            },
         )
     except Exception as issue_exc:
         _LOGGER.debug(

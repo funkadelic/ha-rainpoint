@@ -38,6 +38,37 @@ class DataUpdateCoordinator:
         self.hass = hass
         self.logger = logger
         self.config_entry = config_entry
+        self.data = None
+        self._listeners = []
+
+    def async_add_listener(self, update_callback, context=None):
+        """Register a listener and return the callable that removes it again."""
+        self._listeners.append(update_callback)
+
+        def _remove():
+            """Remove the listener registered above."""
+            if update_callback in self._listeners:
+                self._listeners.remove(update_callback)
+
+        return _remove
+
+    def async_update_listeners(self):
+        """Call every registered listener with no arguments."""
+        for update_callback in list(self._listeners):
+            update_callback()
+
+    async def async_refresh(self):
+        """Run one update cycle and notify listeners, as the real class does.
+
+        Deliberately has no retry, no last_update_success bookkeeping and no
+        ConfigEntryNotReady: a failure propagating is what a test wants.
+        """
+        self.data = await self._async_update_data()
+        self.async_update_listeners()
+
+    async def async_config_entry_first_refresh(self):
+        """Perform the first refresh of a config entry setup."""
+        await self.async_refresh()
 
 
 class UpdateFailed(Exception):

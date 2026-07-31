@@ -28,7 +28,7 @@ This integration supports RainPoint Smart+ device families, including:
 
 The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B** Bluetooth valve are the maintainer's own hardware and are the models tested against real devices. Other models are supported opportunistically from captured payloads.
 
-The **HTV210B** only reports to the cloud while paired through a hub; used over Bluetooth alone it is invisible to the cloud and the integration cannot see it at all. Its zone sensors are read-only: opening and closing from the app works over the cloud, but the exact command the integration would need to send is still being verified, so no valve entity is created rather than one that might accept a command the hardware never acts on.
+The **HTV210B** only reports to the cloud while paired through a hub; used over Bluetooth alone, RainPoint still lists it under the hub but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. Its zone sensors are read-only when it is reporting: opening and closing from the app works over the cloud, but the exact command the integration would need to send is still being verified, so no valve entity is created rather than one that might accept a command the hardware never acts on.
 
 Every model listed above has a decoder written against a real payload. A model that is absent is not necessarily unusable: the opt-in generic sensors described under [Configuration](#configuration) can often surface readings for it from the product catalog, clearly labeled unverified.
 
@@ -38,12 +38,18 @@ All devices communicate via the RainPoint cloud backend. There is no local LAN p
 
 ## My device isn't listed
 
-Unsupported models don't break anything: the integration keeps polling, marks the device as `unknown`, and adds a disabled-by-default **Raw Payload** diagnostic sensor holding its raw data. It also raises a Home Assistant notification with a one-click link that opens a **New device support** report pre-filled with the model and payload.
+There are two different ways a device can look unsupported, and each produces a different surface.
+
+**A device that reports a payload the integration cannot decode.** This doesn't break anything: the integration keeps polling, marks the device as `unknown`, and adds a disabled-by-default **Raw Payload** diagnostic sensor holding its raw data. It also raises a Home Assistant notification with a one-click link that opens a **New device support** report pre-filled with the model and payload.
+
+**A device RainPoint lists on the hub but that returns no readings at all.** This is different: there is no payload, so there is no Raw Payload sensor to hold one. Instead, Home Assistant raises a **Settings → Repairs** issue naming the device, and the device gets a single **Not Reporting** diagnostic entity whose state says whether it has never reported or last reported at a given time. That entity's attributes carry the same pre-filled report link, with the payload field stating plainly that the device returns no status. This commonly means the device is paired over Bluetooth only, out of range, or switched off. The integration clears the Repairs issue on its own once readings resume; the Not Reporting entity stays on the device and simply stops reporting a state. The report is still worth filing here: the absence of a payload is itself the finding.
+
+Neither surface is instant. The integration waits until a device has been missing from three consecutive successful checks before treating it as not reporting, which is roughly four to six minutes at the default two-minute polling interval. A check that failed because the hub itself could not be reached does not count against the device, so a hub going offline does not make its healthy children look silent. Once that threshold is crossed, both surfaces appear together in the session that is already running: the Repairs issue is raised and the Not Reporting entity is added at the same point, so a device that goes quiet while Home Assistant is running becomes visible with no further action from you.
 
 To get your device added:
 
-1. Open a [New device support issue](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) (the notification link pre-fills the model and payload for you).
-2. Include raw payloads in a few known states (valve closed vs open, a sensor at a known reading). One capture shows the byte layout; different states reveal what each byte means. See [`DEBUG_VALVE_PAYLOAD.md`](DEBUG_VALVE_PAYLOAD.md) for how to capture.
+1. Open a [New device support issue](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) (the notification link, or the Not Reporting entity's report link, pre-fills the model and whatever payload is available for you).
+2. Include raw payloads in a few known states (valve closed vs open, a sensor at a known reading). One capture shows the byte layout; different states reveal what each byte means. See [`DEBUG_VALVE_PAYLOAD.md`](DEBUG_VALVE_PAYLOAD.md) for how to capture. A device that never reports has no payload to capture; describe what you see in the RainPoint app instead.
 
 ---
 
@@ -98,7 +104,7 @@ You can still reach every device and zone the original account can. Invited memb
 
 For each device the coordinator discovers, the integration creates:
 
-- **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API.
+- **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API. A device that returns no readings at all gets a single **Not Reporting** diagnostic entity instead, and no Raw Payload sensor, because there is no payload to show.
 - **Valve entities**: one per irrigation zone, for the valve hub models listed in the table above. The HTV210B is not one of them: its zone state is read-only, as described under [Supported devices](#supported-devices).
 - **Number entities**: one per zone for configuring zone run duration (1–60 minutes), on those same valve hub models.
 - **Hub diagnostic sensors**: RSSI, battery, firmware version, last-updated timestamp.

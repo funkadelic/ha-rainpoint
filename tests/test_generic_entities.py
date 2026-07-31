@@ -1080,6 +1080,39 @@ class TestCatalogEligibilityIsPinned:
         assert not [model for model, _code in self._sweep() if is_hand_written_model(model)]
 
 
+class TestSilentEntryRejectedByGenericSensorGate:
+    """D-10: a status-less sub-device must never become eligible for the opt-in
+    generic sensor path, closing the T-15-01 mitigation with a test against the
+    real gate function rather than a proxy.
+    """
+
+    # HWG004WRF/34 is a real catalog variant the sensor gate admits (see
+    # TestCatalogEligibilityIsPinned.EXPECTED above), so a rejection here proves
+    # the type-string gate is what rejects the entry rather than an unrelated
+    # gate (catalog lookup, hand-written-model check) failing first.
+    _MODEL = "HWG004WRF"
+    _MODEL_CODE = 34
+
+    def test_silent_data_type_is_not_the_unknown_admission_string(self):
+        """A future refactor collapsing the two strings must fail loudly here."""
+        from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+
+        assert SILENT_DATA_TYPE != "unknown"
+
+    def test_build_generic_entities_returns_empty_for_a_silent_entry(self):
+        """The trust boundary: a silent entry must never reach the generic path."""
+        from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+
+        sensor_info = make_sensor_entry(
+            hid=100, mid=200, addr=1, model=self._MODEL, sub_name="Outlet 1", data={"type": SILENT_DATA_TYPE}
+        )
+        sensor_info["model_code"] = self._MODEL_CODE
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={"100_200_1": sensor_info})
+
+        assert build_generic_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
+
+
 class TestCuratedTableIsReachable:
     """Every curated identity must be one the decode path can actually produce.
 
@@ -1448,6 +1481,15 @@ class TestCountGenericEligibleDevices:
     def test_devices_with_a_working_decoder_are_not_counted_as_unsupported(self):
         """A decoded device is outside the generic path, so it is not in the denominator."""
         data = {"sensors": {"a": self._entry("HTV245FRF", decoded_type="valve")}}
+
+        assert count_generic_eligible_devices(data) == (0, 0)
+
+    def test_a_silent_device_is_not_counted_as_unsupported(self):
+        """A device with no status at all is not an unsupported model (D-10/D-12);
+        counting it here would misstate the toggle's real effect in the options copy."""
+        from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+
+        data = {"sensors": {"a": self._entry("HTV210B", decoded_type=SILENT_DATA_TYPE)}}
 
         assert count_generic_eligible_devices(data) == (0, 0)
 

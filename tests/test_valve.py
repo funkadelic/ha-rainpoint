@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_145, MODEL_VALVE_245, MODEL_VALVE_345
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
     RainPointValveEntity,
@@ -97,6 +98,17 @@ class TestValveProperties:
         """No data in sensors should give available == False."""
         valve = _make_valve()
         valve.coordinator.data["sensors"]["100_200_1"]["data"] = None
+        assert valve.available is False
+
+    def test_unavailable_when_sensor_entry_turns_silent(self):
+        """A valve already bound to a key that goes silent (D-11/D-12) reports
+        unavailable rather than raising: raw_status={} carries no hub_online."""
+        valve = _make_valve()
+        valve.coordinator.data["sensors"]["100_200_1"]["raw_status"] = {}
+        valve.coordinator.data["sensors"]["100_200_1"]["data"] = {
+            "type": SILENT_DATA_TYPE,
+            "silent_state": "stopped_reporting",
+        }
         assert valve.available is False
 
     def test_extra_state_attributes_includes_duration(self):
@@ -539,6 +551,37 @@ class TestValveSetupEntry:
         assert not async_add_entities.called
 
     @pytest.mark.asyncio
+    async def test_setup_entry_creates_no_valve_for_a_silent_entry(self):
+        """A valve model with no status at all (raw_status={}, D-11/D-12) has no
+        zones to walk, so it produces no valve entity rather than raising."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        sensors = {
+            "10_20_1": {
+                "hid": 10,
+                "mid": 20,
+                "addr": 1,
+                "sub_name": "Hub A",
+                "model": MODEL_VALVE_245,
+                "raw_status": {},
+                "data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
+            }
+        }
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {"sensors": sensors}
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.options = {}
+        hass.data = {DOMAIN: {"e1": {"coordinator": mock_coordinator}}}
+
+        async_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert not async_add_entities.called
+
+    @pytest.mark.asyncio
     async def test_setup_entry_skips_non_dict_sensor_records(self):
         """A malformed sub-device record must not abort setup and drop valid valve entities."""
         from custom_components.rainpoint.valve import async_setup_entry
@@ -753,3 +796,68 @@ class TestValveZoneDataEdges:
         valve = _make_valve()
         valve._sensor_key = "missing"
         assert valve.available is False
+
+
+class TestValveEntitiesAppearWithinTheSession:
+    """A valve reporting no zones at setup still gains them later.
+
+    Drives the real order rather than injecting a ready-made snapshot:
+    construct, first refresh, platform setup, then further refreshes. The
+    entity set is otherwise frozen at the first refresh, so a valve that is
+    silent or zone-less when the platform sets up would never gain a control
+    entity in that session no matter how long it ran.
+    """
+
+    @staticmethod
+    def _hub(zones_reported):
+        """A valve hub record whose child reports zones only when asked to."""
+        status = "11#17E1D70018DC0119D8001AD8001D201E20" if zones_reported else ""
+        return [{"mid": 20, "subDeviceStatus": [{"id": "D01", "value": status, "time": 1785420002247}]}]
+
+    @pytest.mark.asyncio
+    async def test_zones_arriving_after_setup_create_their_valve_entities(self):
+        """The listener is what turns a later poll into a control entity."""
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 20,
+                "name": "Hub A",
+                "deviceName": "d",
+                "productKey": "pk",
+                "homeName": "H",
+                "subDevices": [{"addr": 1, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}],
+            }
+        ]
+        client.get_multiple_device_status.return_value = self._hub(zones_reported=False)
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+        await coordinator.async_config_entry_first_refresh()
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert captured == []
+        assert coordinator._listeners
+
+        client.get_multiple_device_status.return_value = self._hub(zones_reported=True)
+        await coordinator.async_refresh()
+
+        assert [e._zone_num for e in captured] == [1, 2]
+
+        # Steady state must not offer the same zones a second time.
+        await coordinator.async_refresh()
+        assert [e._zone_num for e in captured] == [1, 2]
