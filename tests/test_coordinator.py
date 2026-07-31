@@ -1318,6 +1318,35 @@ class TestHubConnectivity:
         assert _coord_module.hub_connected_flag(None) is None
         assert _coord_module.hub_connected_flag({}) is None
 
+    def test_hub_connectivity_record_returns_the_record_for_mid(self):
+        """A present record is handed back unchanged."""
+        record = {"state": _coord_module.HUB_CONNECTED, "changed_at": None, "state_raw": None}
+        coordinator = types.SimpleNamespace(data={"hub_connectivity": {7: record}})
+        assert _coord_module.hub_connectivity_record(coordinator, 7) is record
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            None,
+            {},
+            {"hub_connectivity": None},
+            {"hub_connectivity": {}},
+            {"hub_connectivity": {9: {"state": _coord_module.HUB_CONNECTED}}},
+            {"hub_connectivity": {7: None}},
+        ],
+        ids=["no-data", "no-key", "none-under-key", "empty-map", "other-mid", "none-record"],
+    )
+    def test_hub_connectivity_record_degrades_to_empty(self, data):
+        """Every partial snapshot yields {}, which hub_connected_flag reads as unknown.
+
+        The none-under-key case is the one a plain .get("hub_connectivity", {})
+        would not catch: the default only fires on a missing key, not on a key
+        holding None, so that lookup would raise on the following .get(mid).
+        """
+        coordinator = types.SimpleNamespace(data=data)
+        assert _coord_module.hub_connectivity_record(coordinator, 7) == {}
+        assert _coord_module.hub_connected_flag(_coord_module.hub_connectivity_record(coordinator, 7)) is None
+
 
 class TestHubConnectivityIntegration:
     """hub_connectivity on the coordinator's returned dict (fourth top-level key)."""

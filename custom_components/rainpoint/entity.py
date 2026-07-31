@@ -23,7 +23,12 @@ from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator, hub_connected_flag
+from .coordinator import (
+    SILENT_DATA_TYPE,
+    RainPointCoordinator,
+    hub_connected_flag,
+    hub_connectivity_record,
+)
 from .device import build_sub_device_info
 
 
@@ -130,9 +135,7 @@ def sub_device_attributes(coordinator: RainPointCoordinator, sensor_key: str) ->
         attrs["device_timestamp"] = data["server_timestamp"]
         attrs["timestamp_source"] = data.get("timestamp_source", "server")
 
-    mid = info.get("mid")
-    hub_connectivity = (coordinator.data or {}).get("hub_connectivity", {})
-    attrs["hub_connected"] = hub_connected_flag(hub_connectivity.get(mid))
+    attrs["hub_connected"] = hub_connected_flag(hub_connectivity_record(coordinator, info.get("mid")))
 
     return attrs
 

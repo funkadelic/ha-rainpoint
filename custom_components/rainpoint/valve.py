@@ -25,7 +25,7 @@ from .const import (
     MODEL_VALVE_405,
     VALVE_MODELS,
 )
-from .coordinator import RainPointCoordinator, hub_connected_flag
+from .coordinator import RainPointCoordinator, hub_connected_flag, hub_connectivity_record
 from .device import build_sub_device_info
 from .entity import LateEntityAdder, sub_device_attributes
 
@@ -165,9 +165,7 @@ class RainPointValveEntity(CoordinatorEntity, ValveEntity):
         # connectivity is unknown (absent, or no hub_connectivity record at
         # all) and must leave availability alone; only an explicit False
         # means the cloud reported this hub as disconnected.
-        mid = self._sensor_info.get("mid")
-        hub_connectivity = (self.coordinator.data or {}).get("hub_connectivity", {})
-        cloud_connected = hub_connected_flag(hub_connectivity.get(mid))
+        cloud_connected = hub_connected_flag(hub_connectivity_record(self.coordinator, self._sensor_info.get("mid")))
         return bool(decoded.get("hub_online", False)) and cloud_connected is not False
 
     @property

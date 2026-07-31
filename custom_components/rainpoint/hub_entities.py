@@ -24,7 +24,13 @@ from .const import (
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
     PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
 )
-from .coordinator import RainPointCoordinator, first_hub_record, hub_connected_flag, is_hub_record
+from .coordinator import (
+    RainPointCoordinator,
+    first_hub_record,
+    hub_connected_flag,
+    hub_connectivity_record,
+    is_hub_record,
+)
 from .device import RainPointHubDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -201,10 +207,10 @@ class RainPointHubConnectivityBinarySensor(CoordinatorEntity, BinarySensorEntity
     def _record(self) -> dict:
         """Return this hub's connectivity record, or {} when none exists yet.
 
-        Tolerates a coordinator snapshot carrying no "hub_connectivity" key at
-        all, which is what every pre-existing test fake in this suite supplies.
+        The partial-snapshot tolerance lives in hub_connectivity_record, shared
+        with the sub-device attributes and valve availability.
         """
-        return (self.coordinator.data or {}).get("hub_connectivity", {}).get(self._hub_info.get("mid")) or {}
+        return hub_connectivity_record(self.coordinator, self._hub_info.get("mid"))
 
     @property
     def is_on(self) -> bool | None:

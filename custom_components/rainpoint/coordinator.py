@@ -440,6 +440,22 @@ def _read_hub_connectivity(status: dict) -> dict:
     }
 
 
+def hub_connectivity_record(coordinator, mid) -> dict:
+    """Return one hub's connectivity record from a coordinator snapshot, or {}.
+
+    The lookup lives here alone so the three surfaces that read it -- the hub
+    connectivity binary sensor, the sub-device attributes, and valve
+    availability -- cannot drift apart in how they tolerate a partial
+    snapshot. Every step degrades to {} rather than raising: no data at all,
+    no "hub_connectivity" key (what every pre-existing test fake in this
+    suite supplies), an explicit None stored under that key, and no record
+    for this mid. {} is what hub_connected_flag maps to "we do not know",
+    so an absent record never reads as disconnected.
+    """
+    connectivity = (coordinator.data or {}).get("hub_connectivity") or {}
+    return connectivity.get(mid) or {}
+
+
 def hub_connected_flag(record: dict | None) -> bool | None:
     """Map a hub_connectivity record to True / False / None.
 
