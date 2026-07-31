@@ -164,6 +164,27 @@ class TestRainPointHubConnectivityBinarySensor:
         entity = self._make_with_record(200, {"state": "unknown", "changed_at": None, "state_raw": None})
         assert entity.is_on is None
 
+    def test_icon_tracks_connected_state(self):
+        """A connected hub must not show a cloud-offline glyph.
+
+        Pins the reason this is an icon property rather than a class-level
+        _attr_icon: a fixed attribute overrides the CONNECTIVITY device
+        class's own on/off pair, so the one entity whose job is an
+        at-a-glance health check would read as a false alarm while healthy.
+        """
+        entity = self._make_with_record(200, {"state": "connected", "changed_at": None, "state_raw": None})
+        assert entity.icon == "mdi:cloud-check-variant"
+
+    def test_icon_tracks_disconnected_state(self):
+        """A disconnected hub shows the offline glyph."""
+        entity = self._make_with_record(200, {"state": "disconnected", "changed_at": None, "state_raw": None})
+        assert entity.icon == "mdi:cloud-off-outline"
+
+    def test_icon_falls_back_to_offline_glyph_when_unknown(self):
+        """Unknown shares the offline glyph rather than claiming a healthy cloud."""
+        entity = self._make_with_record(200, {"state": "unknown", "changed_at": None, "state_raw": None})
+        assert entity.icon == "mdi:cloud-off-outline"
+
     def test_is_on_none_when_no_record_for_mid(self):
         """A coordinator snapshot with a hub_connectivity key that omits this mid."""
         coord = _make_coordinator()

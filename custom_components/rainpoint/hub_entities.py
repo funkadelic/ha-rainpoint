@@ -178,7 +178,6 @@ class RainPointHubConnectivityBinarySensor(CoordinatorEntity, BinarySensorEntity
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_should_poll = False
-    _attr_icon = "mdi:cloud-off-outline"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict) -> None:
         """Build the connectivity entity with a per-hub unique id."""
@@ -204,6 +203,20 @@ class RainPointHubConnectivityBinarySensor(CoordinatorEntity, BinarySensorEntity
     def is_on(self) -> bool | None:
         """Return True/False/None through the shared tri-state mapping."""
         return hub_connected_flag(self._record)
+
+    @property
+    def icon(self) -> str:
+        """Return an icon that tracks the state rather than fixing one glyph.
+
+        A class-level _attr_icon would override the CONNECTIVITY device
+        class's own on/off pair, leaving a connected hub showing a
+        cloud-offline glyph, which reads as a false alarm on the one entity
+        whose whole job is an at-a-glance health check. Unknown shares the
+        offline glyph deliberately: is_on is None only when the cloud has not
+        said either way, and claiming a healthy cloud there would overstate
+        what is known.
+        """
+        return "mdi:cloud-check-variant" if self.is_on else "mdi:cloud-off-outline"
 
     @property
     def extra_state_attributes(self) -> dict:
