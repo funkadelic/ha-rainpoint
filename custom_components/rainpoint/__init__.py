@@ -5,6 +5,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -237,6 +238,97 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
             _LOGGER.debug("Failed to remove stale generic entity %s: %s", row.entity_id, exc)
 
 
+def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Clear a stale via_device_id on an already-registered sub-device.
+
+    Exists because dropping a DeviceInfo's via_device key cannot, on its own,
+    correct a device that is already in the registry: Home Assistant resolves
+    both an omitted via_device and an explicit via_device=None to UNDEFINED
+    when building a DeviceInfo, and its own device-update path skips every
+    UNDEFINED value. A registry row that already carries a via_device_id
+    therefore keeps it forever unless something writes an explicit None over
+    it -- only DeviceRegistry.async_update_device, called through the object
+    dr.async_get(hass) returns, with via_device_id passed as None explicitly,
+    does that.
+
+    Only the clearing direction needs a sweep. The opposite direction, a
+    device that should gain a link it does not have, is already handled by
+    the ordinary DeviceInfo path: a real tuple value is not UNDEFINED, so
+    Home Assistant's own device-update path writes it during the platform
+    setup that follows this call. Nothing here ever writes a via_device_id
+    other than None.
+
+    Idempotent and run on every setup, not gated behind a config-entry
+    version bump or an async_migrate_entry path: a version-boundary migration
+    only ever runs once, so it could not self-heal if a later cloud re-key
+    mis-parented a device again, and this sweep can, because it re-evaluates
+    every time.
+
+    Scoped to devices present in the current poll on purpose. A registry row
+    whose sensor key the current poll does not mention is left alone rather
+    than swept: widening this to every registry row regardless of the
+    current poll would treat a device absent for a single poll as
+    parentless, deciding by side effect a question this phase deliberately
+    leaves open. This scope also makes a hub device row unreachable without
+    any explicit exclusion: a hub's identifier carries no addr segment and is
+    therefore never a sensor key, so the lookup below simply never finds it.
+
+    Synchronous and never raises, for the same reasons
+    _remove_stale_generic_entities is: the registry fetch, the coordinator
+    data read, and each row's decision are guarded independently, so a
+    registry or payload problem can never abort config-entry setup or leave
+    the remaining rows unswept.
+    """
+    try:
+        registry = dr.async_get(hass)
+        rows = list(dr.async_entries_for_config_entry(registry, entry.entry_id))
+    except Exception as exc:
+        _LOGGER.debug("Device registry lookup failed; skipping sub-device parenting reconcile: %s", exc)
+        return
+
+    # Degrades to no sensors rather than aborting the sweep. This is the
+    # opposite degradation direction from the generic-entity sweep: there,
+    # empty data must still let the toggle-off path remove rows; here, the
+    # only mutation available is destructive, so empty data must mean "clear
+    # nothing".
+    try:
+        sensors = (coordinator.data or {}).get("sensors", {}) if coordinator is not None else {}
+    except Exception as exc:
+        _LOGGER.debug("Coordinator data unreadable; clearing nothing this setup: %s", exc)
+        sensors = {}
+
+    for row in rows:
+        try:
+            via_device_id = getattr(row, "via_device_id", None)
+            if not via_device_id:
+                # Nothing to clear means no call, which is what makes a
+                # repeat sweep a genuine no-op rather than a no-op-shaped
+                # rewrite.
+                continue
+
+            candidate_key = None
+            for identifier in row.identifiers:
+                if isinstance(identifier, tuple) and len(identifier) == 2 and identifier[0] == DOMAIN:
+                    candidate_key = identifier[1]
+                    break
+            if candidate_key is None:
+                continue
+
+            if candidate_key not in sensors:
+                # Not in this poll: under D-06 this means leave it alone.
+                continue
+            record = sensors[candidate_key]
+
+            if record.get("hub_paired", True):
+                continue
+
+            registry.async_update_device(row.id, via_device_id=None)
+            _LOGGER.debug("Cleared stale via_device_id on device %s (sensor key %s)", row.id, candidate_key)
+        except Exception as exc:
+            _LOGGER.debug("Could not reconcile device registry row %s: %s", getattr(row, "id", None), exc)
+            continue
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up RainPoint from a config entry."""
     session = async_get_clientsession(hass)
@@ -280,11 +372,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry_store["coordinator"] = coordinator
 
-    # Sweep before any platform is forwarded, so no platform is adding
-    # entities while a removal runs, and after the coordinator's first
-    # refresh, so the sensor records the graduation branch reads are
+    # Both passes below run before any platform is forwarded, so no platform
+    # is adding entities while a registry is being mutated, and after the
+    # coordinator's first refresh, so the sensor records they read are
     # already populated.
     _remove_stale_generic_entities(hass, entry, coordinator)
+    _reconcile_sub_device_parents(hass, entry, coordinator)
 
     # An options change (e.g. toggling push) reloads through the existing
     # unload->setup path, no bespoke start/stop code path needed.
