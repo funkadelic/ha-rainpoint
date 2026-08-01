@@ -132,7 +132,7 @@ Everything above clears on its own after the hub reconnects: the Repairs notice 
 
 In addition to the 120-second polling that always runs, the integration can optionally surface device state changes in near real time over an MQTT push connection. Push is additive, opt-in, and off by default, and polling keeps running as the fallback no matter what, so nothing breaks if you leave push off or the connection drops.
 
-Push carries two kinds of update: new readings from individual devices, and a hub going offline or coming back. The second is what makes [a hub outage](#when-a-hub-goes-offline) visible almost immediately rather than up to two minutes later.
+Push carries two kinds of update: new readings from individual devices, and a hub going offline or coming back. The second is what makes [a hub outage](#when-a-hub-goes-offline) visible almost immediately rather than up to two minutes later. Note this speeds up the Cloud Connection entity and the recovery side, not the Repairs notice itself: that notice still waits for three consecutive checks before it appears, deliberately, so a brief blip doesn't flap a card on and off.
 
 ### Enabling or disabling push
 

@@ -208,9 +208,11 @@ def _parse_hub_frame(payload: bytes) -> _HubFrame | None:
     valid JSON, so a single-outer-try transcription of that helper's shape
     would raise ValueError on the very first statement and return None for the
     exact frame this helper exists to read -- a silent, total feature kill.
-    The JSON probe below is therefore its own inner try, scoped to nothing but
-    the json.loads call, so a non-JSON payload falls through to the bare
-    candidate instead of unwinding the whole function.
+    The JSON probe is therefore scoped to nothing but the json.loads call, so
+    a non-JSON payload falls through to the bare candidate instead of
+    unwinding the whole function. That probe now lives in
+    _resolve_hub_frame_candidate, which owns the try; this function no longer
+    contains one.
 
     Both the bare and JSON-wrapped routes are handled and neither is dropped
     as redundant: the 2026-07-31 capture is recorded as bare pipe-delimited
@@ -271,15 +273,24 @@ _SHAPE_KEY_MAX_CLASSIFIED_SECTIONS = 8
 def _hub_frame_mid_matches(mid_tail: str, own: str) -> bool:
     """Cross-check a hub frame's section-1 tail against the client's own mid.
 
-    A suffix test, and its strength is set by the width guard rather than by
-    the operator. At the only observed mid width, `own` is exactly as long as
-    the frame's fixed-width tail slot, so the suffix test is an exact
-    slot comparison: neither a shorter nor a longer neighbouring mid can
-    satisfy it. At any other width no capture exists to pin the slot, so the
-    same test degrades to a proper-suffix match. That residual is accepted
-    and logged rather than dropped: rejecting every frame of an unobserved
-    width would silently disable the feature for it, which is worse, and the
+    A suffix test, unconditionally. Read the width check below as selecting a
+    log line, not as gating the comparison: both paths run the same test.
+
+    What the test does and does not buy, stated precisely, because the
+    comment this replaced overstated it. When `own` is the observed width and
+    the frame's own mid is that width too, the suffix test is exactly a
+    fixed-width slot comparison, so no *other* mid of that same width can
+    satisfy it. It does NOT rule out a mid of some other width: with `own`
+    "236547", a frame from a hub whose mid is "1236547" ends in "236547" and
+    is accepted, and so is one whose mid is "36547" behind an account id
+    ending in "2". Both were equally true of the fixed-width slice this
+    replaced, which is why the swap is a no-op; neither is a regression.
+
+    That residual is accepted rather than engineered away: no capture has
+    produced a mid of any width but the observed one, rejecting every frame
+    of an unobserved width would silently disable the feature for it, and the
     observer topic is per-hub so cross-delivery is hypothetical (T-17-02).
+    The unobserved-width case is logged so it is at least visible.
 
     Defense in depth against a broker that ever cross-delivers, never a
     source of the mid: the mid handed to the coordinator is always the

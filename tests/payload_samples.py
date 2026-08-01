@@ -302,7 +302,10 @@ SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO = "2026-07-31T18:37:42.039000+00:00"
 # it fails two clauses at once (three sections, and an empty section 2 rather
 # than a literal 0/1); its section-1 tail is 182509, the *hid*, not a mid; and
 # its account slot is 16822204, proving that field is not fixed across frames.
-# A parser that treated an empty section 2 as falsy, or accepted a section
-# count other than 4, would read this as "hub 182509 disconnected" against a
-# real record -- exactly the silent misread the rule prevents.
+# No single relaxed clause misreads it: the section-count check and the
+# 0/1 check each reject it on their own, so both would have to go, and the
+# mid cross-check is a third independent gate behind them (the tail is
+# 182509, so a client whose mid is 236547 drops it regardless). It would take
+# all three giving way to read this as "hub 182509 disconnected" against a
+# real record, which is the point -- the layers are why that misread is hard.
 SAMPLE_NON_HUB_PIPE_FRAME = "#P260801054717000016822204182509||113060569563#"

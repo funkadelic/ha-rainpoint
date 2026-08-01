@@ -606,9 +606,9 @@ class TestHubFrameParsing:
         known-good frame, each failing one clause in isolation. This one is
         real traffic and fails two at once (three sections, and an empty
         section 2 rather than a literal 0/1), which is how malformed input
-        actually arrives. Its section-1 tail is 182509 -- the hid, not a mid
-        -- so a parser that accepted it would write a disconnect against a
-        record that exists.
+        actually arrives. Its section-1 tail is 182509, the hid rather than a
+        mid, so the mid cross-check would drop it as well even if both parse
+        clauses were relaxed: three independent layers, not one.
         """
         assert mqtt_module._parse_hub_frame(SAMPLE_NON_HUB_PIPE_FRAME.encode()) is None
 
