@@ -262,3 +262,40 @@ class TestSubDeviceParentingRealTimeline:
 
         assert by_key["100_200_1"].device_info["via_device"] == (DOMAIN, "hub_100")
         assert "via_device" not in by_key["100_201_1"].device_info
+
+    @pytest.mark.asyncio
+    async def test_parenting_is_a_per_record_property_not_a_per_home_one(self):
+        """Guards the assumption-delta decision this plan is built on: within
+        a single home, the parenting outcome is a property of the top-level
+        record that carries a sub-device, not of the home itself. Asserts
+        that two distinct top-level records in one home, off a single poll,
+        produce two distinct parenting outcomes, and that their sub-device
+        identifiers differ only by the mid segment, so no unique_id or device
+        identifier shape changed (SC 3). This goes red the moment a future
+        change collapses the per-record question back onto the per-home key.
+
+        Debt this test deliberately does not assert on: hub *device* identity
+        and seven hub entity unique_ids remain keyed on the home id (hid),
+        not the carrying record's mid. A second real hub in one home would
+        therefore produce duplicate unique_ids, which Home Assistant rejects,
+        dropping the second hub's entities rather than merely mis-grouping
+        them. The re-key that would fix this is deliberately a separate
+        phase, because no second hub exists on maintainer hardware to verify
+        a fix against, and an assertion on hub unique_ids here would go red
+        on the very change that fixes them.
+        """
+        by_key = await self._build()
+
+        linked = by_key["100_200_1"].device_info
+        parentless = by_key["100_201_1"].device_info
+
+        assert "via_device" in linked
+        assert "via_device" not in parentless
+
+        linked_id = next(t for t in linked["identifiers"] if t[0] == DOMAIN)
+        parentless_id = next(t for t in parentless["identifiers"] if t[0] == DOMAIN)
+        linked_hid, linked_mid, linked_addr = linked_id[1].split("_")
+        parentless_hid, parentless_mid, parentless_addr = parentless_id[1].split("_")
+        assert linked_hid == parentless_hid
+        assert linked_addr == parentless_addr
+        assert linked_mid != parentless_mid
