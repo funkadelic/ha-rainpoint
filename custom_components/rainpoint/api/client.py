@@ -497,7 +497,7 @@ class RainPointClient:
             product_key: Hub productKey.
             port: Zone/port number (1-based).
             mode: 1 = open, 0 = close.
-            duration: Run time in seconds. Pass 0 when mode=0 — the device ignores
+            duration: Run time in seconds. Pass 0 when mode=0: the device ignores
                 this field on close commands, but it must still be present in the request.
 
         Returns:
@@ -531,7 +531,7 @@ class RainPointClient:
 
         code = data.get("code")
         if code == 4:
-            # Code 4 = device already in requested state or transitioning — not fatal
+            # Code 4 = device already in requested state or transitioning, not fatal
             _LOGGER.info("controlWorkMode: device already in requested state (code 4, idempotent): %s", data)
         elif code != 0:
             self._maybe_invalidate_token(code, request_token)

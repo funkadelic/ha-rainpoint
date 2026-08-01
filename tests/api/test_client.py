@@ -618,7 +618,7 @@ class TestTokenManagement:
         """Token is invalid when within 5-minute buffer of expiry."""
         client = _make_client()
         client._token = "tok"
-        # 3 minutes from now — within the 5-min buffer
+        # 3 minutes from now, within the 5-min buffer
         client._token_expires_at = datetime.now(UTC) + timedelta(minutes=3)
         assert client._token_valid() is False
 

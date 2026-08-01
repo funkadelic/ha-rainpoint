@@ -19,7 +19,7 @@ class TestRainPointHubDevice:
             "hardwareVersion": "1.0",
             "mac": "AA:BB:CC:DD:EE:FF",
         }
-        # RainPointHubDevice inherits from Entity stub — use __new__ to bypass
+        # RainPointHubDevice inherits from Entity stub, so use __new__ to bypass
         # any super().__init__ that might call into MagicMock internals.
         hub = RainPointHubDevice.__new__(RainPointHubDevice)
         RainPointHubDevice.__init__(hub, hub_info)

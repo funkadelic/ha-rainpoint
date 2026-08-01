@@ -21,7 +21,7 @@ import pytest
 # Solution: extract the real coroutine function from the class dict and call it
 # with a plain SimpleNamespace as `self`.  This is safe because
 # _async_update_data only uses: self._client, self._hids,
-# self._notified_unknown_models, self.hass, and self.logger — all attributes we
+# self._notified_unknown_models, self.hass, and self.logger: all attributes we
 # can set on a SimpleNamespace.
 # ---------------------------------------------------------------------------
 import custom_components.rainpoint.coordinator as _coord_module

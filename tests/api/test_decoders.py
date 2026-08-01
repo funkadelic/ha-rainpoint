@@ -591,7 +591,7 @@ class TestHtv213DpMapEdgeCases:
 
 
 class TestDecodeMoistureFull:
-    """Tests for decode_moisture_full (HCS021FRF) — hex and ASCII paths."""
+    """Tests for decode_moisture_full (HCS021FRF): hex and ASCII paths."""
 
     def test_hex_payload_fields(self):
         """Hex payload fields."""
@@ -623,7 +623,7 @@ class TestDecodeMoistureFull:
 
 
 class TestDecodeHws019wrfV2:
-    """Tests for decode_hws019wrf_v2 — CSV/semicolon payload."""
+    """Tests for decode_hws019wrf_v2: CSV/semicolon payload."""
 
     def test_readings_parsed(self):
         """Readings parsed."""
@@ -796,7 +796,7 @@ class TestBasicDecoders:
 
 
 class TestDecodeUnknown:
-    """Tests for decode_unknown — the catch-all fallback."""
+    """Tests for decode_unknown: the catch-all fallback."""
 
     def test_valid_payload(self):
         """Valid payload."""

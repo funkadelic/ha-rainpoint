@@ -20,7 +20,7 @@ def _make_stub(name: str) -> ModuleType:
 
 
 # ---------------------------------------------------------------------------
-# Real stubs for update_coordinator — must be real classes so that
+# Real stubs for update_coordinator: must be real classes so that
 # RainPointCoordinator can inherit from DataUpdateCoordinator and be
 # instantiated as a normal Python object.
 # ---------------------------------------------------------------------------
@@ -186,7 +186,7 @@ _countries_stub.COUNTRIES = _AllCountries()
 # Solution: Entity, CoordinatorEntity, and RestoreEntity all share
 # _HABaseEntity as root.  Platform entity types (ValveEntity, SensorEntity,
 # NumberEntity, SelectEntity, SwitchEntity) are FLAT classes that inherit
-# directly from object — no shared root with Entity/CoordinatorEntity.
+# directly from object, no shared root with Entity/CoordinatorEntity.
 # This lets Python resolve any multi-inheritance combo without deadlock.
 # ---------------------------------------------------------------------------
 
@@ -232,7 +232,7 @@ class _RestoreEntity:
         return None
 
 
-# Platform entity base types — FLAT classes (object root only).
+# Platform entity base types: FLAT classes (object root only).
 # They must NOT share _HABaseEntity as a root because device.py's
 # RainPointHubDevice inherits Entity (= _HABaseEntity), and combining
 # (CoordinatorEntity→_HABaseEntity, PlatformType→_HABaseEntity,
@@ -338,7 +338,7 @@ class _HomeAssistantError(Exception):
 sys.modules["homeassistant.exceptions"].HomeAssistantError = _HomeAssistantError
 
 
-# EntityCategory is accessed as EntityCategory.DIAGNOSTIC / .CONFIG — use a simple namespace.
+# EntityCategory is accessed as EntityCategory.DIAGNOSTIC / .CONFIG: use a simple namespace.
 class _EntityCategory:
     """_EntityCategory."""
 
@@ -407,4 +407,4 @@ def _identity_callback(func):
 
 sys.modules["homeassistant.core"].callback = _identity_callback
 
-import tests.helpers  # noqa: E402, F401 — ensures helpers are importable in tests
+import tests.helpers  # noqa: E402, F401 (ensures helpers are importable in tests)
