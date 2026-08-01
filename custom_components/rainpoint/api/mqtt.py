@@ -331,9 +331,12 @@ def _section_class(section: str) -> str:
 def _shape_key(payload: bytes) -> str:
     """Classify a payload's structural shape for D-07's one-shot-per-shape log.
 
-    Built from the total pipe-delimited section count plus a per-section
-    class letter for at most the first _SHAPE_KEY_MAX_CLASSIFIED_SECTIONS
-    sections. Classification keeps cardinality bounded by construction (a
+    Built from the pipe-delimited section count of the first
+    _SHAPE_KEY_PREFIX_BYTES bytes plus a per-section class letter for at most
+    the first _SHAPE_KEY_MAX_CLASSIFIED_SECTIONS of those sections. Two
+    payloads that differ only past that prefix therefore share one key, which
+    is fine for a bookkeeping bound but is not a payload identity.
+    Classification keeps cardinality bounded by construction (a
     small alphabet of classes over a short prefix);
     MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT bounds the per-client bookkeeping this
     feeds absolutely. Never hashes or otherwise carries raw payload content.
