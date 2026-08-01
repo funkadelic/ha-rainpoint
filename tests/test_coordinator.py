@@ -2217,7 +2217,7 @@ class TestPollOnlyHubConnectivityParity:
     @staticmethod
     def _spy_guard(calls):
         """Return a side_effect callable that delegates to the real guard and
-        records (polled, prior, result) for every invocation."""
+        records (polled, result) for every invocation."""
         original = _coord_module._guard_hub_connectivity_order
 
         def _wrapped(polled, prior):
