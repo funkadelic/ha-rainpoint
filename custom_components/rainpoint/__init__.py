@@ -315,7 +315,8 @@ def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coord
                 continue
 
             if candidate_key not in sensors:
-                # Not in this poll: under D-06 this means leave it alone.
+                # Not in this poll: deliberately leave it alone, so a device
+                # absent for a single poll is never treated as parentless.
                 continue
             record = sensors[candidate_key]
 
