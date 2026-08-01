@@ -383,7 +383,7 @@ class TestValveControl:
         mock_er_module = MagicMock()
         mock_er_module.async_get.return_value = mock_registry
 
-        # hass.states.get returns None — state not available yet
+        # hass.states.get returns None, state not available yet
         valve.hass.states.get.return_value = None
 
         # Use monkeypatch.setitem so that if conftest later adds

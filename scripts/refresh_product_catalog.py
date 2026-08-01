@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Regenerate the committed, trimmed RainPoint product catalog.
 
-The integration ships a committed snapshot of the vendor's product-model
+The integration ships a committed snapshot of RainPoint's product-model
 catalog at custom_components/rainpoint/api/data/product_catalog.json and
-never fetches it from the vendor at runtime. This script is the maintainer
+never fetches it from RainPoint at runtime. This script is the maintainer
 tool that keeps that snapshot up to date: it authenticates with a
 maintainer's own RainPoint credentials, pulls the live catalog, trims it
 down to the fields the integration actually uses, and either writes the
@@ -40,14 +40,14 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CATALOG_PATH = _REPO_ROOT / "custom_components" / "rainpoint" / "api" / "data" / "product_catalog.json"
 
 # Only these model-name prefixes are kept -- devices report RainPoint model
-# strings, so any other vendor catalog entry is never looked up and would
+# strings, so any other RainPoint catalog entry is never looked up and would
 # only bloat the committed file.
 _MODEL_PREFIXES = ("HTV", "HCS", "HWS", "HWG", "HIC")
 
 # Per dp entry, keep only the fields the loader/enrichment needs. Drop
-# UI/provisioning metadata the vendor catalog also carries.
+# UI/provisioning metadata the RainPoint catalog also carries.
 #
-# dpLen is the vendor's own byte count and is what the enrichment compares a
+# dpLen is RainPoint's own byte count and is what the enrichment compares a
 # decoded field's width against; dpDataType ("U8", "S16", ...) is kept for its
 # signedness letter. portNumber is deliberately absent: it is a per-model
 # property, not a per-dp one, and is written once on the variant record.
@@ -57,15 +57,15 @@ _KEPT_DP_FIELDS = ("dpCode", "identity", "dpPort", "dpDataType", "dpLen")
 #
 # STA_ entries are the status datapoints the generic decoder actually sees in a
 # payload. CTL_ entries are the control datapoints the generic-control
-# allowlist is built from. The vendor catalog also carries P_/C_/S_/ATTR_/MAX_/
+# allowlist is built from. The RainPoint catalog also carries P_/C_/S_/ATTR_/MAX_/
 # RD_ provisioning, config, and UI metadata that no code path in this
 # integration reads, so it is dropped rather than shipped to every user.
 _KEPT_IDENTITY_PREFIXES = ("STA_", "CTL_")
 
-# Per-variant provenance flags copied straight from the vendor entry. No code
+# Per-variant provenance flags copied straight from the RainPoint entry. No code
 # path decodes with them; they exist so a maintainer triaging an unfamiliar
 # model can tell what kind of catalog record it is without re-fetching the raw
-# vendor response.
+# RainPoint response.
 #
 # hasDistribution marks a record the app can actually pair, which is the
 # closest thing the catalog has to "this product exists." HCS003FRF is the
@@ -83,7 +83,7 @@ _KEPT_PROVENANCE_FIELDS = ("hasDistribution", "isMainDevice", "accessoryFlag")
 # five-minute default, which is long enough that a stalled run looks wedged.
 _DEFAULT_TIMEOUT_SECONDS = 90.0
 
-# Bucket key for vendor entries carrying no modelCode. Duplicated from
+# Bucket key for RainPoint entries carrying no modelCode. Duplicated from
 # custom_components/rainpoint/api/product_catalog.py rather than imported,
 # because this script is standalone and only puts the component on sys.path
 # once it is actually fetching. A test asserts the two stay in step.
@@ -91,18 +91,18 @@ UNCODED_VARIANT = "*"
 
 
 def trim_catalog(raw: list[dict]) -> dict:
-    """Trim a raw vendor productModel catalog to the committed snapshot shape.
+    """Trim a raw RainPoint productModel catalog to the committed snapshot shape.
 
     raw is the list returned by RainPointClient.get_product_catalog(): one
-    entry per vendor model, each carrying a "model" name, an optional
+    entry per RainPoint model, each carrying a "model" name, an optional
     "modelCode", a model-level "portNumber", and a "dp" list of per-datapoint
     metadata dicts. Returns an object keyed by model string then by modelCode,
     whose values are {"portNumber": ..., "dp": [...]} records carrying whichever
-    of _KEPT_PROVENANCE_FIELDS the vendor supplied as booleans. RainPoint-prefixed
+    of _KEPT_PROVENANCE_FIELDS RainPoint supplied as booleans. RainPoint-prefixed
     models keep only their STA_/CTL_ dp entries, trimmed to _KEPT_DP_FIELDS;
     every other model, and every other identity namespace, is dropped.
 
-    The model string alone is not a unique key: the vendor maps some models to
+    The model string alone is not a unique key: RainPoint maps some models to
     several modelCodes whose port counts genuinely differ (HIC801W is 0 ports
     under code 278 and 8 under 279), so a flat model-keyed object would silently
     keep whichever variant happened to come last. Entries with no modelCode land
@@ -120,8 +120,8 @@ def trim_catalog(raw: list[dict]) -> dict:
         trimmed.setdefault(model, {})[variant] = {
             "portNumber": port_number if isinstance(port_number, int) and not isinstance(port_number, bool) else None,
             **{field: entry[field] for field in _KEPT_PROVENANCE_FIELDS if isinstance(entry.get(field), bool)},
-            # Sort by dpCode so re-running against an unchanged vendor catalog
-            # is deterministic, even if the vendor API does not guarantee a
+            # Sort by dpCode so re-running against an unchanged RainPoint catalog
+            # is deterministic, even if the RainPoint API does not guarantee a
             # stable dp array order across calls. Entries missing dpCode sort
             # last.
             "dp": sorted(
@@ -180,7 +180,7 @@ def _print_drift(committed: dict, fresh: dict) -> bool:
 
     Changed models are split by what actually moved. A snapshot regenerated
     after the trim starts keeping a new record key would otherwise report every
-    model as changed with no way to tell that from real vendor drift, which is
+    model as changed with no way to tell that from real catalog drift, which is
     the difference between "commit this" and "read this carefully."
     """
     committed_models = set(committed)
@@ -209,7 +209,7 @@ def _print_drift(committed: dict, fresh: dict) -> bool:
         detail = ", ".join(f"{model} ({', '.join(sorted(changed[model]))})" for model in substantive)
         print(f"Models with changed datapoints or ports ({len(substantive)}): {detail}")
     if metadata_only:
-        print(f"Models changed only in vendor metadata ({len(metadata_only)}): {', '.join(metadata_only)}")
+        print(f"Models changed only in RainPoint metadata ({len(metadata_only)}): {', '.join(metadata_only)}")
     return True
 
 
@@ -220,7 +220,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     job needs no arguments at all.
     """
     parser = argparse.ArgumentParser(
-        description="Regenerate the committed RainPoint product catalog from a live vendor pull.",
+        description="Regenerate the committed RainPoint product catalog from a live RainPoint pull.",
     )
     parser.add_argument(
         "--check",
@@ -263,7 +263,7 @@ def _resolve_password() -> str | None:
 
 
 async def _fetch_trimmed_catalog(email: str, password: str, area_code: str, timeout_seconds: float) -> dict:
-    """Log in, pull the vendor product catalog, and return it trimmed.
+    """Log in, pull the RainPoint product catalog, and return it trimmed.
 
     aiohttp and the component client are imported here rather than at module
     scope: this is the only code path that needs them, and main() does not put
@@ -291,7 +291,7 @@ async def _fetch_trimmed_catalog(email: str, password: str, area_code: str, time
 
     from custom_components.rainpoint.api.client import RainPointClient
 
-    print(f"Logging in as {email} and fetching the vendor catalog (timeout {timeout_seconds:g}s)...", file=sys.stderr)
+    print(f"Logging in as {email} and fetching the RainPoint catalog (timeout {timeout_seconds:g}s)...", file=sys.stderr)
     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         client = RainPointClient(area_code, email, password, session)
@@ -304,7 +304,7 @@ async def _fetch_trimmed_catalog(email: str, password: str, area_code: str, time
                 file=sys.stderr,
             )
             raise
-    print(f"Fetched {len(raw)} vendor model entries.", file=sys.stderr)
+    print(f"Fetched {len(raw)} RainPoint model entries.", file=sys.stderr)
     return trim_catalog(raw)
 
 
@@ -325,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     trimmed = asyncio.run(_fetch_trimmed_catalog(args.email, password, args.area_code, args.timeout))
 
     if args.check:
-        # An empty pull means the fetch failed, not that the vendor dropped
+        # An empty pull means the fetch failed, not that RainPoint dropped
         # every model. Without this guard the drift report would list the whole
         # committed catalog as "removed upstream" and bury the real cause.
         if not trimmed:
@@ -341,7 +341,8 @@ def main(argv: list[str] | None = None) -> int:
     committed = _load_committed_catalog(_CATALOG_PATH)
     if not trimmed:
         print(
-            "Refusing to write an empty catalog (live pull produced 0 kept models); check the vendor response before retrying.",
+            "Refusing to write an empty catalog (live pull produced 0 kept models); "
+            "check the RainPoint response before retrying.",
             file=sys.stderr,
         )
         return 1

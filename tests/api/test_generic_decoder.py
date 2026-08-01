@@ -283,7 +283,7 @@ class TestDecodeGenericCatalogAnnotation:
 
         A single-candidate group keeps the flat path's simple behaviour and
         does not require a usable dpPort, so a variant whose dpPort the
-        vendor left unusable still gets its data-type and width annotation.
+        RainPoint left unusable still gets its data-type and width annotation.
         """
         odd_port_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": None, "dpDataType": "U8", "dpLen": 1}]
         monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: odd_port_catalog)
@@ -343,7 +343,7 @@ class TestDecodeGenericCatalogAnnotation:
         """dpDataType is the fallback width source for an entry with no usable dpLen.
 
         dpLen is authoritative when present, but a catalog written before dpLen
-        was kept - or a vendor entry that omits it - must still be comparable.
+        was kept - or a RainPoint entry that omits it - must still be comparable.
         """
         no_len_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "U16"}]
         monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: no_len_catalog)
@@ -358,7 +358,7 @@ class TestDecodeGenericCatalogAnnotation:
     def test_dplen_wins_over_a_disagreeing_data_type(self, monkeypatch):
         """Where dpLen and the type name disagree, dpLen is authoritative.
 
-        The vendor's TD2 type really does appear at both 1 and 2 bytes in the
+        RainPoint's TD2 type really does appear at both 1 and 2 bytes in the
         live catalog, so trusting the name over the length would flag phantom
         mismatches on every one of those entries.
         """
@@ -376,7 +376,7 @@ class TestDecodeGenericCatalogAnnotation:
     def test_variable_length_type_never_flags_mismatch(self, monkeypatch):
         """A variable-length type (STRING, dpLen 0) degrades to width_mismatch=False.
 
-        dpLen 0 is the vendor's own way of saying "no fixed width", so it must
+        dpLen 0 is RainPoint's own way of saying "no fixed width", so it must
         read as "cannot compare" rather than "declared zero bytes" - which
         would flag a mismatch against every field that decoded any bytes.
         """

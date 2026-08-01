@@ -27,7 +27,7 @@ pip install -r requirements-test.txt ruff
 
 Nothing else in this guide depends on which installer you used.
 
-`requirements-test.txt` pulls in `pytest-homeassistant-custom-component`, which in turn installs a pinned `homeassistant` — do not add `homeassistant` as a separate dependency.
+`requirements-test.txt` pulls in `pytest-homeassistant-custom-component`, which in turn installs a pinned `homeassistant`: do not add `homeassistant` as a separate dependency.
 
 ### Editor (VS Code / Pylance)
 
@@ -36,7 +36,7 @@ After creating the venv:
 1. `Ctrl+Shift+P` → **Python: Select Interpreter** → pick `.venv/bin/python`.
 2. Reload the window. `homeassistant.*` imports will now resolve.
 
-`.venv/` and `.vscode/` are gitignored — don't commit either.
+`.venv/` and `.vscode/` are gitignored, so don't commit either.
 
 ## Running checks
 
@@ -65,7 +65,7 @@ Unknown models are handled gracefully by the coordinator, so partial support is 
 
 ## Versioning
 
-Releases are automated by `release-please`. Do not bump `manifest.json` or `const.VERSION` manually — see `docs/VERSION_ENFORCEMENT.md`.
+Releases are automated by `release-please`. Do not bump `manifest.json` or `const.VERSION` manually. See `docs/VERSION_ENFORCEMENT.md`.
 
 ## Commit and PR style
 

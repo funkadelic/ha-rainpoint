@@ -1360,7 +1360,7 @@ class TestSweepSurvivesUnreadableCoordinatorData(_GenericSweepFixtures):
 class TestSweepSurvivesMalformedSensorRecords(_GenericSweepFixtures):
     """A sensor record that is not a dict must not abort the sweep or escape setup.
 
-    Records come from the vendor payload, so their shape is an assumption
+    Records come from the RainPoint payload, so their shape is an assumption
     rather than a guarantee. Reading a model out of one is the last step in
     this function that can raise, and it runs once per row: without a guard,
     a single malformed record would abandon every row after it.

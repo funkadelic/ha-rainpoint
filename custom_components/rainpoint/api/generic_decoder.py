@@ -23,7 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Field index -> status identity, harvested from the RainPoint/HomGar cloud
 # product catalog's dp[].dpCode / dp[].identity pairs. The catalog is served
-# by the vendor API at https://region3.homgarus.com/app/common/core/productModel
+# by the RainPoint API at https://region3.homgarus.com/app/common/core/productModel
 # and the STA_* names are RainPoint/HomGar's own identities. Only status (STA_*)
 # fields that surface in status frames are kept; provisioning dpCodes that
 # happen to share an index are ignored.
@@ -92,7 +92,7 @@ def _int_from_bytes(value_bytes: list[int]) -> int | None:
     return int.from_bytes(bytes(value_bytes), "little")
 
 
-# The vendor's dpDataType vocabulary is "U8" / "S16" / "U32" style: a
+# RainPoint's dpDataType vocabulary is "U8" / "S16" / "U32" style: a
 # signedness letter then a bit count. Anchored rather than a bare digit
 # search, so a future type name that merely embeds a digit (an "ENUM8" whose
 # 8 means "8 possible states", not "8 bits") is not misread as a width.
@@ -110,7 +110,7 @@ def _parse_data_type(dp_entry: dict) -> re.Match | None:
 def _declared_byte_width(dp_entry: dict) -> int | None:
     """Return a catalog dp entry's declared byte width, or None if it has none.
 
-    dpLen is the vendor's own byte count and is authoritative: it is present on
+    dpLen is RainPoint's own byte count and is authoritative: it is present on
     every entry, including the ones whose dpDataType is blank, and it disagrees
     with the type name where the two conflict (the "TD2" timestamp type appears
     at both 1 and 2 bytes). The dpDataType parse is only a fallback for an entry
@@ -142,7 +142,7 @@ def _declared_signedness(dp_entry: dict) -> bool | None:
     Signedness comes from the dpDataType letter ("S16" is signed, "U8" is
     not). Types that carry no signedness at all (STRING, the timestamp types
     T4/TD2, and blank values) return None rather than defaulting to unsigned,
-    so a caller can tell "the vendor says unsigned" apart from "the vendor does
+    so a caller can tell "RainPoint says unsigned" apart from "RainPoint does
     not say".
 
     dp_entry is always a dict, for the same reason as _declared_byte_width.
@@ -161,7 +161,7 @@ def _match_catalog_dp(dp_list: list, index: int) -> dict | None:
     _STATUS_FIELDS were originally harvested from, and the numbering the
     catalog's dpCode lines up with on both framings.
 
-    dpCode is the vendor's per-instance identifier and is therefore expected
+    dpCode is RainPoint's per-instance identifier and is therefore expected
     to be unique within a model for a single-field key. The catalog is
     regenerated from an external API though, so that is an assumption rather
     than a guarantee: an ambiguous key (two or more entries sharing it)
@@ -191,7 +191,7 @@ def _pair_group_by_dp_id_and_port(group_fields: list[dict], candidates: list[dic
 
     Several decoded fields can share one structural index - the ordinary
     multi-zone shape, such as two STA_WKSTATE fields on a two-zone valve.
-    Disambiguation pairs the fields in ascending dp_id order (the vendor's
+    Disambiguation pairs the fields in ascending dp_id order (RainPoint's
     real per-instance ordering handle, only present on ``11#`` TLV framing)
     against the catalog's own candidates in ascending dpPort order. This is
     the pairing validated in tests/api/test_tlv_catalog_alignment.py against
@@ -202,7 +202,7 @@ def _pair_group_by_dp_id_and_port(group_fields: list[dict], candidates: list[dic
     when the group has more than one member and any candidate's dpPort is
     not a plain int (a group of one keeps the flat path's simple behaviour
     and does not require a usable dpPort, so a variant whose dpPort the
-    vendor left unusable still gets its data-type and width annotation).
+    RainPoint left unusable still gets its data-type and width annotation).
     """
     if not candidates or len(candidates) != len(group_fields):
         return []
@@ -262,7 +262,7 @@ def _annotate_fields_with_catalog(
     Both framings key on the field's structural index against the catalog's
     dpCode - that is the numbering space the catalog actually uses, on both
     the ``10#`` (flat) and ``11#`` (TLV) framings. The ``11#`` framing
-    additionally carries a per-entry dp_id, the vendor's per-instance
+    additionally carries a per-entry dp_id, RainPoint's per-instance
     ordering handle; it is not in the catalog's dpCode space, so it is never
     compared against dpCode, but it disambiguates several fields sharing one
     index by fixing the order they pair against that index's candidate
@@ -334,13 +334,13 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
     committed product catalog for that model additionally carries a "catalog"
     sub-dict: ``{"dp_port": ..., "data_type": ..., "declared_width": ...,
     "signed": ..., "port_number": ..., "width_mismatch": bool}``. Both
-    "declared_width" and "signed" are None when the vendor does not declare
+    "declared_width" and "signed" are None when RainPoint does not declare
     them. The catalog only annotates - a field's "value"
     and "raw" are never modified by this step. A field with no catalog match,
     a model with no catalog entry, or a model of None all leave the field
     dict exactly as it is without ``model`` (no "catalog" key at all).
 
-    ``model_code`` disambiguates models the vendor maps to several codes whose
+    ``model_code`` disambiguates models RainPoint maps to several codes whose
     port counts differ. Passing it is what lets the lookup pick the right
     variant; omitting it for such a model yields no annotation rather than a
     coin-flip between variants.

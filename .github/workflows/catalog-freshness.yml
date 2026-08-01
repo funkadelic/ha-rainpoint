@@ -55,7 +55,7 @@ jobs:
           RAINPOINT_AREA_CODE: ${{ secrets.RAINPOINT_AREA_CODE }}
         run: python scripts/refresh_product_catalog.py --check
 
-      # Regenerate-and-upload exists because the vendor endpoint is not reliably
+      # Regenerate-and-upload exists because the RainPoint endpoint is not reliably
       # reachable from every maintainer network, and the credentials are already
       # here as secrets. The job still only has contents: read, so the result is
       # an artifact to download and commit deliberately, never a push.

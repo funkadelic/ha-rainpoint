@@ -75,7 +75,7 @@ def _parse_tlv_payload(raw: str) -> dict:
 
         width = _TYPE_WIDTHS.get(type_byte)
         if width is None:
-            # Unknown type — skip dp_id + type byte pair to attempt re-sync
+            # Unknown type: skip dp_id + type byte pair to attempt re-sync
             _LOGGER.debug("_parse_tlv_payload: unknown type 0x%02X at offset %d (dp_id=0x%02X), skipping", type_byte, i, dp_id)
             i += 2
             continue

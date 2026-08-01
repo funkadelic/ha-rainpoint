@@ -81,7 +81,7 @@ STALE_VALVE_POLL_GUARD = timedelta(minutes=5)
 
 
 class _AbsentStatus(dict):
-    """Marker meaning "no status response arrived for this hub" (D-05/D-06).
+    """Marker meaning "no status response arrived for this hub".
 
     Subclasses dict rather than using a bare sentinel object because
     _merge_push_sensor_entry and every other status reader do
@@ -293,7 +293,7 @@ def _build_new_device_issue_url(
     than being handed a link GitHub refuses.
 
     payload_note replaces the raw payload with an explicit statement when there
-    is no payload to begin with (a silent sub-device, D-15): decode_generic
+    is no payload to begin with (a silent sub-device): decode_generic
     cannot read prose, so the auto-decode step is skipped entirely rather than
     run against text it was never meant to parse.
     """
@@ -452,8 +452,8 @@ def _guard_hub_connectivity_order(polled: dict, prior: dict | None) -> dict:
     First, why the guard exists. If the REST view lags the push, the next
     poll can carry the old connectivity flag and revert a newer pushed edge,
     producing a visible flip-back that reverts again two minutes later. That
-    is the same stale-overwrites-fresh defect class this phase exists to
-    close, entering through the poll side instead of the push side.
+    is the same stale-overwrites-fresh defect class the push-side ordering
+    guard closes, entering through the poll side instead of the push side.
 
     Second, why only strictly older is held. An equal moment is the same
     edge already held, so returning polled changes nothing observable
@@ -473,8 +473,8 @@ def _guard_hub_connectivity_order(polled: dict, prior: dict | None) -> dict:
     Fourth, the absent case. An absent status yields the unknown record
     from _read_hub_connectivity and this guard takes it whole, because
     absent carries no moment of its own and so is never strictly older than
-    anything held. Phase 16's rule that an absent status is unknown rather
-    than disconnected is not something this guard may quietly change.
+    anything held. The rule that an absent status is unknown rather than
+    disconnected is not something this guard may quietly change.
 
     Fifth, and this is the point a reader is most likely to be surprised
     by, so it is stated plainly rather than left to be discovered: the
@@ -882,8 +882,8 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # The asymmetry is intentional. Clearing early for a hub the
             # cloud already says is back is safe and self-correcting -- the
             # next poll re-raises if it was wrong -- while raising early is
-            # not, which is the flap-raises-a-card case Phase 16 already
-            # rejected. So a pushed disconnected edge leaves both the
+            # not, which is the flap-raises-a-card case the poll-side
+            # debounce already rejects. So a pushed disconnected edge leaves both the
             # counter and the issue untouched: the counter stays
             # poll-counted only, so "3 consecutive polls" keeps meaning
             # literally that and the coordinator holds one debounce concept
@@ -932,7 +932,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
         status = dict(data.get("status", {}))
         # Merely "no prior status recorded for this mid to merge into yet" --
-        # unrelated to the D-05 absent-vs-omitted distinction, which concerns
+        # unrelated to the absent-vs-omitted distinction, which concerns
         # the fetch layer's status_by_mid, not this push-side merge target.
         # STATUS_ABSENT's contents are the same shape, so reusing the shared
         # sentinel here is equivalent and avoids a second copy of the literal.
@@ -991,7 +991,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             for hub in hubs:
                 mid = hub["mid"]
                 # STATUS_ABSENT is an unreachable safety net once _fetch_status_by_mid
-                # covers every hub mid (D-05): a mid genuinely missing here would mean
+                # covers every hub mid: a mid genuinely missing here would mean
                 # its status was never obtained this poll, not that it arrived empty.
                 status = status_by_mid.get(mid, STATUS_ABSENT)
                 if isinstance(status, _AbsentStatus):
@@ -1113,9 +1113,9 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug(debug_with_version("Fetched status for mid=%s using multipleDeviceStatus"), mid)
             # The call succeeded, so a hub mid the response did not mention is
             # evidence about that hub (arrived, reported nobody), not an outage
-            # (D-05). Filling it in here is what makes the absent-vs-omitted
-            # split correct for the exact case that motivated this phase: a
-            # hub whose status came back but never named one of its addrs.
+            # Filling it in here is what makes the absent-vs-omitted split
+            # correct for the exact case it exists for: a hub whose status
+            # came back but never named one of its addrs.
             for hub in hubs:
                 status_by_mid.setdefault(hub["mid"], {"subDeviceStatus": []})
             return status_by_mid
@@ -1148,7 +1148,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Transport error getting status for mid=%s: %s", mid, individual_e)
                 # This hub's status was not obtained this poll -- an outage, not
                 # evidence that it reported nobody -- so it must contribute no
-                # silent entries for any of its children (D-06).
+                # silent entries for any of its children.
                 status_by_mid[mid] = STATUS_ABSENT
         return status_by_mid
 
@@ -1158,7 +1158,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         """Log the unsupported-sensor warning and fire a once-per-variant persistent notification.
 
         Reports modelCode alongside the model string because the two are not
-        equivalent: the vendor catalog contains model strings that map to more
+        equivalent: the RainPoint catalog contains model strings that map to more
         than one modelCode, and the variants can differ in port count. A report
         carrying only the model string can therefore be ambiguous.
 
@@ -1326,14 +1326,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
         Driven by addr_map (the addrs the hub itself lists), not by the status
         response: an addr the hub lists but the status response omits still
-        gets a debounced "silent" entry (D-06/D-09), which a loop driven from
+        gets a debounced "silent" entry, which a loop driven from
         the status response could never produce -- that asymmetry was the
         actual defect. A status entry whose sid resolves to an addr the hub
         does not list is still dropped, and an unresolvable sid is still
         ignored, exactly as before.
 
         An absent status (this hub's status could not be obtained this poll)
-        contributes nothing at all for any of its children (D-06): that is an
+        contributes nothing at all for any of its children: that is an
         outage, not evidence about any particular addr.
         """
         mid = hub["mid"]
@@ -1360,7 +1360,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             s = status_by_addr.get(addr)
             if s is not None:
                 sensor_key, sensor_entry = RainPointCoordinator._decode_one_subdevice(self, hub, mid, addr, sub, s)
-                # A real reading resets the debounce counter (D-07).
+                # A real reading resets the debounce counter.
                 self._silent_poll_counts.pop(sensor_key, None)
             else:
                 sensor_entry = RainPointCoordinator._build_silent_subdevice(self, hub, mid, addr, sub, sensor_key)
@@ -1397,7 +1397,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             "last_seen": last_seen,
             "missed_polls": count,
         }
-        # status_entry={} per D-09/D-11: every downstream raw_status reader
+        # status_entry={} is deliberate: every downstream raw_status reader
         # already tolerates a missing "value"/"time" pair.
         return _build_sensor_entry(hub, sub, mid, addr, {}, decoded)
 
@@ -1405,7 +1405,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         """Drop any debounce counter for an addr no hub currently lists.
 
         Runs every poll so a device that leaves subDevices (unpaired, removed)
-        cannot accumulate a counter forever (T-15-03).
+        cannot accumulate a counter forever.
         """
         live_keys = {_sensor_key(hub["hid"], hub["mid"], sd["addr"]) for hub in hubs for sd in hub.get("subDevices", [])}
         self._silent_poll_counts = {key: count for key, count in self._silent_poll_counts.items() if key in live_keys}
