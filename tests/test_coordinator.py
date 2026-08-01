@@ -3211,9 +3211,10 @@ class TestApplyPushUpdate:
 
 
 class TestChangedAtDatetime:
-    """_changed_at_datetime: the ordering primitive Task 2 and plan 17-03
-    consume. Not yet wired into any caller in this plan, so it is tested
-    directly."""
+    """_changed_at_datetime: the ordering primitive both connectivity guards
+    consume -- apply_hub_push_update's push-side guard and
+    _guard_hub_connectivity_order's poll-side one. Tested directly here so
+    every degradation case is pinned without a driving poll."""
 
     def test_none_record_yields_none(self):
         assert _coord_module._changed_at_datetime(None) is None
@@ -3230,6 +3231,13 @@ class TestChangedAtDatetime:
     def test_valid_iso_string_parses(self):
         record = {"changed_at": "2026-07-31T18:17:30.011000+00:00"}
         assert _coord_module._changed_at_datetime(record) == datetime.fromisoformat("2026-07-31T18:17:30.011000+00:00")
+
+    def test_offsetless_string_is_assumed_utc(self):
+        """No writer emits one, but a naive result would raise TypeError at
+        both ordering sites rather than degrade, so it is normalized here."""
+        parsed = _coord_module._changed_at_datetime({"changed_at": "2026-07-31T18:17:30.011000"})
+        assert parsed == datetime.fromisoformat("2026-07-31T18:17:30.011000+00:00")
+        assert parsed.tzinfo is UTC
 
 
 _APPLY_HUB = _coord_module.RainPointCoordinator.apply_hub_push_update

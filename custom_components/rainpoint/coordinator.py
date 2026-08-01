@@ -611,7 +611,13 @@ def _changed_at_datetime(record: dict | None) -> datetime | None:
 
     None for a falsy record, a changed_at that is not a string, or a string
     that fails to parse as ISO-8601. Consumed by the push-side ordering guard
-    (D-13/D-14/D-15) and the poll-side D-16 guard (plan 17-03).
+    and the poll-side one.
+
+    Every writer of changed_at emits an offset today, so a parsed value is
+    aware in practice. A naive one is assumed to be UTC rather than returned
+    as-is: both ordering sites compare the result against an aware datetime,
+    which would raise TypeError on the event loop out of a helper whose
+    documented contract is to degrade rather than raise.
     """
     if not record:
         return None
@@ -619,9 +625,10 @@ def _changed_at_datetime(record: dict | None) -> datetime | None:
     if not isinstance(changed_at, str):
         return None
     try:
-        return datetime.fromisoformat(changed_at)
+        parsed = datetime.fromisoformat(changed_at)
     except (ValueError, TypeError):
         return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _last_seen_from_entry(previous: dict | None) -> str | None:
