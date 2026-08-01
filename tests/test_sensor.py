@@ -2109,6 +2109,24 @@ class TestSilentEntityAppearsWithinTheSession:
         assert coordinator._listeners
         entry.async_on_unload.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_late_added_not_reporting_entity_has_no_via_device(self):
+        """The real reported hardware shape: an HTV210B under the Bluetooth
+        wrapper record that reports no status at all. The not-reporting
+        entity is created several polls after setup by the coordinator
+        listener, so this proves the parenting holds on the late-add path,
+        not only on the setup-snapshot path Task 1 already covers."""
+        coordinator, hass, entry, captured, async_add_entities = self._build()
+
+        await coordinator.async_config_entry_first_refresh()
+        await async_setup_entry(hass, entry, async_add_entities)
+        await coordinator.async_refresh()
+        await coordinator.async_refresh()
+
+        not_reporting = self._not_reporting(captured)
+        assert len(not_reporting) == 1
+        assert "via_device" not in not_reporting[0].device_info
+
 
 class TestLateSensorEntityAdder:
     """The add-once bookkeeping behind the coordinator listener."""

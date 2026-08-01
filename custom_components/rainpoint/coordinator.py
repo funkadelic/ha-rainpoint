@@ -1447,12 +1447,22 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 hub_name=entry.get("hub_name"),
                 missed_polls=(entry.get("data") or {}).get("missed_polls", 0),
                 silent=(entry.get("data") or {}).get("type") == SILENT_DATA_TYPE,
-                # A real hub always carries both of these; the placeholder
-                # record the cloud parks a Bluetooth-only device under carries
-                # neither, along with an empty name that would otherwise reach
-                # the card as "unknown". Read as "is there a hub at all",
-                # which is a different question from "what is it called".
-                hub_paired=bool(entry.get("product_key") or entry.get("device_name")),
+                # The canonical is_hub_record verdict, computed once when this
+                # entry was built (_build_sensor_entry) and read here rather
+                # than re-derived from the raw hub fields it supersedes, so
+                # this card and the via_device link (device.py) can never
+                # drift onto two different answers to "is there a hub at
+                # all", which is a different question from "what is it
+                # called". Absence defaults to hub-linked, matching
+                # build_sub_device_info's own default.
+                #
+                # Behaviour change on a shape never observed: a top-level
+                # record carrying did or mac but neither productKey nor
+                # deviceName now counts as a real hub and stops producing a
+                # no-hub Repairs card. The two predicates agree on the
+                # wrapper record, the only shape ever captured, so this is
+                # invisible on all real data seen to date.
+                hub_paired=entry.get("hub_paired", True),
             )
             for entry in decoded_sensors.values()
         ]
