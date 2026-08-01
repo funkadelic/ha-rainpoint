@@ -1615,101 +1615,195 @@ class TestHubConnectivityEntityUnaffectedByGenericRegistrySweeps:
         assert removed == []
 
 
-class _ReconcileFixtures:
-    """Inline seed data for _reconcile_sub_device_parents.
+class _DeviceSweepFixtures:
+    """Seeded fake device-registry fixtures for _reconcile_sub_device_parents.
 
-    Task 3 consolidates these onto a shared seeded fake device registry
-    alongside the two-real-hubs and cross-entry-isolation cases.
+    One seeded registry, following _GenericSweepFixtures' shape: SimpleNamespace
+    device rows as class constants with realistic {hid}_{mid}_{addr} identifiers,
+    plus a _make_fake_device_registry helper mirroring _make_fake_registry's
+    per-call re-filtering so a row cleared by one sweep presents as cleared on
+    the next.
     """
 
     ENTRY_ID = "this_entry"
+    OTHER_ENTRY_ID = "other_entry"
 
+    # Two permanently-eligible wrapper-carried rows: hub_paired False, a
+    # via_device_id already set. Two of them (not one) so the
+    # raise-on-one-row test can prove the other still clears.
     WRAPPER_ROW = SimpleNamespace(
         id="device_wrapper_1",
         identifiers={(DOMAIN, "100_201_1")},
         via_device_id="hub_100",
+        config_entry_id=ENTRY_ID,
     )
-    HUB_PAIRED_ROW = SimpleNamespace(
-        id="device_hub_paired_1",
+    WRAPPER_ROW_2 = SimpleNamespace(
+        id="device_wrapper_4",
+        identifiers={(DOMAIN, "100_201_4")},
+        via_device_id="hub_100",
+        config_entry_id=ENTRY_ID,
+    )
+    # Two distinct real hubs, each carrying its own sub-device row. No second
+    # real hub exists on maintainer hardware; this proves the case against a
+    # constructed fixture only (see test_two_real_hubs_... docstring below).
+    HUB_A_SUB_ROW = SimpleNamespace(
+        id="device_hub_a_sub_1",
         identifiers={(DOMAIN, "100_200_1")},
         via_device_id="hub_100",
+        config_entry_id=ENTRY_ID,
+    )
+    HUB_B_SUB_ROW = SimpleNamespace(
+        id="device_hub_b_sub_1",
+        identifiers={(DOMAIN, "100_300_1")},
+        via_device_id="hub_300",
+        config_entry_id=ENTRY_ID,
     )
     ALREADY_CLEARED_ROW = SimpleNamespace(
         id="device_wrapper_2",
         identifiers={(DOMAIN, "100_201_2")},
         via_device_id=None,
+        config_entry_id=ENTRY_ID,
     )
     NOT_IN_POLL_ROW = SimpleNamespace(
         id="device_wrapper_3",
         identifiers={(DOMAIN, "100_201_3")},
         via_device_id="hub_100",
+        config_entry_id=ENTRY_ID,
     )
     HUB_DEVICE_ROW = SimpleNamespace(
         id="device_hub_100",
         identifiers={(DOMAIN, "hub_100")},
         via_device_id="hub_100",
+        config_entry_id=ENTRY_ID,
     )
     MALFORMED_ROW = SimpleNamespace(
         id="device_malformed",
         identifiers="not-a-set-of-tuples",
         via_device_id="hub_100",
+        config_entry_id=ENTRY_ID,
     )
     NO_DOMAIN_ROW = SimpleNamespace(
         id="device_no_domain",
         identifiers={("other_integration", "100_201_9")},
         via_device_id="hub_100",
+        config_entry_id=ENTRY_ID,
     )
     MISSING_IDENTIFIERS_ROW = SimpleNamespace(
         id="device_missing_identifiers",
         via_device_id="hub_100",
+        config_entry_id=ENTRY_ID,
     )
+    # Belongs to a different config entry. The current-poll sensors mapping
+    # below deliberately makes this row look eligible if it ever leaked
+    # through the config-entry-scoped lookup, so a regression there would be
+    # caught rather than passing by accident.
+    FOREIGN_ENTRY_ROW = SimpleNamespace(
+        id="device_foreign_entry",
+        identifiers={(DOMAIN, "99_500_1")},
+        via_device_id="hub_99",
+        config_entry_id=OTHER_ENTRY_ID,
+    )
+
+    def _all_rows(self):
+        """Return every seeded device row across both config entries."""
+        return [
+            self.WRAPPER_ROW,
+            self.WRAPPER_ROW_2,
+            self.HUB_A_SUB_ROW,
+            self.HUB_B_SUB_ROW,
+            self.ALREADY_CLEARED_ROW,
+            self.NOT_IN_POLL_ROW,
+            self.HUB_DEVICE_ROW,
+            self.MALFORMED_ROW,
+            self.NO_DOMAIN_ROW,
+            self.MISSING_IDENTIFIERS_ROW,
+            self.FOREIGN_ENTRY_ROW,
+        ]
 
     def _sensors(self):
         """Sensor keys present in the current poll, with a stamped hub_paired verdict.
 
-        "100_201_3" is deliberately absent, matching NOT_IN_POLL_ROW.
+        "100_201_3" (NOT_IN_POLL_ROW) is deliberately absent. "99_500_1"
+        (FOREIGN_ENTRY_ROW) is present and eligible-looking so a leak past
+        the config-entry scope guard would be caught, not accidentally missed.
         """
         return {
             "100_201_1": {"hub_paired": False},
+            "100_201_4": {"hub_paired": False},
             "100_200_1": {"hub_paired": True},
+            "100_300_1": {"hub_paired": True},
             "100_201_2": {"hub_paired": False},
+            "99_500_1": {"hub_paired": False},
         }
 
-    def _make_fake_registry(self, rows, raise_on_lookup=False):
-        """Build patchable stand-ins for dr.async_get / dr.async_entries_for_config_entry."""
+    def _make_fake_device_registry(self, raise_on_lookup=False, raise_once_for=None):
+        """Build patchable stand-ins for dr.async_get / dr.async_entries_for_config_entry.
+
+        async_entries_for_config_entry re-filters on each call: the returned
+        rows are fresh copies whose via_device_id reflects every update this
+        registry has recorded so far, rather than mutating the shared class-
+        level SimpleNamespace constants (which would leak state across
+        tests). This is what makes the idempotency assertion (two
+        consecutive sweeps) meaningful rather than incidental.
+        """
         updated: list[tuple] = []
+        cleared: set[str] = set()
+        raise_once_for = set(raise_once_for or ())
 
-        class _FakeRegistry:
+        class _FakeDeviceRegistry:
             def async_update_device(self, device_id, *, via_device_id):
+                if device_id in raise_once_for:
+                    raise_once_for.discard(device_id)
+                    raise RuntimeError(f"boom updating {device_id}")
                 updated.append((device_id, via_device_id))
+                cleared.add(device_id)
 
-        fake_registry = _FakeRegistry()
+        fake_registry = _FakeDeviceRegistry()
 
         def _async_get(hass):
             if raise_on_lookup:
                 raise RuntimeError("registry unavailable")
             return fake_registry
 
+        def _copy_row(row):
+            # Built field-by-field, omitting "identifiers" entirely when the
+            # seed row omits it, so MISSING_IDENTIFIERS_ROW still raises
+            # AttributeError inside the function under test rather than here.
+            kwargs = {"id": row.id, "via_device_id": None if row.id in cleared else row.via_device_id}
+            if hasattr(row, "identifiers"):
+                kwargs["identifiers"] = row.identifiers
+            return SimpleNamespace(**kwargs)
+
         def _async_entries_for_config_entry(registry, entry_id):
-            return list(rows)
+            return [_copy_row(row) for row in self._all_rows() if row.config_entry_id == entry_id]
 
         return updated, _async_get, _async_entries_for_config_entry
 
-    def _make_entry_and_coordinator(self, sensors):
+    def _make_entry_and_coordinator(self, sensors, entry_id=None):
         entry = MagicMock()
-        entry.entry_id = self.ENTRY_ID
+        entry.entry_id = entry_id or self.ENTRY_ID
         coordinator = MagicMock()
         coordinator.data = {"sensors": sensors}
         return entry, coordinator
 
 
-class TestReconcileSubDeviceParents(_ReconcileFixtures):
-    """Cover _reconcile_sub_device_parents against inline seed data."""
+class TestReconcileSubDeviceParents(_DeviceSweepFixtures):
+    """Cover _reconcile_sub_device_parents against one seeded fake device registry.
 
-    def test_wrapper_row_with_via_device_id_is_cleared(self):
-        """The one eligible row: hub_paired False, sensor key in the current poll,
-        via_device_id already set, is updated exactly once with via_device_id=None."""
-        updated, async_get, async_entries = self._make_fake_registry([self.WRAPPER_ROW])
+    A mocked registry is used rather than a live Home Assistant one, for the
+    same reason TestRemoveStaleGenericEntities gives: the repository conftest
+    replaces the whole homeassistant package tree with stubs before any test
+    module is imported.
+    """
+
+    def test_wrapper_carried_rows_with_via_device_id_are_cleared(self):
+        """Both wrapper-carried rows (hub_paired False, sensor key in the
+        current poll, via_device_id already set) are cleared exactly once
+        each. Every other seeded row for this entry -- both real hubs' own
+        sub-devices, the already-cleared row, the row absent from the poll,
+        and the hub device row -- produces zero calls, together in one
+        sweep."""
+        updated, async_get, async_entries = self._make_fake_device_registry()
         entry, coordinator = self._make_entry_and_coordinator(self._sensors())
 
         with (
@@ -1718,11 +1812,15 @@ class TestReconcileSubDeviceParents(_ReconcileFixtures):
         ):
             _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
 
-        assert updated == [(self.WRAPPER_ROW.id, None)]
+        assert updated == [(self.WRAPPER_ROW.id, None), (self.WRAPPER_ROW_2.id, None)]
 
-    def test_hub_paired_row_is_never_updated(self):
-        """A sensor key whose stamped hub_paired verdict is True is never touched."""
-        updated, async_get, async_entries = self._make_fake_registry([self.HUB_PAIRED_ROW])
+    def test_two_real_hubs_each_keep_their_own_sub_devices_link(self):
+        """No second real hub exists on maintainer hardware, so this case is
+        proven against a constructed fixture only and is recorded here as a
+        backstop rather than a verified behaviour. Two distinct real hubs in
+        one home, each carrying its own hub_paired=True sub-device, must both
+        keep their via_device_id through the sweep."""
+        updated, async_get, async_entries = self._make_fake_device_registry()
         entry, coordinator = self._make_entry_and_coordinator(self._sensors())
 
         with (
@@ -1731,54 +1829,15 @@ class TestReconcileSubDeviceParents(_ReconcileFixtures):
         ):
             _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
 
-        assert updated == []
-
-    def test_already_cleared_row_is_never_updated(self):
-        """A row already at via_device_id None is skipped without a call."""
-        updated, async_get, async_entries = self._make_fake_registry([self.ALREADY_CLEARED_ROW])
-        entry, coordinator = self._make_entry_and_coordinator(self._sensors())
-
-        with (
-            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
-            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
-        ):
-            _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
-
-        assert updated == []
-
-    def test_row_absent_from_current_poll_is_never_updated(self):
-        """D-06: a sensor key the current poll does not mention is left alone,
-        even though it carries a via_device_id."""
-        updated, async_get, async_entries = self._make_fake_registry([self.NOT_IN_POLL_ROW])
-        entry, coordinator = self._make_entry_and_coordinator(self._sensors())
-
-        with (
-            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
-            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
-        ):
-            _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
-
-        assert updated == []
-
-    def test_hub_device_row_is_never_updated(self):
-        """A hub device row's identifier is hub_{hid}, never a sensor key, so it
-        cannot match the lookup even though it carries a via_device_id here."""
-        updated, async_get, async_entries = self._make_fake_registry([self.HUB_DEVICE_ROW])
-        entry, coordinator = self._make_entry_and_coordinator(self._sensors())
-
-        with (
-            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
-            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
-        ):
-            _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
-
-        assert updated == []
+        cleared_ids = {device_id for device_id, _ in updated}
+        assert self.HUB_A_SUB_ROW.id not in cleared_ids
+        assert self.HUB_B_SUB_ROW.id not in cleared_ids
 
     def test_malformed_and_missing_identifier_rows_are_skipped_and_sweep_continues(self):
-        """A row with no DOMAIN identifier, a malformed identifiers value, or a
-        missing attribute is skipped, and the eligible row after it still clears."""
-        rows = [self.MALFORMED_ROW, self.NO_DOMAIN_ROW, self.MISSING_IDENTIFIERS_ROW, self.WRAPPER_ROW]
-        updated, async_get, async_entries = self._make_fake_registry(rows)
+        """A row with no DOMAIN identifier, a malformed identifiers value, or
+        a missing attribute is skipped, and the sweep still clears the
+        eligible rows around them."""
+        updated, async_get, async_entries = self._make_fake_device_registry()
         entry, coordinator = self._make_entry_and_coordinator(self._sensors())
 
         with (
@@ -1787,10 +1846,33 @@ class TestReconcileSubDeviceParents(_ReconcileFixtures):
         ):
             _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
 
-        assert updated == [(self.WRAPPER_ROW.id, None)]
+        cleared_ids = {device_id for device_id, _ in updated}
+        assert self.MALFORMED_ROW.id not in cleared_ids
+        assert self.NO_DOMAIN_ROW.id not in cleared_ids
+        assert self.MISSING_IDENTIFIERS_ROW.id not in cleared_ids
+        assert self.WRAPPER_ROW.id in cleared_ids
+
+    def test_foreign_entry_row_is_never_returned_or_updated(self):
+        """A row belonging to a different config entry is never returned by
+        the fixture's config-entry-scoped lookup and is never updated, even
+        though its sensor key looks eligible in the seeded poll data."""
+        updated, async_get, async_entries = self._make_fake_device_registry()
+        entry, coordinator = self._make_entry_and_coordinator(self._sensors())
+
+        registry = async_get(MagicMock())
+        returned_ids = {row.id for row in async_entries(registry, self.ENTRY_ID)}
+        assert self.FOREIGN_ENTRY_ROW.id not in returned_ids
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
+
+        assert self.FOREIGN_ENTRY_ROW.id not in {device_id for device_id, _ in updated}
 
     def test_raising_registry_lookup_returns_without_updating_anything(self):
-        updated, async_get, async_entries = self._make_fake_registry([self.WRAPPER_ROW], raise_on_lookup=True)
+        updated, async_get, async_entries = self._make_fake_device_registry(raise_on_lookup=True)
         entry, coordinator = self._make_entry_and_coordinator(self._sensors())
 
         with (
@@ -1805,7 +1887,7 @@ class TestReconcileSubDeviceParents(_ReconcileFixtures):
         """Degradation is the opposite direction from the generic-entity sweep:
         the only mutation here is destructive, so unreadable data must clear
         nothing rather than fall back to acting on empty data."""
-        updated, async_get, async_entries = self._make_fake_registry([self.WRAPPER_ROW])
+        updated, async_get, async_entries = self._make_fake_device_registry()
         entry = MagicMock()
         entry.entry_id = self.ENTRY_ID
 
@@ -1823,65 +1905,110 @@ class TestReconcileSubDeviceParents(_ReconcileFixtures):
         assert updated == []
 
     def test_raising_update_on_one_row_does_not_block_the_remaining_rows(self):
-        """A registry update that raises on one row must not prevent the
-        remaining eligible rows from being cleared."""
-        boom_row = SimpleNamespace(id="device_boom", identifiers={(DOMAIN, "100_201_1")}, via_device_id="hub_100")
-        other_wrapper = SimpleNamespace(id="device_wrapper_other", identifiers={(DOMAIN, "100_201_2")}, via_device_id="hub_100")
-        rows = [boom_row, other_wrapper]
-        updated: list[tuple] = []
-
-        class _FakeRegistry:
-            def async_update_device(self, device_id, *, via_device_id):
-                if device_id == "device_boom":
-                    raise RuntimeError("boom updating device")
-                updated.append((device_id, via_device_id))
-
-        fake_registry = _FakeRegistry()
-
-        def _async_get(hass):
-            return fake_registry
-
-        def _async_entries_for_config_entry(registry, entry_id):
-            return list(rows)
-
+        """A registry update that raises on one eligible row must not prevent
+        the other eligible row from being cleared."""
+        updated, async_get, async_entries = self._make_fake_device_registry(raise_once_for={self.WRAPPER_ROW.id})
         entry, coordinator = self._make_entry_and_coordinator(self._sensors())
 
         with (
-            patch("custom_components.rainpoint.dr.async_get", side_effect=_async_get),
-            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=_async_entries_for_config_entry),
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
         ):
             _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
 
-        assert updated == [("device_wrapper_other", None)]
+        assert updated == [(self.WRAPPER_ROW_2.id, None)]
 
     def test_repeat_sweep_is_a_genuine_no_op(self):
-        """A second consecutive sweep, against a registry row that reflects the
-        first sweep's write, issues zero calls."""
-        row = SimpleNamespace(id="device_wrapper_1", identifiers={(DOMAIN, "100_201_1")}, via_device_id="hub_100")
-        rows = [row]
-        updated: list[tuple] = []
-
-        class _FakeRegistry:
-            def async_update_device(self, device_id, *, via_device_id):
-                updated.append((device_id, via_device_id))
-                row.via_device_id = via_device_id  # mirrors a real registry write
-
-        fake_registry = _FakeRegistry()
-
-        def _async_get(hass):
-            return fake_registry
-
-        def _async_entries_for_config_entry(registry, entry_id):
-            return list(rows)
-
+        """A second consecutive sweep, against a registry that re-filters on
+        every call, issues zero calls: the first sweep's clears are reflected
+        the second time the rows are fetched."""
+        updated, async_get, async_entries = self._make_fake_device_registry()
         entry, coordinator = self._make_entry_and_coordinator(self._sensors())
 
         with (
-            patch("custom_components.rainpoint.dr.async_get", side_effect=_async_get),
-            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=_async_entries_for_config_entry),
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
         ):
             _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
-            assert updated == [("device_wrapper_1", None)]
+            first_run = list(updated)
             _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
 
-        assert updated == [("device_wrapper_1", None)]
+        assert first_run == [(self.WRAPPER_ROW.id, None), (self.WRAPPER_ROW_2.id, None)]
+        assert updated == first_run
+
+
+class TestReconcileSubDeviceParentsUnpatchedRegistryStub:
+    """Pins the conftest MagicMock device-registry stub's no-op behaviour.
+
+    Every pre-existing async_setup_entry test in this file now runs the
+    reconcile without patching dr, so what happens there needs to be
+    deliberate rather than incidental. homeassistant.helpers.device_registry
+    is stubbed as a MagicMock module by conftest, and MagicMock implements
+    __iter__, returning an empty iterator by default -- so
+    list(dr.async_entries_for_config_entry(...)) evaluates to [] without
+    raising, and the per-row loop never executes. The registry-fetch
+    exception guard is never entered; this is not the swallowed-exception
+    path.
+
+    The real hazard this pins is a vacuous pass: a future test that forgets
+    to patch dr would see zero rows and go green while asserting nothing at
+    all. This test asserts zero update calls rather than merely "did not
+    raise", precisely so that difference stays visible.
+    """
+
+    def test_unpatched_dr_stub_walks_zero_rows_and_updates_nothing(self):
+        from custom_components.rainpoint import dr as unpatched_dr
+
+        entry = MagicMock()
+        entry.entry_id = "some_entry_never_patched"
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {"1_2_3": {"hub_paired": False}}}
+
+        registry = unpatched_dr.async_get(MagicMock())
+        calls_before = registry.async_update_device.call_count
+
+        _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
+
+        assert registry.async_update_device.call_count == calls_before
+
+
+class TestReconcileSubDeviceParentsCallSiteOrdering:
+    """Pins where _reconcile_sub_device_parents runs inside async_setup_entry."""
+
+    @pytest.mark.asyncio
+    async def test_reconcile_runs_once_after_first_refresh_and_before_forward_setups(self):
+        """Ordering here is not cosmetic: running before the first refresh
+        would read empty sensor data and, under the D-06 scope guard, clear
+        nothing at all, which is a silent total feature kill that a
+        state-only assertion would not catch."""
+        hass = _make_hass()
+        entry = _make_entry()
+        order: list[str] = []
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+
+        mock_coordinator = MagicMock()
+
+        async def _first_refresh():
+            order.append("first_refresh")
+
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock(side_effect=_first_refresh)
+
+        async def _forward_setups(entry_arg, platforms):
+            order.append("forward_setups")
+
+        hass.config_entries.async_forward_entry_setups = AsyncMock(side_effect=_forward_setups)
+
+        def _reconcile(hass_arg, entry_arg, coordinator_arg):
+            order.append("reconcile")
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch("custom_components.rainpoint.coordinator.RainPointCoordinator", return_value=mock_coordinator),
+            patch("custom_components.rainpoint._reconcile_sub_device_parents", side_effect=_reconcile) as mock_reconcile,
+        ):
+            await async_setup_entry(hass, entry)
+
+        assert mock_reconcile.call_count == 1
+        assert order == ["first_refresh", "reconcile", "forward_setups"]
