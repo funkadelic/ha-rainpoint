@@ -12,6 +12,7 @@ from custom_components.rainpoint import (
     _generic_control_row_removal_reason,
     _generic_row_removal_reason,
     _reconcile_sub_device_parents,
+    _reconcile_sub_device_parents_on_updates,
     _remove_stale_generic_entities,
     async_reload_integration,
     async_setup,
@@ -1935,6 +1936,124 @@ class TestReconcileSubDeviceParents(_DeviceSweepFixtures):
 
         assert first_run == [(self.WRAPPER_ROW.id, None), (self.WRAPPER_ROW_2.id, None)]
         assert updated == first_run
+
+
+class TestSubDeviceParentReconcileRealTimeline:
+    """Drives construct -> first refresh -> setup -> further polls for the
+    device the parenting fix actually exists for: the Bluetooth-only HTV210B,
+    which reports no status at all.
+
+    A silent sub-device is absent from coordinator.data["sensors"] until it
+    has been omitted for SILENT_DEBOUNCE_POLLS consecutive polls, so at the
+    moment the setup-time sweep runs its sensor key does not exist yet and
+    the scope guard leaves its row alone. Every earlier test for the sweep
+    injected a coordinator.data snapshot that already listed the key, which
+    is how a suite at full branch coverage still shipped a fix that could
+    not reach the reported hardware. This drives the real order instead.
+    """
+
+    ROW_ID = "device_bt_valve"
+    SENSOR_KEY = "100_200_1"
+
+    @staticmethod
+    def _make_fake_device_registry(row_id, sensor_key):
+        """Return (updated, async_get, async_entries) over one pre-existing row.
+
+        The row stands for a sub-device registered by an earlier version, so
+        it already carries the stale via_device_id that the DeviceInfo path
+        alone cannot clear. Rows are re-derived per call so a cleared row
+        presents as cleared on the next sweep.
+        """
+        updated: list[tuple] = []
+
+        class _FakeDeviceRegistry:
+            def async_update_device(self, device_id, *, via_device_id):
+                updated.append((device_id, via_device_id))
+
+        registry = _FakeDeviceRegistry()
+
+        def _async_get(hass):
+            return registry
+
+        def _async_entries_for_config_entry(reg, entry_id):
+            via = None if updated else "hub_100"
+            return [SimpleNamespace(id=row_id, identifiers={(DOMAIN, sensor_key)}, via_device_id=via)]
+
+        return updated, _async_get, _async_entries_for_config_entry
+
+    @staticmethod
+    def _build_coordinator():
+        """Build a real coordinator over one wrapper record whose only child is silent."""
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from tests.test_sensor import _silent_wrapper_hub_record
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [_silent_wrapper_hub_record()]
+        # Arrived but named nobody: the silent debounce increments rather
+        # than the status-outage path firing.
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {"hids": [100]}
+        entry.options = {}
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"test_entry": {}}}
+
+        return RainPointCoordinator(hass, client, entry), hass, entry
+
+    @pytest.mark.asyncio
+    async def test_silent_wrapper_child_is_reconciled_once_the_debounce_lands(self):
+        """The reported symptom, as a timeline: nothing to sweep at setup,
+        and the stale link cleared on the poll that first surfaces the
+        device. Asserting only the end state would pass against a
+        setup-only sweep that never reaches this device at all."""
+        coordinator, hass, entry = self._build_coordinator()
+        updated, async_get, async_entries = self._make_fake_device_registry(self.ROW_ID, self.SENSOR_KEY)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
+
+            # Poll 1: the key is still below the debounce, so the scope guard
+            # skips the row rather than clearing it.
+            assert self.SENSOR_KEY not in coordinator.data["sensors"]
+            assert updated == []
+
+            await coordinator.async_refresh()
+            await coordinator.async_refresh()
+
+            assert self.SENSOR_KEY in coordinator.data["sensors"]
+            assert updated == [(self.ROW_ID, None)]
+
+            # Further polls change nothing: the row now reads back cleared.
+            await coordinator.async_refresh()
+            assert updated == [(self.ROW_ID, None)]
+
+    @pytest.mark.asyncio
+    async def test_the_update_listener_is_unregistered_on_unload(self):
+        """The listener goes through entry.async_on_unload like every other
+        one, so a reload does not accumulate a second sweep per update."""
+        coordinator, hass, entry = self._build_coordinator()
+        _updated, async_get, async_entries = self._make_fake_device_registry(self.ROW_ID, self.SENSOR_KEY)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
+
+        assert len(coordinator._listeners) == 1
+        remove = entry.async_on_unload.call_args[0][0]
+        remove()
+        assert coordinator._listeners == []
 
 
 class TestReconcileSubDeviceParentsUnpatchedRegistryStub:

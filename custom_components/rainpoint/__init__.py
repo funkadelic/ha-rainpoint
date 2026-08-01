@@ -3,7 +3,7 @@ from typing import Literal
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -330,6 +330,40 @@ def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coord
             continue
 
 
+def _reconcile_sub_device_parents_on_updates(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Run the parenting reconcile now, then again on every coordinator update.
+
+    A setup-time sweep alone cannot reach the device this whole path exists
+    for. The Bluetooth-only sub-device reports no status at all, so it is a
+    silent device: _build_silent_subdevice returns None until the addr has
+    been omitted for SILENT_DEBOUNCE_POLLS consecutive polls, which means its
+    sensor key is not in coordinator.data["sensors"] on the first refresh.
+    The sweep's scope guard reads that as "not in this poll, leave it alone",
+    and nothing sweeps again, so the stale via_device_id survives forever.
+    The DeviceInfo half cannot rescue it either: the entity the late-add
+    listener creates several polls later omits via_device, and an omitted
+    via_device is UNDEFINED, which Home Assistant's device-update path skips.
+
+    Re-running on coordinator updates is the same mechanism, and the same
+    reason, as the late entity adders in sensor.py, valve.py and number.py:
+    anything that depends on a device appearing after the first poll needs a
+    listener, because setup runs exactly once.
+
+    No throttling and no memo of what was already swept. A row with no
+    via_device_id short-circuits before any registry write, so a repeat sweep
+    over settled devices makes no calls at all, and the clearing write cannot
+    re-arm itself: the row it clears reads back cleared.
+    """
+    _reconcile_sub_device_parents(hass, entry, coordinator)
+
+    @callback
+    def _on_coordinator_update() -> None:
+        """Re-sweep for a device that surfaced after setup."""
+        _reconcile_sub_device_parents(hass, entry, coordinator)
+
+    entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up RainPoint from a config entry."""
     session = async_get_clientsession(hass)
@@ -378,7 +412,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # coordinator's first refresh, so the sensor records they read are
     # already populated.
     _remove_stale_generic_entities(hass, entry, coordinator)
-    _reconcile_sub_device_parents(hass, entry, coordinator)
+    _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
 
     # An options change (e.g. toggling push) reloads through the existing
     # unload->setup path, no bespoke start/stop code path needed.
