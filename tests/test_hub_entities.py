@@ -359,7 +359,7 @@ class TestRainPointHubDeviceIDSensor:
         return sensor
 
     def test_native_value_returns_did(self):
-        """native_value should return the device id (did), matching the vendor app."""
+        """native_value should return the device id (did), matching the RainPoint app."""
         sensor = self._make(hid=100, did="17053410")
         assert sensor.native_value == "17053410"
 

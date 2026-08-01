@@ -387,7 +387,7 @@ class TestCoordinatorUpdate:
         """A decodable payload pre-fills the auto_decoded field with named values."""
         url = _coord_module._build_new_device_issue_url("HTV999XYZ", SAMPLE_HTV245_TLV_PAYLOAD)
         assert "auto_decoded=" in url
-        # Vendor field names from the generic decode land in the pre-fill.
+        # RainPoint field names from the generic decode land in the pre-fill.
         assert "STA_DURATION" in url
         assert "STA_WKSTATE" in url
 
@@ -539,7 +539,7 @@ class TestCoordinatorUpdate:
     async def test_same_model_different_model_code_each_notify(self):
         """Two variants sharing a model string are reported separately, not deduped.
 
-        The vendor catalog contains model strings mapping to more than one
+        The RainPoint catalog contains model strings mapping to more than one
         modelCode (e.g. HIC801W is both 278 and 279) whose port counts differ,
         so suppressing the second as a duplicate of the first would hide a
         genuinely distinct device.

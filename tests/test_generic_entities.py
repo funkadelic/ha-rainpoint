@@ -357,7 +357,7 @@ class TestEvaluateGenericGate:
 
         Roughly a third of the committed catalog is this shape, so reporting it
         as "not in the product catalog" would misdirect most reports about
-        those models: extending the snapshot cannot help a model the vendor
+        those models: extending the snapshot cannot help a model RainPoint
         already describes with nothing.
         """
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: [])
@@ -1680,7 +1680,7 @@ class TestRssiTransformWidths:
         return round(value, self.SPEC.precision)
 
     def test_two_byte_reading_decodes_to_the_app_value(self):
-        """b401 is -76 dBm at 1M PHY, the value the vendor app showed for an HTV210B.
+        """b401 is -76 dBm at 1M PHY, the value the RainPoint app showed for an HTV210B.
 
         The generic decoder hands this over as a little-endian word, 436, which
         the valid_range then rejected, so the reading was dropped entirely.

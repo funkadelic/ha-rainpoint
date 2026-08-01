@@ -705,7 +705,7 @@ class RainPointMqttClient:
 
         # The credential response's host is authoritative for the account's
         # region; fall back to the template host when absent. mqttHostUrl is
-        # formatted as "host:port", but the advertised port is the vendor's
+        # formatted as "host:port", but the advertised port is RainPoint's
         # plaintext 1883 -- we take only the host and always connect over TLS on
         # MQTT_BROKER_PORT (8883).
         host_url = creds.get("mqttHostUrl") or MQTT_BROKER_HOST_TEMPLATE.format(product_key=product_key)

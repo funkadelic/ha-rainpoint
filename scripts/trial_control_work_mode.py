@@ -3,7 +3,7 @@
 
 The generic-control allowlist and every new hand-written valve model are
 gated on proof that client.control_work_mode is the call that actually
-commands the hardware, not just that the vendor app can. This script is the
+commands the hardware, not just that the RainPoint app can. This script is the
 maintainer tool for producing that proof: it sends one controlWorkMode
 command to one explicitly named sub-device, then polls the device status so
 the run-state read-back (STA_WKSTATE bit 0 on valve models) is captured

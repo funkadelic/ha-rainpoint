@@ -85,7 +85,7 @@ DEFAULT_CONTROL_DURATION_SECONDS = 600  # 10 minutes
 # scripts/trial_control_work_mode.py) showed a hub-paired HTV210B rejects
 # that call with response code 3 for both open and close, in the same
 # session where the identical call shape was accepted by an HTV245FRF on
-# the same hub. The vendor app can command the valve through the cloud with
+# the same hub. The RainPoint app can command the valve through the cloud with
 # Bluetooth off, so a cloud path exists, but it is not this endpoint. The
 # models declaring this identity (HTV102B, HTV107B, HTV124LT, HTV210B,
 # HTV224B) carry no CTL_WATER datapoint at all, so admitting the identity

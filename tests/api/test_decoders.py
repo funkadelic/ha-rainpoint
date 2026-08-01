@@ -231,7 +231,7 @@ class TestDecodeHtv213frfValve:
         """A header whose fourth byte is a real PHY, not padding, still yields RSSI.
 
         The captured HTV210B frame carries 17e1b401: 0xb4 is -76 dBm, which the
-        vendor app showed for that device, and the 0x01 is the PHY. Matching the
+        RainPoint app showed for that device, and the 0x01 is the PHY. Matching the
         fourth byte against 0x00 voided the reading on any frame reporting a
         non-zero PHY, and the catalog declares this field two bytes wide on
         HTV213FRF and HTV405FRF, which share this decoder.
@@ -1329,7 +1329,7 @@ class TestHtv213ZoneUsageAndEventTime:
         assert zones[2]["last_usage_counts"] == 48
 
     def test_usage_counts_convert_to_gallons(self):
-        """421 counts is the calibration point: it showed as 0.8 gal in the vendor app."""
+        """421 counts is the calibration point: it showed as 0.8 gal in the RainPoint app."""
         zones = decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)["zones"]
         assert zones[1]["last_usage_gallons"] == 0.842
         assert round(zones[1]["last_usage_gallons"], 1) == 0.8
@@ -1450,7 +1450,7 @@ class TestDecodeHtv210b:
             assert zone["event_time"] is None
 
     def test_idle_capture_reports_rssi_battery_and_report_time(self):
-        """The frame's diagnostics match what the vendor app showed at capture time.
+        """The frame's diagnostics match what the RainPoint app showed at capture time.
 
         RSSI -76 dBm at 1M PHY, battery flag 1, and a report time that decodes
         to the calendar day the capture was taken.

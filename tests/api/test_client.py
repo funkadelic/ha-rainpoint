@@ -946,7 +946,7 @@ class TestTrimCatalog:
     def test_keeps_only_the_five_dp_fields(self):
         """A kept RainPoint model's dp entries keep exactly the five needed fields.
 
-        portNumber is deliberately not among them: the vendor declares it once
+        portNumber is deliberately not among them: RainPoint declares it once
         per model, not per dp entry, so it lives on the variant record.
         """
         raw = [
@@ -995,10 +995,10 @@ class TestTrimCatalog:
         assert set(result.keys()) == {"HTV245FRF", "HCS021FRF"}
         assert isinstance(result, dict)
 
-    def test_sorts_dp_entries_by_dpcode_regardless_of_vendor_order(self):
+    def test_sorts_dp_entries_by_dpcode_regardless_of_rainpoint_order(self):
         """Two runs with the same dp entries in a different order produce identical output.
 
-        The vendor API does not guarantee dp array order across calls; trim_catalog
+        The RainPoint API does not guarantee dp array order across calls; trim_catalog
         must sort by dpCode so --check/write output is stable and does not produce
         spurious drift on an otherwise-unchanged catalog.
         """
@@ -1101,7 +1101,7 @@ class TestTrimCatalog:
 
     def test_provenance_flags_are_carried_onto_the_variant_record(self):
         """hasDistribution and friends survive the trim so a maintainer can triage
-        an unfamiliar model without re-fetching the raw vendor response.
+        an unfamiliar model without re-fetching the raw RainPoint response.
 
         This is what would have answered "is HCS003FRF a real product?" directly:
         it is the only kind of record that is unpairable in the app.
@@ -1125,7 +1125,7 @@ class TestTrimCatalog:
         assert record["accessoryFlag"] is False
 
     def test_non_boolean_provenance_flags_are_dropped(self):
-        """A vendor field that is not a bool is omitted rather than committed as junk,
+        """A RainPoint field that is not a bool is omitted rather than committed as junk,
         matching how a non-integer portNumber degrades.
         """
         raw = [
@@ -1161,7 +1161,7 @@ class TestTrimCatalog:
         assert trim_catalog(raw)["HCS021FRF"]["*"]["portNumber"] is None
 
     def test_entry_without_a_model_code_lands_in_the_uncoded_bucket(self):
-        """Most vendor entries carry no code; they become the model-level default."""
+        """Most RainPoint entries carry no code; they become the model-level default."""
         raw = [{"model": "HCS021FRF", "dp": [{"dpCode": 10, "identity": "STA_RH"}]}]
 
         result = trim_catalog(raw)
@@ -1177,18 +1177,18 @@ class TestRefreshScriptDrift:
     """Tests for the --check drift report.
 
     Reporting every model as changed whenever the trim starts keeping a new
-    record key would drown the one thing --check exists to surface: a vendor
+    record key would drown the one thing --check exists to surface: a RainPoint
     datapoint that actually moved.
     """
 
     def test_provenance_only_changes_are_reported_separately(self, capsys):
-        """A snapshot that only gains vendor metadata is called out as such."""
+        """A snapshot that only gains RainPoint metadata is called out as such."""
         committed = {"HTV245FRF": {"303": {"portNumber": 2, "dp": [{"dpCode": 1}]}}}
         fresh = {"HTV245FRF": {"303": {"portNumber": 2, "hasDistribution": True, "dp": [{"dpCode": 1}]}}}
 
         assert refresh_product_catalog._print_drift(committed, fresh) is True
         out = capsys.readouterr().out
-        assert "changed only in vendor metadata (1): HTV245FRF" in out
+        assert "changed only in RainPoint metadata (1): HTV245FRF" in out
         assert "changed datapoints or ports" not in out
 
     def test_datapoint_drift_is_reported_with_the_fields_that_moved(self, capsys):
@@ -1199,7 +1199,7 @@ class TestRefreshScriptDrift:
         assert refresh_product_catalog._print_drift(committed, fresh) is True
         out = capsys.readouterr().out
         assert "HTV245FRF (dp, hasDistribution, portNumber)" in out
-        assert "changed only in vendor metadata" not in out
+        assert "changed only in RainPoint metadata" not in out
 
     def test_a_variant_present_on_one_side_only_counts_as_drift(self, capsys):
         """An added modelCode must not report as a change with no fields."""
@@ -1225,9 +1225,9 @@ class TestRefreshScriptDrift:
 class TestRefreshScriptMain:
     """Tests for scripts/refresh_product_catalog.py::main safety guards.
 
-    These guards are the only thing standing between a bad vendor pull and a
+    These guards are the only thing standing between a bad RainPoint pull and a
     corrupted committed catalog, so each refusal branch is exercised directly.
-    Every test stubs the network fetch; nothing here talks to the vendor.
+    Every test stubs the network fetch; nothing here talks to RainPoint.
     """
 
     @pytest.fixture(autouse=True)

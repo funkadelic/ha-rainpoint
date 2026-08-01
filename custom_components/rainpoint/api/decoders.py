@@ -58,7 +58,7 @@ _HTV213_DP_BASE_DURATION = 0x24
 _HTV213_DP_BASE_USAGE = 0x28
 
 # Gallons per raw usage count. Calibrated against a single maintainer reading:
-# a run the frame reported as 421 counts showed as 0.8 gal in the vendor app,
+# a run the frame reported as 421 counts showed as 0.8 gal in the RainPoint app,
 # which fits a 500-count-per-gallon flow sensor to well inside the one decimal
 # the app displays. Two other candidate factors (1/512 gal, 7.5 mL) also round
 # to that same 0.8, so the raw count is preserved next to the converted value:
@@ -233,7 +233,7 @@ def _extract_htv213_rssi(b: bytes) -> int | None:
     be matched against 0x00 to stop a 0x17/0xE1 pair inside another record's
     value bytes being read as the header, which silently voided the RSSI on any
     frame reporting a non-zero PHY: a captured HTV210B frame carries 17e1b401,
-    which the vendor app shows as -76 dBm at 1M PHY. The catalog declares this
+    which the RainPoint app shows as -76 dBm at 1M PHY. The catalog declares this
     field two bytes wide on HTV213FRF and HTV405FRF but one byte on HTV245FRF
     and HTV345FRF, so the width cannot be trusted to disambiguate either.
 
@@ -403,7 +403,7 @@ def _extract_htv213_zones(dp_map: dict[int, tuple[int, int]]) -> dict[int, dict]
 
         # On every frame captured so far this is the moment the zone's current
         # run ends (the frame's own report time plus the duration above), and
-        # it reads zero for an idle zone. It is named for the vendor's own
+        # it reads zero for an idle zone. It is named for RainPoint's own
         # STA_EVTIME identity rather than for that observed meaning, so a
         # firmware that later populates it while idle does not make the name a
         # lie.

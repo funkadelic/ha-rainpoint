@@ -103,7 +103,7 @@ class TestBuildSubDeviceInfo:
         assert info["sw_version"] == "1.4"
 
     def test_serial_number_is_the_mid_addr_pair(self):
-        """Sub-devices have no vendor serial, so the stable pair stands in for one."""
+        """Sub-devices have no manufacturer serial, so the stable pair stands in for one."""
         info = build_sub_device_info(self._info(mid=200, addr=7), name_fallback="Sensor 7")
         assert info["serial_number"] == "200_7"
 

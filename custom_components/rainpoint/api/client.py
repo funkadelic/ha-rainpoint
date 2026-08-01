@@ -299,7 +299,7 @@ class RainPointClient:
         return data.get("data", [])
 
     async def get_product_catalog(self) -> list[dict]:
-        """Fetch the vendor's full productModel catalog as a list of model entries.
+        """Fetch RainPoint's full productModel catalog as a list of model entries.
 
         Used only by the maintainer refresh script (scripts/refresh_product_catalog.py)
         to regenerate the committed, trimmed catalog snapshot -- the running

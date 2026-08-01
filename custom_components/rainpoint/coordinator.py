@@ -1158,7 +1158,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         """Log the unsupported-sensor warning and fire a once-per-variant persistent notification.
 
         Reports modelCode alongside the model string because the two are not
-        equivalent: the vendor catalog contains model strings that map to more
+        equivalent: the RainPoint catalog contains model strings that map to more
         than one modelCode, and the variants can differ in port count. A report
         carrying only the model string can therefore be ambiguous.
 

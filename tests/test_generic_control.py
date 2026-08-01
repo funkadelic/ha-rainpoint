@@ -345,7 +345,7 @@ class TestEvaluateControlGateRealCatalog:
         CTL_BT_WATER declares no CTL_WATER datapoint, so admitting it would build a
         valve whose every command fails while never reporting a state change -- the
         user would read it as slow hardware rather than an uncommanded one. This pins
-        the exclusion until a capture of the vendor app's traffic identifies the
+        the exclusion until a capture of the RainPoint app's traffic identifies the
         endpoint and payload it actually uses.
         """
         bt_variants = [

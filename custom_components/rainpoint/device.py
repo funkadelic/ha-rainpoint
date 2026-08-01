@@ -18,7 +18,7 @@ def build_sub_device_info(sensor_info: dict, *, name_fallback: str) -> DeviceInf
     coordinator already had, and only the sensor platform linked the device to
     its hub.
 
-    serial_number is the mid/addr pair rather than a vendor serial, which the
+    serial_number is the mid/addr pair rather than a manufacturer serial, which the
     status payloads do not carry. It is the same identity the entity unique IDs
     are built from, so it is stable across restarts and re-pairings that keep
     the device in place.

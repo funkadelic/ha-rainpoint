@@ -1392,7 +1392,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
 
     The value is a converted flow count, not a metered volume: the device
     reports a raw count and the gallons-per-count factor is calibrated from a
-    single vendor-app reading (see _USAGE_GALLONS_PER_COUNT in api/decoders.py).
+    single RainPoint-app reading (see _USAGE_GALLONS_PER_COUNT in api/decoders.py).
     Two consequences follow, and both are deliberate.
 
     There is no device_class. SensorDeviceClass.WATER accepts only the TOTAL

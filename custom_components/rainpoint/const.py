@@ -95,7 +95,7 @@ HUB_CONNECTIVITY_ISSUE_ID_PREFIX = "hub_disconnected"
 # Committed, variant-keyed force-disable list. Each member is a
 # (model, modelCode-as-string) tuple, keyed exactly the way the product
 # catalog itself is keyed: get_catalog_entry's UNCODED_VARIANT sentinel ("*")
-# is the modelCode for a variant the vendor supplied without one. Empty
+# is the modelCode for a variant RainPoint supplied without one. Empty
 # because no committed variant is currently known to be misrouted; it exists
 # so one misrouted variant can be force-disabled without disabling every
 # variant of that model line. Deliberately NOT keyed on bare model strings
@@ -107,7 +107,7 @@ GENERIC_CONTROL_OVERRIDE_DISABLED: frozenset[tuple[str, str]] = frozenset()
 # auto-delivers the hub's thing/service/property/set downlink messages to the
 # connected device unsolicited. See _parse_push_envelope for the payload shape.
 MQTT_BROKER_HOST_TEMPLATE = "{product_key}.iot-as-mqtt.us-west-1.aliyuncs.com"
-# TLS port. The credential's mqttHostUrl advertises the vendor's plaintext 1883,
+# TLS port. The credential's mqttHostUrl advertises RainPoint's plaintext 1883,
 # but the same broker also serves TLS on 8883. We always connect over TLS and
 # ignore the advertised port, verifying the chain against the pinned root below.
 MQTT_BROKER_PORT = 8883
