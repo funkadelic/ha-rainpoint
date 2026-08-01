@@ -671,7 +671,13 @@ def _build_sensor_entry(
     status_entry: dict,
     decoded: dict | None,
 ) -> dict:
-    """Build the per-sensor metadata dict that goes into the coordinator's sensors output."""
+    """Build the per-sensor metadata dict that goes into the coordinator's sensors output.
+
+    hub_paired is a derived verdict, not a payload passthrough: it is
+    is_hub_record(hub)'s answer to "does a real hub carry this sub-device",
+    cached once here at construction time so no consumer re-derives it from
+    the raw hub fields on its own.
+    """
     return {
         "hid": hub["hid"],
         "mid": mid,
@@ -684,6 +690,7 @@ def _build_sensor_entry(
         "firmware_version": sub.get("softVer"),
         "device_name": hub.get("deviceName"),
         "product_key": hub.get("productKey"),
+        "hub_paired": is_hub_record(hub),
         "raw_status": status_entry,
         "data": decoded,
     }

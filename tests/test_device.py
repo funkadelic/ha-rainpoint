@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from custom_components.rainpoint.const import DOMAIN
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_VALVE_245
 from custom_components.rainpoint.device import RainPointHubDevice, build_sub_device_info
 
 
@@ -93,6 +97,7 @@ class TestBuildSubDeviceInfo:
             "sub_name": "Soil Sensor",
             "model": "HCS026FRF",
             "firmware_version": "1.4",
+            "hub_paired": True,
         }
         base.update(overrides)
         return base
@@ -107,10 +112,42 @@ class TestBuildSubDeviceInfo:
         info = build_sub_device_info(self._info(mid=200, addr=7), name_fallback="Sensor 7")
         assert info["serial_number"] == "200_7"
 
-    def test_links_to_the_parent_hub(self):
-        """Every sub-device is a child of its hub, not a top-level device."""
-        info = build_sub_device_info(self._info(hid=100), name_fallback="Sensor 1")
+    def test_links_to_the_parent_hub_when_hub_paired(self):
+        """A sub-device carried by a real hub keeps its via_device link."""
+        info = build_sub_device_info(self._info(hid=100, hub_paired=True), name_fallback="Sensor 1")
         assert info["via_device"] == (DOMAIN, "hub_100")
+
+    def test_no_via_device_when_not_hub_paired(self):
+        """A sub-device carried by the Bluetooth wrapper record gets no parent.
+
+        Both product_key and device_name are populated here to prove the
+        builder reads only the stamped hub_paired field and never re-derives
+        the verdict from the raw hub fields it supersedes.
+        """
+        info = build_sub_device_info(
+            self._info(hub_paired=False, product_key="pk", device_name="dev"),
+            name_fallback="Sensor 1",
+        )
+        assert "via_device" not in info
+
+    def test_via_device_present_when_hub_paired_key_absent(self):
+        """A sensor_info with no hub_paired key defaults to hub-linked."""
+        info = self._info()
+        del info["hub_paired"]
+        result = build_sub_device_info(info, name_fallback="Sensor 1")
+        assert result["via_device"] == (DOMAIN, "hub_100")
+
+    def test_only_via_device_differs_between_the_two_polarities(self):
+        """Parenting is the only thing that changes; every other field agrees."""
+        linked = build_sub_device_info(self._info(hub_paired=True), name_fallback="Sensor 1")
+        parentless = build_sub_device_info(self._info(hub_paired=False), name_fallback="Sensor 1")
+        linked_without_parent = dict(linked)
+        linked_without_parent.pop("via_device", None)
+        parentless_without_parent = dict(parentless)
+        parentless_without_parent.pop("via_device", None)
+        assert linked_without_parent == parentless_without_parent
+        assert "via_device" not in parentless
+        assert "via_device" in linked
 
     def test_identifiers_are_unchanged(self):
         """The registry key keeps its existing shape so no migration is needed."""
@@ -133,3 +170,95 @@ class TestBuildSubDeviceInfo:
         """An absent model is reported as Unknown rather than left blank."""
         info = build_sub_device_info(self._info(model=None), name_fallback="Sensor 1")
         assert info["model"] == "Unknown"
+
+
+class TestSubDeviceParentingRealTimeline:
+    """Drives the real construct -> first refresh -> platform setup sequence
+    for two top-level records in one home, a real hub and the Bluetooth
+    wrapper record, proving parenting on the DeviceInfo the valve platform's
+    real async_setup_entry actually built, rather than on build_sub_device_info
+    called directly with a hand-built dict or on an injected coordinator.data
+    snapshot. Per the entity-lifecycle invariant (CLAUDE.md), entity creation
+    is one-shot off the single coordinator.data snapshot built at
+    async_config_entry_first_refresh, so asserting on the entity object here
+    is what proves the feature reaches a live platform and is not merely true
+    of the builder in isolation.
+
+    The wrapper record's real-world child is an HTV210B that reports no
+    status at all (silent). The reporting valve child used here is the
+    structurally equivalent case chosen so both polarities exist at setup
+    time with no debounce; the silent HTV210B shape is covered by Task 2's
+    driven timeline in tests/test_sensor.py.
+    """
+
+    @staticmethod
+    def _zone_payload():
+        """Reuse the TLV fixture from test_valve.py's zones-reported case
+        rather than inventing a second one."""
+        from tests.test_valve import TestValveEntitiesAppearWithinTheSession
+
+        return TestValveEntitiesAppearWithinTheSession._hub(zones_reported=True)[0]["subDeviceStatus"][0]["value"]
+
+    async def _build(self) -> dict:
+        """Construct, first-refresh, then run valve.async_setup_entry over a
+        two-record poll: a real hub at mid 200 and the Bluetooth wrapper
+        record at mid 201, each carrying one valve sub-device at addr 1.
+        Returns captured entities keyed by their _sensor_key."""
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        zone_value = self._zone_payload()
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 200,
+                "name": "Hub A",
+                "deviceName": "d",
+                "productKey": "pk",
+                "homeName": "H",
+                "subDevices": [{"addr": 1, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"}],
+            },
+            {
+                # The Bluetooth wrapper record: every identity field is the
+                # empty string and it carries neither did nor mac.
+                "mid": 201,
+                "name": "",
+                "deviceName": "",
+                "productKey": "",
+                "model": "",
+                "homeName": "H",
+                "subDevices": [{"addr": 1, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"}],
+            },
+        ]
+        client.get_multiple_device_status.return_value = [
+            {"mid": 200, "subDeviceStatus": [{"id": "D01", "value": zone_value, "time": 1785420002247}]},
+            {"mid": 201, "subDeviceStatus": [{"id": "D01", "value": zone_value, "time": 1785420002247}]},
+        ]
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [100]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        return {entity._sensor_key: entity for entity in captured}
+
+    @pytest.mark.asyncio
+    async def test_hub_paired_child_keeps_its_link_and_wrapper_child_has_none(self):
+        """SC 5's actual proof: parenting asserted on the entity the real
+        platform's async_setup_entry built off a real coordinator refresh."""
+        by_key = await self._build()
+
+        assert by_key["100_200_1"].device_info["via_device"] == (DOMAIN, "hub_100")
+        assert "via_device" not in by_key["100_201_1"].device_info
