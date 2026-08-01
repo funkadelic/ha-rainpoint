@@ -2012,6 +2012,54 @@ class TestHubConnectivitySurvivesDeviceListOutage:
             assert delete.call_count == deletes_before_outage
 
 
+def _set_hub_connected(client, value, time_ms=None):
+    """Mutate the next poll's connected entry on an already-built client.
+
+    Omitting time_ms leaves the entry with no "time" key, which is what a
+    firmware that reports connectivity without a change timestamp sends and
+    what the ordering guard has to treat as unorderable.
+    """
+    entry = {"id": "connected", "value": value}
+    if time_ms is not None:
+        entry["time"] = time_ms
+    client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [entry]}]
+
+
+def _build_hub_connectivity_coord(connected_value="1", time_ms=None):
+    """Return (coordinator, client) wired the way __init__.py wires it.
+
+    Shared by every hub connectivity class that drives a real construct ->
+    first refresh -> further refresh timeline. The hub carries no subDevices
+    on purpose: the not-reporting lifecycle shares the same
+    ir.async_create_issue / ir.async_delete_issue mocks those classes assert
+    call counts against, so a declared sub-device going silent for three
+    consecutive polls would raise its own issue on those same mocks at
+    exactly the poll asserted to be the only create call. Do not declare a
+    sub-device here.
+    """
+    client = AsyncMock()
+    client.get_devices_by_hid.return_value = [
+        {
+            "mid": 200,
+            "name": "Hub1",
+            "deviceName": "dev1",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [],
+        }
+    ]
+    _set_hub_connected(client, connected_value, time_ms)
+
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    entry.data = {CONF_HIDS: [100]}
+
+    hass = MagicMock()
+    hass.data = {}
+
+    return _coord_module.RainPointCoordinator(hass, client, entry), client
+
+
 class TestHubConnectivityDebounceRealTimeline:
     """Drives the real coordinator construct -> first refresh -> repeated
     refresh sequence, asserting between every step, rather than proving the
@@ -2019,43 +2067,8 @@ class TestHubConnectivityDebounceRealTimeline:
     snapshot -- the specific pattern that shipped two critical defects under
     100% branch coverage in a prior phase."""
 
-    @staticmethod
-    def _build(connected_value="1"):
-        """Return (coordinator, client) wired the way __init__.py wires it.
-
-        The hub carries no subDevices so the not-reporting lifecycle -- which
-        shares the same ir.async_create_issue/async_delete_issue mocks --
-        never fires and confuses this class's call-count assertions.
-        """
-        client = AsyncMock()
-        client.get_devices_by_hid.return_value = [
-            {
-                "mid": 200,
-                "name": "Hub1",
-                "deviceName": "dev1",
-                "productKey": "pk1",
-                "homeName": "Home",
-                "subDevices": [],
-            }
-        ]
-        client.get_multiple_device_status.return_value = [
-            {"mid": 200, "subDeviceStatus": [{"id": "connected", "value": connected_value}]}
-        ]
-
-        entry = MagicMock()
-        entry.entry_id = "test_entry"
-        entry.data = {CONF_HIDS: [100]}
-
-        hass = MagicMock()
-        hass.data = {}
-
-        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
-        return coordinator, client
-
-    @staticmethod
-    def _set_connected(client, value):
-        """Mutate the next poll's connected value on an already-built client."""
-        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": value}]}]
+    _build = staticmethod(_build_hub_connectivity_coord)
+    _set_connected = staticmethod(_set_hub_connected)
 
     @pytest.mark.asyncio
     async def test_three_consecutive_disconnected_polls_raise_exactly_one_issue(self):
@@ -2198,38 +2211,8 @@ class TestPollOnlyHubConnectivityParity:
     single call, so a future change that made the guard fire without push
     history goes red here rather than silently altering poll behaviour."""
 
-    @staticmethod
-    def _build(connected_value="1"):
-        """Return (coordinator, client) wired the way __init__.py wires it."""
-        client = AsyncMock()
-        client.get_devices_by_hid.return_value = [
-            {
-                "mid": 200,
-                "name": "Hub1",
-                "deviceName": "dev1",
-                "productKey": "pk1",
-                "homeName": "Home",
-                "subDevices": [],
-            }
-        ]
-        client.get_multiple_device_status.return_value = [
-            {"mid": 200, "subDeviceStatus": [{"id": "connected", "value": connected_value}]}
-        ]
-
-        entry = MagicMock()
-        entry.entry_id = "test_entry"
-        entry.data = {CONF_HIDS: [100]}
-
-        hass = MagicMock()
-        hass.data = {}
-
-        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
-        return coordinator, client
-
-    @staticmethod
-    def _set_connected(client, value):
-        """Mutate the next poll's connected value on an already-built client."""
-        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": value}]}]
+    _build = staticmethod(_build_hub_connectivity_coord)
+    _set_connected = staticmethod(_set_hub_connected)
 
     @staticmethod
     def _spy_guard(calls):
@@ -2361,14 +2344,13 @@ class TestHubConnectivityPushClearInterleavedTimeline:
     availability and hub_connected-attribute assertion for the same pushed
     edge instead of duplicating them here.
 
-    This class's fixture deliberately carries no subDevices, exactly as
-    TestHubConnectivityDebounceRealTimeline._build does and for the same
-    reason: the not-reporting lifecycle shares the same
-    ir.async_create_issue / ir.async_delete_issue mocks this class asserts
-    call counts against, and a declared sub-device that goes silent for
-    three consecutive polls would raise its own issue on those same mocks at
-    exactly the poll this class asserts is the only create call. Do not
-    declare a sub-device here and do not merge this class with
+    This class's fixture deliberately carries no subDevices, the reason
+    _build_hub_connectivity_coord records: the not-reporting lifecycle
+    shares the same ir.async_create_issue / ir.async_delete_issue mocks this
+    class asserts call counts against, and a declared sub-device that goes
+    silent for three consecutive polls would raise its own issue on those
+    same mocks at exactly the poll this class asserts is the only create
+    call. Do not declare a sub-device here and do not merge this class with
     TestValveAvailabilityPushedReconnect."""
 
     # The third pipe-delimited field of SAMPLE_HUB_RECONNECT_FRAME
@@ -2380,42 +2362,8 @@ class TestHubConnectivityPushClearInterleavedTimeline:
     _DISCONNECT_TS_1 = _RECONNECT_TS + 1000
     _DISCONNECT_TS_2 = _RECONNECT_TS + 2000
 
-    @staticmethod
-    def _build(connected_value="1"):
-        """Return (coordinator, client) wired the way __init__.py wires it.
-
-        The hub carries no subDevices for the reason given in the class
-        docstring; mirrors TestHubConnectivityDebounceRealTimeline._build.
-        """
-        client = AsyncMock()
-        client.get_devices_by_hid.return_value = [
-            {
-                "mid": 200,
-                "name": "Hub1",
-                "deviceName": "dev1",
-                "productKey": "pk1",
-                "homeName": "Home",
-                "subDevices": [],
-            }
-        ]
-        client.get_multiple_device_status.return_value = [
-            {"mid": 200, "subDeviceStatus": [{"id": "connected", "value": connected_value}]}
-        ]
-
-        entry = MagicMock()
-        entry.entry_id = "test_entry"
-        entry.data = {CONF_HIDS: [100]}
-
-        hass = MagicMock()
-        hass.data = {}
-
-        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
-        return coordinator, client
-
-    @staticmethod
-    def _set_connected(client, value):
-        """Mutate the next poll's connected value on an already-built client."""
-        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": value}]}]
+    _build = staticmethod(_build_hub_connectivity_coord)
+    _set_connected = staticmethod(_set_hub_connected)
 
     @staticmethod
     def _push_hub_edge(coordinator, connected, changed_ts):
@@ -3671,38 +3619,8 @@ class TestGuardHubConnectivityOrderRealTimeline:
     _OLDER_TS = 1785521850011
     _EVEN_NEWER_TS = _NEWER_TS + 5000
 
-    @staticmethod
-    def _build():
-        """Return (coordinator, client) wired the way __init__.py wires it."""
-        client = AsyncMock()
-        client.get_devices_by_hid.return_value = [
-            {
-                "mid": 200,
-                "name": "Hub1",
-                "deviceName": "dev1",
-                "productKey": "pk1",
-                "homeName": "Home",
-                "subDevices": [],
-            }
-        ]
-        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": "1"}]}]
-
-        entry = MagicMock()
-        entry.entry_id = "test_entry"
-        entry.data = {CONF_HIDS: [100]}
-
-        hass = MagicMock()
-        hass.data = {}
-
-        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
-        return coordinator, client
-
-    @staticmethod
-    def _set_connected(client, value, time_ms=None):
-        entry = {"id": "connected", "value": value}
-        if time_ms is not None:
-            entry["time"] = time_ms
-        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [entry]}]
+    _build = staticmethod(_build_hub_connectivity_coord)
+    _set_connected = staticmethod(_set_hub_connected)
 
     @pytest.mark.asyncio
     async def test_a_lagging_disconnected_poll_cannot_revert_a_newer_pushed_reconnect(self):
@@ -3758,48 +3676,17 @@ class TestHubConnectivityGuardComposition:
     D-09/D-10's push-side clear rather than the poll-side guard's
     interaction with the debounce reconcile.
 
-    This class's fixture carries no subDevices, exactly as
-    TestHubConnectivityDebounceRealTimeline._build does and for the same
-    reason: the not-reporting lifecycle shares the same
-    ir.async_create_issue/async_delete_issue mocks these tests assert call
-    counts against."""
+    This class's fixture carries no subDevices, the reason
+    _build_hub_connectivity_coord records: the not-reporting lifecycle
+    shares the same ir.async_create_issue/async_delete_issue mocks these
+    tests assert call counts against."""
 
     _NEWER_TS = 1785523062039
     _OLDER_TS = 1785521850011
     _EVEN_NEWER_TS = _NEWER_TS + 5000
 
-    @staticmethod
-    def _build():
-        """Return (coordinator, client) wired the way __init__.py wires it."""
-        client = AsyncMock()
-        client.get_devices_by_hid.return_value = [
-            {
-                "mid": 200,
-                "name": "Hub1",
-                "deviceName": "dev1",
-                "productKey": "pk1",
-                "homeName": "Home",
-                "subDevices": [],
-            }
-        ]
-        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "connected", "value": "1"}]}]
-
-        entry = MagicMock()
-        entry.entry_id = "test_entry"
-        entry.data = {CONF_HIDS: [100]}
-
-        hass = MagicMock()
-        hass.data = {}
-
-        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
-        return coordinator, client
-
-    @staticmethod
-    def _set_connected(client, value, time_ms=None):
-        entry = {"id": "connected", "value": value}
-        if time_ms is not None:
-            entry["time"] = time_ms
-        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [entry]}]
+    _build = staticmethod(_build_hub_connectivity_coord)
+    _set_connected = staticmethod(_set_hub_connected)
 
     @pytest.mark.asyncio
     async def test_held_pushed_connected_against_lagging_disconnected_polls_raises_no_card(self):
@@ -3892,44 +3779,15 @@ class TestHubConnectivityPushDuringInFlightPoll:
     _BASE_TS = 1785521850011  # matches SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO
     _PUSH_TS = _BASE_TS + 100_000  # strictly newer than _BASE_TS
 
-    @staticmethod
-    def _build():
-        """Return (coordinator, client) wired the way __init__.py wires it,
-        with get_multiple_device_status returning a non-blocking connected
-        status at _BASE_TS by default (used for the first refresh)."""
-        client = AsyncMock()
-        client.get_devices_by_hid.return_value = [
-            {
-                "mid": 200,
-                "name": "Hub1",
-                "deviceName": "dev1",
-                "productKey": "pk1",
-                "homeName": "Home",
-                "subDevices": [],
-            }
-        ]
-        client.get_multiple_device_status.return_value = [
-            {
-                "mid": 200,
-                "subDeviceStatus": [
-                    {
-                        "id": "connected",
-                        "value": "1",
-                        "time": TestHubConnectivityPushDuringInFlightPoll._BASE_TS,
-                    }
-                ],
-            }
-        ]
+    @classmethod
+    def _build(cls):
+        """The shared builder, pinned to a connected status at _BASE_TS.
 
-        entry = MagicMock()
-        entry.entry_id = "test_entry"
-        entry.data = {CONF_HIDS: [100]}
-
-        hass = MagicMock()
-        hass.data = {}
-
-        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
-        return coordinator, client
+        Unlike the other connectivity classes this one needs the first
+        refresh to carry a change timestamp, because the poll it races
+        against reports that same lagging moment.
+        """
+        return _build_hub_connectivity_coord(connected_value="1", time_ms=cls._BASE_TS)
 
     @pytest.mark.asyncio
     async def test_a_push_landing_mid_await_survives_the_completed_poll(self):
