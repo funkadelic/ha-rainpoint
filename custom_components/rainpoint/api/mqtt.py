@@ -168,6 +168,33 @@ class _HubFrame(NamedTuple):
     changed_ts: int
 
 
+def _resolve_hub_frame_candidate(text: str) -> str:
+    """Return the frame text to validate: the inner param string of a
+    recognised AliCloud envelope, or the input unchanged.
+
+    Split out of _parse_hub_frame so the envelope-unwrapping decision and the
+    shape-validation clauses can each be read on their own.
+
+    Every non-envelope outcome -- non-JSON, wrong method, params not a dict,
+    param value not a string -- returns the input untouched, so a genuinely
+    bare frame is never punished for failing a JSON probe it was never shaped
+    to pass.
+    """
+    try:
+        outer = json.loads(text)
+    except (ValueError, TypeError):
+        return text
+    if not isinstance(outer, dict) or outer.get("method") != MQTT_PUSH_METHOD:
+        return text
+    params = outer.get("params")
+    if not isinstance(params, dict):
+        return text
+    param_str = params.get(MQTT_PUSH_PARAMS_KEY)
+    if param_str is None and len(params) == 1:
+        param_str = next(iter(params.values()))
+    return param_str if isinstance(param_str, str) else text
+
+
 def _parse_hub_frame(payload: bytes) -> _HubFrame | None:
     """Parse a pipe-delimited hub connectivity frame into a typed record.
 
@@ -195,26 +222,7 @@ def _parse_hub_frame(payload: bytes) -> _HubFrame | None:
     if len(payload) > MQTT_PUSH_MAX_PAYLOAD_BYTES:
         return None
     text = payload.decode("utf-8", "replace").strip()
-
-    # Candidate resolution: default to the bare text; only a JSON envelope
-    # carrying the confirmed method name replaces it with the inner param
-    # string. Every other outcome -- non-JSON, wrong method, params not a
-    # dict, param value not a string -- leaves the candidate as the bare text,
-    # so a genuinely bare frame is never punished for failing a JSON probe it
-    # was never shaped to pass.
-    candidate = text
-    try:
-        outer = json.loads(text)
-    except (ValueError, TypeError):
-        outer = None
-    if isinstance(outer, dict) and outer.get("method") == MQTT_PUSH_METHOD:
-        params = outer.get("params")
-        if isinstance(params, dict):
-            param_str = params.get(MQTT_PUSH_PARAMS_KEY)
-            if param_str is None and len(params) == 1:
-                param_str = next(iter(params.values()))
-            if isinstance(param_str, str):
-                candidate = param_str
+    candidate = _resolve_hub_frame_candidate(text)
 
     # The captured frame ends with a single terminator, which would stop
     # section 4 parsing as an integer. Strip exactly one trailing terminator
@@ -258,6 +266,40 @@ _SHAPE_KEY_PREFIX_BYTES = 256
 # many class letters), keeping the key's own size bounded regardless of how
 # many sections the payload actually has.
 _SHAPE_KEY_MAX_CLASSIFIED_SECTIONS = 8
+
+
+def _hub_frame_mid_matches(mid_tail: str, own: str) -> bool:
+    """Cross-check a hub frame's section-1 tail against the client's own mid.
+
+    A suffix test, and its strength is set by the width guard rather than by
+    the operator. At the only observed mid width, `own` is exactly as long as
+    the frame's fixed-width tail slot, so the suffix test is an exact
+    slot comparison: neither a shorter nor a longer neighbouring mid can
+    satisfy it. At any other width no capture exists to pin the slot, so the
+    same test degrades to a proper-suffix match. That residual is accepted
+    and logged rather than dropped: rejecting every frame of an unobserved
+    width would silently disable the feature for it, which is worse, and the
+    observer topic is per-hub so cross-delivery is hypothetical (T-17-02).
+
+    Defense in depth against a broker that ever cross-delivers, never a
+    source of the mid: the mid handed to the coordinator is always the
+    construction-supplied one (D-06).
+    """
+    if len(own) != MQTT_PUSH_HUB_FRAME_MID_WIDTH:
+        _LOGGER.debug(
+            "RainPoint MQTT hub frame mid cross-check used the suffix fallback (hub_mid=%s width=%s, expected width=%s)",
+            own,
+            len(own),
+            MQTT_PUSH_HUB_FRAME_MID_WIDTH,
+        )
+    if mid_tail.endswith(own):
+        return True
+    _LOGGER.debug(
+        "RainPoint MQTT hub frame mid mismatch: frame_tail=%s hub_mid=%s",
+        mid_tail,
+        own,
+    )
+    return False
 
 
 def _section_class(section: str) -> str:
@@ -791,33 +833,7 @@ class RainPointMqttClient:
 
         frame = _parse_hub_frame(payload)
         if frame is not None:
-            own = str(self._hub_mid)
-            if len(own) == MQTT_PUSH_HUB_FRAME_MID_WIDTH:
-                # Exact comparison of the fixed-width tail slot: neither a
-                # shorter nor a longer neighboring mid at this width can
-                # satisfy it.
-                tail_matches = frame.mid_tail[-MQTT_PUSH_HUB_FRAME_MID_WIDTH:] == own
-            else:
-                # No capture has produced a mid of any other width. Falling
-                # back to a suffix test degrades the guarantee rather than
-                # dropping every frame and silently disabling the feature for
-                # an unobserved width. Residual, accepted: on this path a
-                # proper-suffix mid can still satisfy it; that is acceptable
-                # because the observer topic is per-hub and cross-delivery is
-                # hypothetical (T-17-02).
-                tail_matches = frame.mid_tail.endswith(own)
-                _LOGGER.debug(
-                    "RainPoint MQTT hub frame mid cross-check used the suffix fallback (hub_mid=%s width=%s, expected width=%s)",
-                    own,
-                    len(own),
-                    MQTT_PUSH_HUB_FRAME_MID_WIDTH,
-                )
-            if not tail_matches:
-                _LOGGER.debug(
-                    "RainPoint MQTT hub frame mid mismatch: frame_tail=%s hub_mid=%s",
-                    frame.mid_tail,
-                    own,
-                )
+            if not _hub_frame_mid_matches(frame.mid_tail, str(self._hub_mid)):
                 return
             if self._drop_if_no_coordinator():
                 return
