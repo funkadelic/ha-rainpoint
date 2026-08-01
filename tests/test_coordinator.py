@@ -2197,12 +2197,12 @@ class TestHubConnectivityDebounceRealTimeline:
 
 
 class TestPollOnlyHubConnectivityParity:
-    """SC 6: with the push channel down and no pushed edge ever applied,
+    """With the push channel down and no pushed edge ever applied,
     hub connectivity behaves exactly as Phase 16 shipped it. This class
     does not duplicate TestHubConnectivityDebounceRealTimeline,
     TestHubConnectivityIntegration or TestHubConnectivitySurvivesDeviceListOutage
-    (the per-behaviour proofs); it is the composed proof that the D-16
-    guard changed none of them, driven with no apply_hub_push_update call
+    (the per-behaviour proofs); it is the composed proof that the
+    poll-side ordering guard changed none of them, driven with no apply_hub_push_update call
     anywhere in the class and no direct assignment to coordinator.data.
 
     _guard_hub_connectivity_order is instrumented rather than trusted: a
@@ -2239,7 +2239,8 @@ class TestPollOnlyHubConnectivityParity:
         fourth raises no second card; recovery clears and resets the
         counter; a fresh outage crosses the threshold again from zero --
         the same lifecycle TestHubConnectivityDebounceRealTimeline pins,
-        composed here as one proof that D-16 changed none of it."""
+        composed here as one proof that the ordering guard changed none
+        of it."""
         coordinator, client = self._build(connected_value="1")
         guard_calls: list[tuple[dict, dict]] = []
 
@@ -2336,7 +2337,7 @@ class TestPollOnlyHubConnectivityParity:
 
 
 class TestHubConnectivityPushClearInterleavedTimeline:
-    """D-09/D-10 interleaved over a real driven timeline: raising the card
+    """Raise and push-clear interleaved over a real driven timeline: raising the card
     stays poll-counted only, a pushed reconnect clears it and the counter
     immediately, and a hub that goes down again starts a fresh three-poll
     count. Companion to tests/test_valve.py's
@@ -2410,7 +2411,7 @@ class TestHubConnectivityPushClearInterleavedTimeline:
 
             # A pushed disconnect delivered mid-sequence flips the entity
             # immediately but must not touch the counter or raise a card, no
-            # matter how many arrive back to back (D-09).
+            # matter how many arrive back to back.
             self._push_hub_edge(coordinator, False, self._DISCONNECT_TS_1)
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
             assert (100, 200) not in coordinator._hub_disconnect_poll_counts
@@ -2930,7 +2931,7 @@ class TestApplyPushUpdate:
         coord.async_set_updated_data.assert_not_called()
 
     def test_sub_device_push_leaves_hub_connectivity_object_identical(self):
-        """D-12: only the connectivity frame changes connectivity. A pushed
+        """Only the connectivity frame changes connectivity. A pushed
         sub-device reading must not move hub_connectivity in either
         direction, even though it updates the sensor entry it targets --
         silence cannot imply disconnected, and the rule's inverse (a fresh
@@ -3192,7 +3193,7 @@ _APPLY_HUB = _coord_module.RainPointCoordinator.apply_hub_push_update
 
 
 class TestApplyHubPushUpdate:
-    """apply_hub_push_update: the second sanctioned push entry point (D-01).
+    """apply_hub_push_update: the second sanctioned push entry point.
     Copy-on-write merge of one hub connectivity record, notifying listeners
     without resetting the poll timer, and dropping misses via a ladder that
     mirrors apply_push_update's."""
@@ -3234,7 +3235,7 @@ class TestApplyHubPushUpdate:
 
     def test_unconvertible_timestamp_declines_the_increment(self):
         """changed_ts=10**20 is out of datetime.fromtimestamp's representable
-        range (D-08): the held record is left byte-identical and listeners
+        range: the held record is left byte-identical and listeners
         are not notified, deliberately diverging from the poll path's
         unknown-on-malformed rule."""
         hub = _push_hub()
@@ -3250,7 +3251,7 @@ class TestApplyHubPushUpdate:
 
     def test_merge_writes_three_key_record_and_preserves_sibling_identity(self):
         """The merge writes exactly state/changed_at/state_raw, carries
-        state_raw forward from the held record (D-03), preserves sibling mid
+        state_raw forward from the held record, preserves sibling mid
         object identity, carries hubs by reference, and notifies listeners
         exactly once without resetting the poll timer."""
         hub = _push_hub()
@@ -3299,7 +3300,7 @@ class TestApplyHubPushUpdate:
         coord._hub_connectivity_issues.async_clear.assert_not_called()
 
     def test_connected_edge_pops_the_counter_and_clears_the_issue_once(self):
-        """D-10/D-11: a pushed connected edge against a hub whose counter
+        """A pushed connected edge against a hub whose counter
         reads 2 pops that key and clears the Repairs card exactly once."""
         hub = _push_hub()
         coord = _seed_push_coord(hub, sensors={})
@@ -3311,7 +3312,7 @@ class TestApplyHubPushUpdate:
         coord._hub_connectivity_issues.async_clear.assert_called_once_with(100, 200)
 
     def test_disconnected_edge_leaves_the_counter_and_issue_untouched(self):
-        """D-09: raising the card stays poll-counted only, so a pushed
+        """Raising the card stays poll-counted only, so a pushed
         disconnect must never increment the counter or clear anything."""
         hub = _push_hub()
         coord = _seed_push_coord(hub, sensors={})
@@ -3350,7 +3351,7 @@ class TestApplyHubPushUpdate:
 
 
 class TestApplyHubPushUpdateOrderingGuard:
-    """apply_hub_push_update's ordering guard (D-13/D-14/D-15): the pushed
+    """apply_hub_push_update's ordering guard: the pushed
     change moment is compared against the held record's changed_at, ordering
     both channels against one identical value. Strictly newer wins; an equal
     or older moment is a no-op; a held moment that cannot be established
@@ -3419,7 +3420,7 @@ class TestApplyHubPushUpdateOrderingGuard:
         coord.async_update_listeners.assert_called_once()
 
     def test_strictly_newer_pushed_edge_against_a_valid_older_held_moment_applies(self):
-        """D-14's "strictly newer wins" from the winning side: a held record
+        """ "Strictly newer wins" from the winning side: a held record
         with a genuine, parseable, older changed_at is not a barrier."""
         hub = _push_hub()
         coord = _seed_push_coord(hub, sensors={})
@@ -3440,7 +3441,7 @@ class TestApplyHubPushUpdateOrderingGuard:
 
     def test_unparseable_held_changed_at_falls_through_and_applies(self):
         """Refusing here would make push a permanent no-op on any firmware
-        whose connected entry carries no usable time (D-15)."""
+        whose connected entry carries no usable time."""
         hub = _push_hub()
         coord = _seed_push_coord(hub, sensors={})
         coord.data["hub_connectivity"] = {
@@ -3455,10 +3456,10 @@ class TestApplyHubPushUpdateOrderingGuard:
 
 
 class TestGuardHubConnectivityOrder:
-    """_guard_hub_connectivity_order (D-16): the poll-side ordering guard
+    """_guard_hub_connectivity_order: the poll-side ordering guard
     applied at the single _async_update_data call site. A strictly older
     poll record must not overwrite a newer held one; state_raw always takes
-    the latest polled value regardless of whether the guard fired (D-17)."""
+    the latest polled value regardless of whether the guard fired."""
 
     def test_older_poll_is_held_off_by_a_newer_held_record(self):
         """The example from the plan: held changed_at is the 18:37:42
@@ -3606,7 +3607,7 @@ class TestGuardHubConnectivityOrder:
 
 
 class TestGuardHubConnectivityOrderRealTimeline:
-    """The D-16 guard proven against a real prior snapshot -- construct ->
+    """The poll-side guard proven against a real prior snapshot -- construct ->
     first refresh -> a pushed edge -> a further poll -- rather than a
     hand-built prior dict, for at least three of the pure-function cases
     TestGuardHubConnectivityOrder already covers directly."""
@@ -3669,11 +3670,11 @@ class TestGuardHubConnectivityOrderRealTimeline:
 
 
 class TestHubConnectivityGuardComposition:
-    """The D-16 guard composes with _sync_hub_connectivity_issues in both
+    """The poll-side guard composes with _sync_hub_connectivity_issues in both
     directions (the fifth point of _guard_hub_connectivity_order's
     docstring). Deliberately separate from
-    TestHubConnectivityPushClearInterleavedTimeline (17-02), which pins
-    D-09/D-10's push-side clear rather than the poll-side guard's
+    TestHubConnectivityPushClearInterleavedTimeline, which pins the
+    push-side clear rather than the poll-side guard's
     interaction with the debounce reconcile.
 
     This class's fixture carries no subDevices, the reason
@@ -3764,12 +3765,12 @@ class TestHubConnectivityGuardComposition:
 
 
 class TestHubConnectivityPushDuringInFlightPoll:
-    """WR-01 regression: a hub connectivity push landing while a poll is
+    """Regression: a hub connectivity push landing while a poll is
     suspended inside its awaited fetch must survive that poll's completion,
     not get silently discarded when DataUpdateCoordinator replaces self.data
     wholesale with the poll's return value.
 
-    _async_update_data reads its D-16 prior_connectivity snapshot as late as
+    _async_update_data reads its prior_connectivity snapshot as late as
     possible -- after _fetch_status_by_mid's await, immediately before the
     per-hub loop -- specifically so a push landing during that awaited
     network round-trip is visible to the ordering guard. Hoisting the read
@@ -3845,7 +3846,7 @@ class TestHubConnectivityPushDuringInFlightPoll:
 class TestHubPushTracerEndToEnd:
     """Drives construct -> first refresh -> platform setup -> one push
     dispatch in real order, proving the pushed disconnect reaches the Phase
-    16 connectivity entity with no intervening poll (SC 1)."""
+    16 connectivity entity with no intervening poll."""
 
     @pytest.mark.asyncio
     async def test_pushed_disconnect_reaches_the_connectivity_entity_with_no_poll_between(self):

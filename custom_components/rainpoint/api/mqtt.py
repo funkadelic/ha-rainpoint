@@ -156,10 +156,10 @@ def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
 
 
 class _HubFrame(NamedTuple):
-    """One recognized hub-level connectivity frame (D-05).
+    """One recognized hub-level connectivity frame.
 
-    mid_tail is section 1 as parsed -- the caller's cross-check value only
-    (D-06); it is never handed to the coordinator. connected and changed_ts
+    mid_tail is section 1 as parsed -- the caller's cross-check value only;
+    it is never handed to the coordinator. connected and changed_ts
     are the two fields apply_hub_push_update actually consumes.
     """
 
@@ -237,7 +237,7 @@ def _parse_hub_frame(payload: bytes) -> _HubFrame | None:
 
     sections = candidate.split(MQTT_PUSH_SECTION_DELIMITER)
 
-    # D-05's five clauses, each its own early return so the failing clause is
+    # The five recognition clauses, each its own early return so the failing clause is
     # nameable in a diagnostic rather than folded into one combined boolean.
     if any(section.lstrip().startswith("{") for section in sections):
         return None
@@ -250,7 +250,7 @@ def _parse_hub_frame(payload: bytes) -> _HubFrame | None:
     try:
         changed_ts = int(sections[2])
         # Section 4 is propVer: validated so the frame's shape can be
-        # trusted, then discarded (D-13 rejected it as the ordering key), so
+        # trusted, then discarded (section 3 is the ordering key, not this), so
         # it never enters the return surface as a field with no consumer.
         int(sections[3])
     except ValueError:
@@ -289,12 +289,12 @@ def _hub_frame_mid_matches(mid_tail: str, own: str) -> bool:
     That residual is accepted rather than engineered away: no capture has
     produced a mid of any width but the observed one, rejecting every frame
     of an unobserved width would silently disable the feature for it, and the
-    observer topic is per-hub so cross-delivery is hypothetical (T-17-02).
+    observer topic is per-hub so cross-delivery is hypothetical.
     The unobserved-width case is logged so it is at least visible.
 
     Defense in depth against a broker that ever cross-delivers, never a
     source of the mid: the mid handed to the coordinator is always the
-    construction-supplied one (D-06).
+    construction-supplied one.
     """
     if len(own) != MQTT_PUSH_HUB_FRAME_MID_WIDTH:
         _LOGGER.debug(
@@ -329,7 +329,7 @@ def _section_class(section: str) -> str:
 
 
 def _shape_key(payload: bytes) -> str:
-    """Classify a payload's structural shape for D-07's one-shot-per-shape log.
+    """Classify a payload's structural shape for the one-shot-per-shape log.
 
     Built from the pipe-delimited section count of the first
     _SHAPE_KEY_PREFIX_BYTES bytes plus a per-section class letter for at most
@@ -417,7 +417,7 @@ class RainPointMqttClient:
         self._message_count = 0
         self._last_message_at: float | None = None
         self._connected = False
-        # D-07 one-shot-per-shape bookkeeping: dies with the client rather
+        # One-shot-per-shape bookkeeping: dies with the client rather
         # than living for the process, and is bounded absolutely by
         # MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT regardless of how chatty the
         # downlink gets.
@@ -855,7 +855,7 @@ class RainPointMqttClient:
             # coordinator is always self._hub_mid from construction, never one
             # parsed out of the payload. The cross-check above is a defense
             # in depth against a broker that ever cross-delivers, not a
-            # source of the mid (D-06).
+            # source of the mid.
             self._coordinator.apply_hub_push_update(self._hub_mid, frame.connected, frame.changed_ts)
             return
 

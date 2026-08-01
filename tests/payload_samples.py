@@ -278,7 +278,7 @@ SAMPLE_HTV210B_TLV_PAYLOAD = (
 # apart, so a few ms of skew cannot invert them -- but do not write a test
 # that asserts the two are equal.
 SAMPLE_HUB_DISCONNECT_FRAME = "#P260731181730000016822282236547|0|1785521850011|112882164350#"
-# Reconstructed from the disconnect frame's shape: 17-CONTEXT.md records the
+# Reconstructed from the disconnect frame's shape: the capture recorded the
 # reconnect frame elided as "...|1|1785523062039|112882164351#". The
 # reconstruction is arithmetically consistent: 1785523062039 ms is
 # 2026-07-31T18:37:42.039+00:00, matching the measured 11:37:42 local

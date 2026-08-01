@@ -441,7 +441,7 @@ def _read_hub_connectivity(status: dict) -> dict:
 
 
 def _guard_hub_connectivity_order(polled: dict, prior: dict | None) -> dict:
-    """Hold a strictly older poll's connectivity half against a newer held one (D-16).
+    """Hold a strictly older poll's connectivity half against a newer held one.
 
     Applied at the single _async_update_data call site both fetch paths
     funnel through, immediately after _read_hub_connectivity. Kept as a
@@ -462,12 +462,12 @@ def _guard_hub_connectivity_order(polled: dict, prior: dict | None) -> dict:
     and the unordered case. That is what keeps the poll authoritative: the
     guard only ever holds a moment it can prove is older.
 
-    Third, D-17: state_raw always takes the latest polled value regardless
+    Third, state_raw always takes the latest polled value regardless
     of whether the guard fired. The guard exists to stop a stale
     connectivity flag winning, and state_raw is an unrelated diagnostic the
     push never carries, so discarding it would blank the raw state
     attribute for a full cycle every time the guard fires. This pairs with
-    the push side's D-03 from the other direction: neither path destroys
+    apply_hub_push_update from the other direction: neither path destroys
     the field the other owns.
 
     Fourth, the absent case. An absent status yields the unknown record
@@ -769,7 +769,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
     def apply_hub_push_update(self, mid: int, connected: bool, changed_ts: int) -> None:
         """Merge a pushed hub-level connectivity edge into coordinator data.
 
-        The second sanctioned push entry point (D-01), alongside
+        The second sanctioned push entry point, alongside
         apply_push_update: a hub frame carries no addr, no decoder, and
         touches neither the sensors nor the status branch, so it shares none
         of that method's merge logic even though it mirrors its drop ladder
@@ -781,14 +781,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
         connectivity record on the poll path, and writing one here would
         create a record the next poll deletes.
 
-        The ordering guard below (D-13/D-14/D-15) decides whether the pushed
+        The ordering guard below decides whether the pushed
         edge is applied at all. On a connected edge that is applied, this
         method also explicitly pops `_hub_disconnect_poll_counts` and calls
-        `_hub_connectivity_issues.async_clear` (D-10/D-11): the merge is
+        `_hub_connectivity_issues.async_clear`: the merge is
         copy-on-write over coordinator data and touches neither, so clearing
         has to be explicit here, exactly as apply_push_update already does
         for the silent-device pair. A pushed disconnected edge leaves both
-        untouched (D-09): raising the card stays poll-counted only, so "3
+        untouched: raising the card stays poll-counted only, so "3
         consecutive polls" keeps meaning literally that.
         """
         data = self.data
@@ -812,7 +812,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
         changed_dt = _status_entry_time({"time": changed_ts})
         if changed_dt is None:
-            # Deliberate divergence from the poll path's D-08: a poll is a
+            # Deliberate divergence from _read_hub_connectivity: a poll is a
             # complete observation, so an unconvertible timestamp there
             # honestly degrades to unknown. A push is an increment on top of
             # a poll, so the honest answer here is to decline the increment
@@ -827,7 +827,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
         held = ((data.get("hub_connectivity") or {}).get(mid)) or {}
 
-        # Ordering guard (D-13/D-14/D-15). The change timestamp is the
+        # Ordering guard. The change timestamp is the
         # ordering key, compared against the held record's own changed_at:
         # the poll path already stores that field from the same cloud field,
         # so both channels order against one identical value rather than two
@@ -849,7 +849,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Dropping already-recorded hub push: mid=%s moment=%s", mid, changed_dt.isoformat())
                 return
         # A held moment of None, an absent held record, and an unparseable
-        # held changed_at all fall through to apply (D-15): there is no
+        # held changed_at all fall through to apply: there is no
         # recorded moment for the pushed edge to be older than, and refusing
         # would make push a permanent no-op on any firmware whose connected
         # entry carries no usable time, silently disabling the feature with
@@ -858,7 +858,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         record = {
             "state": HUB_CONNECTED if connected else HUB_DISCONNECTED,
             "changed_at": changed_dt.isoformat(),
-            # Carried forward from the held record, untouched (D-03/D-17): the
+            # Carried forward from the held record, untouched: the
             # frame does not carry the raw `state` id, so a pushed edge must
             # neither invent this field nor blank a poll-established
             # diagnostic for up to 120s.
@@ -867,7 +867,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         RainPointCoordinator._merge_push_hub_connectivity(self, mid, record)
 
         if connected:
-            # Connected-edge clear (D-10/D-11). The merge above is
+            # Connected-edge clear. The merge above is
             # copy-on-write over coordinator data and touches no debounce or
             # issue state, so clearing has to be explicit here rather than
             # folded into the merge, exactly as apply_push_update already
@@ -884,7 +884,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # next poll re-raises if it was wrong -- while raising early is
             # not, which is the flap-raises-a-card case Phase 16 already
             # rejected. So a pushed disconnected edge leaves both the
-            # counter and the issue untouched (D-09): the counter stays
+            # counter and the issue untouched: the counter stays
             # poll-counted only, so "3 consecutive polls" keeps meaning
             # literally that and the coordinator holds one debounce concept
             # rather than two.
@@ -965,7 +965,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             if hubs:
                 status_by_mid = await RainPointCoordinator._fetch_status_by_mid(self, hubs)
 
-            # D-16: the prior snapshot both _fetch_status_by_mid paths' guard
+            # The prior snapshot both _fetch_status_by_mid paths' guard
             # reads from, hoisted once rather than per hub. Read as late as
             # possible -- here, after every await above (_collect_hubs and
             # _fetch_status_by_mid) has already yielded control back to the
@@ -999,7 +999,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 # The Bluetooth wrapper record has no cloud connection to report
                 # on, so it must contribute no connectivity record at all. Both
                 # the multipleDeviceStatus path and the _fallback_per_hub_status
-                # path funnel into status_by_mid above, so applying the D-16
+                # path funnel into status_by_mid above, so applying the
                 # guard at this one site is what makes the two fetch paths
                 # observe an identical ordering rule; a second guard site would
                 # be the way they could drift apart.

@@ -992,7 +992,7 @@ class TestValveAvailabilityRealTimeline:
 
 
 class TestValveAvailabilityPushedReconnect:
-    """SC 3: a pushed reconnect must close the valve-availability gate at
+    """A pushed reconnect must close the valve-availability gate at
     push latency, with no async_refresh() between the pushed dispatch and
     the read that follows it. Companion to TestValveAvailabilityRealTimeline
     above (poll-only) and to TestHubConnectivityPushClearInterleavedTimeline

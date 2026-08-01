@@ -581,7 +581,7 @@ class TestPushEnvelopeParsing:
 
 
 class TestHubFrameParsing:
-    """_parse_hub_frame as a pure function: fully fail-safe (D-05), and
+    """_parse_hub_frame as a pure function: fully fail-safe, and
     fail-safe via two exception scopes rather than one (the load-bearing fix
     a literal transcription of _parse_push_envelope's shape would have missed)."""
 
@@ -692,7 +692,7 @@ class TestHubFrameParsing:
         ],
     )
     def test_each_d05_clause_failing_yields_none(self, mutated, reason):
-        """Each of D-05's five clauses, failing independently, drops the frame."""
+        """Each of the five recognition clauses, failing independently, drops the frame."""
         assert mqtt_module._parse_hub_frame(mutated.encode()) is None, reason
 
     @pytest.mark.parametrize(
@@ -716,7 +716,7 @@ class TestHubFrameParsing:
 class TestHubFrameRouting:
     """_dispatch_push routes a recognized hub frame to apply_hub_push_update,
     always with the client's own construction-supplied mid, never the frame's
-    parsed mid_tail (D-06)."""
+    parsed mid_tail."""
 
     def test_hub_frame_reaches_apply_hub_push_update_with_the_clients_own_mid(self):
         coordinator = MagicMock()
@@ -752,7 +752,7 @@ class TestHubFrameRouting:
     def test_fallback_width_admits_a_proper_suffix_mid_as_documented_residual(self):
         """own is 5 digits, not the observed 6-digit width, and happens to be a
         proper suffix of the frame's real mid: the fallback path admits it.
-        This is T-17-02's documented, accepted residual for an unobserved mid
+        This is the documented, accepted residual for an unobserved mid
         width -- degrading to a weaker check beats dropping every frame and
         silently disabling the feature for that width."""
         coordinator = MagicMock()
