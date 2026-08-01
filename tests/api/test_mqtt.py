@@ -12,6 +12,12 @@ import pytest
 
 import custom_components.rainpoint.api.mqtt as mqtt_module
 from custom_components.rainpoint.api.mqtt import RainPointMqttClient, RainPointMqttError
+from tests.payload_samples import (
+    SAMPLE_HUB_DISCONNECT_FRAME,
+    SAMPLE_HUB_FRAME_MID,
+    SAMPLE_HUB_RECONNECT_FRAME,
+    SAMPLE_NON_HUB_PIPE_FRAME,
+)
 
 FAKE_DEVICE_SECRET = "SEKRIT-value-9f3a"
 
@@ -150,8 +156,14 @@ class TestMessageReceiptLogging:
         await client.async_disconnect()
 
     @pytest.mark.asyncio
-    async def test_undecodable_push_logs_payload_preview_on_drop_path(self, caplog):
-        """A message with no sub-device update logs a payload preview at DEBUG for diagnosis."""
+    async def test_first_unrecognized_shape_announces_itself_at_info_without_the_payload(self, caplog):
+        """The first payload of a distinct unrecognized shape announces itself
+        at INFO so it is visible without a debug session, which a signal
+        visible only under DEBUG is not: that is precisely the condition that
+        hid the hub connectivity frames for a whole milestone. The
+        announcement names the shape and topic and never carries the payload,
+        which observed frames of this family embed an account id and a mid
+        into and INFO reaches the default Home Assistant log."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -159,30 +171,36 @@ class TestMessageReceiptLogging:
         await client.async_start()
         await _settle()
 
-        # A hub property/set downlink (not a sub-device status push) is dropped.
+        # A hub property/set downlink (not a sub-device status push, not a
+        # hub connectivity frame) is dropped.
         payload = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
         msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
 
-        with caplog.at_level(logging.DEBUG):
+        with caplog.at_level(logging.INFO):
             client._on_message(fake_paho, None, msg)
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 
-        drop_records = [r for r in caplog.records if "carried no sub-device update" in r.message]
-        assert len(drop_records) == 1
-        assert "BroadcastTime" in drop_records[0].message
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
+        assert len(info_records) == 1
+        assert mqtt_module._shape_key(payload) in info_records[0].message
+        assert "BroadcastTime" not in info_records[0].message
+        assert payload.decode() not in info_records[0].message
 
         await client.async_disconnect()
 
     @pytest.mark.asyncio
-    async def test_undecodable_push_skips_preview_above_debug(self, caplog):
-        """Above DEBUG, the drop-path preview is skipped (the isEnabledFor guard's off branch).
+    async def test_repeat_of_the_same_unrecognized_shape_skips_preview_above_debug(self, caplog):
+        """A second payload of an already-seen unrecognized shape is
+        DEBUG-only: above DEBUG, the preview call is skipped (the
+        isEnabledFor guard's off branch).
 
-        The logger level is pinned to INFO explicitly so this covers the guard's
-        skip branch deterministically, regardless of ambient log state or test order.
-        Asserting that _payload_preview never runs is what proves the guard skipped
-        the work; an absent log record alone would also be satisfied by the logger
-        filtering a record whose arguments had already been evaluated.
+        The logger level is pinned to INFO explicitly so this covers the
+        guard's skip branch deterministically, regardless of ambient log
+        state or test order. Asserting that _payload_preview never runs is
+        what proves the guard skipped the work; an absent log record alone
+        would also be satisfied by the logger filtering a record whose
+        arguments had already been evaluated.
         """
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
@@ -194,6 +212,12 @@ class TestMessageReceiptLogging:
         payload = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
         msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
 
+        # First occurrence establishes the shape as seen; not under test here.
+        client._on_message(fake_paho, None, msg)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        caplog.clear()
+
         with (
             patch.object(mqtt_module, "_payload_preview", wraps=mqtt_module._payload_preview) as preview,
             caplog.at_level(logging.INFO, logger="custom_components.rainpoint.api.mqtt"),
@@ -203,7 +227,7 @@ class TestMessageReceiptLogging:
             await asyncio.sleep(0)
 
         assert preview.call_count == 0
-        assert not any("carried no sub-device update" in r.message for r in caplog.records)
+        assert not any(r.levelno == logging.DEBUG for r in caplog.records)
 
         await client.async_disconnect()
 
@@ -554,6 +578,297 @@ class TestPushEnvelopeParsing:
             ("D01", "11#ab", 1784707302285),
             ("D02", "11#cd", 1784707302285),
         ]
+
+
+class TestHubFrameParsing:
+    """_parse_hub_frame as a pure function: fully fail-safe, and
+    fail-safe via two exception scopes rather than one (the load-bearing fix
+    a literal transcription of _parse_push_envelope's shape would have missed)."""
+
+    def test_bare_capture_parses_with_no_json_wrapper(self):
+        """The exact 2026-07-31 capture, bare, with no JSON wrapper at all,
+        must parse -- this is the frame the two-exception-scope structure
+        exists to read, and pins the load-bearing requirement against
+        regression. A single-outer-try transcription of _parse_push_envelope's
+        shape would raise ValueError on json.loads and return None here."""
+        frame = mqtt_module._parse_hub_frame(SAMPLE_HUB_DISCONNECT_FRAME.encode())
+        assert frame is not None
+        assert frame.connected is False
+        assert frame.changed_ts == 1785521850011
+
+    def test_reconnect_frame_parses_connected_true(self):
+        """The reconstructed reconnect frame parses with connected True."""
+        frame = mqtt_module._parse_hub_frame(SAMPLE_HUB_RECONNECT_FRAME.encode())
+        assert frame is not None
+        assert frame.connected is True
+        assert frame.changed_ts == 1785523062039
+
+    def test_captured_non_hub_pipe_frame_is_rejected(self):
+        """The only OBSERVED payload that must be rejected, captured on the
+        same downlink topic moments after a hub reconnect during the
+        2026-08-01 UAT.
+
+        Every other rejection case here is a hand-mutated variant of a
+        known-good frame, each failing one clause in isolation. This one is
+        real traffic and fails two at once (three sections, and an empty
+        section 2 rather than a literal 0/1), which is how malformed input
+        actually arrives. Its section-1 tail is 182509, the hid rather than a
+        mid, so the mid cross-check would drop it as well even if both parse
+        clauses were relaxed: three independent layers, not one.
+        """
+        assert mqtt_module._parse_hub_frame(SAMPLE_NON_HUB_PIPE_FRAME.encode()) is None
+
+    def test_captured_non_hub_pipe_frame_is_rejected_inside_its_envelope(self):
+        """Rejected on the JSON-wrapped route too, which is how it arrived.
+
+        The bare-text assertion above would still pass if envelope unwrapping
+        were the thing that changed, so both routes are pinned.
+        """
+        payload = json.dumps(
+            {
+                "method": "thing.service.property.set",
+                "id": "429833999",
+                "params": {"param": SAMPLE_NON_HUB_PIPE_FRAME},
+                "version": "1.0.0",
+            }
+        ).encode()
+        assert mqtt_module._parse_hub_frame(payload) is None
+
+    def test_captured_non_hub_pipe_frame_reaches_no_coordinator_entry_point(self):
+        """Rejection at the parser is not enough on its own: the frame must
+        also leave both sanctioned coordinator entry points untouched, since
+        that is the actual harm a misread would cause."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
+        client._dispatch_push("topic", SAMPLE_NON_HUB_PIPE_FRAME.encode())
+        coordinator.apply_hub_push_update.assert_not_called()
+        coordinator.apply_push_update.assert_not_called()
+
+    def test_json_wrapped_capture_parses_to_the_identical_frame(self):
+        """The same frame carried inside an AliCloud envelope converges on the
+        identical _HubFrame as the bare route -- both routes are required and
+        neither is redundant."""
+        payload = json.dumps({"method": "thing.service.property.set", "params": {"param": SAMPLE_HUB_DISCONNECT_FRAME}}).encode()
+        frame = mqtt_module._parse_hub_frame(payload)
+        assert frame == mqtt_module._parse_hub_frame(SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+    def test_json_wrapped_single_unnamed_param_fallback(self):
+        """A params dict with exactly one entry under a non-'param' key is
+        still used, mirroring _parse_push_envelope's identical fallback."""
+        payload = json.dumps(
+            {"method": "thing.service.property.set", "params": {"anything": SAMPLE_HUB_DISCONNECT_FRAME}}
+        ).encode()
+        frame = mqtt_module._parse_hub_frame(payload)
+        assert frame is not None
+        assert frame.connected is False
+
+    def test_missing_trailing_terminator_still_parses(self):
+        """The terminator strip only fires when present; its absence is not an error."""
+        no_terminator = SAMPLE_HUB_DISCONNECT_FRAME[:-1]
+        frame = mqtt_module._parse_hub_frame(no_terminator.encode())
+        assert frame is not None
+        assert frame.changed_ts == 1785521850011
+
+    def test_oversized_payload_is_dropped(self):
+        """The MQTT_PUSH_MAX_PAYLOAD_BYTES bound is applied before any parse."""
+        oversized = SAMPLE_HUB_DISCONNECT_FRAME.encode() + b"0" * mqtt_module.MQTT_PUSH_MAX_PAYLOAD_BYTES
+        assert mqtt_module._parse_hub_frame(oversized) is None
+
+    def test_non_utf8_bytes_do_not_raise(self):
+        """Undecodable bytes degrade via 'replace' rather than raising, and the
+        resulting garbled text simply fails shape recognition."""
+        assert mqtt_module._parse_hub_frame(b"\xff\xfe\x00#P|0|1|2#") is None
+
+    @pytest.mark.parametrize(
+        ("mutated", "reason"),
+        [
+            ("{" + SAMPLE_HUB_DISCONNECT_FRAME, "brace-prefixed section"),
+            ("#P1|0|2#", "wrong section count (3)"),
+            ("#P1|0|2|3|4#", "wrong section count (5)"),
+            ("P260731181730000016822282236547|0|1785521850011|112882164350#", "missing #P prefix"),
+            ("#P260731181730000016822282236547|2|1785521850011|112882164350#", "section 2 not literal 0/1"),
+            ("#P260731181730000016822282236547|0|not-an-int|112882164350#", "section 3 not int"),
+            ("#P260731181730000016822282236547|0|1785521850011|not-an-int#", "section 4 not int"),
+        ],
+    )
+    def test_each_d05_clause_failing_yields_none(self, mutated, reason):
+        """Each of the five recognition clauses, failing independently, drops the frame."""
+        assert mqtt_module._parse_hub_frame(mutated.encode()) is None, reason
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            json.dumps([1, 2, 3]).encode(),  # valid JSON, not a dict
+            json.dumps({"method": "other.method", "params": {"param": SAMPLE_HUB_DISCONNECT_FRAME}}).encode(),
+            json.dumps({"method": "thing.service.property.set", "params": "not-a-dict"}).encode(),
+            json.dumps({"method": "thing.service.property.set", "params": {"a": "x", "b": "y"}}).encode(),
+            json.dumps({"method": "thing.service.property.set", "params": {"param": 123}}).encode(),
+        ],
+    )
+    def test_candidate_resolution_falls_through_to_bare_text_and_still_fails_shape(self, payload):
+        """Every non-standard envelope shape leaves the candidate as the raw
+        JSON text, which is not a hub frame either, so the result is None --
+        proving the candidate-resolution branches degrade safely rather than
+        raising or accidentally matching."""
+        assert mqtt_module._parse_hub_frame(payload) is None
+
+
+class TestHubFrameRouting:
+    """_dispatch_push routes a recognized hub frame to apply_hub_push_update,
+    always with the client's own construction-supplied mid, never the frame's
+    parsed mid_tail."""
+
+    def test_hub_frame_reaches_apply_hub_push_update_with_the_clients_own_mid(self):
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
+
+        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        coordinator.apply_hub_push_update.assert_called_once_with(SAMPLE_HUB_FRAME_MID, False, 1785521850011)
+        coordinator.apply_push_update.assert_not_called()
+
+    def test_differing_six_digit_mid_drops_without_calling_either_entry_point(self):
+        """The equal-width exact-slice path: a genuinely different 6-digit mid
+        cannot satisfy the fixed-width comparison."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=999999)
+
+        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        coordinator.apply_hub_push_update.assert_not_called()
+        coordinator.apply_push_update.assert_not_called()
+
+    def test_fallback_width_mismatch_drops(self):
+        """own is 7 digits, not the observed 6-digit width, so the suffix
+        fallback applies -- and still correctly rejects a genuinely different
+        tail."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=1236547)
+
+        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        coordinator.apply_hub_push_update.assert_not_called()
+
+    def test_fallback_width_admits_a_proper_suffix_mid_as_documented_residual(self):
+        """own is 5 digits, not the observed 6-digit width, and happens to be a
+        proper suffix of the frame's real mid: the fallback path admits it.
+        This is the documented, accepted residual for an unobserved mid
+        width -- degrading to a weaker check beats dropping every frame and
+        silently disabling the feature for that width."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=36547)
+
+        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        coordinator.apply_hub_push_update.assert_called_once_with(36547, False, 1785521850011)
+
+    def test_coordinator_not_wired_drops_a_recognized_hub_frame(self, caplog):
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator=None, hub_mid=SAMPLE_HUB_FRAME_MID)
+
+        with caplog.at_level(logging.DEBUG):
+            client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+
+        assert any("before coordinator wiring" in r.message for r in caplog.records)
+
+    def test_sub_device_envelope_and_hub_frame_each_route_to_exactly_one_entry_point(self):
+        """The companion invariant test named in the plan's assumption-delta
+        decision: a sub-device envelope reaches only apply_push_update and a
+        hub frame reaches only apply_hub_push_update, never both -- it goes
+        red the instant a future change lets one payload reach both."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
+
+        subdevice_payload = _captured_push_payload({"D01": "11#" + "0a1b" * 28})
+        client._dispatch_push("topic", subdevice_payload)
+        coordinator.apply_push_update.assert_called_once()
+        coordinator.apply_hub_push_update.assert_not_called()
+
+        coordinator.reset_mock()
+        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+        coordinator.apply_hub_push_update.assert_called_once()
+        coordinator.apply_push_update.assert_not_called()
+
+
+class TestUnrecognisedShapeLogging:
+    """The first payload of a distinct unrecognized shape announces that shape
+    once at INFO, carrying no payload; every truncated preview stays DEBUG;
+    the per-client bookkeeping is hard-capped so it cannot grow unbounded."""
+
+    def test_shape_key_classifies_by_structure_not_content(self):
+        """Two payloads with the same section-count/class shape but
+        different content classify to the same key."""
+        key_a = mqtt_module._shape_key(b'{"method":"a","params":{"x":1}}')
+        key_b = mqtt_module._shape_key(b'{"method":"b","params":{"y":2}}')
+        assert key_a == key_b
+
+    def test_shape_key_differs_for_a_different_section_count(self):
+        key_two_sections = mqtt_module._shape_key(b"a|b")
+        key_three_sections = mqtt_module._shape_key(b"a|b|c")
+        assert key_two_sections != key_three_sections
+
+    def test_section_class_covers_every_bucket(self):
+        """The empty and all-digits buckets have no other exercising path."""
+        assert mqtt_module._section_class("") == "E"
+        assert mqtt_module._section_class("{not-really-json") == "J"
+        assert mqtt_module._section_class("112882164350") == "D"
+        assert mqtt_module._section_class("not-digits-or-json") == "O"
+
+    def test_first_shape_logs_info_repeat_logs_debug_new_shape_logs_info_again(self, caplog):
+        """Under DEBUG each of the three payloads yields a preview: the two
+        first-of-shape ones from the announcement's own nested debug call, the
+        repeat from the already-seen branch. Only the two first-of-shape
+        payloads add an INFO announcement."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator)
+        shape_a = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
+        shape_a_repeat = b'{"method":"thing.service.property.set","params":{"BroadcastTime":2}}'
+        shape_b = b"not-a-json-payload-at-all"
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.mqtt"):
+            client._dispatch_push("topic", shape_a)
+            client._dispatch_push("topic", shape_a_repeat)
+            client._dispatch_push("topic", shape_b)
+
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
+        assert len(info_records) == 2
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert len(debug_records) == 3
+        # No INFO record carries payload content, on either first-of-shape path.
+        assert not any("BroadcastTime" in r.message or "not-a-json" in r.message for r in info_records)
+
+    def test_first_shape_preview_is_withheld_when_debug_is_off(self, caplog):
+        """Above DEBUG the announcement still fires, and the preview it would
+        otherwise carry is never produced: the identifiers observed frames
+        embed stay out of the default log."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator)
+        payload = b"#P26073118173000001682228223654|9|9|9#"
+
+        with (
+            caplog.at_level(logging.INFO, logger="custom_components.rainpoint.api.mqtt"),
+            patch.object(mqtt_module, "_payload_preview") as preview,
+        ):
+            client._dispatch_push("topic", payload)
+
+        preview.assert_not_called()
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
+        assert len(info_records) == 1
+        assert "16822282" not in info_records[0].message
+
+    def test_unrecognized_shape_cap_stops_growth_and_further_info_records(self, caplog):
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator)
+        limit = mqtt_module.MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.mqtt"):
+            for i in range(limit + 2):
+                # A distinct pipe-count per iteration guarantees a distinct shape key.
+                payload = "|".join(["x"] * (i + 1)).encode()
+                client._dispatch_push("topic", payload)
+
+        assert len(client._unrecognised_shapes) == limit
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
+        assert len(info_records) == limit
 
 
 class TestAsyncDisconnect:

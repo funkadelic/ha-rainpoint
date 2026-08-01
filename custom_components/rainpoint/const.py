@@ -136,6 +136,22 @@ MQTT_PUSH_TIME_FIELD = "time"
 # firmware that grows the envelope is not rejected, small enough to bound work.
 MQTT_PUSH_MAX_PAYLOAD_BYTES = 8192
 
+# Hub-level connectivity frame shape, confirmed against the 2026-07-31
+# UAT capture: "#P260731181730000016822282236547|0|1785521850011|112882164350#".
+# Section 1 decomposes as the "#P" prefix, a 12-digit YYMMDDHHMMSS stamp,
+# "0000", an 8-digit account id, and a 6-digit mid -- the mid is a fixed-width
+# tail, not an open-ended suffix, so a cross-check against it can slice
+# instead of scanning for a substring.
+MQTT_PUSH_HUB_FRAME_PREFIX = "#P"
+MQTT_PUSH_HUB_FRAME_SECTIONS = 4
+MQTT_PUSH_HUB_FRAME_TERMINATOR = "#"
+MQTT_PUSH_HUB_FRAME_MID_WIDTH = 6
+
+# Hard cap on the per-client one-shot-per-shape unrecognised-downlink
+# bookkeeping. Keeps the set bounded against a hostile or chatty
+# downlink; a shape count past this logs at DEBUG instead of INFO.
+MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT = 32
+
 # Push observability: hub-level diagnostic entities that surface the live push
 # connection state and the age of the last received message. The unique_id is
 # built by appending these suffixes to the hub's base unique_id, so they stay

@@ -116,21 +116,23 @@ All entities are grouped under their parent hub device in the Home Assistant dev
 
 ## When a hub goes offline
 
-Each hub's **Cloud Connection** entity reflects whether RainPoint's cloud currently reports that hub as reachable, refreshed on every poll (every two minutes by default).
+Each hub's **Cloud Connection** entity reflects whether RainPoint's cloud currently reports that hub as reachable, refreshed on every poll (every two minutes by default). With [push](#real-time-push-updates-opt-in) enabled, RainPoint also announces a hub going offline or coming back as it happens, and the entity follows within a second or so instead of waiting for the next poll. The poll keeps running either way, so nothing depends on push being on.
 
-If a hub stays unreachable for three checks in a row, roughly six minutes, Home Assistant also raises a **Settings → Repairs** notice naming the hub, so a brief blip doesn't flap a card on and off. Valve controls for devices on that hub become unavailable within a single check, since a command cannot reach hardware the cloud itself cannot reach.
+If a hub stays unreachable for three checks in a row, roughly four to six minutes at the default two-minute polling interval, Home Assistant also raises a **Settings → Repairs** notice naming the hub, so a brief blip doesn't flap a card on and off. Valve controls for devices on that hub become unavailable as soon as the hub is reported offline, which is within a single check, or near-immediately with push enabled, since a command cannot reach hardware the cloud itself cannot reach.
 
 Every other reading on that hub keeps showing its last known value, and that deserves its own explanation. RainPoint keeps serving the last reading it received for every device on an offline hub, for as long as the outage lasts, rather than reporting that a device has gone quiet. That means a reading can look perfectly current in Home Assistant while the hub behind it has actually been offline for hours: the moisture, temperature, or rainfall value shown is the last one RainPoint delivered, not necessarily a fresh one. The integration leaves those readings visible rather than hiding them, because the data catches up within seconds of the hub reconnecting, and marking devices unavailable for a condition that clears itself would leave gaps in your history and break any automation or template built around a device going offline.
 
 To tell whether what you're looking at is current, check two things: the hub's own **Cloud Connection** entity, and the `hub_connected` attribute Home Assistant now attaches to every entity on that hub's devices. The attribute is always present: `hub_connected` is `true` when the cloud reports the hub connected, `false` when it reports the hub offline, and `none` when the cloud hasn't said either way yet. Test that unknown state with `is none` rather than `is defined`, since the key exists either way. A dashboard card or an automation condition can check this attribute directly to flag a reading that might be stale.
 
-Everything above clears on its own by the next scheduled check after the hub reconnects, so allow up to two minutes: the Repairs notice closes, the Cloud Connection entity turns back on, valve controls return, and no reload is needed.
+Everything above clears on its own after the hub reconnects: the Repairs notice closes, the Cloud Connection entity turns back on, valve controls return, and no reload is needed. With push enabled that happens within seconds of the hub coming back; otherwise it waits for the next scheduled check, so allow up to two minutes.
 
 ---
 
 ## Real-time push updates (opt-in)
 
 In addition to the 120-second polling that always runs, the integration can optionally surface device state changes in near real time over an MQTT push connection. Push is additive, opt-in, and off by default, and polling keeps running as the fallback no matter what, so nothing breaks if you leave push off or the connection drops.
+
+Push carries two kinds of update: new readings from individual devices, and a hub going offline or coming back. The second is what makes [a hub outage](#when-a-hub-goes-offline) visible almost immediately rather than up to two minutes later. Note this speeds up the Cloud Connection entity and the recovery side, not the Repairs notice itself: that notice still waits for three consecutive checks before it appears, deliberately, so a brief blip doesn't flap a card on and off.
 
 ### Enabling or disabling push
 

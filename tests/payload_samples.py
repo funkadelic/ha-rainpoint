@@ -261,3 +261,51 @@ SAMPLE_HTV210B_TLV_PAYLOAD = (
     "11#37FF0D0000000018DC0117E1B40119D8001AD8001D201E2021B70000000022B7000000002"
     "5AF0000000026AF00000000299F000000002A9F0000000038FF0D00000000FEFF0F1527FB19"
 )
+
+# Verbatim pipe-delimited hub-level connectivity frames from the 2026-07-31 UAT
+# on v1.12.0b1, both delivered on thing/service/property/set. Section 1
+# decomposes as the "#P" prefix, a 12-digit YYMMDDHHMMSS stamp in UTC, "0000",
+# the 8-digit account id 16822282, and the 6-digit mid 236547; section 2 is the
+# connected flag; section 3 is the change timestamp; section 4 is a propVer
+# matching the next poll's.
+#
+# Section 3 is close to, but NOT the same value as, the poll's `connected`
+# entry `time`. A second live capture (2026-08-01) measured the poll trailing
+# the frame by a few ms on both edges: disconnect 1785562863072 vs
+# 1785562863078, reconnect 1785523062039 vs 1785523062046. They are two cloud
+# timestamps for one edge, not one shared field. This does not weaken the
+# ordering guard -- real connect/disconnect edges are seconds to minutes
+# apart, so a few ms of skew cannot invert them -- but do not write a test
+# that asserts the two are equal.
+SAMPLE_HUB_DISCONNECT_FRAME = "#P260731181730000016822282236547|0|1785521850011|112882164350#"
+# Reconstructed from the disconnect frame's shape: the capture recorded the
+# reconnect frame elided as "...|1|1785523062039|112882164351#". The
+# reconstruction is arithmetically consistent: 1785523062039 ms is
+# 2026-07-31T18:37:42.039+00:00, matching the measured 11:37:42 local
+# reconnect edge, and the delta from the disconnect frame's 1785521850011 ms
+# is exactly 20m12s -- the measured 11:17:30 -> 11:37:42 gap. The 2026-08-01
+# UAT captured a real reconnect frame
+# ("#P260801054717000016822282236547|1|1785563237200|113059798638#") that
+# parses to the same shape, confirming the reconstruction.
+SAMPLE_HUB_RECONNECT_FRAME = "#P260731183742000016822282236547|1|1785523062039|112882164351#"
+# The mid and expected ISO changed_at strings both frames above decode to, so
+# tests assert against one shared definition rather than repeating literals.
+SAMPLE_HUB_FRAME_MID = 236547
+SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO = "2026-07-31T18:17:30.011000+00:00"
+SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO = "2026-07-31T18:37:42.039000+00:00"
+
+# A third "#P" frame family, captured verbatim on the same downlink topic
+# during the 2026-08-01 UAT, moments after a hub reconnect. It must be
+# rejected, and it is the only observed (rather than hand-mutated) payload
+# that has to be. Three properties make it the adversarial case the strict
+# recognition rule exists for, and none of the synthetic mutations cover them:
+# it fails two clauses at once (three sections, and an empty section 2 rather
+# than a literal 0/1); its section-1 tail is 182509, the *hid*, not a mid; and
+# its account slot is 16822204, proving that field is not fixed across frames.
+# No single relaxed clause misreads it: the section-count check and the
+# 0/1 check each reject it on their own, so both would have to go, and the
+# mid cross-check is a third independent gate behind them (the tail is
+# 182509, so a client whose mid is 236547 drops it regardless). It would take
+# all three giving way to read this as "hub 182509 disconnected" against a
+# real record, which is the point -- the layers are why that misread is hard.
+SAMPLE_NON_HUB_PIPE_FRAME = "#P260801054717000016822204182509||113060569563#"

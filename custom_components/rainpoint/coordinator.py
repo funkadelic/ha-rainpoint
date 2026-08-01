@@ -440,6 +440,73 @@ def _read_hub_connectivity(status: dict) -> dict:
     }
 
 
+def _guard_hub_connectivity_order(polled: dict, prior: dict | None) -> dict:
+    """Hold a strictly older poll's connectivity half against a newer held one.
+
+    Applied at the single _async_update_data call site both fetch paths
+    funnel through, immediately after _read_hub_connectivity. Kept as a
+    separate merge step rather than a parameter threaded into
+    _read_hub_connectivity, so that function stays a pure function of one
+    status dict and its 13 existing tests need no edit.
+
+    First, why the guard exists. If the REST view lags the push, the next
+    poll can carry the old connectivity flag and revert a newer pushed edge,
+    producing a visible flip-back that reverts again two minutes later. That
+    is the same stale-overwrites-fresh defect class this phase exists to
+    close, entering through the poll side instead of the push side.
+
+    Second, why only strictly older is held. An equal moment is the same
+    edge already held, so returning polled changes nothing observable
+    either way. An unordered pair, meaning either side carries no usable
+    time, is not evidence of staleness, so the poll wins in both the equal
+    and the unordered case. That is what keeps the poll authoritative: the
+    guard only ever holds a moment it can prove is older.
+
+    Third, state_raw always takes the latest polled value regardless
+    of whether the guard fired. The guard exists to stop a stale
+    connectivity flag winning, and state_raw is an unrelated diagnostic the
+    push never carries, so discarding it would blank the raw state
+    attribute for a full cycle every time the guard fires. This pairs with
+    apply_hub_push_update from the other direction: neither path destroys
+    the field the other owns.
+
+    Fourth, the absent case. An absent status yields the unknown record
+    from _read_hub_connectivity and this guard takes it whole, because
+    absent carries no moment of its own and so is never strictly older than
+    anything held. Phase 16's rule that an absent status is unknown rather
+    than disconnected is not something this guard may quietly change.
+
+    Fifth, and this is the point a reader is most likely to be surprised
+    by, so it is stated plainly rather than left to be discovered: the
+    guarded record returned here is what _sync_hub_connectivity_issues
+    reconciles against, so the guard composes with the poll-side debounce
+    in both directions. When a held pushed connected state is kept against
+    a lagging disconnected poll, the reconcile sees connected and pops the
+    counter. When a held pushed disconnected state is kept against a
+    lagging connected poll, the reconcile sees disconnected and increments,
+    and because the guard writes the held changed_at into the record it
+    returns, the hold repeats on every following poll until the REST view's
+    own connected time advances past the held moment. Three such polls
+    therefore raise a card that no poll independently observed as
+    disconnected. That is the intended consequence of treating a newer held
+    value as fresher than a lagging poll, and it is not the push path
+    incrementing a counter: apply_hub_push_update never touches
+    _hub_disconnect_poll_counts on a disconnected edge, the poll reconcile
+    counts the guarded record it was handed. A later reader should not read
+    this as a defect in the push path and "fix" it by exempting held
+    records from the reconcile.
+    """
+    prior_moment = _changed_at_datetime(prior)
+    polled_moment = _changed_at_datetime(polled)
+    if prior_moment is not None and polled_moment is not None and polled_moment < prior_moment:
+        return {
+            "state": prior["state"],
+            "changed_at": prior["changed_at"],
+            "state_raw": polled.get("state_raw"),
+        }
+    return polled
+
+
 def hub_connectivity_record(coordinator, mid) -> dict:
     """Return one hub's connectivity record from a coordinator snapshot, or {}.
 
@@ -537,6 +604,31 @@ def _status_entry_time(status_entry: dict) -> datetime | None:
         return datetime.fromtimestamp(device_time / 1000, tz=UTC)
     except (ValueError, TypeError, OSError, OverflowError):
         return None
+
+
+def _changed_at_datetime(record: dict | None) -> datetime | None:
+    """Return a hub_connectivity record's changed_at as a UTC datetime, or None.
+
+    None for a falsy record, a changed_at that is not a string, or a string
+    that fails to parse as ISO-8601. Consumed by the push-side ordering guard
+    and the poll-side one.
+
+    Every writer of changed_at emits an offset today, so a parsed value is
+    aware in practice. A naive one is assumed to be UTC rather than returned
+    as-is: both ordering sites compare the result against an aware datetime,
+    which would raise TypeError on the event loop out of a helper whose
+    documented contract is to degrade rather than raise.
+    """
+    if not record:
+        return None
+    changed_at = record.get("changed_at")
+    if not isinstance(changed_at, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(changed_at)
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _last_seen_from_entry(previous: dict | None) -> str | None:
@@ -674,6 +766,149 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # timer is never reset; the 120s poll keeps running as the fallback.
         self.async_update_listeners()
 
+    def apply_hub_push_update(self, mid: int, connected: bool, changed_ts: int) -> None:
+        """Merge a pushed hub-level connectivity edge into coordinator data.
+
+        The second sanctioned push entry point, alongside
+        apply_push_update: a hub frame carries no addr, no decoder, and
+        touches neither the sensors nor the status branch, so it shares none
+        of that method's merge logic even though it mirrors its drop ladder
+        and copy-on-write/notify shape.
+
+        Mirrors apply_push_update's before-first-poll and unknown-mid drops,
+        and adds one drop with no equivalent there: a resolved hub that fails
+        is_hub_record, because the Bluetooth wrapper record contributes no
+        connectivity record on the poll path, and writing one here would
+        create a record the next poll deletes.
+
+        The ordering guard below decides whether the pushed
+        edge is applied at all. On a connected edge that is applied, this
+        method also explicitly pops `_hub_disconnect_poll_counts` and calls
+        `_hub_connectivity_issues.async_clear`: the merge is
+        copy-on-write over coordinator data and touches neither, so clearing
+        has to be explicit here, exactly as apply_push_update already does
+        for the silent-device pair. A pushed disconnected edge leaves both
+        untouched: raising the card stays poll-counted only, so "3
+        consecutive polls" keeps meaning literally that.
+        """
+        data = self.data
+        if not data:
+            _LOGGER.debug(
+                "Dropping hub push before first poll: mid=%s connected=%s changed_ts=%s",
+                mid,
+                connected,
+                changed_ts,
+            )
+            return
+
+        hub = next((h for h in data.get("hubs", []) if h.get("mid") == mid), None)
+        if hub is None:
+            _LOGGER.debug("Dropping hub push for unknown mid=%s connected=%s changed_ts=%s", mid, connected, changed_ts)
+            return
+
+        if not is_hub_record(hub):
+            _LOGGER.debug("Dropping hub push for non-hub record mid=%s connected=%s changed_ts=%s", mid, connected, changed_ts)
+            return
+
+        changed_dt = _status_entry_time({"time": changed_ts})
+        if changed_dt is None:
+            # Deliberate divergence from _read_hub_connectivity: a poll is a
+            # complete observation, so an unconvertible timestamp there
+            # honestly degrades to unknown. A push is an increment on top of
+            # a poll, so the honest answer here is to decline the increment
+            # rather than knock a good held value down to unknown.
+            _LOGGER.debug(
+                "Dropping hub push with unconvertible changed_ts=%s for mid=%s connected=%s",
+                changed_ts,
+                mid,
+                connected,
+            )
+            return
+
+        held = ((data.get("hub_connectivity") or {}).get(mid)) or {}
+
+        # Ordering guard. The change timestamp is the
+        # ordering key, compared against the held record's own changed_at:
+        # the poll path already stores that field from the same cloud field,
+        # so both channels order against one identical value rather than two
+        # parallel clocks.
+        held_moment = _changed_at_datetime(held)
+        if held_moment is not None:
+            if changed_dt < held_moment:
+                _LOGGER.debug(
+                    "Dropping older hub push: mid=%s pushed=%s held=%s",
+                    mid,
+                    changed_dt.isoformat(),
+                    held_moment.isoformat(),
+                )
+                return
+            if changed_dt == held_moment:
+                # The common case: the poll routinely picks up the very edge
+                # the push already delivered. Applying it would rewrite an
+                # identical record and fire listeners for nothing.
+                _LOGGER.debug("Dropping already-recorded hub push: mid=%s moment=%s", mid, changed_dt.isoformat())
+                return
+        # A held moment of None, an absent held record, and an unparseable
+        # held changed_at all fall through to apply: there is no
+        # recorded moment for the pushed edge to be older than, and refusing
+        # would make push a permanent no-op on any firmware whose connected
+        # entry carries no usable time, silently disabling the feature with
+        # no way for the user to tell.
+
+        record = {
+            "state": HUB_CONNECTED if connected else HUB_DISCONNECTED,
+            "changed_at": changed_dt.isoformat(),
+            # Carried forward from the held record, untouched: the
+            # frame does not carry the raw `state` id, so a pushed edge must
+            # neither invent this field nor blank a poll-established
+            # diagnostic for up to 120s.
+            "state_raw": held.get("state_raw"),
+        }
+        RainPointCoordinator._merge_push_hub_connectivity(self, mid, record)
+
+        if connected:
+            # Connected-edge clear. The merge above is
+            # copy-on-write over coordinator data and touches no debounce or
+            # issue state, so clearing has to be explicit here rather than
+            # folded into the merge, exactly as apply_push_update already
+            # does for _silent_poll_counts / _silent_issues.async_clear.
+            # _sync_hub_connectivity_issues is deliberately not driven from
+            # here: it is built around a full per-poll sweep over hubs that
+            # produces a record for every hub, so a single-hub push edge
+            # would mean either faking a poll or splitting the function, and
+            # it would re-run the unknown/unreachable logic for hubs the
+            # push said nothing about.
+            #
+            # The asymmetry is intentional. Clearing early for a hub the
+            # cloud already says is back is safe and self-correcting -- the
+            # next poll re-raises if it was wrong -- while raising early is
+            # not, which is the flap-raises-a-card case Phase 16 already
+            # rejected. So a pushed disconnected edge leaves both the
+            # counter and the issue untouched: the counter stays
+            # poll-counted only, so "3 consecutive polls" keeps meaning
+            # literally that and the coordinator holds one debounce concept
+            # rather than two.
+            self._hub_disconnect_poll_counts.pop((hub["hid"], mid), None)
+            self._hub_connectivity_issues.async_clear(hub["hid"], mid)
+
+        # Notify listeners WITHOUT async_set_updated_data so the poll interval
+        # timer is never reset; the 120s poll keeps running as the fallback.
+        self.async_update_listeners()
+
+    def _merge_push_hub_connectivity(self, mid: int, record: dict) -> None:
+        """Copy-on-write merge of one pushed hub connectivity record into self.data.
+
+        Replaces only hub_connectivity[mid], shallow-copying the top-level
+        dict and the hub_connectivity sub-dict along the way so every sibling
+        mid keeps its object identity and hubs/sensors/status are carried by
+        reference. Assigns the rebuilt top-level dict back to self.data.
+        """
+        data = dict(self.data)
+        hub_connectivity = dict(data.get("hub_connectivity", {}))
+        hub_connectivity[mid] = record
+        data["hub_connectivity"] = hub_connectivity
+        self.data = data
+
     def _merge_push_sensor_entry(
         self,
         mid: int,
@@ -730,6 +965,29 @@ class RainPointCoordinator(DataUpdateCoordinator):
             if hubs:
                 status_by_mid = await RainPointCoordinator._fetch_status_by_mid(self, hubs)
 
+            # The prior snapshot both _fetch_status_by_mid paths' guard
+            # reads from, hoisted once rather than per hub. Read as late as
+            # possible -- here, after every await above (_collect_hubs and
+            # _fetch_status_by_mid) has already yielded control back to the
+            # event loop -- because apply_hub_push_update is synchronous and
+            # can run to completion during either of those awaits. Hoisting
+            # this read any earlier would let a push landing in that window
+            # go unseen by the guard below, then get silently discarded when
+            # this poll's return value replaces self.data wholesale.
+            #
+            # Everything from here to the return below is synchronous: no
+            # further await exists in this method, so this read is not just
+            # "as late as possible" but the last point at which a
+            # concurrently-arriving push could be missed. If a future change
+            # adds an await between this line and the return (or makes one of
+            # the helpers called below async), that reasoning stops holding
+            # and this comment needs revisiting alongside it. Degrades to {}
+            # the same way hub_connectivity_record already does, so a first
+            # poll after startup (self.data is falsy) or a snapshot that
+            # never gained a hub_connectivity key both resolve to no prior
+            # record.
+            prior_connectivity = (self.data or {}).get("hub_connectivity") or {}
+
             for hub in hubs:
                 mid = hub["mid"]
                 # STATUS_ABSENT is an unreachable safety net once _fetch_status_by_mid
@@ -739,9 +997,16 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 if isinstance(status, _AbsentStatus):
                     absent_hubs.append(hub)
                 # The Bluetooth wrapper record has no cloud connection to report
-                # on, so it must contribute no connectivity record at all.
+                # on, so it must contribute no connectivity record at all. Both
+                # the multipleDeviceStatus path and the _fallback_per_hub_status
+                # path funnel into status_by_mid above, so applying the
+                # guard at this one site is what makes the two fetch paths
+                # observe an identical ordering rule; a second guard site would
+                # be the way they could drift apart.
                 if is_hub_record(hub):
-                    hub_connectivity[mid] = _read_hub_connectivity(status)
+                    hub_connectivity[mid] = _guard_hub_connectivity_order(
+                        _read_hub_connectivity(status), prior_connectivity.get(mid)
+                    )
                 decoded_sensors.update(RainPointCoordinator._decode_hub_subdevices(self, hub, status))
 
             # A poll that returned no hubs at all, for an installation that had

@@ -27,6 +27,7 @@ import logging
 import random
 import time
 from collections.abc import Callable
+from typing import NamedTuple
 
 import paho.mqtt.client as paho_mqtt
 from homeassistant.core import HomeAssistant, callback
@@ -35,6 +36,10 @@ from ..const import (
     MQTT_BROKER_HOST_TEMPLATE,
     MQTT_BROKER_PORT,
     MQTT_KEEPALIVE,
+    MQTT_PUSH_HUB_FRAME_MID_WIDTH,
+    MQTT_PUSH_HUB_FRAME_PREFIX,
+    MQTT_PUSH_HUB_FRAME_SECTIONS,
+    MQTT_PUSH_HUB_FRAME_TERMINATOR,
     MQTT_PUSH_MAX_PAYLOAD_BYTES,
     MQTT_PUSH_METHOD,
     MQTT_PUSH_PARAMS_KEY,
@@ -43,6 +48,7 @@ from ..const import (
     MQTT_PUSH_TIME_FIELD,
     MQTT_PUSH_VALUE_FIELD,
     MQTT_TLS_CA_CERT,
+    MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT,
 )
 from .client import RainPointClient
 
@@ -149,6 +155,199 @@ def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
         return []
 
 
+class _HubFrame(NamedTuple):
+    """One recognized hub-level connectivity frame.
+
+    mid_tail is section 1 as parsed -- the caller's cross-check value only;
+    it is never handed to the coordinator. connected and changed_ts
+    are the two fields apply_hub_push_update actually consumes.
+    """
+
+    mid_tail: str
+    connected: bool
+    changed_ts: int
+
+
+def _resolve_hub_frame_candidate(text: str) -> str:
+    """Return the frame text to validate: the inner param string of a
+    recognised AliCloud envelope, or the input unchanged.
+
+    Split out of _parse_hub_frame so the envelope-unwrapping decision and the
+    shape-validation clauses can each be read on their own.
+
+    Every non-envelope outcome -- non-JSON, wrong method, params not a dict,
+    param value not a string -- returns the input untouched, so a genuinely
+    bare frame is never punished for failing a JSON probe it was never shaped
+    to pass.
+    """
+    try:
+        outer = json.loads(text)
+    except (ValueError, TypeError):
+        return text
+    if not isinstance(outer, dict) or outer.get("method") != MQTT_PUSH_METHOD:
+        return text
+    params = outer.get("params")
+    if not isinstance(params, dict):
+        return text
+    param_str = params.get(MQTT_PUSH_PARAMS_KEY)
+    if param_str is None and len(params) == 1:
+        param_str = next(iter(params.values()))
+    return param_str if isinstance(param_str, str) else text
+
+
+def _parse_hub_frame(payload: bytes) -> _HubFrame | None:
+    """Parse a pipe-delimited hub connectivity frame into a typed record.
+
+    Fully fail-safe: any oversized, malformed, or structurally odd payload
+    yields None rather than raising, matching _parse_push_envelope's contract.
+
+    Two exception scopes, not one -- this is load-bearing. _parse_push_envelope
+    can put json.loads first because every payload it handles is JSON; the hub
+    frame is not. The captured disconnect frame
+    "#P260731181730000016822282236547|0|1785521850011|112882164350#" is not
+    valid JSON, so a single-outer-try transcription of that helper's shape
+    would raise ValueError on the very first statement and return None for the
+    exact frame this helper exists to read -- a silent, total feature kill.
+    The JSON probe is therefore scoped to nothing but the json.loads call, so
+    a non-JSON payload falls through to the bare candidate instead of
+    unwinding the whole function. That probe now lives in
+    _resolve_hub_frame_candidate, which owns the try; this function no longer
+    contains one.
+
+    Both the bare and JSON-wrapped routes are handled and neither is dropped
+    as redundant: the 2026-07-31 capture is recorded as bare pipe-delimited
+    text because it was read off the existing drop-path preview, and whether
+    the broker also wraps this family in the standard AliCloud envelope like
+    the sub-device family is not settled by that one capture. Handling both
+    costs one branch and removes the gamble.
+    """
+    if len(payload) > MQTT_PUSH_MAX_PAYLOAD_BYTES:
+        return None
+    text = payload.decode("utf-8", "replace").strip()
+    candidate = _resolve_hub_frame_candidate(text)
+
+    # The captured frame ends with a single terminator, which would stop
+    # section 4 parsing as an integer. Strip exactly one trailing terminator
+    # when present before splitting; the leading "#" is retained and is
+    # covered by the MQTT_PUSH_HUB_FRAME_PREFIX clause below. Stripping
+    # exactly one is never wrong in the fail-safe direction: a doubled
+    # terminator just fails the section-4 int() parse below.
+    if candidate.endswith(MQTT_PUSH_HUB_FRAME_TERMINATOR):
+        candidate = candidate[: -len(MQTT_PUSH_HUB_FRAME_TERMINATOR)]
+
+    sections = candidate.split(MQTT_PUSH_SECTION_DELIMITER)
+
+    # The five recognition clauses, each its own early return so the failing clause is
+    # nameable in a diagnostic rather than folded into one combined boolean.
+    if any(section.lstrip().startswith("{") for section in sections):
+        return None
+    if len(sections) != MQTT_PUSH_HUB_FRAME_SECTIONS:
+        return None
+    if not sections[0].startswith(MQTT_PUSH_HUB_FRAME_PREFIX):
+        return None
+    if sections[1] not in ("0", "1"):
+        return None
+    try:
+        changed_ts = int(sections[2])
+        # Section 4 is propVer: validated so the frame's shape can be
+        # trusted, then discarded (section 3 is the ordering key, not this), so
+        # it never enters the return surface as a field with no consumer.
+        int(sections[3])
+    except ValueError:
+        return None
+
+    return _HubFrame(mid_tail=sections[0], connected=sections[1] == "1", changed_ts=changed_ts)
+
+
+# Bounded prefix a shape classification decodes -- large enough to see the
+# first several pipe sections of any payload observed so far, small enough
+# that classifying a hostile oversized payload never forces a full decode.
+_SHAPE_KEY_PREFIX_BYTES = 256
+# Only the first few sections are classified individually; a payload with
+# many more sections still yields one key (its total section count plus this
+# many class letters), keeping the key's own size bounded regardless of how
+# many sections the payload actually has.
+_SHAPE_KEY_MAX_CLASSIFIED_SECTIONS = 8
+
+
+def _hub_frame_mid_matches(mid_tail: str, own: str) -> bool:
+    """Cross-check a hub frame's section-1 tail against the client's own mid.
+
+    A suffix test, unconditionally. Read the width check below as selecting a
+    log line, not as gating the comparison: both paths run the same test.
+
+    What the test does and does not buy, stated precisely, because the
+    comment this replaced overstated it. When `own` is the observed width and
+    the frame's own mid is that width too, the suffix test is exactly a
+    fixed-width slot comparison, so no *other* mid of that same width can
+    satisfy it. It does NOT rule out a mid of some other width: with `own`
+    "236547", a frame from a hub whose mid is "1236547" ends in "236547" and
+    is accepted, and so is one whose mid is "36547" behind an account id
+    ending in "2". Both were equally true of the fixed-width slice this
+    replaced, which is why the swap is a no-op; neither is a regression.
+
+    That residual is accepted rather than engineered away: no capture has
+    produced a mid of any width but the observed one, rejecting every frame
+    of an unobserved width would silently disable the feature for it, and the
+    observer topic is per-hub so cross-delivery is hypothetical.
+    The unobserved-width case is logged so it is at least visible.
+
+    Defense in depth against a broker that ever cross-delivers, never a
+    source of the mid: the mid handed to the coordinator is always the
+    construction-supplied one.
+    """
+    if len(own) != MQTT_PUSH_HUB_FRAME_MID_WIDTH:
+        _LOGGER.debug(
+            "RainPoint MQTT hub frame mid cross-check used the suffix fallback (hub_mid=%s width=%s, expected width=%s)",
+            own,
+            len(own),
+            MQTT_PUSH_HUB_FRAME_MID_WIDTH,
+        )
+    if mid_tail.endswith(own):
+        return True
+    _LOGGER.debug(
+        "RainPoint MQTT hub frame mid mismatch: frame_tail=%s hub_mid=%s",
+        mid_tail,
+        own,
+    )
+    return False
+
+
+def _section_class(section: str) -> str:
+    """Classify one pipe-delimited section into a single letter.
+
+    Structural only -- never derived from the section's actual content past
+    this coarse bucket, so the key cannot be used to reconstruct the payload.
+    """
+    if not section:
+        return "E"  # empty
+    if section.lstrip().startswith("{"):
+        return "J"  # JSON-shaped
+    if section.isdigit():
+        return "D"  # all-digits
+    return "O"  # other
+
+
+def _shape_key(payload: bytes) -> str:
+    """Classify a payload's structural shape for the one-shot-per-shape log.
+
+    Built from the pipe-delimited section count of the first
+    _SHAPE_KEY_PREFIX_BYTES bytes plus a per-section class letter for at most
+    the first _SHAPE_KEY_MAX_CLASSIFIED_SECTIONS of those sections. Two
+    payloads that differ only past that prefix therefore share one key, which
+    is fine for a bookkeeping bound but is not a payload identity.
+    Classification keeps cardinality bounded by construction (a
+    small alphabet of classes over a short prefix);
+    MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT bounds the per-client bookkeeping this
+    feeds absolutely. Never hashes or otherwise carries raw payload content.
+    """
+    prefix = payload[:_SHAPE_KEY_PREFIX_BYTES]
+    text = prefix.decode("utf-8", "replace")
+    sections = text.split(MQTT_PUSH_SECTION_DELIMITER)
+    classes = "".join(_section_class(s) for s in sections[:_SHAPE_KEY_MAX_CLASSIFIED_SECTIONS])
+    return f"{len(sections)}:{classes}"
+
+
 # Supervisor backoff: only the DELAY is capped, never
 # the attempt count. 30s base doubling up to a 480s ceiling (within the 300-600s
 # band), with +-10-30% jitter to avoid a synchronized reconnect storm.
@@ -218,6 +417,11 @@ class RainPointMqttClient:
         self._message_count = 0
         self._last_message_at: float | None = None
         self._connected = False
+        # One-shot-per-shape bookkeeping: dies with the client rather
+        # than living for the process, and is bounded absolutely by
+        # MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT regardless of how chatty the
+        # downlink gets.
+        self._unrecognised_shapes: set[str] = set()
         # Observability seam: listeners registered by the diagnostic entities so
         # they re-render on connect/disconnect/message. coordinator.async_update_listeners
         # does not fire on these transitions (the live state is not in coordinator.data),
@@ -607,30 +811,89 @@ class RainPointMqttClient:
         self._notify_state_listeners()
         self._dispatch_push(topic, payload)
 
-    def _dispatch_push(self, topic: str, payload: bytes) -> None:
-        """Parse the payload and route each sub-device reading to the coordinator.
+    def _drop_if_no_coordinator(self) -> bool:
+        """Return True (after logging) if a push arrived before coordinator wiring.
 
-        A payload that carries no decodable sub-device update is dropped quietly.
-        apply_push_update is the only coordinator method this client ever calls,
-        and the per-hub mid is supplied from construction (never parsed from the
-        payload or the ephemeral observer topic). The drop path logs a truncated
-        payload preview at DEBUG so unrecognized downlinks can be diagnosed;
-        handled sub-device pushes never have their contents logged.
+        Shared by every recognized frame family in _dispatch_push so the
+        "not wired yet" check and its log message live in one place rather
+        than being copied per branch.
+        """
+        if self._coordinator is None:
+            _LOGGER.debug("RainPoint MQTT push received before coordinator wiring; dropping")
+            return True
+        return False
+
+    def _dispatch_push(self, topic: str, payload: bytes) -> None:
+        """Parse the payload and route it to the coordinator entry point that
+        owns its frame family.
+
+        Two frame families arrive on the same downlink and are routed to two
+        different coordinator entry points, and never to both: a D-prefixed
+        sub-device JSON envelope goes to apply_push_update (unchanged, and
+        kept first so the hot path is byte-equivalent to before this frame
+        family existed); a pipe-delimited hub connectivity frame goes to
+        apply_hub_push_update. Anything recognized as neither is dropped; the
+        drop path logs a truncated payload preview at DEBUG so an
+        unrecognized downlink can still be diagnosed. Handled pushes of
+        either family never have their contents logged.
         """
         updates = _parse_push_envelope(payload)
-        if not updates:
+        if updates:
+            if self._drop_if_no_coordinator():
+                return
+            for sid, raw_value, device_ts in updates:
+                self._coordinator.apply_push_update(self._hub_mid, sid, raw_value, device_ts)
+            return
+
+        frame = _parse_hub_frame(payload)
+        if frame is not None:
+            if not _hub_frame_mid_matches(frame.mid_tail, str(self._hub_mid)):
+                return
+            if self._drop_if_no_coordinator():
+                return
+            # frame.mid_tail is never passed on: the mid handed to the
+            # coordinator is always self._hub_mid from construction, never one
+            # parsed out of the payload. The cross-check above is a defense
+            # in depth against a broker that ever cross-delivers, not a
+            # source of the mid.
+            self._coordinator.apply_hub_push_update(self._hub_mid, frame.connected, frame.changed_ts)
+            return
+
+        # The first payload of a distinct unrecognized shape announces itself
+        # once at INFO, so the next undiscovered downlink shape is visible in
+        # an ordinary log rather than requiring a debug session: a signal
+        # visible only under DEBUG is exactly the condition that hid the hub
+        # connectivity frames for a whole milestone. The announcement carries
+        # the shape key and topic, never the payload. Observed frames of this
+        # family embed an account id and a mid, and INFO reaches the default
+        # Home Assistant log, so the preview itself stays DEBUG-only on both
+        # branches below. Enabling DEBUG then yields the full preview on the
+        # next frame of that shape, since repeats fall through to the elif.
+        # WARNING on every unrecognized frame was rejected: it would turn a
+        # normal class of unconsumed downlink into recurring noise for every
+        # user.
+        shape_key = _shape_key(payload)
+        if shape_key not in self._unrecognised_shapes and len(self._unrecognised_shapes) < MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT:
+            self._unrecognised_shapes.add(shape_key)
+            _LOGGER.info(
+                "RainPoint MQTT push carried an unrecognized downlink shape: topic=%s shape=%s "
+                "(enable debug logging for this integration to capture the payload)",
+                topic,
+                shape_key,
+            )
             if _LOGGER.isEnabledFor(logging.DEBUG):
                 _LOGGER.debug(
-                    "RainPoint MQTT push carried no sub-device update: topic=%s payload=%s",
+                    "RainPoint MQTT push unrecognized downlink shape %s: topic=%s payload=%s",
+                    shape_key,
                     topic,
                     _payload_preview(payload),
                 )
-            return
-        if self._coordinator is None:
-            _LOGGER.debug("RainPoint MQTT push received before coordinator wiring; dropping")
-            return
-        for sid, raw_value, device_ts in updates:
-            self._coordinator.apply_push_update(self._hub_mid, sid, raw_value, device_ts)
+        elif _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "RainPoint MQTT push carried no sub-device or hub update: topic=%s payload=%s",
+                topic,
+                _payload_preview(payload),
+            )
 
     async def async_disconnect(self) -> None:
         """Cancel and await the supervisor task, then stop the paho loop and

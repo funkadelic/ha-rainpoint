@@ -449,8 +449,9 @@ class RainPointHubConnectivityIssues:
     Re-keys the raise-once / clear-on-recovery shape of
     RainPointSilentDeviceIssues onto the hub rather than the sub-device: a
     home can have several hubs, and each needs to name itself on its own
-    card. Driven by the coordinator's poll reconcile only -- push is not a
-    connectivity input in this phase -- and holds no knowledge of the
+    card. The poll reconcile drives async_sync; the push path drives
+    async_clear directly, exactly as RainPointSilentDeviceIssues does for the
+    sub-device pair. Either way the class holds no knowledge of the
     coordinator's data shape, exactly like its sibling.
     """
 
@@ -497,6 +498,16 @@ class RainPointHubConnectivityIssues:
             # what happened.
             self._clear_issue(stale_id, reason=_CLEAR_REASON_REMOVED)
 
+    def async_clear(self, hid: Any, mid: int) -> None:
+        """Clear one hub's issue explicitly; the push-arrival half of the lifecycle.
+
+        A pushed connected edge already overwrites the held connectivity
+        record for free, but the active-issue set is separate state the
+        merge does not touch, so the coordinator's push path calls this
+        directly rather than waiting for the next poll's reconcile.
+        """
+        self._clear_issue(hub_connectivity_issue_id(hid, mid))
+
     def _raise_issue(self, issue_id: str, record: HubConnectivityRecord) -> None:
         """Raise one hub's issue, at most once per active period.
 
@@ -526,7 +537,7 @@ class RainPointHubConnectivityIssues:
             # session.
             self._active.add(issue_id)
             _LOGGER.warning(
-                "RainPoint hub hid=%s mid=%s has been unreachable from the cloud for %s polls; raising repair issue",
+                "RainPoint hub hid=%s mid=%s has been unreachable from the cloud for at least %s polls; raising repair issue",
                 record.hid,
                 record.mid,
                 record.missed_polls,

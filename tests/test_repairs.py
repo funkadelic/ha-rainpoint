@@ -851,6 +851,32 @@ class TestRainPointHubConnectivityIssues:
 
         assert create.call_count == 2
 
+    def test_async_clear_deletes_by_key(self, issue_mocks):
+        """The push-arrival half of the lifecycle, which does not wait for a poll."""
+        _create, delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+        manager.async_sync([_make_hub_record()])
+
+        manager.async_clear(100, 200)
+
+        assert delete.call_count == 1
+        _hass, domain, issue_id = delete.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == hub_connectivity_issue_id(100, 200)
+
+    def test_async_clear_on_an_id_never_raised_is_still_an_idempotent_delete(self, issue_mocks):
+        """A fresh instance after a reload can still clear an issue a prior
+        session raised, because deleting an unknown id is already a no-op."""
+        _create, delete = issue_mocks
+        manager = RainPointHubConnectivityIssues(MagicMock())
+
+        manager.async_clear(100, 200)
+
+        assert delete.call_count == 1
+        _hass, domain, issue_id = delete.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == hub_connectivity_issue_id(100, 200)
+
 
 class TestHubConnectivityUnreachableIdsAreNotCleared:
     """An id whose owning hub's connectivity could not be determined this poll
