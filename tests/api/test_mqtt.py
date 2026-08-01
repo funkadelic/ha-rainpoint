@@ -16,6 +16,7 @@ from tests.payload_samples import (
     SAMPLE_HUB_DISCONNECT_FRAME,
     SAMPLE_HUB_FRAME_MID,
     SAMPLE_HUB_RECONNECT_FRAME,
+    SAMPLE_NON_HUB_PIPE_FRAME,
 )
 
 FAKE_DEVICE_SECRET = "SEKRIT-value-9f3a"
@@ -595,6 +596,47 @@ class TestHubFrameParsing:
         assert frame is not None
         assert frame.connected is True
         assert frame.changed_ts == 1785523062039
+
+    def test_captured_non_hub_pipe_frame_is_rejected(self):
+        """The only OBSERVED payload that must be rejected, captured on the
+        same downlink topic moments after a hub reconnect during the
+        2026-08-01 UAT.
+
+        Every other rejection case here is a hand-mutated variant of a
+        known-good frame, each failing one clause in isolation. This one is
+        real traffic and fails two at once (three sections, and an empty
+        section 2 rather than a literal 0/1), which is how malformed input
+        actually arrives. Its section-1 tail is 182509 -- the hid, not a mid
+        -- so a parser that accepted it would write a disconnect against a
+        record that exists.
+        """
+        assert mqtt_module._parse_hub_frame(SAMPLE_NON_HUB_PIPE_FRAME.encode()) is None
+
+    def test_captured_non_hub_pipe_frame_is_rejected_inside_its_envelope(self):
+        """Rejected on the JSON-wrapped route too, which is how it arrived.
+
+        The bare-text assertion above would still pass if envelope unwrapping
+        were the thing that changed, so both routes are pinned.
+        """
+        payload = json.dumps(
+            {
+                "method": "thing.service.property.set",
+                "id": "429833999",
+                "params": {"param": SAMPLE_NON_HUB_PIPE_FRAME},
+                "version": "1.0.0",
+            }
+        ).encode()
+        assert mqtt_module._parse_hub_frame(payload) is None
+
+    def test_captured_non_hub_pipe_frame_reaches_no_coordinator_entry_point(self):
+        """Rejection at the parser is not enough on its own: the frame must
+        also leave both sanctioned coordinator entry points untouched, since
+        that is the actual harm a misread would cause."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
+        client._dispatch_push("topic", SAMPLE_NON_HUB_PIPE_FRAME.encode())
+        coordinator.apply_hub_push_update.assert_not_called()
+        coordinator.apply_push_update.assert_not_called()
 
     def test_json_wrapped_capture_parses_to_the_identical_frame(self):
         """The same frame carried inside an AliCloud envelope converges on the
