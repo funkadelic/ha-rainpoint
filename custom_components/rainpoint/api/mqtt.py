@@ -859,24 +859,35 @@ class RainPointMqttClient:
             self._coordinator.apply_hub_push_update(self._hub_mid, frame.connected, frame.changed_ts)
             return
 
-        # D-07: the first payload of a distinct unrecognized shape logs once
-        # at INFO with a truncated preview, so the next undiscovered downlink
-        # shape is visible in an ordinary log rather than requiring a debug
-        # session -- DEBUG-only preview is exactly the condition that hid the
-        # hub connectivity frames for a whole milestone. Repeats of an
-        # already-seen shape stay DEBUG, keeping the existing isEnabledFor
-        # guard around the preview call so an ordinary unconsumed downlink
-        # still costs nothing under default logging. WARNING on every
-        # unrecognized frame was rejected: it would turn a normal class of
-        # unconsumed downlink into recurring noise for every user.
+        # The first payload of a distinct unrecognized shape announces itself
+        # once at INFO, so the next undiscovered downlink shape is visible in
+        # an ordinary log rather than requiring a debug session: a signal
+        # visible only under DEBUG is exactly the condition that hid the hub
+        # connectivity frames for a whole milestone. The announcement carries
+        # the shape key and topic, never the payload. Observed frames of this
+        # family embed an account id and a mid, and INFO reaches the default
+        # Home Assistant log, so the preview itself stays DEBUG-only on both
+        # branches below. Enabling DEBUG then yields the full preview on the
+        # next frame of that shape, since repeats fall through to the elif.
+        # WARNING on every unrecognized frame was rejected: it would turn a
+        # normal class of unconsumed downlink into recurring noise for every
+        # user.
         shape_key = _shape_key(payload)
         if shape_key not in self._unrecognised_shapes and len(self._unrecognised_shapes) < MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT:
             self._unrecognised_shapes.add(shape_key)
             _LOGGER.info(
-                "RainPoint MQTT push carried an unrecognized downlink shape: topic=%s payload=%s",
+                "RainPoint MQTT push carried an unrecognized downlink shape: topic=%s shape=%s "
+                "(enable debug logging for this integration to capture the payload)",
                 topic,
-                _payload_preview(payload),
+                shape_key,
             )
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "RainPoint MQTT push unrecognized downlink shape %s: topic=%s payload=%s",
+                    shape_key,
+                    topic,
+                    _payload_preview(payload),
+                )
         elif _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(
                 "RainPoint MQTT push carried no sub-device or hub update: topic=%s payload=%s",

@@ -156,10 +156,14 @@ class TestMessageReceiptLogging:
         await client.async_disconnect()
 
     @pytest.mark.asyncio
-    async def test_first_unrecognized_shape_logs_payload_preview_at_info(self, caplog):
-        """The first payload of a distinct unrecognized shape logs a preview
-        at INFO for diagnosis (D-07): DEBUG-only preview is precisely the
-        condition that hid the hub connectivity frames for a whole milestone."""
+    async def test_first_unrecognized_shape_announces_itself_at_info_without_the_payload(self, caplog):
+        """The first payload of a distinct unrecognized shape announces itself
+        at INFO so it is visible without a debug session, which a signal
+        visible only under DEBUG is not: that is precisely the condition that
+        hid the hub connectivity frames for a whole milestone. The
+        announcement names the shape and topic and never carries the payload,
+        which observed frames of this family embed an account id and a mid
+        into and INFO reaches the default Home Assistant log."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -179,7 +183,9 @@ class TestMessageReceiptLogging:
 
         info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
         assert len(info_records) == 1
-        assert "BroadcastTime" in info_records[0].message
+        assert mqtt_module._shape_key(payload) in info_records[0].message
+        assert "BroadcastTime" not in info_records[0].message
+        assert payload.decode() not in info_records[0].message
 
         await client.async_disconnect()
 
@@ -784,9 +790,9 @@ class TestHubFrameRouting:
 
 
 class TestUnrecognisedShapeLogging:
-    """D-07: the first payload of a distinct unrecognized shape logs once at
-    INFO with a truncated preview; repeats of that shape stay DEBUG; the
-    per-client bookkeeping is hard-capped so it cannot grow unbounded."""
+    """The first payload of a distinct unrecognized shape announces that shape
+    once at INFO, carrying no payload; every truncated preview stays DEBUG;
+    the per-client bookkeeping is hard-capped so it cannot grow unbounded."""
 
     def test_shape_key_classifies_by_structure_not_content(self):
         """Two payloads with the same section-count/class shape but
@@ -808,6 +814,10 @@ class TestUnrecognisedShapeLogging:
         assert mqtt_module._section_class("not-digits-or-json") == "O"
 
     def test_first_shape_logs_info_repeat_logs_debug_new_shape_logs_info_again(self, caplog):
+        """Under DEBUG each of the three payloads yields a preview: the two
+        first-of-shape ones from the announcement's own nested debug call, the
+        repeat from the already-seen branch. Only the two first-of-shape
+        payloads add an INFO announcement."""
         coordinator = MagicMock()
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
         shape_a = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
@@ -822,7 +832,28 @@ class TestUnrecognisedShapeLogging:
         info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
         assert len(info_records) == 2
         debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
-        assert len(debug_records) == 1
+        assert len(debug_records) == 3
+        # No INFO record carries payload content, on either first-of-shape path.
+        assert not any("BroadcastTime" in r.message or "not-a-json" in r.message for r in info_records)
+
+    def test_first_shape_preview_is_withheld_when_debug_is_off(self, caplog):
+        """Above DEBUG the announcement still fires, and the preview it would
+        otherwise carry is never produced: the identifiers observed frames
+        embed stay out of the default log."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator)
+        payload = b"#P26073118173000001682228223654|9|9|9#"
+
+        with (
+            caplog.at_level(logging.INFO, logger="custom_components.rainpoint.api.mqtt"),
+            patch.object(mqtt_module, "_payload_preview") as preview,
+        ):
+            client._dispatch_push("topic", payload)
+
+        preview.assert_not_called()
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
+        assert len(info_records) == 1
+        assert "16822282" not in info_records[0].message
 
     def test_unrecognized_shape_cap_stops_growth_and_further_info_records(self, caplog):
         coordinator = MagicMock()
