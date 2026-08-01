@@ -351,7 +351,7 @@ Thanks to **@blauwaerts** and **@torbertkf** for the HTV145FRF sample payloads, 
 
 ### Changed
 - Renamed integration domain from `homgar` to `rainpoint`
-- Removed HomGar/RainPoint dual-brand app-type selection: RainPoint is now the only supported brand
+- Removed HomGar/RainPoint dual-brand app-type selection — RainPoint is now the only supported brand
 - Hardcoded RainPoint appCode; no user-facing app-type configuration step
 - All entity unique IDs use `rainpoint_` prefix
 - All class names use `RainPoint` prefix
