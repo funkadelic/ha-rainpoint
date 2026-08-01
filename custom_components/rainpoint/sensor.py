@@ -325,11 +325,12 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
 
     if (info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
         # Must run before the factory lookup: a silent entry has no payload of
-        # any kind, but MODEL_HTV210B -- the device that motivated this phase --
+        # any kind, but MODEL_HTV210B -- the device this guard was written for --
         # HAS a factory (_make_htv210b_entities), and reaching it here would
         # emit a battery/RSSI pair that reads available with a native_value of
-        # None, exactly the "looks wired up while reading nothing" outcome D-02
-        # forbids. No generic entities and no Raw Payload sensor either: there
+        # None, exactly the "looks wired up while reading nothing" outcome this
+        # guard exists to prevent. No generic entities and no Raw Payload
+        # sensor either: there
         # is nothing for either to hold.
         return [RainPointNotReportingSensor(coordinator, key, info, base_slug)]
 
@@ -1259,7 +1260,7 @@ class RainPointNotReportingSensor(RainPointSensorBase):
     device since it started; "stopped_reporting" means it observed one at
     last_seen and has since stopped. That distinction stays true across a
     Home Assistant restart, which a bare "never seen" state would not report
-    honestly (D-02). No state class is set, matching RainPointUnknownSensor:
+    honestly. No state class is set, matching RainPointUnknownSensor:
     an entity with no readable state must never enter long-term statistics.
     """
 
@@ -1312,7 +1313,7 @@ class RainPointNotReportingSensor(RainPointSensorBase):
 
         # The same one-click report path an unsupported-payload device gets,
         # except the payload field states plainly that there is no payload
-        # (D-15): the absence of one is itself the finding a maintainer needs.
+        # at all: the absence of one is itself the finding a maintainer needs.
         if self._report_url is None:
             model = self._sensor_info.get("model")
             model_code = self._sensor_info.get("model_code")

@@ -348,7 +348,7 @@ def _evaluate_control_gate(model: str | None, model_code: int | str | None) -> C
     # run-state datapoints (below), and a real multi-zone valve hub commonly
     # reuses one dpCode for the same identity across its zones (see
     # HTV214FRF). Carrying the sensor rule over would refuse every multi-zone
-    # valve hub, which is the hardware this phase exists for.
+    # valve hub, which is the hardware this path exists to serve.
     run_state_entries = [entry for entry in raw_entry if isinstance(entry, dict) and entry.get("identity") == RUN_STATE_IDENTITY]
 
     datapoints: list[ControlDatapoint] = []

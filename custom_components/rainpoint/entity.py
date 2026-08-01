@@ -176,9 +176,9 @@ class RainPointSubDeviceEntity(CoordinatorEntity):
 
         A silent entry's data is truthy (it carries silent_state/last_seen), so
         the plain "is not None" check used to read this as available with a
-        native_value of None once a previously-reporting device went silent
-        (D-02/D-12). RainPointNotReportingSensor is the one deliberate
-        exception and overrides this back to True.
+        native_value of None once a previously-reporting device went silent.
+        RainPointNotReportingSensor is the one deliberate exception and
+        overrides this back to True.
         """
         data = self._sensor_data
         if data is None:
