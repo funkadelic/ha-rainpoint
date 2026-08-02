@@ -136,7 +136,7 @@ class RainPointHubDeviceIDSensor(RainPointHubSensorBase):
 
     @property
     def native_value(self) -> str | int | None:
-        # `did` is the device ID the vendor app shows; the home id (hid) is only a
+        # `did` is the device ID the RainPoint app shows; the home id (hid) is only a
         # fallback for a hub record that omits it.
         return self._hub_info.get("did") or self._hub_info.get("hid")
 
@@ -292,7 +292,7 @@ def _hub_rf_current_channel(hub_info: dict) -> int | None:
     """Return the hub's current RF channel from its `recich` field, or None.
 
     `recich` is the receive channel the hub is tuned to (matches the value the
-    vendor app shows). bool is excluded because it is an int subclass.
+    RainPoint app shows). bool is excluded because it is an int subclass.
     """
     value = hub_info.get("recich")
     if isinstance(value, bool) or not isinstance(value, int):

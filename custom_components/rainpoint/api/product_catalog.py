@@ -1,7 +1,7 @@
 """Import-time, failure-tolerant loader for the committed RainPoint product catalog.
 
-The catalog is a trimmed snapshot of the vendor's product-model metadata,
-shipped inside the package and never fetched from the vendor at runtime. It is
+The catalog is a trimmed snapshot of RainPoint's product-model metadata,
+shipped inside the package and never fetched from RainPoint at runtime. It is
 loaded once, in this module, during component import - which Home Assistant
 already runs in the executor thread, so this read never blocks the event
 loop. A missing, corrupt, oversized, or wrong-shape catalog file degrades to
@@ -13,14 +13,14 @@ On-disk shape is model -> modelCode -> variant record::
     {"HIC801W": {"278": {"portNumber": 0, "dp": [...]},
                  "279": {"portNumber": 8, "dp": [...]}}}
 
-A model string is not a unique key: the vendor catalog maps some models to
+A model string is not a unique key: the RainPoint catalog maps some models to
 more than one modelCode, and those variants can differ in port count. Keying
 on the model alone would let one variant's zone metadata be attached to the
 other's payload. HIC801W above is a real example - the same model name is 0
-ports under code 278 and 8 ports under 279. Entries whose modelCode the vendor
+ports under code 278 and 8 ports under 279. Entries whose modelCode RainPoint
 did not supply live under the "*" bucket and act as the model-level default.
 
-portNumber is a per-model property in the vendor catalog, not a per-dp one, so
+portNumber is a per-model property in the RainPoint catalog, not a per-dp one, so
 it lives on the variant record rather than being repeated on every dp entry.
 """
 
@@ -32,7 +32,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _CATALOG_PATH = Path(__file__).parent / "data" / "product_catalog.json"
 
-# Bucket key for catalog entries the vendor supplied without a modelCode.
+# Bucket key for catalog entries RainPoint supplied without a modelCode.
 UNCODED_VARIANT = "*"
 
 # Upper bound on the committed catalog file size. The real trimmed snapshot is
@@ -186,7 +186,7 @@ def get_catalog_port_number(model: str | None, model_code: int | str | None = No
     """Return the declared port (zone) count for a model variant, or None on a miss.
 
     None means "the catalog does not say", which is distinct from 0 ("the
-    vendor declares no ports"): several models are 0 ports under one modelCode
+    RainPoint declares no ports"): several models are 0 ports under one modelCode
     and many under another, so a caller must not read a missing value as zero.
     """
     record = _resolve_variant(model, model_code)

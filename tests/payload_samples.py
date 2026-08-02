@@ -253,7 +253,7 @@ CATALOG_ANCHOR_MODEL = "HCS702B"
 # Real hex (11#) payload from the maintainer's HTV210B, captured after moving it
 # off Bluetooth onto the hub, both zones idle and no usage history yet. Kept for
 # the RSSI record it carries: 17e1b401, where 0xb4 is -76 dBm (the value the
-# vendor app showed at the time) and the trailing 0x01 is the PHY. Every other
+# RainPoint app showed at the time) and the trailing 0x01 is the PHY. Every other
 # frame we hold carries 0x00 there, so this is the only capture proving that
 # byte varies. Decoded by decode_htv210b; also exercises the shared byte
 # scanning, since the HTV213 family's RSSI extractor must read this frame too.

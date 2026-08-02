@@ -94,7 +94,7 @@ class TestLoadCatalogValid:
 class TestVariantResolution:
     """get_catalog_entry must never attach one variant's metadata to another.
 
-    The vendor maps some model strings to several modelCodes whose port counts
+    RainPoint maps some model strings to several modelCodes whose port counts
     differ, so resolving a lookup to the wrong variant would put a bogus zone
     number on a diagnostic field. Every ambiguous case here resolves to None
     instead.
@@ -198,7 +198,7 @@ class TestPortNumberResolution:
         assert get_catalog_port_number(None) is None
 
     def test_zero_ports_is_distinct_from_unknown(self, monkeypatch):
-        """0 means "the vendor declares no ports"; None means "the catalog does not say".
+        """0 means "RainPoint declares no ports"; None means "the catalog does not say".
 
         Collapsing the two would let a caller read a missing value as a real
         zero-port declaration.

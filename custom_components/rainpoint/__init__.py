@@ -247,7 +247,7 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
 
     for row in rows:
         # The reason lookup reads the coordinator's sensor records, which come
-        # from the vendor payload and are only assumed to be dicts. A row whose
+        # from the RainPoint payload and are only assumed to be dicts. A row whose
         # record is malformed is skipped like any other unremovable row rather
         # than abandoning the rest of the sweep.
         try:

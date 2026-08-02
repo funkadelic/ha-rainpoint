@@ -131,7 +131,7 @@ def _rssi_dbm(raw: int) -> float | None:
     Bluetooth-capable ones, where the second byte carries the PHY the reading
     was taken on rather than part of the magnitude. Masking to the low byte
     first makes both widths decode the same way: a captured HTV210B frame reads
-    b401, which the vendor app reports as -76 dBm at 1M PHY, and a one-byte 0xC4
+    b401, which the RainPoint app reports as -76 dBm at 1M PHY, and a one-byte 0xC4
     still reads -60 as the hand-written decoders have it.
 
     Without the mask the two-byte form arrived here as a little-endian word
@@ -646,7 +646,7 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
     # Distinct lookup outcomes, deliberately not collapsed into one "not in
     # the catalog" message. They call for different fixes: an unresolved
     # variant is broken down further by _unresolved_variant_reason, while a
-    # model the vendor describes with no datapoints at all cannot be helped
+    # model RainPoint describes with no datapoints at all cannot be helped
     # by any of those. Roughly a third of the committed catalog is that last
     # case, so reporting it as absent would misdirect most reports about
     # those models.
