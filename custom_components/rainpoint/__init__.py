@@ -154,6 +154,37 @@ def _generic_control_row_removal_reason(unique_id, control_enabled: bool, sensor
     return None
 
 
+def _fetch_registry_rows(get_registry, entries_for_config_entry, hass: HomeAssistant, entry: ConfigEntry, sweep: str):
+    """Return (registry, rows) for one config entry, or (None, []) if unreadable.
+
+    Shared by both registry sweeps. The registry accessors are passed in
+    rather than chosen here so each sweep keeps its own registry (entity vs
+    device) and its own patch surface, while the guard around them exists
+    once. Failure returns a registry of None, which every caller treats as
+    "skip this sweep entirely", rather than raising into config-entry setup.
+    """
+    try:
+        registry = get_registry(hass)
+        return registry, list(entries_for_config_entry(registry, entry.entry_id))
+    except Exception as exc:
+        _LOGGER.debug("Registry lookup failed; skipping %s: %s", sweep, exc)
+        return None, []
+
+
+def _read_current_sensors(coordinator, consequence: str) -> dict:
+    """Return the current poll's sensor records, or {} if they cannot be read.
+
+    Shared by both registry sweeps, which degrade to {} for opposite reasons:
+    the caller states its own in `consequence`, because an empty mapping means
+    "sweep without graduation data" to one and "clear nothing" to the other.
+    """
+    try:
+        return (coordinator.data or {}).get("sensors", {}) if coordinator is not None else {}
+    except Exception as exc:
+        _LOGGER.debug("Coordinator data unreadable; %s: %s", consequence, exc)
+        return {}
+
+
 def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Remove generic-namespace registry rows that should no longer exist.
 
@@ -183,18 +214,18 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
     Synchronous on purpose: both registry helpers it uses are callbacks, so
     there is nothing to await and no suspension point at which a reload
     could interleave with a partially completed removal set. Never raises:
-    the registry lookup, the read of the coordinator's current sensors, and
-    each row's keep-or-remove decision and removal are guarded independently,
-    so none of them can propagate out of config-entry setup.
+    the registry lookup (_fetch_registry_rows), the read of the coordinator's
+    current sensors (_read_current_sensors), and each row's keep-or-remove
+    decision and removal are guarded independently, so none of them can
+    propagate out of config-entry setup.
     """
     generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
     control_enabled = entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False)
 
-    try:
-        registry = er.async_get(hass)
-        rows = list(er.async_entries_for_config_entry(registry, entry.entry_id))
-    except Exception as exc:
-        _LOGGER.debug("Entity registry lookup failed; skipping generic entity sweep: %s", exc)
+    registry, rows = _fetch_registry_rows(
+        er.async_get, er.async_entries_for_config_entry, hass, entry, "the generic entity sweep"
+    )
+    if registry is None:
         return
 
     # Degrades to no sensors rather than aborting the sweep. This data only
@@ -202,11 +233,7 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
     # model already means "leave the row alone"; aborting instead would also
     # abandon the toggle-off path, which must remove every generic row and
     # needs none of this data to do it.
-    try:
-        sensors = (coordinator.data or {}).get("sensors", {}) if coordinator is not None else {}
-    except Exception as exc:
-        _LOGGER.debug("Coordinator data unreadable; sweeping without graduation data: %s", exc)
-        sensors = {}
+    sensors = _read_current_sensors(coordinator, "sweeping without graduation data")
 
     for row in rows:
         # The reason lookup reads the coordinator's sensor records, which come
@@ -274,16 +301,16 @@ def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coord
     therefore never a sensor key, so the lookup below simply never finds it.
 
     Synchronous and never raises, for the same reasons
-    _remove_stale_generic_entities is: the registry fetch, the coordinator
-    data read, and each row's decision are guarded independently, so a
-    registry or payload problem can never abort config-entry setup or leave
-    the remaining rows unswept.
+    _remove_stale_generic_entities is, and through the same two shared
+    guards: the registry fetch (_fetch_registry_rows), the coordinator data
+    read (_read_current_sensors), and each row's decision are guarded
+    independently, so a registry or payload problem can never abort
+    config-entry setup or leave the remaining rows unswept.
     """
-    try:
-        registry = dr.async_get(hass)
-        rows = list(dr.async_entries_for_config_entry(registry, entry.entry_id))
-    except Exception as exc:
-        _LOGGER.debug("Device registry lookup failed; skipping sub-device parenting reconcile: %s", exc)
+    registry, rows = _fetch_registry_rows(
+        dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the sub-device parenting reconcile"
+    )
+    if registry is None:
         return
 
     # Degrades to no sensors rather than aborting the sweep. This is the
@@ -291,11 +318,7 @@ def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coord
     # empty data must still let the toggle-off path remove rows; here, the
     # only mutation available is destructive, so empty data must mean "clear
     # nothing".
-    try:
-        sensors = (coordinator.data or {}).get("sensors", {}) if coordinator is not None else {}
-    except Exception as exc:
-        _LOGGER.debug("Coordinator data unreadable; clearing nothing this setup: %s", exc)
-        sensors = {}
+    sensors = _read_current_sensors(coordinator, "clearing nothing this setup")
 
     for row in rows:
         try:
