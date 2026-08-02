@@ -1062,83 +1062,9 @@ class RainPointCoordinator(DataUpdateCoordinator):
                     )
                 decoded_sensors.update(RainPointCoordinator._decode_hub_subdevices(self, hub, status))
 
-            # A poll that returned no hubs at all, for an installation that had
-            # some a moment ago, is a device-list outage rather than evidence
-            # that every device left. Pruning and reconciling against it would
-            # wipe each debounce counter and clear each still-valid issue, then
-            # re-raise it once the list came back: the same clear-then-reraise
-            # cycle the absent-hub signal above exists to prevent, entering
-            # through the device-list door instead of the status door. Skipping
-            # both is safe in the direction that matters, since a poll with no
-            # hubs also decodes no sensors and so can never raise anything. The
-            # guard covers both the not-reporting and the hub-connectivity
-            # state, since an empty device list is the same outage for both.
-            if hubs or not (self._silent_poll_counts or self._hub_disconnect_poll_counts):
-                # Must run first, inside this guard, and only for a non-empty
-                # device list. An empty list is a total outage and freezes the
-                # enumeration memory entirely: no counter advances and
-                # _last_poll_hub_keys is unchanged, so a partial list arriving
-                # after a total outage still computes the correct missing set
-                # against the pre-outage memory.
-                #
-                # The emptiness test is deliberately separate from the branch
-                # condition above, because that condition does not partition
-                # total outages cleanly: with nothing being debounced,
-                # "not (silent or disconnect)" is true and an empty list falls
-                # into this branch rather than the else below. Deriving the
-                # freeze from the branch alone would therefore make a total
-                # outage behave one way in a quiet installation and another
-                # way once a single device happened to be mid-debounce, which
-                # is the same event handled two ways. Keyed on the list itself,
-                # both doors agree: an empty device list never advances
-                # enumeration state, whatever else is being tracked.
-                missing_hub_keys: frozenset[tuple[Any, int]] = frozenset()
-                if hubs:
-                    missing_hub_keys = RainPointCoordinator._track_missing_hubs(self, hubs)
-
-                # D-15's shape decision: an independent inline hold, not a
-                # reuse of _merge_push_hub_connectivity or
-                # _guard_hub_connectivity_order. _merge_push_hub_connectivity
-                # assigns self.data directly, while this method returns a
-                # dict that DataUpdateCoordinator then assigns; using it here
-                # would write a snapshot this poll's own return value
-                # immediately overwrites. _guard_hub_connectivity_order
-                # orders a polled record against a held one, and a missing
-                # hub produces no polled record to order -- bolting a hold
-                # onto it would require synthesizing a stand-in record, the
-                # shape D-14 already rejected for the same reason: any
-                # invented identity leaking into coordinator.data["hubs"]
-                # reaches every entity platform. So this reads the
-                # already-hoisted prior_connectivity local directly and
-                # writes hub_connectivity[mid] for provisionally missing
-                # hubs only, carrying the record unchanged. Writes no entry
-                # when there is no prior record, so a hub that vanished
-                # before it ever reported stays absent rather than gaining
-                # an invented one. This narrows Backlog PUSHOBS-03's window
-                # (a push that landed before the prior_connectivity hoist
-                # above now survives the gap instead of being dropped) but
-                # does not close it: a push landing between that hoist and
-                # this method's return is still lost, unchanged.
-                for _missing_hid, missing_mid in missing_hub_keys:
-                    held_record = prior_connectivity.get(missing_mid)
-                    if held_record is not None:
-                        hub_connectivity[missing_mid] = held_record
-
-                RainPointCoordinator._prune_silent_state(self, hubs, missing_hub_keys=missing_hub_keys)
-                RainPointCoordinator._sync_silent_device_issues(
-                    self, decoded_sensors, absent_hubs, missing_hub_keys=missing_hub_keys
-                )
-                RainPointCoordinator._prune_hub_connectivity_state(self, hubs, missing_hub_keys=missing_hub_keys)
-                RainPointCoordinator._sync_hub_connectivity_issues(
-                    self, hubs, hub_connectivity, missing_hub_keys=missing_hub_keys
-                )
-            else:
-                _LOGGER.warning(
-                    "Device list came back empty while %d sub-device(s) and %d hub(s) were being "
-                    "tracked; treating it as an outage and leaving connectivity state untouched",
-                    len(self._silent_poll_counts),
-                    len(self._hub_disconnect_poll_counts),
-                )
+            RainPointCoordinator._reconcile_repairs_surfaces(
+                self, hubs, decoded_sensors, absent_hubs, hub_connectivity, prior_connectivity
+            )
 
             _LOGGER.info("Coordinator update complete: %d hubs, %d sensors", len(hubs), len(decoded_sensors))
             _LOGGER.debug(debug_with_version("Final data: hubs=%s, sensors=%s"), hubs, list(decoded_sensors.keys()))
@@ -1154,6 +1080,98 @@ class RainPointCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.exception("Unexpected RainPoint error while refreshing")
             raise UpdateFailed(f"Unexpected RainPoint error: {err}") from err
+
+    def _reconcile_repairs_surfaces(
+        self,
+        hubs: list[dict],
+        decoded_sensors: dict[str, dict],
+        absent_hubs: list[dict],
+        hub_connectivity: dict[int, dict],
+        prior_connectivity: dict,
+    ) -> None:
+        """Reconcile both Repairs surfaces against one poll's outcome.
+
+        Extracted from _async_update_data so that method stays within the
+        project's cognitive-complexity budget; it is the whole outage-guard
+        half of a poll and has no caller but that one. Mutates
+        hub_connectivity in place for a provisionally missing hub, and
+        otherwise writes only coordinator debounce state, so nothing here
+        needs to reach the returned snapshot by any other route.
+
+        A poll that returned no hubs at all, for an installation that had
+        some a moment ago, is a device-list outage rather than evidence
+        that every device left. Pruning and reconciling against it would
+        wipe each debounce counter and clear each still-valid issue, then
+        re-raise it once the list came back: the same clear-then-reraise
+        cycle the absent-hub signal exists to prevent, entering through the
+        device-list door instead of the status door. Skipping both is safe
+        in the direction that matters, since a poll with no hubs also
+        decodes no sensors and so can never raise anything. The guard
+        covers both the not-reporting and the hub-connectivity state, since
+        an empty device list is the same outage for both.
+        """
+        if hubs or not (self._silent_poll_counts or self._hub_disconnect_poll_counts):
+            # Must run first, inside this guard, and only for a non-empty
+            # device list. An empty list is a total outage and freezes the
+            # enumeration memory entirely: no counter advances and
+            # _last_poll_hub_keys is unchanged, so a partial list arriving
+            # after a total outage still computes the correct missing set
+            # against the pre-outage memory.
+            #
+            # The emptiness test is deliberately separate from the branch
+            # condition above, because that condition does not partition
+            # total outages cleanly: with nothing being debounced,
+            # "not (silent or disconnect)" is true and an empty list falls
+            # into this branch rather than the else below. Deriving the
+            # freeze from the branch alone would therefore make a total
+            # outage behave one way in a quiet installation and another
+            # way once a single device happened to be mid-debounce, which
+            # is the same event handled two ways. Keyed on the list itself,
+            # both doors agree: an empty device list never advances
+            # enumeration state, whatever else is being tracked.
+            missing_hub_keys: frozenset[tuple[Any, int]] = frozenset()
+            if hubs:
+                missing_hub_keys = RainPointCoordinator._track_missing_hubs(self, hubs)
+
+            # D-15's shape decision: an independent inline hold, not a
+            # reuse of _merge_push_hub_connectivity or
+            # _guard_hub_connectivity_order. _merge_push_hub_connectivity
+            # assigns self.data directly, while this method returns a
+            # dict that DataUpdateCoordinator then assigns; using it here
+            # would write a snapshot this poll's own return value
+            # immediately overwrites. _guard_hub_connectivity_order
+            # orders a polled record against a held one, and a missing
+            # hub produces no polled record to order -- bolting a hold
+            # onto it would require synthesizing a stand-in record, the
+            # shape D-14 already rejected for the same reason: any
+            # invented identity leaking into coordinator.data["hubs"]
+            # reaches every entity platform. So this reads the
+            # already-hoisted prior_connectivity local directly and
+            # writes hub_connectivity[mid] for provisionally missing
+            # hubs only, carrying the record unchanged. Writes no entry
+            # when there is no prior record, so a hub that vanished
+            # before it ever reported stays absent rather than gaining
+            # an invented one. This narrows Backlog PUSHOBS-03's window
+            # (a push that landed before the prior_connectivity hoist
+            # above now survives the gap instead of being dropped) but
+            # does not close it: a push landing between that hoist and
+            # this method's return is still lost, unchanged.
+            for _missing_hid, missing_mid in missing_hub_keys:
+                held_record = prior_connectivity.get(missing_mid)
+                if held_record is not None:
+                    hub_connectivity[missing_mid] = held_record
+
+            RainPointCoordinator._prune_silent_state(self, hubs, missing_hub_keys=missing_hub_keys)
+            RainPointCoordinator._sync_silent_device_issues(self, decoded_sensors, absent_hubs, missing_hub_keys=missing_hub_keys)
+            RainPointCoordinator._prune_hub_connectivity_state(self, hubs, missing_hub_keys=missing_hub_keys)
+            RainPointCoordinator._sync_hub_connectivity_issues(self, hubs, hub_connectivity, missing_hub_keys=missing_hub_keys)
+        else:
+            _LOGGER.warning(
+                "Device list came back empty while %d sub-device(s) and %d hub(s) were being "
+                "tracked; treating it as an outage and leaving connectivity state untouched",
+                len(self._silent_poll_counts),
+                len(self._hub_disconnect_poll_counts),
+            )
 
     async def _collect_hubs(self) -> list[dict]:
         """Fetch hubs for every configured hid and inject hid + brand metadata."""
