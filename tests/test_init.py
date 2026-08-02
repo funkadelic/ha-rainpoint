@@ -1763,7 +1763,10 @@ class _DeviceSweepFixtures:
         raise_once_for = set(raise_once_for or ())
 
         class _FakeDeviceRegistry:
+            """Records every clearing call, optionally raising once per seeded id."""
+
             def async_update_device(self, device_id, *, via_device_id):
+                """Record one clearing call, or raise if this id is armed to fail."""
                 if device_id in raise_once_for:
                     raise_once_for.discard(device_id)
                     raise RuntimeError(f"boom updating {device_id}")
@@ -1773,11 +1776,17 @@ class _DeviceSweepFixtures:
         fake_registry = _FakeDeviceRegistry()
 
         def _async_get(hass):
+            """Return the fake registry, or raise to drive the lookup guard."""
             if raise_on_lookup:
                 raise RuntimeError("registry unavailable")
             return fake_registry
 
         def _copy_row(row):
+            """Return a fresh row reflecting the clears recorded so far.
+
+            Copies rather than mutating the class-level seed rows, so state
+            cannot leak between tests.
+            """
             # Built field-by-field, omitting "identifiers" entirely when the
             # seed row omits it, so MISSING_IDENTIFIERS_ROW still raises
             # AttributeError inside the function under test rather than here.
@@ -1787,11 +1796,13 @@ class _DeviceSweepFixtures:
             return SimpleNamespace(**kwargs)
 
         def _async_entries_for_config_entry(registry, entry_id):
+            """Return this config entry's seeded rows, re-derived on every call."""
             return [_copy_row(row) for row in self._all_rows() if row.config_entry_id == entry_id]
 
         return updated, _async_get, _async_entries_for_config_entry
 
     def _make_entry_and_coordinator(self, sensors, entry_id=None):
+        """Return an (entry, coordinator) pair whose poll data is the given sensors."""
         entry = MagicMock()
         entry.entry_id = entry_id or self.ENTRY_ID
         coordinator = MagicMock()
@@ -1902,6 +1913,8 @@ class TestReconcileSubDeviceParents(_DeviceSweepFixtures):
         assert self.FOREIGN_ENTRY_ROW.id not in {device_id for device_id, _ in updated}
 
     def test_raising_registry_lookup_returns_without_updating_anything(self):
+        """A registry that cannot be fetched skips the sweep instead of raising
+        into config-entry setup, and clears nothing on the way out."""
         updated, async_get, async_entries = self._make_fake_device_registry(raise_on_lookup=True)
         entry, coordinator = self._make_entry_and_coordinator(self._sensors())
 
@@ -1922,8 +1935,11 @@ class TestReconcileSubDeviceParents(_DeviceSweepFixtures):
         entry.entry_id = self.ENTRY_ID
 
         class _RaisingCoordinator:
+            """A coordinator whose data read raises, driving the read guard."""
+
             @property
             def data(self):
+                """Raise, standing in for an unreadable coordinator snapshot."""
                 raise RuntimeError("coordinator data unavailable")
 
         with (
@@ -2006,16 +2022,21 @@ class TestSubDeviceParentReconcileRealTimeline:
         cleared: set[str] = set()
 
         class _FakeDeviceRegistry:
+            """Records each clearing call and remembers which rows are cleared."""
+
             def async_update_device(self, device_id, *, via_device_id):
+                """Record one clearing call against this row's own id."""
                 updated.append((device_id, via_device_id))
                 cleared.add(device_id)
 
         registry = _FakeDeviceRegistry()
 
         def _async_get(hass):
+            """Return the single-row fake registry."""
             return registry
 
         def _async_entries_for_config_entry(reg, entry_id):
+            """Return the one seeded row for this config entry, re-derived per call."""
             if entry_id != cls.ENTRY_ID:
                 return []
             via = None if row_id in cleared else "hub_100"
@@ -2092,6 +2113,7 @@ class TestSubDeviceParentReconcileRealTimeline:
         lookups = []
 
         def _counting_async_get(hass_arg):
+            """Count each registry lookup, then defer to the fake registry."""
             lookups.append(hass_arg)
             return async_get(hass_arg)
 
@@ -2132,6 +2154,7 @@ class TestSubDeviceParentReconcileRealTimeline:
         lookups = []
 
         def _counting_async_get(hass_arg):
+            """Count each registry lookup, then defer to the fake registry."""
             lookups.append(hass_arg)
             return async_get(hass_arg)
 
@@ -2177,6 +2200,8 @@ class TestReconcileSubDeviceParentsUnpatchedRegistryStub:
     """
 
     def test_unpatched_dr_stub_walks_zero_rows_and_updates_nothing(self):
+        """The unpatched conftest stub yields zero rows and updates nothing, so
+        a test that forgets to patch dr cannot pass vacuously."""
         from custom_components.rainpoint import dr as unpatched_dr
 
         entry = MagicMock()
@@ -2221,16 +2246,19 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
         mock_coordinator = MagicMock()
 
         async def _first_refresh():
+            """Record that the coordinator's first refresh ran."""
             order.append("first_refresh")
 
         mock_coordinator.async_config_entry_first_refresh = AsyncMock(side_effect=_first_refresh)
 
         async def _forward_setups(entry_arg, platforms):
+            """Record that the platforms were forwarded."""
             order.append("forward_setups")
 
         hass.config_entries.async_forward_entry_setups = AsyncMock(side_effect=_forward_setups)
 
         def _reconcile(hass_arg, entry_arg, coordinator_arg):
+            """Record that the parenting reconcile ran."""
             order.append("reconcile")
 
         with (
