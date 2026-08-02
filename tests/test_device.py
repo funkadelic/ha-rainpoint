@@ -8,6 +8,7 @@ import pytest
 
 from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_VALVE_245
 from custom_components.rainpoint.device import RainPointHubDevice, build_sub_device_info
+from tests.helpers import VALVE_ZONES_TLV_PAYLOAD
 
 
 class TestRainPointHubDevice:
@@ -187,17 +188,14 @@ class TestSubDeviceParentingRealTimeline:
     The wrapper record's real-world child is an HTV210B that reports no
     status at all (silent). The reporting valve child used here is the
     structurally equivalent case chosen so both polarities exist at setup
-    time with no debounce; the silent HTV210B shape is covered by Task 2's
-    driven timeline in tests/test_sensor.py.
+    time with no debounce; the silent HTV210B shape is covered by
+    TestSilentEntityAppearsWithinTheSession in tests/test_sensor.py.
     """
 
     @staticmethod
     def _zone_payload():
-        """Reuse the TLV fixture from test_valve.py's zones-reported case
-        rather than inventing a second one."""
-        from tests.test_valve import TestValveEntitiesAppearWithinTheSession
-
-        return TestValveEntitiesAppearWithinTheSession._hub(zones_reported=True)[0]["subDeviceStatus"][0]["value"]
+        """The shared captured TLV zone fixture, rather than a second copy."""
+        return VALVE_ZONES_TLV_PAYLOAD
 
     async def _build(self) -> dict:
         """Construct, first-refresh, then run valve.async_setup_entry over a
@@ -256,8 +254,9 @@ class TestSubDeviceParentingRealTimeline:
 
     @pytest.mark.asyncio
     async def test_hub_paired_child_keeps_its_link_and_wrapper_child_has_none(self):
-        """SC 5's actual proof: parenting asserted on the entity the real
-        platform's async_setup_entry built off a real coordinator refresh."""
+        """Parenting asserted on the entity the valve platform's own
+        async_setup_entry built off a real coordinator refresh, not on a
+        DeviceInfo assembled by the test."""
         by_key = await self._build()
 
         assert by_key["100_200_1"].device_info["via_device"] == (DOMAIN, "hub_100")
@@ -271,7 +270,7 @@ class TestSubDeviceParentingRealTimeline:
         that two distinct top-level records in one home, off a single poll,
         produce two distinct parenting outcomes, and that their sub-device
         identifiers differ only by the mid segment, so no unique_id or device
-        identifier shape changed (SC 3). This goes red the moment a future
+        identifier shape changed. This goes red the moment a future
         change collapses the per-record question back onto the per-home key.
 
         Debt this test deliberately does not assert on: hub *device* identity

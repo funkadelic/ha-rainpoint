@@ -2107,7 +2107,8 @@ class TestSilentEntityAppearsWithinTheSession:
         wrapper record that reports no status at all. The not-reporting
         entity is created several polls after setup by the coordinator
         listener, so this proves the parenting holds on the late-add path,
-        not only on the setup-snapshot path Task 1 already covers."""
+        not only on the setup-snapshot path
+        TestSubDeviceParentingRealTimeline in tests/test_device.py covers."""
         coordinator, hass, entry, captured, async_add_entities = self._build()
 
         await coordinator.async_config_entry_first_refresh()

@@ -275,6 +275,19 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
             _LOGGER.debug("Failed to remove stale generic entity %s: %s", row.entity_id, exc)
 
 
+def _domain_sensor_key(row) -> str | None:
+    """Return the row's DOMAIN-scoped identifier value, or None.
+
+    None covers both a row carrying no DOMAIN identifier and a row whose
+    identifiers value is not a collection of 2-tuples, so the malformed case
+    has one named home rather than reaching the caller's broad guard.
+    """
+    for identifier in row.identifiers:
+        if isinstance(identifier, tuple) and len(identifier) == 2 and identifier[0] == DOMAIN:
+            return identifier[1]
+    return None
+
+
 def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Clear a stale via_device_id on an already-registered sub-device.
 
@@ -343,11 +356,7 @@ def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coord
                 # rewrite.
                 continue
 
-            candidate_key = None
-            for identifier in row.identifiers:
-                if isinstance(identifier, tuple) and len(identifier) == 2 and identifier[0] == DOMAIN:
-                    candidate_key = identifier[1]
-                    break
+            candidate_key = _domain_sensor_key(row)
             if candidate_key is None:
                 continue
 
@@ -357,7 +366,12 @@ def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coord
                 continue
             record = sensors[candidate_key]
 
-            if record.get("hub_paired", True):
+            # The record shape is only assumed, not guaranteed: it is built
+            # from a cloud payload. A non-dict is a payload problem, and
+            # skipping it here says so, rather than letting an AttributeError
+            # reach the guard below and be logged as a reconcile failure. Same
+            # defensive filter sensor.py and valve.py already apply.
+            if not isinstance(record, dict) or record.get("hub_paired", True):
                 continue
 
             registry.async_update_device(row.id, via_device_id=None)

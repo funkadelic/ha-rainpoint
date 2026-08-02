@@ -1695,6 +1695,14 @@ class _DeviceSweepFixtures:
         via_device_id="hub_100",
         config_entry_id=ENTRY_ID,
     )
+    # Its sensor record below is a string rather than a dict, the one shape a
+    # cloud payload can produce that the hub_paired read cannot survive.
+    NON_DICT_RECORD_ROW = SimpleNamespace(
+        id="device_non_dict_record",
+        identifiers={(DOMAIN, "100_201_5")},
+        via_device_id="hub_100",
+        config_entry_id=ENTRY_ID,
+    )
     # Belongs to a different config entry. The current-poll sensors mapping
     # below deliberately makes this row look eligible if it ever leaked
     # through the config-entry-scoped lookup, so a regression there would be
@@ -1719,6 +1727,7 @@ class _DeviceSweepFixtures:
             self.MALFORMED_ROW,
             self.NO_DOMAIN_ROW,
             self.MISSING_IDENTIFIERS_ROW,
+            self.NON_DICT_RECORD_ROW,
             self.FOREIGN_ENTRY_ROW,
         ]
 
@@ -1735,6 +1744,7 @@ class _DeviceSweepFixtures:
             "100_200_1": {"hub_paired": True},
             "100_300_1": {"hub_paired": True},
             "100_201_2": {"hub_paired": False},
+            "100_201_5": "not-a-record",
             "99_500_1": {"hub_paired": False},
         }
 
@@ -1852,6 +1862,24 @@ class TestReconcileSubDeviceParents(_DeviceSweepFixtures):
         assert self.MALFORMED_ROW.id not in cleared_ids
         assert self.NO_DOMAIN_ROW.id not in cleared_ids
         assert self.MISSING_IDENTIFIERS_ROW.id not in cleared_ids
+        assert self.WRAPPER_ROW.id in cleared_ids
+
+    def test_a_row_whose_sensor_record_is_not_a_dict_is_skipped(self):
+        """A cloud payload that yields a non-dict record is a payload problem,
+        not a registry one: the row is skipped by the isinstance filter rather
+        than raising into the per-row guard, and the rows around it still
+        clear."""
+        updated, async_get, async_entries = self._make_fake_device_registry()
+        entry, coordinator = self._make_entry_and_coordinator(self._sensors())
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
+
+        cleared_ids = {device_id for device_id, _ in updated}
+        assert self.NON_DICT_RECORD_ROW.id not in cleared_ids
         assert self.WRAPPER_ROW.id in cleared_ids
 
     def test_foreign_entry_row_is_never_returned_or_updated(self):
@@ -2179,9 +2207,10 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
     @pytest.mark.asyncio
     async def test_reconcile_runs_once_after_first_refresh_and_before_forward_setups(self):
         """Ordering here is not cosmetic: running before the first refresh
-        would read empty sensor data and, under the D-06 scope guard, clear
-        nothing at all, which is a silent total feature kill that a
-        state-only assertion would not catch."""
+        would read empty sensor data and, under the current-poll membership
+        guard in _reconcile_sub_device_parents, clear nothing at all, which is
+        a silent total feature kill that a state-only assertion would not
+        catch."""
         hass = _make_hass()
         entry = _make_entry()
         order: list[str] = []
@@ -2219,8 +2248,9 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
 
     @pytest.mark.asyncio
     async def test_setup_arms_the_update_listener_through_async_on_unload(self):
-        """The half GAP-1 turned on: setup must leave the reconcile armed for
-        later updates, not merely run it once. Asserted against the real
+        """Setup must leave the reconcile armed for later updates, not merely
+        run it once, which is what reaches a device that surfaces after the
+        first refresh. Asserted against the real
         _reconcile_sub_device_parents_on_updates (unpatched) so the listener
         registration is the production one, with only the sweep it calls
         stubbed out."""
