@@ -1461,7 +1461,9 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 # inline predicate tested only productKey and deviceName. A
                 # top-level record carrying any of did, mac or model but
                 # neither productKey nor deviceName therefore now counts as a
-                # real hub and stops producing a no-hub Repairs card. The two
+                # real hub. The not-reporting card is raised either way; what
+                # changes is its "Hub:" line, which renders the record's own
+                # (possibly empty) name instead of the literal "none". The two
                 # predicates agree on the wrapper record, the only shape ever
                 # captured, so this is invisible on all real data seen to date.
                 hub_paired=entry.get("hub_paired", True),
