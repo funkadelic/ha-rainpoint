@@ -2251,9 +2251,18 @@ class TestSilentIssueSurvivesPartialHubShrink:
     @pytest.mark.asyncio
     async def test_release_drops_both_the_counter_and_the_remembered_hub_key(self):
         """D-09, SC6: release drops both the counter and the remembered hub
-        key, so the memory this method owns cannot grow without bound."""
+        key, so the memory this method owns cannot grow without bound.
+
+        Release is driven through a shrunken list rather than an empty one,
+        because an empty device list is a total outage and freezes the
+        enumeration memory instead of advancing it. Driving it the other way
+        would assert that a total outage releases, which is the opposite of
+        what the empty-list door is for; a second hub keeps the list
+        non-empty so the absence is a shrink.
+        """
         hub_a = self._hub(hid=100, mid=200, addrs=())
-        coord, client = self._build([hub_a])
+        hub_b = self._hub(hid=100, mid=300, addrs=())
+        coord, client = self._build([hub_a, hub_b])
         key_a = (100, 200)
 
         with (
@@ -2263,13 +2272,16 @@ class TestSilentIssueSurvivesPartialHubShrink:
             await _run(coord)
             assert key_a in coord._last_poll_hub_keys
 
-            client.get_devices_by_hid.return_value = []
-            client.get_multiple_device_status.return_value = []
+            client.get_devices_by_hid.return_value = [hub_b]
+            client.get_multiple_device_status.return_value = [self._arrived_empty(300)]
             for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS + 1):
                 await _run(coord)
 
             assert key_a not in coord._hub_absent_poll_counts
             assert key_a not in coord._last_poll_hub_keys
+            # Hub B, present throughout, is still remembered: release is
+            # scoped to the hub that actually went missing (D-04).
+            assert (100, 300) in coord._last_poll_hub_keys
 
     @pytest.mark.asyncio
     async def test_a_total_empty_list_freezes_the_enumeration_memory_entirely(self):
@@ -2687,6 +2699,88 @@ class TestHubConnectivitySurvivesPartialHubShrink:
             assert coordinator._last_poll_hub_keys == hub_keys_before
             sensor_key = _coord_module._sensor_key(100, self.HUB_B_MID, 1)
             assert sensor_key not in coordinator._silent_poll_counts
+
+    @pytest.mark.asyncio
+    async def test_a_healthy_sibling_hub_still_raises_its_own_card_during_another_hubs_gap(self):
+        """D-04 on the connectivity surface, the mirror of the not-reporting
+        door's sibling test.
+
+        Suppression is scoped to the hub that actually went missing. Hub A
+        vanishing from the device list must not stop hub B, which is still
+        listed and still reporting, from advancing its own disconnect
+        debounce and raising its own card. A global guard would freeze B and
+        would still pass every other test in this class, since all of them
+        assert only about A.
+        """
+        coordinator, client = self._build(hub_a_connected="1", hub_b_connected="1")
+        hub_b_issue_id = hub_connectivity_issue_id(100, self.HUB_B_MID)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+
+            # Hub A leaves the device list and stays gone; hub B remains
+            # listed but starts reporting disconnected on the same poll.
+            client.get_devices_by_hid.return_value = [self._hub(self.HUB_B_MID, "HubB")]
+            self._set_connected(client, hub_a_connected=None, hub_b_connected="0")
+            for _ in range(_coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+
+            created_ids = {call.args[2] for call in create.call_args_list}
+            assert hub_b_issue_id in created_ids
+            assert coordinator._hub_disconnect_poll_counts[(100, self.HUB_B_MID)] == _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS
+            # And A really was in its gap for the whole of it, so the
+            # assertion above is about scoping rather than about A having
+            # already been released.
+            assert (100, self.HUB_A_MID) in coordinator._hub_absent_poll_counts
+
+    @pytest.mark.asyncio
+    async def test_a_totally_empty_device_list_never_advances_enumeration_state(self):
+        """A total outage freezes the enumeration memory whatever else is
+        being tracked, so both outage doors agree about the same event.
+
+        The branch condition is "hubs or not (silent or disconnect)", which
+        does not partition total outages cleanly: with nothing being
+        debounced it is true, so an empty device list lands in the same
+        branch a partial shrink does. Keying the freeze on the device list
+        itself rather than on that branch is what stops a total outage from
+        being processed as a partial shrink in a quiet installation while
+        being frozen once a single device happens to be mid-debounce.
+
+        Drives the quiet case specifically, since that is the one the branch
+        condition sends down the shrink path.
+        """
+        coordinator, client = self._build(hub_a_connected="1", hub_b_connected="1")
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            hub_keys_after_healthy_poll = set(coordinator._last_poll_hub_keys)
+            assert hub_keys_after_healthy_poll == {(100, self.HUB_A_MID), (100, self.HUB_B_MID)}
+            # Nothing is being debounced, which is what routes the empty list
+            # below into the shrink branch rather than the total-outage one.
+            assert not coordinator._silent_poll_counts
+            assert not coordinator._hub_disconnect_poll_counts
+
+            client.get_devices_by_hid.return_value = []
+            client.get_multiple_device_status.return_value = []
+            await coordinator.async_refresh()
+
+            assert coordinator._hub_absent_poll_counts == {}
+            assert coordinator._last_poll_hub_keys == hub_keys_after_healthy_poll
+
+            # The pre-outage memory is intact, so a later partial list
+            # computes its missing set against it rather than against the
+            # outage.
+            client.get_devices_by_hid.return_value = [self._hub(self.HUB_B_MID, "HubB")]
+            self._set_connected(client, hub_a_connected=None, hub_b_connected="1")
+            await coordinator.async_refresh()
+
+            assert coordinator._hub_absent_poll_counts == {(100, self.HUB_A_MID): 1}
 
 
 def _set_hub_connected(client, value, time_ms=None):

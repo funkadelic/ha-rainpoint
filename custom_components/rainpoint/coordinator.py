@@ -1074,14 +1074,27 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # guard covers both the not-reporting and the hub-connectivity
             # state, since an empty device list is the same outage for both.
             if hubs or not (self._silent_poll_counts or self._hub_disconnect_poll_counts):
-                # Must run first, inside this guard: placing it here rather
-                # than before the guard is load-bearing for the empty-list
-                # case above. When that door fires instead, the enumeration
-                # memory below is frozen entirely -- no counter advances and
-                # _last_poll_hub_keys is unchanged -- so a partial list
-                # arriving after a total outage still computes the correct
-                # missing set against the pre-outage memory.
-                missing_hub_keys = RainPointCoordinator._track_missing_hubs(self, hubs)
+                # Must run first, inside this guard, and only for a non-empty
+                # device list. An empty list is a total outage and freezes the
+                # enumeration memory entirely: no counter advances and
+                # _last_poll_hub_keys is unchanged, so a partial list arriving
+                # after a total outage still computes the correct missing set
+                # against the pre-outage memory.
+                #
+                # The emptiness test is deliberately separate from the branch
+                # condition above, because that condition does not partition
+                # total outages cleanly: with nothing being debounced,
+                # "not (silent or disconnect)" is true and an empty list falls
+                # into this branch rather than the else below. Deriving the
+                # freeze from the branch alone would therefore make a total
+                # outage behave one way in a quiet installation and another
+                # way once a single device happened to be mid-debounce, which
+                # is the same event handled two ways. Keyed on the list itself,
+                # both doors agree: an empty device list never advances
+                # enumeration state, whatever else is being tracked.
+                missing_hub_keys: frozenset[tuple[Any, int]] = frozenset()
+                if hubs:
+                    missing_hub_keys = RainPointCoordinator._track_missing_hubs(self, hubs)
 
                 # D-15's shape decision: an independent inline hold, not a
                 # reuse of _merge_push_hub_connectivity or
