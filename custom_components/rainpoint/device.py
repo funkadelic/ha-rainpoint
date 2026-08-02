@@ -11,12 +11,14 @@ from .const import DOMAIN
 def build_sub_device_info(sensor_info: dict, *, name_fallback: str) -> DeviceInfo:
     """Return the device registry entry for one sub-device.
 
-    Every platform that owns sub-device entities routes through here, so the
+    Every module that owns sub-device entities routes through here, so the
     device page carries the same identity, firmware and hub link no matter
-    which platform registered the device first. The five platforms used to
-    build this dict inline and had drifted: none carried the firmware the
+    which platform registered the device first. Five modules used to build
+    this dict inline and had drifted: none carried the firmware the
     coordinator already had, and only the sensor platform linked the device to
-    its hub.
+    its hub. There are four direct call sites today (entity.py, valve.py,
+    number.py, generic_control.py); sensor.py and diagnostic_sensors.py were
+    later collapsed onto entity.py's shared RainPointSubDeviceEntity base.
 
     serial_number is the mid/addr pair rather than a manufacturer serial, which the
     status payloads do not carry. It is the same identity the entity unique IDs
@@ -31,10 +33,34 @@ def build_sub_device_info(sensor_info: dict, *, name_fallback: str) -> DeviceInf
     class shipped alongside RainPointHubDevice originally and no platform ever
     inherited from it, which is how the inline copies drifted in the first
     place.
+
+    The hub link is conditional. via_device is included only when
+    sensor_info's stamped "hub_paired" field is truthy: the link is to the
+    top-level record that actually carries this sub-device, and a record that
+    is not a real hub yields a parentless top-level device, because the
+    Bluetooth wrapper record carries no identity fields to build a device page
+    from. The verdict is read off the sensor entry rather than re-derived
+    here, so there is one predicate for the question rather than a third
+    spelling of it. A sensor_info with no "hub_paired" key defaults to
+    hub-linked, so a caller that omits the key gets today's behaviour rather
+    than a silently orphaned device.
+
+    via_device is omitted rather than passed as None. Both spellings resolve
+    identically inside Home Assistant's device registry, so this is not a
+    correctness distinction; the reason to prefer omission is readability at
+    the call site, a key that is never constructed states "this device has no
+    parent" more plainly than a key carrying None, and it is what lets a test
+    assert by key membership rather than by equality against None, which would
+    pass for either construction. via_device is the first and only
+    conditionally-constructed key in this function; every other key is always
+    present.
     """
     hid = sensor_info["hid"]
     mid = sensor_info["mid"]
     addr = sensor_info["addr"]
+    optional: dict = {}
+    if sensor_info.get("hub_paired", True):
+        optional["via_device"] = (DOMAIN, f"hub_{hid}")
     return DeviceInfo(
         identifiers={(DOMAIN, f"{hid}_{mid}_{addr}")},
         name=sensor_info.get("sub_name") or name_fallback,
@@ -42,7 +68,7 @@ def build_sub_device_info(sensor_info: dict, *, name_fallback: str) -> DeviceInf
         model=sensor_info.get("model") or "Unknown",
         sw_version=sensor_info.get("firmware_version"),
         serial_number=f"{mid}_{addr}",
-        via_device=(DOMAIN, f"hub_{hid}"),  # Link to parent hub
+        **optional,
     )
 
 

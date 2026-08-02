@@ -77,7 +77,7 @@ from custom_components.rainpoint.sensor import (
     _slugify,
     async_setup_entry,
 )
-from tests.helpers import make_coordinator_data, make_hub_info, make_sensor_entry
+from tests.helpers import make_coordinator_data, make_hub_info, make_sensor_entry, make_silent_wrapper_hub_record
 from tests.payload_samples import SAMPLE_HTV345_TLV_PAYLOAD, SAMPLE_HTV405_TLV_PAYLOAD
 
 # ---------------------------------------------------------------------------
@@ -2022,15 +2022,7 @@ def _silent_wrapper_hub_record():
     Empty identity fields make is_hub_record return False, so no hub entities
     are created and the captured entity list holds sub-device entities only.
     """
-    return {
-        "mid": 200,
-        "homeName": "Home",
-        "name": "",
-        "deviceName": "",
-        "productKey": "",
-        "model": "",
-        "subDevices": [{"addr": 1, "model": MODEL_HTV210B, "name": "BT Valve", "softVer": "1.0"}],
-    }
+    return make_silent_wrapper_hub_record(model=MODEL_HTV210B)
 
 
 class TestSilentEntityAppearsWithinTheSession:
@@ -2108,6 +2100,25 @@ class TestSilentEntityAppearsWithinTheSession:
         assert captured == []
         assert coordinator._listeners
         entry.async_on_unload.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_late_added_not_reporting_entity_has_no_via_device(self):
+        """The real reported hardware shape: an HTV210B under the Bluetooth
+        wrapper record that reports no status at all. The not-reporting
+        entity is created several polls after setup by the coordinator
+        listener, so this proves the parenting holds on the late-add path,
+        not only on the setup-snapshot path
+        TestSubDeviceParentingRealTimeline in tests/test_device.py covers."""
+        coordinator, hass, entry, captured, async_add_entities = self._build()
+
+        await coordinator.async_config_entry_first_refresh()
+        await async_setup_entry(hass, entry, async_add_entities)
+        await coordinator.async_refresh()
+        await coordinator.async_refresh()
+
+        not_reporting = self._not_reporting(captured)
+        assert len(not_reporting) == 1
+        assert "via_device" not in not_reporting[0].device_info
 
 
 class TestLateSensorEntityAdder:

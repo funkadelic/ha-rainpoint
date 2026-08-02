@@ -1726,6 +1726,7 @@ class TestSyncSilentDeviceIssues:
                 "hub_name": "",
                 "product_key": "",
                 "device_name": "",
+                "hub_paired": False,
                 "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
             },
             "100_200_2": {
@@ -1736,6 +1737,7 @@ class TestSyncSilentDeviceIssues:
                 "hub_name": "Hub1",
                 "product_key": "a3QrDxYPTM2",
                 "device_name": "MAC-A84674BB91F0",
+                "hub_paired": True,
                 "data": {"type": "moisture"},
             },
         }
@@ -1746,6 +1748,74 @@ class TestSyncSilentDeviceIssues:
         by_key = {(r.hid, r.mid, r.addr): r for r in records}
         assert by_key[(100, 346965, 1)].hub_paired is False
         assert by_key[(100, 200, 2)].hub_paired is True
+
+    def test_hub_paired_reads_the_stamped_field_not_the_raw_hub_fields(self):
+        """A sensor entry stamped hub_paired True with empty raw hub fields
+        still yields hub_paired True: this cannot pass under the retired
+        inline predicate, which is the proof the stamped field is the source."""
+        coord, _ = _make_coord()
+        decoded_sensors = {
+            "100_346965_1": {
+                "hid": 100,
+                "mid": 346965,
+                "addr": 1,
+                "model": "HTV210B",
+                "hub_name": "",
+                "product_key": "",
+                "device_name": "",
+                "hub_paired": True,
+                "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
+            }
+        }
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors, [])
+
+        (records,) = coord._silent_issues.async_sync.call_args.args
+        assert records[0].hub_paired is True
+
+    def test_hub_paired_false_wins_even_with_populated_raw_hub_fields(self):
+        """A sensor entry stamped hub_paired False with populated raw hub
+        fields still yields hub_paired False, pinning that the raw fields are
+        never consulted once the stamped field is present."""
+        coord, _ = _make_coord()
+        decoded_sensors = {
+            "100_200_2": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 2,
+                "model": MODEL_MOISTURE_SIMPLE,
+                "hub_name": "Hub1",
+                "product_key": "a3QrDxYPTM2",
+                "device_name": "MAC-A84674BB91F0",
+                "hub_paired": False,
+                "data": {"type": "moisture"},
+            }
+        }
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors, [])
+
+        (records,) = coord._silent_issues.async_sync.call_args.args
+        assert records[0].hub_paired is False
+
+    def test_hub_paired_absent_key_defaults_true(self):
+        """A sensor entry with no hub_paired key at all defaults to hub-linked,
+        matching build_sub_device_info's own absent-key default."""
+        coord, _ = _make_coord()
+        decoded_sensors = {
+            "100_200_2": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 2,
+                "model": MODEL_MOISTURE_SIMPLE,
+                "hub_name": "Hub1",
+                "data": {"type": "moisture"},
+            }
+        }
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors, [])
+
+        (records,) = coord._silent_issues.async_sync.call_args.args
+        assert records[0].hub_paired is True
 
     def test_empty_decoded_sensors_syncs_an_empty_record_list(self):
         """A poll that decoded nothing still reconciles, so stale issues clear."""

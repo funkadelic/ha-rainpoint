@@ -12,7 +12,7 @@ from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
     RainPointValveEntity,
 )
-from tests.helpers import make_sensor_coordinator
+from tests.helpers import make_sensor_coordinator, make_valve_zone_status
 from tests.payload_samples import SAMPLE_HTV145_OPEN_PAYLOAD, SAMPLE_HTV245_ASCII_PAYLOAD
 
 
@@ -857,8 +857,7 @@ class TestValveEntitiesAppearWithinTheSession:
     @staticmethod
     def _hub(zones_reported):
         """A valve hub record whose child reports zones only when asked to."""
-        status = "11#17E1D70018DC0119D8001AD8001D201E20" if zones_reported else ""
-        return [{"mid": 20, "subDeviceStatus": [{"id": "D01", "value": status, "time": 1785420002247}]}]
+        return make_valve_zone_status(zones_reported=zones_reported)
 
     @pytest.mark.asyncio
     async def test_zones_arriving_after_setup_create_their_valve_entities(self):

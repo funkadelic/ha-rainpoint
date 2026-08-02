@@ -6,3 +6,13 @@ reviews:
     auto_incremental_review: false
     ignore_title_keywords:
       - "chore(main): release"
+  tools:
+    # Ruff already runs three times against this repo's own config: the
+    # pre-commit hook locally, pre-commit.ci on the PR, and the lint job in
+    # tests.yml. CodeRabbit runs it with a wider rule set than
+    # pyproject.toml selects (E, F, I, UP, B, SIM, RUF), so its findings are
+    # for rules this project has deliberately not enabled. Acting on them is
+    # worse than ignoring them: RUF100 is selected, so adding a noqa for an
+    # unselected rule is an unused directive that fails lint.
+    ruff:
+      enabled: false

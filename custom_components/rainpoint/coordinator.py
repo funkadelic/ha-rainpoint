@@ -671,7 +671,13 @@ def _build_sensor_entry(
     status_entry: dict,
     decoded: dict | None,
 ) -> dict:
-    """Build the per-sensor metadata dict that goes into the coordinator's sensors output."""
+    """Build the per-sensor metadata dict that goes into the coordinator's sensors output.
+
+    hub_paired is a derived verdict, not a payload passthrough: it is
+    is_hub_record(hub)'s answer to "does a real hub carry this sub-device",
+    cached once here at construction time so no consumer re-derives it from
+    the raw hub fields on its own.
+    """
     return {
         "hid": hub["hid"],
         "mid": mid,
@@ -684,6 +690,7 @@ def _build_sensor_entry(
         "firmware_version": sub.get("softVer"),
         "device_name": hub.get("deviceName"),
         "product_key": hub.get("productKey"),
+        "hub_paired": is_hub_record(hub),
         "raw_status": status_entry,
         "data": decoded,
     }
@@ -1440,12 +1447,26 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 hub_name=entry.get("hub_name"),
                 missed_polls=(entry.get("data") or {}).get("missed_polls", 0),
                 silent=(entry.get("data") or {}).get("type") == SILENT_DATA_TYPE,
-                # A real hub always carries both of these; the placeholder
-                # record the cloud parks a Bluetooth-only device under carries
-                # neither, along with an empty name that would otherwise reach
-                # the card as "unknown". Read as "is there a hub at all",
-                # which is a different question from "what is it called".
-                hub_paired=bool(entry.get("product_key") or entry.get("device_name")),
+                # The canonical is_hub_record verdict, computed once when this
+                # entry was built (_build_sensor_entry) and read here rather
+                # than re-derived from the raw hub fields it supersedes, so
+                # this card and the via_device link (device.py) can never
+                # drift onto two different answers to "is there a hub at
+                # all", which is a different question from "what is it
+                # called". Absence defaults to hub-linked, matching
+                # build_sub_device_info's own default.
+                #
+                # Behaviour change on a shape never observed: is_hub_record
+                # tests did, mac, productKey and model, while the retired
+                # inline predicate tested only productKey and deviceName. A
+                # top-level record carrying any of did, mac or model but
+                # neither productKey nor deviceName therefore now counts as a
+                # real hub. The not-reporting card is raised either way; what
+                # changes is its "Hub:" line, which renders the record's own
+                # (possibly empty) name instead of the literal "none". The two
+                # predicates agree on the wrapper record, the only shape ever
+                # captured, so this is invisible on all real data seen to date.
+                hub_paired=entry.get("hub_paired", True),
             )
             for entry in decoded_sensors.values()
         ]

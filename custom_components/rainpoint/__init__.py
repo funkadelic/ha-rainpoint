@@ -1,10 +1,11 @@
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -153,6 +154,47 @@ def _generic_control_row_removal_reason(unique_id, control_enabled: bool, sensor
     return None
 
 
+def _fetch_registry_rows(
+    get_registry, entries_for_config_entry, hass: HomeAssistant, entry: ConfigEntry, sweep: str
+) -> tuple[Any | None, list]:
+    """Return (registry, rows) for one config entry, or (None, []) if unreadable.
+
+    Shared by both registry sweeps. The registry accessors are passed in
+    rather than chosen here so each sweep keeps its own registry (entity vs
+    device) and its own patch surface, while the guard around them exists
+    once. Failure returns a registry of None, which every caller treats as
+    "skip this sweep entirely", rather than raising into config-entry setup.
+    That nullable first element is the load-bearing part of the return type:
+    both callers branch on it.
+
+    `sweep` names the caller in the failure log and does nothing else.
+    """
+    try:
+        registry = get_registry(hass)
+        return registry, list(entries_for_config_entry(registry, entry.entry_id))
+    except Exception as exc:
+        _LOGGER.debug("Registry lookup failed; skipping %s: %s", sweep, exc)
+        return None, []
+
+
+def _read_current_sensors(coordinator, consequence: str) -> dict:
+    """Return the current poll's sensor records, or {} if they cannot be read.
+
+    Shared by both registry sweeps, which degrade to {} to opposite effect.
+    Nothing here implements that difference: `consequence` is a log-only
+    label, and the divergence lives entirely in what each caller does with an
+    empty mapping. In the generic sweep, each row-removal reason function
+    returns its toggle-off reason before it ever looks at `sensors`, so the
+    toggle-off path still removes every row; in the parenting sweep, the
+    membership guard fails for every row, so nothing is cleared.
+    """
+    try:
+        return (coordinator.data or {}).get("sensors", {}) if coordinator is not None else {}
+    except Exception as exc:
+        _LOGGER.debug("Coordinator data unreadable; %s: %s", consequence, exc)
+        return {}
+
+
 def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Remove generic-namespace registry rows that should no longer exist.
 
@@ -182,18 +224,18 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
     Synchronous on purpose: both registry helpers it uses are callbacks, so
     there is nothing to await and no suspension point at which a reload
     could interleave with a partially completed removal set. Never raises:
-    the registry lookup, the read of the coordinator's current sensors, and
-    each row's keep-or-remove decision and removal are guarded independently,
-    so none of them can propagate out of config-entry setup.
+    the registry lookup (_fetch_registry_rows), the read of the coordinator's
+    current sensors (_read_current_sensors), and each row's keep-or-remove
+    decision and removal are guarded independently, so none of them can
+    propagate out of config-entry setup.
     """
     generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
     control_enabled = entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False)
 
-    try:
-        registry = er.async_get(hass)
-        rows = list(er.async_entries_for_config_entry(registry, entry.entry_id))
-    except Exception as exc:
-        _LOGGER.debug("Entity registry lookup failed; skipping generic entity sweep: %s", exc)
+    registry, rows = _fetch_registry_rows(
+        er.async_get, er.async_entries_for_config_entry, hass, entry, "the generic entity sweep"
+    )
+    if registry is None:
         return
 
     # Degrades to no sensors rather than aborting the sweep. This data only
@@ -201,11 +243,7 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
     # model already means "leave the row alone"; aborting instead would also
     # abandon the toggle-off path, which must remove every generic row and
     # needs none of this data to do it.
-    try:
-        sensors = (coordinator.data or {}).get("sensors", {}) if coordinator is not None else {}
-    except Exception as exc:
-        _LOGGER.debug("Coordinator data unreadable; sweeping without graduation data: %s", exc)
-        sensors = {}
+    sensors = _read_current_sensors(coordinator, "sweeping without graduation data")
 
     for row in rows:
         # The reason lookup reads the coordinator's sensor records, which come
@@ -235,6 +273,176 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
             _LOGGER.debug("Removed stale generic entity %s: %s", row.entity_id, reason)
         except Exception as exc:
             _LOGGER.debug("Failed to remove stale generic entity %s: %s", row.entity_id, exc)
+
+
+def _domain_sensor_key(row) -> str | None:
+    """Return the row's DOMAIN-scoped identifier value, or None.
+
+    None covers both a row carrying no DOMAIN identifier and a row whose
+    identifiers value is not a collection of 2-tuples, so the malformed case
+    has one named home rather than reaching the caller's broad guard.
+    """
+    for identifier in row.identifiers:
+        if isinstance(identifier, tuple) and len(identifier) == 2 and identifier[0] == DOMAIN:
+            return identifier[1]
+    return None
+
+
+def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Clear a stale via_device_id on an already-registered sub-device.
+
+    Exists because dropping a DeviceInfo's via_device key cannot, on its own,
+    correct a device that is already in the registry: Home Assistant resolves
+    both an omitted via_device and an explicit via_device=None to UNDEFINED
+    when building a DeviceInfo, and its own device-update path skips every
+    UNDEFINED value. A registry row that already carries a via_device_id
+    therefore keeps it forever unless something writes an explicit None over
+    it -- only DeviceRegistry.async_update_device, called through the object
+    dr.async_get(hass) returns, with via_device_id passed as None explicitly,
+    does that.
+
+    Only the clearing direction is swept here, and the opposite direction is
+    repaired on a narrower schedule than this once claimed. A device that
+    should gain a link it does not have is handled by the ordinary DeviceInfo
+    path, because a real tuple value is not UNDEFINED, but Home Assistant
+    writes a DeviceInfo only while adding an entity. So the gaining direction
+    lands at first registration or after a reload, not on any sweep: when
+    _reconcile_sub_device_parents_on_updates calls this from its listener,
+    there is no platform setup following it to repair anything. Nothing here
+    ever writes a via_device_id other than None.
+
+    Idempotent, and run on every setup plus, through that listener, on an
+    update that surfaces a new sensor key. Not gated behind a config-entry
+    version bump or an async_migrate_entry path: a version-boundary migration
+    only ever runs once, so it could not self-heal if a later cloud re-key
+    mis-parented a device again, and this sweep can, because it re-evaluates
+    every time.
+
+    Scoped to devices present in the current poll on purpose. A registry row
+    whose sensor key the current poll does not mention is left alone rather
+    than swept: widening this to every registry row regardless of the
+    current poll would treat a device absent for a single poll as
+    parentless, deciding by side effect a question this phase deliberately
+    leaves open. This scope also makes a hub device row unreachable without
+    any explicit exclusion: a hub's identifier carries no addr segment and is
+    therefore never a sensor key, so the lookup below simply never finds it.
+
+    Synchronous and never raises, for the same reasons
+    _remove_stale_generic_entities is, and through the same two shared
+    guards: the registry fetch (_fetch_registry_rows), the coordinator data
+    read (_read_current_sensors), and each row's decision are guarded
+    independently, so a registry or payload problem can never abort
+    config-entry setup or leave the remaining rows unswept.
+    """
+    registry, rows = _fetch_registry_rows(
+        dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the sub-device parenting reconcile"
+    )
+    if registry is None:
+        return
+
+    # Degrades to no sensors rather than aborting the sweep. This is the
+    # opposite degradation direction from the generic-entity sweep: there,
+    # empty data must still let the toggle-off path remove rows; here, the
+    # only mutation available is destructive, so empty data must mean "clear
+    # nothing".
+    sensors = _read_current_sensors(coordinator, "clearing nothing this setup")
+
+    for row in rows:
+        try:
+            via_device_id = getattr(row, "via_device_id", None)
+            if not via_device_id:
+                # Nothing to clear means no call, which is what makes a
+                # repeat sweep a genuine no-op rather than a no-op-shaped
+                # rewrite.
+                continue
+
+            candidate_key = _domain_sensor_key(row)
+            if candidate_key is None:
+                continue
+
+            if candidate_key not in sensors:
+                # Not in this poll: deliberately leave it alone, so a device
+                # absent for a single poll is never treated as parentless.
+                continue
+            record = sensors[candidate_key]
+
+            # The record shape is only assumed, not guaranteed: it is built
+            # from a cloud payload. A non-dict is a payload problem, and
+            # skipping it here says so, rather than letting an AttributeError
+            # reach the guard below and be logged as a reconcile failure. Same
+            # defensive filter sensor.py and valve.py already apply.
+            if not isinstance(record, dict) or record.get("hub_paired", True):
+                continue
+
+            registry.async_update_device(row.id, via_device_id=None)
+            _LOGGER.debug("Cleared stale via_device_id on device %s (sensor key %s)", row.id, candidate_key)
+        except Exception as exc:
+            _LOGGER.debug("Could not reconcile device registry row %s: %s", getattr(row, "id", None), exc)
+            continue
+
+
+def _reconcile_sub_device_parents_on_updates(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Run the parenting reconcile now, then again on every coordinator update.
+
+    A setup-time sweep alone cannot reach the device this whole path exists
+    for. The Bluetooth-only sub-device reports no status at all, so it is a
+    silent device: _build_silent_subdevice returns None until the addr has
+    been omitted for SILENT_DEBOUNCE_POLLS consecutive polls, which means its
+    sensor key is not in coordinator.data["sensors"] on the first refresh.
+    The sweep's scope guard reads that as "not in this poll, leave it alone",
+    and nothing sweeps again, so the stale via_device_id survives forever.
+    The DeviceInfo half cannot rescue it either: the entity the late-add
+    listener creates several polls later omits via_device, and an omitted
+    via_device is UNDEFINED, which Home Assistant's device-update path skips.
+
+    Re-running on coordinator updates is the same mechanism, and the same
+    reason, as the late entity adders in sensor.py, valve.py and number.py:
+    anything that depends on a device appearing after the first poll needs a
+    listener, because setup runs exactly once.
+
+    The listener sweeps only when a sensor key has appeared that was not
+    there at the previous sweep, and this narrowing is deliberate. The sweep's
+    only mutation is destructive and irreversible within the session: Home
+    Assistant writes a DeviceInfo's via_device only while adding an entity, so
+    a link cleared for a device whose entities already exist stays cleared
+    until a reload, no matter what later polls report. The verdict driving the
+    clear, is_hub_record, reads identity fields straight off the cloud
+    response, so a single degraded response that blanks did, mac, productKey
+    and model on a real hub is indistinguishable from the Bluetooth wrapper
+    record. Sweeping on every update would let any one such response
+    permanently unparent a genuine sub-device. A newly surfaced key is the
+    only case this listener exists to serve, and restricting to it keeps the
+    exposure close to the setup-only sweep's while still reaching the silent
+    device. It also keeps the sweep off the hub-connectivity push path
+    entirely, which never changes sensors at all.
+
+    What this deliberately does not do is correct a device whose parenting
+    changes while it is already present and unchanged in the poll. That is the
+    same case the setup-only design left to the next reload, and settling it
+    is the removal counterpart tracked separately, not this listener's job.
+
+    Within a sweep there is no throttling and no memo: a row with no
+    via_device_id short-circuits before any registry write, so a repeat sweep
+    over settled devices makes no calls at all, and the clearing write cannot
+    re-arm itself, because the row it clears reads back cleared.
+    """
+    _reconcile_sub_device_parents(hass, entry, coordinator)
+    # Seeded from the same snapshot the sweep above just acted on, so the
+    # first update cannot re-present an already-swept key as new.
+    swept_keys = set(_read_current_sensors(coordinator, "seeding an empty swept-key set").keys())
+
+    @callback
+    def _on_coordinator_update() -> None:
+        """Re-sweep only when this update surfaced a sensor key the last one did not."""
+        nonlocal swept_keys
+        current_keys = set(_read_current_sensors(coordinator, "treating this update as surfacing nothing").keys())
+        if current_keys - swept_keys:
+            _reconcile_sub_device_parents(hass, entry, coordinator)
+        # Assigned on every update, not only on a sweep, so a key that
+        # disappears and returns counts as newly surfaced again.
+        swept_keys = current_keys
+
+    entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -280,11 +488,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry_store["coordinator"] = coordinator
 
-    # Sweep before any platform is forwarded, so no platform is adding
-    # entities while a removal runs, and after the coordinator's first
-    # refresh, so the sensor records the graduation branch reads are
-    # already populated.
+    # Both passes below run after the coordinator's first refresh, so the
+    # sensor records they read are already populated, and before any platform
+    # is forwarded, so this first pass of each cannot race a platform adding
+    # entities. That is the whole story for the generic sweep, which runs
+    # once. The parenting pass also arms a listener, and its later runs do
+    # share updates with the late entity adders in sensor.py, valve.py and
+    # number.py. They are ordered by listener registration, not by platform
+    # forwarding: this listener is registered first, so it runs first, and the
+    # adders' DeviceInfo omits via_device for an unparented record anyway.
     _remove_stale_generic_entities(hass, entry, coordinator)
+    _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
 
     # An options change (e.g. toggling push) reloads through the existing
     # unload->setup path, no bespoke start/stop code path needed.
