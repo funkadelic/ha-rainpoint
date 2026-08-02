@@ -1516,8 +1516,35 @@ class RainPointCoordinator(DataUpdateCoordinator):
             if count <= HUB_ABSENT_DEBOUNCE_POLLS:
                 self._hub_absent_poll_counts[key] = count
                 provisional_keys.add(key)
+                # Bounded to at most HUB_ABSENT_DEBOUNCE_POLLS warnings per
+                # hub per gap. Carries only the hub key and integer counts --
+                # never hub.get("name")/deviceName/model or any other
+                # cloud-supplied string, since a missing hub has no dict here
+                # to read them from anyway, and keeping cloud free text out
+                # of the log line is what makes this surface immune to the
+                # log-injection threat the Markdown-rendered Repairs cards
+                # need _sanitize_placeholder for.
+                protected_count = len(_sensor_keys_for_hub_keys(self._silent_poll_counts, {key}))
+                _LOGGER.warning(
+                    "Hub %s missing from device list (%d/%d consecutive poll(s)); "
+                    "treating as an outage and protecting %d tracked sensor key(s)",
+                    key,
+                    count,
+                    HUB_ABSENT_DEBOUNCE_POLLS,
+                    protected_count,
+                )
             else:
                 self._hub_absent_poll_counts.pop(key, None)
+                # One INFO line at the moment the shrunken list becomes
+                # authoritative for this hub, since that is the moment its
+                # cards can disappear and that moment needs its own
+                # breadcrumb -- both Phase 15's two criticals and Phase 19's
+                # GAP-1 were invisible in production logs.
+                _LOGGER.info(
+                    "Hub %s absent for %d consecutive polls; releasing it and treating the shrunken device list as authoritative",
+                    key,
+                    count,
+                )
 
         self._last_poll_hub_keys = current_keys | provisional_keys
         return provisional_keys
