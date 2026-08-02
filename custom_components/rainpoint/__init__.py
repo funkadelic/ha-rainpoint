@@ -1,5 +1,5 @@
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -154,7 +154,9 @@ def _generic_control_row_removal_reason(unique_id, control_enabled: bool, sensor
     return None
 
 
-def _fetch_registry_rows(get_registry, entries_for_config_entry, hass: HomeAssistant, entry: ConfigEntry, sweep: str):
+def _fetch_registry_rows(
+    get_registry, entries_for_config_entry, hass: HomeAssistant, entry: ConfigEntry, sweep: str
+) -> tuple[Any | None, list]:
     """Return (registry, rows) for one config entry, or (None, []) if unreadable.
 
     Shared by both registry sweeps. The registry accessors are passed in
@@ -162,6 +164,10 @@ def _fetch_registry_rows(get_registry, entries_for_config_entry, hass: HomeAssis
     device) and its own patch surface, while the guard around them exists
     once. Failure returns a registry of None, which every caller treats as
     "skip this sweep entirely", rather than raising into config-entry setup.
+    That nullable first element is the load-bearing part of the return type:
+    both callers branch on it.
+
+    `sweep` names the caller in the failure log and does nothing else.
     """
     try:
         registry = get_registry(hass)
@@ -174,9 +180,13 @@ def _fetch_registry_rows(get_registry, entries_for_config_entry, hass: HomeAssis
 def _read_current_sensors(coordinator, consequence: str) -> dict:
     """Return the current poll's sensor records, or {} if they cannot be read.
 
-    Shared by both registry sweeps, which degrade to {} for opposite reasons:
-    the caller states its own in `consequence`, because an empty mapping means
-    "sweep without graduation data" to one and "clear nothing" to the other.
+    Shared by both registry sweeps, which degrade to {} to opposite effect.
+    Nothing here implements that difference: `consequence` is a log-only
+    label, and the divergence lives entirely in what each caller does with an
+    empty mapping. In the generic sweep, each row-removal reason function
+    returns its toggle-off reason before it ever looks at `sensors`, so the
+    toggle-off path still removes every row; in the parenting sweep, the
+    membership guard fails for every row, so nothing is cleared.
     """
     try:
         return (coordinator.data or {}).get("sensors", {}) if coordinator is not None else {}
@@ -278,14 +288,18 @@ def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coord
     dr.async_get(hass) returns, with via_device_id passed as None explicitly,
     does that.
 
-    Only the clearing direction needs a sweep. The opposite direction, a
-    device that should gain a link it does not have, is already handled by
-    the ordinary DeviceInfo path: a real tuple value is not UNDEFINED, so
-    Home Assistant's own device-update path writes it during the platform
-    setup that follows this call. Nothing here ever writes a via_device_id
-    other than None.
+    Only the clearing direction is swept here, and the opposite direction is
+    repaired on a narrower schedule than this once claimed. A device that
+    should gain a link it does not have is handled by the ordinary DeviceInfo
+    path, because a real tuple value is not UNDEFINED, but Home Assistant
+    writes a DeviceInfo only while adding an entity. So the gaining direction
+    lands at first registration or after a reload, not on any sweep: when
+    _reconcile_sub_device_parents_on_updates calls this from its listener,
+    there is no platform setup following it to repair anything. Nothing here
+    ever writes a via_device_id other than None.
 
-    Idempotent and run on every setup, not gated behind a config-entry
+    Idempotent, and run on every setup plus, through that listener, on an
+    update that surfaces a new sensor key. Not gated behind a config-entry
     version bump or an async_migrate_entry path: a version-boundary migration
     only ever runs once, so it could not self-heal if a later cloud re-key
     mis-parented a device again, and this sweep can, because it re-evaluates
@@ -372,17 +386,47 @@ def _reconcile_sub_device_parents_on_updates(hass: HomeAssistant, entry: ConfigE
     anything that depends on a device appearing after the first poll needs a
     listener, because setup runs exactly once.
 
-    No throttling and no memo of what was already swept. A row with no
+    The listener sweeps only when a sensor key has appeared that was not
+    there at the previous sweep, and this narrowing is deliberate. The sweep's
+    only mutation is destructive and irreversible within the session: Home
+    Assistant writes a DeviceInfo's via_device only while adding an entity, so
+    a link cleared for a device whose entities already exist stays cleared
+    until a reload, no matter what later polls report. The verdict driving the
+    clear, is_hub_record, reads identity fields straight off the cloud
+    response, so a single degraded response that blanks did, mac, productKey
+    and model on a real hub is indistinguishable from the Bluetooth wrapper
+    record. Sweeping on every update would let any one such response
+    permanently unparent a genuine sub-device. A newly surfaced key is the
+    only case this listener exists to serve, and restricting to it keeps the
+    exposure close to the setup-only sweep's while still reaching the silent
+    device. It also keeps the sweep off the hub-connectivity push path
+    entirely, which never changes sensors at all.
+
+    What this deliberately does not do is correct a device whose parenting
+    changes while it is already present and unchanged in the poll. That is the
+    same case the setup-only design left to the next reload, and settling it
+    is the removal counterpart tracked separately, not this listener's job.
+
+    Within a sweep there is no throttling and no memo: a row with no
     via_device_id short-circuits before any registry write, so a repeat sweep
     over settled devices makes no calls at all, and the clearing write cannot
-    re-arm itself: the row it clears reads back cleared.
+    re-arm itself, because the row it clears reads back cleared.
     """
     _reconcile_sub_device_parents(hass, entry, coordinator)
+    # Seeded from the same snapshot the sweep above just acted on, so the
+    # first update cannot re-present an already-swept key as new.
+    swept_keys = set(_read_current_sensors(coordinator, "seeding an empty swept-key set").keys())
 
     @callback
     def _on_coordinator_update() -> None:
-        """Re-sweep for a device that surfaced after setup."""
-        _reconcile_sub_device_parents(hass, entry, coordinator)
+        """Re-sweep only when this update surfaced a sensor key the last one did not."""
+        nonlocal swept_keys
+        current_keys = set(_read_current_sensors(coordinator, "treating this update as surfacing nothing").keys())
+        if current_keys - swept_keys:
+            _reconcile_sub_device_parents(hass, entry, coordinator)
+        # Assigned on every update, not only on a sweep, so a key that
+        # disappears and returns counts as newly surfaced again.
+        swept_keys = current_keys
 
     entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
@@ -430,10 +474,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry_store["coordinator"] = coordinator
 
-    # Both passes below run before any platform is forwarded, so no platform
-    # is adding entities while a registry is being mutated, and after the
-    # coordinator's first refresh, so the sensor records they read are
-    # already populated.
+    # Both passes below run after the coordinator's first refresh, so the
+    # sensor records they read are already populated, and before any platform
+    # is forwarded, so this first pass of each cannot race a platform adding
+    # entities. That is the whole story for the generic sweep, which runs
+    # once. The parenting pass also arms a listener, and its later runs do
+    # share updates with the late entity adders in sensor.py, valve.py and
+    # number.py. They are ordered by listener registration, not by platform
+    # forwarding: this listener is registered first, so it runs first, and the
+    # adders' DeviceInfo omits via_device for an unparented record anyway.
     _remove_stale_generic_entities(hass, entry, coordinator)
     _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
 
