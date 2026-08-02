@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from collections.abc import Iterable
+from collections.abc import Set as AbstractSet
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
@@ -347,7 +348,7 @@ def _sensor_key(hid, mid: int, addr: int) -> str:
     return f"{hid}_{mid}_{addr}"
 
 
-def _sensor_keys_for_hub_keys(sensor_keys: Iterable[str], hub_keys: set[tuple[Any, int]]) -> set[str]:
+def _sensor_keys_for_hub_keys(sensor_keys: Iterable[str], hub_keys: AbstractSet[tuple[Any, int]]) -> set[str]:
     """Return the subset of sensor_keys whose (hid, mid) half is in hub_keys.
 
     A hub absent from the device list carries no subDevices to walk, so its
@@ -1494,7 +1495,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # already tolerates a missing "value"/"time" pair.
         return _build_sensor_entry(hub, sub, mid, addr, {}, decoded)
 
-    def _track_missing_hubs(self, hubs: list[dict]) -> set[tuple[Any, int]]:
+    def _track_missing_hubs(self, hubs: list[dict]) -> frozenset[tuple[Any, int]]:
         """Compare this poll's real hubs against the last trusted poll's, and
         return the (hid, mid) of every hub still within its provisional
         absence window.
@@ -1591,7 +1592,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 )
 
         self._last_poll_hub_keys = current_keys | provisional_keys
-        return provisional_keys
+        return frozenset(provisional_keys)
 
     def _prune_silent_state(self, hubs: list[dict], *, missing_hub_keys: frozenset[tuple[Any, int]] = frozenset()) -> None:
         """Drop any debounce counter for an addr no hub currently lists.
