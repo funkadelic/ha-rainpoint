@@ -1081,12 +1081,43 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 # arriving after a total outage still computes the correct
                 # missing set against the pre-outage memory.
                 missing_hub_keys = RainPointCoordinator._track_missing_hubs(self, hubs)
+
+                # D-15's shape decision: an independent inline hold, not a
+                # reuse of _merge_push_hub_connectivity or
+                # _guard_hub_connectivity_order. _merge_push_hub_connectivity
+                # assigns self.data directly, while this method returns a
+                # dict that DataUpdateCoordinator then assigns; using it here
+                # would write a snapshot this poll's own return value
+                # immediately overwrites. _guard_hub_connectivity_order
+                # orders a polled record against a held one, and a missing
+                # hub produces no polled record to order -- bolting a hold
+                # onto it would require synthesizing a stand-in record, the
+                # shape D-14 already rejected for the same reason: any
+                # invented identity leaking into coordinator.data["hubs"]
+                # reaches every entity platform. So this reads the
+                # already-hoisted prior_connectivity local directly and
+                # writes hub_connectivity[mid] for provisionally missing
+                # hubs only, carrying the record unchanged. Writes no entry
+                # when there is no prior record, so a hub that vanished
+                # before it ever reported stays absent rather than gaining
+                # an invented one. This narrows Backlog PUSHOBS-03's window
+                # (a push that landed before the prior_connectivity hoist
+                # above now survives the gap instead of being dropped) but
+                # does not close it: a push landing between that hoist and
+                # this method's return is still lost, unchanged.
+                for _missing_hid, missing_mid in missing_hub_keys:
+                    held_record = prior_connectivity.get(missing_mid)
+                    if held_record is not None:
+                        hub_connectivity[missing_mid] = held_record
+
                 RainPointCoordinator._prune_silent_state(self, hubs, missing_hub_keys=missing_hub_keys)
                 RainPointCoordinator._sync_silent_device_issues(
                     self, decoded_sensors, absent_hubs, missing_hub_keys=missing_hub_keys
                 )
-                RainPointCoordinator._prune_hub_connectivity_state(self, hubs)
-                RainPointCoordinator._sync_hub_connectivity_issues(self, hubs, hub_connectivity)
+                RainPointCoordinator._prune_hub_connectivity_state(self, hubs, missing_hub_keys=missing_hub_keys)
+                RainPointCoordinator._sync_hub_connectivity_issues(
+                    self, hubs, hub_connectivity, missing_hub_keys=missing_hub_keys
+                )
             else:
                 _LOGGER.warning(
                     "Device list came back empty while %d sub-device(s) and %d hub(s) were being "
@@ -1496,6 +1527,19 @@ class RainPointCoordinator(DataUpdateCoordinator):
         while ORPH-01 needs to find entity-registry rows whose sensor key
         has vanished from coordinator.data["sensors"]. The two are
         deliberately not merged (D-11).
+
+        Nothing here reads from MQTT, and apply_push_update /
+        apply_hub_push_update read nothing from here (D-07): MQTT carries no
+        enumeration information, so inferring hub presence from a pushed
+        payload would let one chatty sub-device mask a hub that has really
+        left the account, which is exactly the case this method's release
+        rule exists to catch. Observed consequence, recorded as a finding
+        rather than fixed here: during a gap, a push addressed to a child of
+        the missing hub is dropped by apply_push_update's own unknown-mid
+        guard, since that method resolves the hub from
+        coordinator.data["hubs"] and the missing hub is not in it. This is
+        pre-existing behaviour this phase deliberately does not change, and
+        it is a candidate backlog item, not a task here.
         """
         current_keys = {(hub["hid"], hub["mid"]) for hub in hubs if is_hub_record(hub)}
         missing_keys = self._last_poll_hub_keys - current_keys
@@ -1653,19 +1697,33 @@ class RainPointCoordinator(DataUpdateCoordinator):
         ]
         self._silent_issues.async_sync(records, unreachable_ids=unreachable_ids)
 
-    def _prune_hub_connectivity_state(self, hubs: list[dict]) -> None:
+    def _prune_hub_connectivity_state(
+        self, hubs: list[dict], *, missing_hub_keys: frozenset[tuple[Any, int]] = frozenset()
+    ) -> None:
         """Drop any hub-disconnect debounce counter for a hub no longer listed.
 
         A hub removed from the account (unpaired, home restructured) must not
         accumulate a counter forever, mirroring _prune_silent_state's
         reasoning for sub-devices.
+
+        missing_hub_keys must be passed explicitly rather than derived here
+        (D-14): live_keys is built from hubs, and a hub absent from hubs is
+        never iterated, so without this parameter a missing hub's counter is
+        wiped on the very first missing poll and D-05's freeze fails on the
+        connectivity side.
         """
         live_keys = {(hub["hid"], hub["mid"]) for hub in hubs if is_hub_record(hub)}
         self._hub_disconnect_poll_counts = {
-            key: count for key, count in self._hub_disconnect_poll_counts.items() if key in live_keys
+            key: count for key, count in self._hub_disconnect_poll_counts.items() if key in live_keys or key in missing_hub_keys
         }
 
-    def _sync_hub_connectivity_issues(self, hubs: list[dict], hub_connectivity: dict[int, dict]) -> None:
+    def _sync_hub_connectivity_issues(
+        self,
+        hubs: list[dict],
+        hub_connectivity: dict[int, dict],
+        *,
+        missing_hub_keys: frozenset[tuple[Any, int]] = frozenset(),
+    ) -> None:
         """Reconcile the per-hub connectivity repair issue against this poll's tri-states.
 
         Translates each real hub's tri-state into a plain HubConnectivityRecord
@@ -1701,9 +1759,28 @@ class RainPointCoordinator(DataUpdateCoordinator):
         connectivity is unknown produces no disconnected record to raise from
         in the first place. unreachable_ids is a local built fresh every call,
         never manager state.
+
+        missing_hub_keys names the enumeration door alongside the unknown
+        tri-state above (D-13): a hub absent from hubs is never iterated by
+        the loop below at all, so unlike the status-fetch door its id never
+        reaches unreachable_ids without help -- a missing hub does not fall
+        out through the unknown branch for free (D-14). Seeding
+        unreachable_ids with each missing hub's id, and skipping
+        self._hub_disconnect_poll_counts for those keys entirely, has to
+        happen before the loop touches any hub the missing set does not
+        name, so a held disconnected record on a hub that is also missing
+        this poll cannot advance the debounce (D-16): doing so would raise a
+        card from evidence the poll never contained, the connectivity-side
+        statement of D-05's rule. missing_hub_keys and the keys reachable
+        from hubs are disjoint by construction -- a key is only missing when
+        it is absent from hubs -- so this seeding can never collide with the
+        loop's own verdicts. The empty-list guard already covers both
+        Repairs surfaces (Phase 16), so leaving this door covering only the
+        not-reporting surface would make the two doors disagree about the
+        same event.
         """
         records: list[HubConnectivityRecord] = []
-        unreachable_ids: set[str] = set()
+        unreachable_ids: set[str] = {hub_connectivity_issue_id(hid, mid) for hid, mid in missing_hub_keys}
 
         for hub in hubs:
             if not is_hub_record(hub):

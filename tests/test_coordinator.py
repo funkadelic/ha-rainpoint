@@ -2448,6 +2448,247 @@ class TestHubConnectivitySurvivesDeviceListOutage:
             assert delete.call_count == deletes_before_outage
 
 
+class TestHubConnectivitySurvivesPartialHubShrink:
+    """A hub missing from a non-empty device list is an outage for its
+    connectivity card too, mirroring TestSilentIssueSurvivesPartialHubShrink
+    for the not-reporting lifecycle: both surfaces have to move together
+    (D-13), since the empty-list guard already treats them as one outage.
+
+    Drives the real coordinator through async_config_entry_first_refresh
+    then repeated async_refresh, the pattern
+    TestHubConnectivityDebounceRealTimeline establishes, rather than an
+    injected already-past-threshold coordinator.data snapshot.
+    """
+
+    HUB_A_MID = 200
+    HUB_B_MID = 300
+
+    @staticmethod
+    def _hub(mid, name):
+        """A real hub record with no subDevices, mirroring
+        _build_hub_connectivity_coord's reasoning: a declared sub-device
+        going silent would raise its own issue on the same mocks these
+        tests assert call counts against."""
+        return {
+            "mid": mid,
+            "name": name,
+            "deviceName": f"dev{mid}",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [],
+        }
+
+    def _set_connected(self, client, hub_a_connected=None, hub_b_connected=None):
+        """Mutate the next poll's connected entries for both hubs. A None
+        value omits that hub's status entirely, matching a hub genuinely
+        absent from the device list this poll."""
+        status = []
+        if hub_a_connected is not None:
+            status.append({"mid": self.HUB_A_MID, "subDeviceStatus": [{"id": "connected", "value": hub_a_connected}]})
+        if hub_b_connected is not None:
+            status.append({"mid": self.HUB_B_MID, "subDeviceStatus": [{"id": "connected", "value": hub_b_connected}]})
+        client.get_multiple_device_status.return_value = status
+
+    def _build(self, hub_a_connected="1", hub_b_connected="1"):
+        """Return (coordinator, client) wired the way __init__.py wires it,
+        with two real hubs."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            self._hub(self.HUB_A_MID, "HubA"),
+            self._hub(self.HUB_B_MID, "HubB"),
+        ]
+        self._set_connected(client, hub_a_connected, hub_b_connected)
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+
+        hass = MagicMock()
+        hass.data = {}
+
+        return _coord_module.RainPointCoordinator(hass, client, entry), client
+
+    @pytest.mark.asyncio
+    async def test_a_shrunken_device_list_leaves_the_missing_hubs_counter_and_issue_untouched(self):
+        """D-13, D-14: a hub missing from a non-empty device list keeps its
+        disconnect counter and its connectivity card through the gap.
+
+        Asserted by the issue id never appearing among the deletes made
+        during the gap poll specifically (an index slice of the mock's call
+        list, not its full history), rather than a raw call-count delta:
+        hub A's own issue id is legitimately cleared idempotently while it
+        is still connected, before the gap begins, and hub B's own record
+        clears its (never-raised) issue idempotently every poll it stays
+        connected (mirroring the empty-list sibling test's own note that
+        this clear is unconditional), so only the calls made during the gap
+        poll itself say anything about the gap.
+        """
+        coordinator, client = self._build(hub_a_connected="1", hub_b_connected="1")
+        hub_a_issue_id = hub_connectivity_issue_id(100, self.HUB_A_MID)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            await coordinator.async_config_entry_first_refresh()
+
+            self._set_connected(client, hub_a_connected="0", hub_b_connected="1")
+            for _ in range(_coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+            assert create.call_count == 1
+
+            # Hub A drops out of the device list entirely; hub B stays.
+            client.get_devices_by_hid.return_value = [self._hub(self.HUB_B_MID, "HubB")]
+            self._set_connected(client, hub_a_connected=None, hub_b_connected="1")
+            calls_before_gap = len(delete.call_args_list)
+            await coordinator.async_refresh()
+
+            deleted_ids_during_gap = {call.args[2] for call in delete.call_args_list[calls_before_gap:]}
+            assert hub_a_issue_id not in deleted_ids_during_gap
+            assert hub_a_issue_id in coordinator._hub_connectivity_issues._active
+            assert (100, self.HUB_A_MID) in coordinator._hub_disconnect_poll_counts
+
+    @pytest.mark.asyncio
+    async def test_a_missing_hub_holds_its_last_known_connectivity_record(self):
+        """D-15: the Cloud Connection binary sensor and valve availability
+        both read coordinator data through hub_connectivity_record /
+        hub_connected_flag, so the hold has to be proven through those two
+        functions rather than the raw dict."""
+        coordinator, client = self._build(hub_a_connected="1", hub_b_connected="1")
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            assert _coord_module.hub_connected_flag(_coord_module.hub_connectivity_record(coordinator, self.HUB_A_MID)) is True
+
+            client.get_devices_by_hid.return_value = [self._hub(self.HUB_B_MID, "HubB")]
+            self._set_connected(client, hub_a_connected=None, hub_b_connected="1")
+            await coordinator.async_refresh()
+
+            assert _coord_module.hub_connected_flag(_coord_module.hub_connectivity_record(coordinator, self.HUB_A_MID)) is True
+            # A hub with no prior record at all must not gain an invented one.
+            assert _coord_module.hub_connectivity_record(coordinator, 999999) == {}
+
+    @pytest.mark.asyncio
+    async def test_a_held_disconnected_record_on_a_missing_hub_does_not_advance_the_debounce(self):
+        """D-16: a held disconnected record on a hub that is also missing
+        this poll must not advance the debounce, or a card would raise from
+        evidence the poll never contained."""
+        coordinator, client = self._build(hub_a_connected="1", hub_b_connected="1")
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+
+            self._set_connected(client, hub_a_connected="0", hub_b_connected="1")
+            await coordinator.async_refresh()
+            assert coordinator._hub_disconnect_poll_counts[(100, self.HUB_A_MID)] == 1
+            assert create.call_count == 0
+
+            client.get_devices_by_hid.return_value = [self._hub(self.HUB_B_MID, "HubB")]
+            self._set_connected(client, hub_a_connected=None, hub_b_connected="1")
+            for _ in range(3):
+                await coordinator.async_refresh()
+
+            assert coordinator._hub_disconnect_poll_counts[(100, self.HUB_A_MID)] == 1
+            assert create.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_a_missing_hub_released_after_the_window_clears_its_connectivity_card(self):
+        """D-01 on the connectivity surface: after the 4th consecutive
+        absence, the counter key is gone, a delete fires for
+        hub_connectivity_issue_id, and the held record stops being carried
+        into coordinator.data["hub_connectivity"].
+
+        Asserted by issue id within each poll's own slice of delete calls,
+        for the same reason as the sibling test above: hub A's own issue id
+        is legitimately cleared idempotently while still connected, before
+        the gap begins, and hub B's own record clears its (never-raised)
+        issue idempotently every poll it stays connected.
+        """
+        coordinator, client = self._build(hub_a_connected="1", hub_b_connected="1")
+        hub_a_issue_id = hub_connectivity_issue_id(100, self.HUB_A_MID)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            await coordinator.async_config_entry_first_refresh()
+
+            self._set_connected(client, hub_a_connected="0", hub_b_connected="1")
+            for _ in range(_coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+            assert create.call_count == 1
+
+            client.get_devices_by_hid.return_value = [self._hub(self.HUB_B_MID, "HubB")]
+            self._set_connected(client, hub_a_connected=None, hub_b_connected="1")
+
+            for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS):
+                calls_before_poll = len(delete.call_args_list)
+                await coordinator.async_refresh()
+                deleted_ids_this_poll = {call.args[2] for call in delete.call_args_list[calls_before_poll:]}
+                assert hub_a_issue_id not in deleted_ids_this_poll
+
+            # The next absence exceeds the threshold and releases hub A.
+            calls_before_release = len(delete.call_args_list)
+            await coordinator.async_refresh()
+
+            deleted_ids_on_release = {call.args[2] for call in delete.call_args_list[calls_before_release:]}
+            assert hub_a_issue_id in deleted_ids_on_release
+            assert (100, self.HUB_A_MID) not in coordinator._hub_disconnect_poll_counts
+            assert self.HUB_A_MID not in coordinator.data["hub_connectivity"]
+
+    @pytest.mark.asyncio
+    async def test_a_push_during_a_gap_leaves_the_hub_absence_counter_untouched(self):
+        """D-07: MQTT carries no enumeration information, so a push must not
+        move _hub_absent_poll_counts or _last_poll_hub_keys, even while
+        clearing the pushed child's own silent counter and issue exactly as
+        it always has."""
+        hub_b_with_child = {
+            "mid": self.HUB_B_MID,
+            "name": "HubB",
+            "deviceName": f"dev{self.HUB_B_MID}",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [{"addr": 1, "model": MODEL_MOISTURE_SIMPLE, "name": "Sub1", "softVer": "1.0"}],
+        }
+        coordinator, client = self._build(hub_a_connected="1", hub_b_connected="1")
+        client.get_devices_by_hid.return_value = [self._hub(self.HUB_A_MID, "HubA"), hub_b_with_child]
+        # Hub B's child arrives but never reports (arrived-but-empty), so its
+        # silent counter advances every poll.
+        client.get_multiple_device_status.return_value = [
+            {"mid": self.HUB_A_MID, "subDeviceStatus": [{"id": "connected", "value": "1"}]},
+            {"mid": self.HUB_B_MID, "subDeviceStatus": []},
+        ]
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            await coordinator.async_refresh()
+
+            # Hub A drops out; hub B's silent child keeps being tracked.
+            client.get_devices_by_hid.return_value = [hub_b_with_child]
+            client.get_multiple_device_status.return_value = [{"mid": self.HUB_B_MID, "subDeviceStatus": []}]
+            await coordinator.async_refresh()
+
+            absent_counts_before = dict(coordinator._hub_absent_poll_counts)
+            hub_keys_before = set(coordinator._last_poll_hub_keys)
+            assert (100, self.HUB_A_MID) in absent_counts_before
+
+            coordinator.apply_push_update(self.HUB_B_MID, "D1", _MOISTURE_SIMPLE_PAYLOAD, device_ts=1700000000000)
+
+            assert coordinator._hub_absent_poll_counts == absent_counts_before
+            assert coordinator._last_poll_hub_keys == hub_keys_before
+            sensor_key = _coord_module._sensor_key(100, self.HUB_B_MID, 1)
+            assert sensor_key not in coordinator._silent_poll_counts
+
+
 def _set_hub_connected(client, value, time_ms=None):
     """Mutate the next poll's connected entry on an already-built client.
 
