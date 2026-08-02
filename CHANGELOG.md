@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.12.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.12.0...v1.12.1) (2026-08-02)
+
+
+### Fixed
+
+* keep a not-reporting card through a partial device-list outage ([#139](https://github.com/funkadelic/ha-rainpoint/issues/139)) ([163c525](https://github.com/funkadelic/ha-rainpoint/commit/163c525e42ae4ce55f72e7b54a76b8cdabab9d92))
+
 ## [1.12.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.11.0...v1.12.0) (2026-08-02)
 
 
