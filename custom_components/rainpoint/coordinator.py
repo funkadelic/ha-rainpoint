@@ -748,18 +748,18 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._silent_issues = RainPointSilentDeviceIssues(hass)
         self._hub_disconnect_poll_counts: dict[tuple[Any, int], int] = {}
         self._hub_connectivity_issues = RainPointHubConnectivityIssues(hass)
-        # Cross-poll hub-enumeration memory (D-09, D-12): the (hid, mid) of
-        # every real hub the last trusted poll listed, plus any hub still
-        # within its provisional absence window, and how many consecutive
-        # polls each missing hub has been absent for. This is a different
-        # concept from _silent_poll_counts (per-child silence): it decides
-        # whether a poll's device list can be trusted at all, not whether a
-        # given addr is still reporting. Deliberately not the structure
-        # Backlog ORPH-01 will need, which resolves entity-registry rows
-        # against coordinator.data["sensors"]. Living outside self.data
-        # accepts less of Backlog PUSHOBS-03's instance-attribute-versus-
-        # self.data skew than _hub_disconnect_poll_counts does, because only
-        # the poll (never a push) ever writes this state.
+        # Cross-poll hub-enumeration memory: the (hid, mid) of every real hub
+        # the last trusted poll listed, plus any hub still within its
+        # provisional absence window, and how many consecutive polls each
+        # missing hub has been absent for. This is a different concept from
+        # _silent_poll_counts (per-child silence): it decides whether a poll's
+        # device list can be trusted at all, not whether a given addr is still
+        # reporting. Deliberately not the structure an orphaned-entity sweep
+        # would need, which resolves entity-registry rows against
+        # coordinator.data["sensors"]. Living outside self.data accepts less
+        # instance-attribute-versus-self.data skew than
+        # _hub_disconnect_poll_counts does, because only the poll (never a
+        # push) ever writes this state.
         self._last_poll_hub_keys: set[tuple[Any, int]] = set()
         self._hub_absent_poll_counts: dict[tuple[Any, int], int] = {}
 
@@ -1133,8 +1133,8 @@ class RainPointCoordinator(DataUpdateCoordinator):
             if hubs:
                 missing_hub_keys = RainPointCoordinator._track_missing_hubs(self, hubs)
 
-            # D-15's shape decision: an independent inline hold, not a
-            # reuse of _merge_push_hub_connectivity or
+            # Deliberately an independent inline hold, not a reuse of
+            # _merge_push_hub_connectivity or
             # _guard_hub_connectivity_order. _merge_push_hub_connectivity
             # assigns self.data directly, while this method returns a
             # dict that DataUpdateCoordinator then assigns; using it here
@@ -1143,19 +1143,20 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # orders a polled record against a held one, and a missing
             # hub produces no polled record to order -- bolting a hold
             # onto it would require synthesizing a stand-in record, the
-            # shape D-14 already rejected for the same reason: any
-            # invented identity leaking into coordinator.data["hubs"]
-            # reaches every entity platform. So this reads the
-            # already-hoisted prior_connectivity local directly and
-            # writes hub_connectivity[mid] for provisionally missing
-            # hubs only, carrying the record unchanged. Writes no entry
-            # when there is no prior record, so a hub that vanished
+            # same shape _prune_hub_connectivity_state's parameter exists
+            # to avoid: any invented identity leaking into
+            # coordinator.data["hubs"] reaches every entity platform. So
+            # this reads the already-hoisted prior_connectivity local
+            # directly and writes hub_connectivity[mid] for provisionally
+            # missing hubs only, carrying the record unchanged. Writes no
+            # entry when there is no prior record, so a hub that vanished
             # before it ever reported stays absent rather than gaining
-            # an invented one. This narrows Backlog PUSHOBS-03's window
-            # (a push that landed before the prior_connectivity hoist
-            # above now survives the gap instead of being dropped) but
-            # does not close it: a push landing between that hoist and
-            # this method's return is still lost, unchanged.
+            # an invented one. This narrows the window in which a
+            # concurrent push is lost (a push that landed before the
+            # prior_connectivity hoist above now survives the gap instead
+            # of being dropped) but does not close it: a push landing
+            # between that hoist and this method's return is still lost,
+            # unchanged.
             for _missing_hid, missing_mid in missing_hub_keys:
                 held_record = prior_connectivity.get(missing_mid)
                 if held_record is not None:
@@ -1532,52 +1533,51 @@ class RainPointCoordinator(DataUpdateCoordinator):
         absence window.
 
         A hub reappearing at all resets its absence counter regardless of
-        what its subDevices lists (D-03): the hid/mid key alone is what
-        "back" means here, not any judgement about its children. A hub
-        missing for HUB_ABSENT_DEBOUNCE_POLLS or fewer consecutive polls is
-        provisional and keeps its counter and its remembered key; once a
-        missing hub's consecutive-absence count exceeds that threshold it is
-        released, dropping both the counter and the key, so the shrunken
-        list becomes authoritative for it again and the memory this method
-        owns cannot grow without bound (D-01, SC6).
+        what its subDevices lists: the hid/mid key alone is what "back"
+        means here, not any judgement about its children. A hub missing for
+        HUB_ABSENT_DEBOUNCE_POLLS or fewer consecutive polls is provisional
+        and keeps its counter and its remembered key; once a missing hub's
+        consecutive-absence count exceeds that threshold it is released,
+        dropping both the counter and the key, so the shrunken list becomes
+        authoritative for it again and the memory this method owns cannot
+        grow without bound.
 
         A restart mid-gap clears every card this method is protecting: the
         Repairs issue itself survives in Home Assistant's registry, but
         _last_poll_hub_keys and _hub_absent_poll_counts do not, so the first
         poll after a restart has no prior list, sees nothing missing, and
         clears normally. This is pre-existing on every poll-counted surface
-        in this file -- the silent counter, the disconnect counter, and the
-        empty-list guard all reset the same way on a fresh instance, and
+        in this file -- _silent_poll_counts, _hub_disconnect_poll_counts and
+        the empty-list guard all reset the same way on a fresh instance, and
         _sync_hub_connectivity_issues' own docstring already reasons about
-        it -- so this phase introduces no new instance of it (D-08). Fixing
-        it means seeding this state from the issue registry at setup, which
-        lands better alongside Backlog PUSHOBS-04's time-based debounce,
-        where a cloud timestamp survives a restart for free.
+        it -- so this method introduces no new instance of it. Fixing it
+        means seeding this state from the issue registry at setup, which
+        lands better alongside a time-based debounce, where a cloud
+        timestamp survives a restart for free.
 
-        This map answers a different question from Backlog ORPH-01's: it
-        remembers hub enumeration to decide whether a poll is trustworthy,
-        while ORPH-01 needs to find entity-registry rows whose sensor key
-        has vanished from coordinator.data["sensors"]. The two are
-        deliberately not merged (D-11).
+        This map answers a different question from an orphaned-entity sweep:
+        it remembers hub enumeration to decide whether a poll is
+        trustworthy, while such a sweep needs to find entity-registry rows
+        whose sensor key has vanished from coordinator.data["sensors"]. The
+        two are deliberately not merged.
 
         Nothing here reads from MQTT, and apply_push_update /
-        apply_hub_push_update read nothing from here (D-07): MQTT carries no
+        apply_hub_push_update read nothing from here: MQTT carries no
         enumeration information, so inferring hub presence from a pushed
         payload would let one chatty sub-device mask a hub that has really
         left the account, which is exactly the case this method's release
-        rule exists to catch. Observed consequence, recorded as a finding
-        rather than fixed here: during a gap, a push addressed to a child of
-        the missing hub is dropped by apply_push_update's own unknown-mid
-        guard, since that method resolves the hub from
-        coordinator.data["hubs"] and the missing hub is not in it. This is
-        pre-existing behaviour this phase deliberately does not change, and
-        it is a candidate backlog item, not a task here.
+        rule exists to catch. Observed consequence, recorded rather than
+        fixed here: during a gap, a push addressed to a child of the missing
+        hub is dropped by apply_push_update's own unknown-mid guard, since
+        that method resolves the hub from coordinator.data["hubs"] and the
+        missing hub is not in it. That is pre-existing behaviour this method
+        deliberately does not change.
         """
         current_keys = {(hub["hid"], hub["mid"]) for hub in hubs if is_hub_record(hub)}
         missing_keys = self._last_poll_hub_keys - current_keys
 
         # A hub reappearing at all resets its counter, regardless of what its
-        # subDevices lists (D-03).
+        # subDevices lists.
         for key in current_keys:
             self._hub_absent_poll_counts.pop(key, None)
 
@@ -1614,8 +1614,8 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 # One INFO line at the moment the shrunken list becomes
                 # authoritative for this hub, since that is the moment its
                 # cards can disappear and that moment needs its own
-                # breadcrumb -- both Phase 15's two criticals and Phase 19's
-                # GAP-1 were invisible in production logs.
+                # breadcrumb -- earlier defects on this path were invisible
+                # in production logs.
                 _LOGGER.info(
                     "Hub %s absent for %d consecutive polls; releasing it and treating the shrunken device list as authoritative",
                     key,
@@ -1632,12 +1632,13 @@ class RainPointCoordinator(DataUpdateCoordinator):
         cannot accumulate a counter forever.
 
         missing_hub_keys carries the hub keys currently within their
-        provisional absence window (the enumeration door, D-10): a child of
-        one of those hubs keeps its counter too, since the hub not appearing
-        in this poll's device list says nothing about whether that
-        particular child is still silent -- a missing hub is an outage, not
-        evidence about any addr, so it can neither confirm nor deny that a
-        child is silent (D-05). The increment half of that freeze holds for
+        provisional absence window (the enumeration door, alongside the
+        status-fetch door in _sync_silent_device_issues): a child of one of
+        those hubs keeps its counter too, since the hub not appearing in
+        this poll's device list says nothing about whether that particular
+        child is still silent -- a missing hub is an outage, not evidence
+        about any addr, so it can neither confirm nor deny that a child is
+        silent. The increment half of that freeze holds for
         free: the only site that advances _silent_poll_counts is
         _build_silent_subdevice, reached from _decode_hub_subdevices, which a
         missing hub never enters. This function is the reset half, which is
@@ -1674,9 +1675,9 @@ class RainPointCoordinator(DataUpdateCoordinator):
         silent entries, so there is nothing to raise from in the first place.
 
         missing_hub_keys carries the enumeration door alongside the
-        status-fetch door above (D-10): the still-silent children of a hub
+        status-fetch door above: the still-silent children of a hub
         currently within its provisional absence window. Suppression here is
-        scoped per hub, never global (D-04) -- in a poll where hub A is
+        scoped per hub, never global -- in a poll where hub A is
         missing and hub B reported normally, only A's children enter the
         set, because missing_hub_keys names only A, and B's cards raise and
         clear on schedule. The asymmetry stated above holds trivially on
@@ -1738,11 +1739,11 @@ class RainPointCoordinator(DataUpdateCoordinator):
         accumulate a counter forever, mirroring _prune_silent_state's
         reasoning for sub-devices.
 
-        missing_hub_keys must be passed explicitly rather than derived here
-        (D-14): live_keys is built from hubs, and a hub absent from hubs is
-        never iterated, so without this parameter a missing hub's counter is
-        wiped on the very first missing poll and D-05's freeze fails on the
-        connectivity side.
+        missing_hub_keys must be passed explicitly rather than derived here:
+        live_keys is built from hubs, and a hub absent from hubs is never
+        iterated, so without this parameter a missing hub's counter is wiped
+        on the very first missing poll and the freeze _prune_silent_state
+        applies to a silent child fails on the connectivity side.
         """
         live_keys = {(hub["hid"], hub["mid"]) for hub in hubs if is_hub_record(hub)}
         self._hub_disconnect_poll_counts = {
@@ -1793,23 +1794,24 @@ class RainPointCoordinator(DataUpdateCoordinator):
         never manager state.
 
         missing_hub_keys names the enumeration door alongside the unknown
-        tri-state above (D-13): a hub absent from hubs is never iterated by
-        the loop below at all, so unlike the status-fetch door its id never
+        tri-state above: a hub absent from hubs is never iterated by the
+        loop below at all, so unlike the status-fetch door its id never
         reaches unreachable_ids without help -- a missing hub does not fall
-        out through the unknown branch for free (D-14). Seeding
-        unreachable_ids with each missing hub's id, and skipping
+        out through the unknown branch for free. Seeding unreachable_ids
+        with each missing hub's id, and skipping
         self._hub_disconnect_poll_counts for those keys entirely, has to
         happen before the loop touches any hub the missing set does not
         name, so a held disconnected record on a hub that is also missing
-        this poll cannot advance the debounce (D-16): doing so would raise a
-        card from evidence the poll never contained, the connectivity-side
-        statement of D-05's rule. missing_hub_keys and the keys reachable
-        from hubs are disjoint by construction -- a key is only missing when
-        it is absent from hubs -- so this seeding can never collide with the
-        loop's own verdicts. The empty-list guard already covers both
-        Repairs surfaces (Phase 16), so leaving this door covering only the
-        not-reporting surface would make the two doors disagree about the
-        same event.
+        this poll cannot advance the debounce: doing so would raise a card
+        from evidence the poll never contained, the connectivity-side
+        statement of the same rule _prune_silent_state applies to a silent
+        child. missing_hub_keys and the keys reachable from hubs are
+        disjoint by construction -- a key is only missing when it is absent
+        from hubs -- so this seeding can never collide with the loop's own
+        verdicts. The empty-list guard in _reconcile_repairs_surfaces
+        already covers both Repairs surfaces, so leaving this door covering
+        only the not-reporting surface would make the two doors disagree
+        about the same event.
         """
         records: list[HubConnectivityRecord] = []
         unreachable_ids: set[str] = {hub_connectivity_issue_id(hid, mid) for hid, mid in missing_hub_keys}

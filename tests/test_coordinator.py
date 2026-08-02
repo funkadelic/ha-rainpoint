@@ -2054,9 +2054,9 @@ class TestSilentIssueSurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_shrunken_device_list_is_an_outage_for_the_missing_hub(self):
-        """The mandatory regression test the Phase 15 deep review specified:
-        one poll with a shrunken (not empty) device list mid-sequence must
-        not clear a still-silent child's card.
+        """The core regression this guard exists for: one poll with a
+        shrunken (not empty) device list mid-sequence must not clear a
+        still-silent child's card.
 
         References only symbols that already exist before this task's
         source change (create.call_count, delete.call_count,
@@ -2100,7 +2100,7 @@ class TestSilentIssueSurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_healthy_sibling_hub_still_raises_and_clears_during_another_hubs_gap(self):
-        """Suppression is scoped per hub, never global (D-04): hub B's own
+        """Suppression is scoped per hub, never global: hub B's own
         silent child still raises its card on schedule during hub A's gap,
         and hub A's own issue never gets created in the first place since
         its counter is frozen, not evidence for anything."""
@@ -2137,7 +2137,7 @@ class TestSilentIssueSurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_missing_hub_is_released_on_the_fourth_consecutive_absence(self):
-        """The stated rule (D-01, SC3): absences one through
+        """The stated rule: absences one through
         HUB_ABSENT_DEBOUNCE_POLLS suppress, the next one releases and the
         shrunken list becomes authoritative, clearing the missing hub's
         still-tracked card."""
@@ -2170,7 +2170,7 @@ class TestSilentIssueSurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_hub_reappearing_resets_its_absence_counter_regardless_of_subdevices(self):
-        """D-03: a hub reappearing at all counts as back, regardless of what
+        """A hub reappearing at all counts as back, regardless of what
         its subDevices lists. The child's absence from subDevices is then
         definitive, and a later disappearance starts a fresh window."""
         hub_a = self._hub(hid=100, mid=200, addrs=(1,))
@@ -2211,7 +2211,7 @@ class TestSilentIssueSurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_mid_debounce_silent_counter_freezes_across_the_gap_and_resumes(self):
-        """D-05, SC2: a child's silent counter neither advances nor resets
+        """A child's silent counter neither advances nor resets
         while its hub is missing, and reaches the threshold only on the poll
         after the hub returns."""
         hub_a = self._hub(hid=100, mid=200, addrs=(1,))
@@ -2250,7 +2250,7 @@ class TestSilentIssueSurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_release_drops_both_the_counter_and_the_remembered_hub_key(self):
-        """D-09, SC6: release drops both the counter and the remembered hub
+        """Release drops both the counter and the remembered hub
         key, so the memory this method owns cannot grow without bound.
 
         Release is driven through a shrunken list rather than an empty one,
@@ -2280,12 +2280,12 @@ class TestSilentIssueSurvivesPartialHubShrink:
             assert key_a not in coord._hub_absent_poll_counts
             assert key_a not in coord._last_poll_hub_keys
             # Hub B, present throughout, is still remembered: release is
-            # scoped to the hub that actually went missing (D-04).
+            # scoped to the hub that actually went missing.
             assert (100, 300) in coord._last_poll_hub_keys
 
     @pytest.mark.asyncio
     async def test_a_total_empty_list_freezes_the_enumeration_memory_entirely(self):
-        """SC5: the pre-existing total-empty-list guard freezes the
+        """The pre-existing total-empty-list guard freezes the
         enumeration memory exactly as it freezes every other debounce
         counter, and a partial list arriving afterward still computes the
         correct missing set from the pre-outage memory."""
@@ -2318,7 +2318,7 @@ class TestSilentIssueSurvivesPartialHubShrink:
 
 
 class TestSensorKeysForHubKeys:
-    """Direct-call tests for _sensor_keys_for_hub_keys (D-10)."""
+    """Direct-call tests for _sensor_keys_for_hub_keys."""
 
     def test_filters_only_keys_whose_hub_half_matches(self):
         """A protected hub's children are returned; another hub's are not."""
@@ -2351,7 +2351,7 @@ class TestSensorKeysForHubKeys:
 
 
 class TestTrackMissingHubs:
-    """Direct-call tests for _track_missing_hubs (D-01, D-09)."""
+    """Direct-call tests for _track_missing_hubs."""
 
     def test_a_wrapper_record_is_never_remembered_as_a_hub_key(self):
         """A Bluetooth wrapper record must never enter _last_poll_hub_keys,
@@ -2463,8 +2463,8 @@ class TestHubConnectivitySurvivesDeviceListOutage:
 class TestHubConnectivitySurvivesPartialHubShrink:
     """A hub missing from a non-empty device list is an outage for its
     connectivity card too, mirroring TestSilentIssueSurvivesPartialHubShrink
-    for the not-reporting lifecycle: both surfaces have to move together
-    (D-13), since the empty-list guard already treats them as one outage.
+    for the not-reporting lifecycle: both surfaces have to move together,
+    since the empty-list guard already treats them as one outage.
 
     Drives the real coordinator through async_config_entry_first_refresh
     then repeated async_refresh, the pattern
@@ -2522,7 +2522,7 @@ class TestHubConnectivitySurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_shrunken_device_list_leaves_the_missing_hubs_counter_and_issue_untouched(self):
-        """D-13, D-14: a hub missing from a non-empty device list keeps its
+        """A hub missing from a non-empty device list keeps its
         disconnect counter and its connectivity card through the gap.
 
         Asserted by the issue id never appearing among the deletes made
@@ -2562,7 +2562,7 @@ class TestHubConnectivitySurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_missing_hub_holds_its_last_known_connectivity_record(self):
-        """D-15: the Cloud Connection binary sensor and valve availability
+        """The Cloud Connection binary sensor and valve availability
         both read coordinator data through hub_connectivity_record /
         hub_connected_flag, so the hold has to be proven through those two
         functions rather than the raw dict."""
@@ -2585,7 +2585,7 @@ class TestHubConnectivitySurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_held_disconnected_record_on_a_missing_hub_does_not_advance_the_debounce(self):
-        """D-16: a held disconnected record on a hub that is also missing
+        """A held disconnected record on a hub that is also missing
         this poll must not advance the debounce, or a card would raise from
         evidence the poll never contained."""
         coordinator, client = self._build(hub_a_connected="1", hub_b_connected="1")
@@ -2603,7 +2603,7 @@ class TestHubConnectivitySurvivesPartialHubShrink:
 
             client.get_devices_by_hid.return_value = [self._hub(self.HUB_B_MID, "HubB")]
             self._set_connected(client, hub_a_connected=None, hub_b_connected="1")
-            for _ in range(3):
+            for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS):
                 await coordinator.async_refresh()
 
             assert coordinator._hub_disconnect_poll_counts[(100, self.HUB_A_MID)] == 1
@@ -2611,8 +2611,8 @@ class TestHubConnectivitySurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_missing_hub_released_after_the_window_clears_its_connectivity_card(self):
-        """D-01 on the connectivity surface: after the 4th consecutive
-        absence, the counter key is gone, a delete fires for
+        """The release rule on the connectivity surface: one absence past
+        HUB_ABSENT_DEBOUNCE_POLLS and the counter key is gone, a delete fires for
         hub_connectivity_issue_id, and the held record stops being carried
         into coordinator.data["hub_connectivity"].
 
@@ -2656,7 +2656,7 @@ class TestHubConnectivitySurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_push_during_a_gap_leaves_the_hub_absence_counter_untouched(self):
-        """D-07: MQTT carries no enumeration information, so a push must not
+        """MQTT carries no enumeration information, so a push must not
         move _hub_absent_poll_counts or _last_poll_hub_keys, even while
         clearing the pushed child's own silent counter and issue exactly as
         it always has."""
@@ -2702,8 +2702,8 @@ class TestHubConnectivitySurvivesPartialHubShrink:
 
     @pytest.mark.asyncio
     async def test_a_healthy_sibling_hub_still_raises_its_own_card_during_another_hubs_gap(self):
-        """D-04 on the connectivity surface, the mirror of the not-reporting
-        door's sibling test.
+        """Per-hub scoping on the connectivity surface, the mirror of the
+        not-reporting door's sibling test.
 
         Suppression is scoped to the hub that actually went missing. Hub A
         vanishing from the device list must not stop hub B, which is still
