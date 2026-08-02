@@ -5,6 +5,13 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.12.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.11.0...v1.12.0) (2026-08-02)
 
 
+### What's new
+
+- **You can now see whether your hub is actually reachable.** Each hub gains a **Cloud Connection** entity showing whether RainPoint can currently reach it. When a hub goes offline, its valve controls become unavailable instead of accepting commands that quietly go nowhere, and a notice appears under **Settings → Repairs** naming the hub. This matters because RainPoint keeps serving the last reading it received from an offline hub, so device readings can look current when they are not. The notice and the controls recover on their own once the hub reconnects.
+- **Hub connection changes now show up as soon as RainPoint reports them.** Previously the integration only noticed on its next scheduled check, up to a couple of minutes later, in both directions. On installs with push updates enabled, a hub going offline or coming back is reflected immediately. The delay before that point is not something this integration controls: RainPoint itself can take several minutes to notice a hub has gone offline, though it spots a reconnection almost at once.
+- **A Bluetooth-only valve is no longer filed under the wrong hub.** If you have a valve paired over Bluetooth rather than to a hub, it was being listed under that hub's **Connected Devices** as though the hub owned it. It now appears as its own device. Existing installs are corrected automatically, though for a device that reports no readings the correction lands a few minutes after the restart rather than immediately.
+
+
 ### Added
 
 * parent a sub-device to the record that carries it ([#138](https://github.com/funkadelic/ha-rainpoint/issues/138)) ([d3d7a93](https://github.com/funkadelic/ha-rainpoint/commit/d3d7a936fe76db8db77dc58d881affa6bf132048))
