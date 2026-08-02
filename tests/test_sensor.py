@@ -77,7 +77,7 @@ from custom_components.rainpoint.sensor import (
     _slugify,
     async_setup_entry,
 )
-from tests.helpers import make_coordinator_data, make_hub_info, make_sensor_entry
+from tests.helpers import make_coordinator_data, make_hub_info, make_sensor_entry, make_silent_wrapper_hub_record
 from tests.payload_samples import SAMPLE_HTV345_TLV_PAYLOAD, SAMPLE_HTV405_TLV_PAYLOAD
 
 # ---------------------------------------------------------------------------
@@ -2022,15 +2022,7 @@ def _silent_wrapper_hub_record():
     Empty identity fields make is_hub_record return False, so no hub entities
     are created and the captured entity list holds sub-device entities only.
     """
-    return {
-        "mid": 200,
-        "homeName": "Home",
-        "name": "",
-        "deviceName": "",
-        "productKey": "",
-        "model": "",
-        "subDevices": [{"addr": 1, "model": MODEL_HTV210B, "name": "BT Valve", "softVer": "1.0"}],
-    }
+    return make_silent_wrapper_hub_record(model=MODEL_HTV210B)
 
 
 class TestSilentEntityAppearsWithinTheSession:

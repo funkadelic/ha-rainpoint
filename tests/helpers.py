@@ -103,3 +103,23 @@ def make_sensor_coordinator(
     coord = MagicMock()
     coord.data = coord_data
     return coord
+
+
+def make_silent_wrapper_hub_record(mid=200, addr=1, model="HTV210B", sub_name="BT Valve"):
+    """Return the cloud's Bluetooth wrapper record carrying one silent child.
+
+    Every identity field is the empty string rather than absent, which is what
+    the cloud actually returns and what makes is_hub_record answer False. Two
+    test modules drive timelines off this shape (entity creation in
+    test_sensor.py, the parenting reconcile in test_init.py), so it lives here
+    rather than in whichever module happened to need it first.
+    """
+    return {
+        "mid": mid,
+        "homeName": "Home",
+        "name": "",
+        "deviceName": "",
+        "productKey": "",
+        "model": "",
+        "subDevices": [{"addr": addr, "model": model, "name": sub_name, "softVer": "1.0"}],
+    }

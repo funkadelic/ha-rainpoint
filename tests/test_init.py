@@ -25,6 +25,7 @@ from custom_components.rainpoint.const import (
     CONF_PUSH_ENABLED,
     MODEL_HCS026FRF,
 )
+from tests.helpers import make_silent_wrapper_hub_record
 
 
 def _make_entry(entry_id="test_entry_id"):
@@ -1952,23 +1953,34 @@ class TestSubDeviceParentReconcileRealTimeline:
     not reach the reported hardware. This drives the real order instead.
     """
 
+    ENTRY_ID = "test_entry"
     ROW_ID = "device_bt_valve"
     SENSOR_KEY = "100_200_1"
 
-    @staticmethod
-    def _make_fake_device_registry(row_id, sensor_key):
+    @classmethod
+    def _make_single_row_device_registry(cls, row_id, sensor_key):
         """Return (updated, async_get, async_entries) over one pre-existing row.
 
         The row stands for a sub-device registered by an earlier version, so
         it already carries the stale via_device_id that the DeviceInfo path
-        alone cannot clear. Rows are re-derived per call so a cleared row
-        presents as cleared on the next sweep.
+        alone cannot clear.
+
+        Named apart from _DeviceSweepFixtures._make_fake_device_registry
+        rather than shadowing it, because that one seeds a whole registry and
+        this one seeds exactly one row. It keeps the two properties that make
+        the difference observable: rows are re-derived per call and keyed on
+        this row's own id, so "cleared the right row" cannot be confused with
+        "cleared any row", and the config-entry scope is honoured, so the
+        sweep's config-entry-scoped lookup is exercised here too rather than
+        being a no-op the fixture papers over.
         """
         updated: list[tuple] = []
+        cleared: set[str] = set()
 
         class _FakeDeviceRegistry:
             def async_update_device(self, device_id, *, via_device_id):
                 updated.append((device_id, via_device_id))
+                cleared.add(device_id)
 
         registry = _FakeDeviceRegistry()
 
@@ -1976,30 +1988,31 @@ class TestSubDeviceParentReconcileRealTimeline:
             return registry
 
         def _async_entries_for_config_entry(reg, entry_id):
-            via = None if updated else "hub_100"
+            if entry_id != cls.ENTRY_ID:
+                return []
+            via = None if row_id in cleared else "hub_100"
             return [SimpleNamespace(id=row_id, identifiers={(DOMAIN, sensor_key)}, via_device_id=via)]
 
         return updated, _async_get, _async_entries_for_config_entry
 
-    @staticmethod
-    def _build_coordinator():
+    @classmethod
+    def _build_coordinator(cls):
         """Build a real coordinator over one wrapper record whose only child is silent."""
         from custom_components.rainpoint.coordinator import RainPointCoordinator
-        from tests.test_sensor import _silent_wrapper_hub_record
 
         client = AsyncMock()
-        client.get_devices_by_hid.return_value = [_silent_wrapper_hub_record()]
+        client.get_devices_by_hid.return_value = [make_silent_wrapper_hub_record()]
         # Arrived but named nobody: the silent debounce increments rather
         # than the status-outage path firing.
         client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
 
         entry = MagicMock()
-        entry.entry_id = "test_entry"
+        entry.entry_id = cls.ENTRY_ID
         entry.data = {"hids": [100]}
         entry.options = {}
 
         hass = MagicMock()
-        hass.data = {DOMAIN: {"test_entry": {}}}
+        hass.data = {DOMAIN: {cls.ENTRY_ID: {}}}
 
         return RainPointCoordinator(hass, client, entry), hass, entry
 
@@ -2010,7 +2023,7 @@ class TestSubDeviceParentReconcileRealTimeline:
         device. Asserting only the end state would pass against a
         setup-only sweep that never reaches this device at all."""
         coordinator, hass, entry = self._build_coordinator()
-        updated, async_get, async_entries = self._make_fake_device_registry(self.ROW_ID, self.SENSOR_KEY)
+        updated, async_get, async_entries = self._make_single_row_device_registry(self.ROW_ID, self.SENSOR_KEY)
 
         await coordinator.async_config_entry_first_refresh()
 
@@ -2036,24 +2049,84 @@ class TestSubDeviceParentReconcileRealTimeline:
             assert updated == [(self.ROW_ID, None)]
 
     @pytest.mark.asyncio
-    async def test_the_update_listener_is_unregistered_on_unload(self):
-        """The listener goes through entry.async_on_unload like every other
-        one, so a reload does not accumulate a second sweep per update."""
+    async def test_an_update_that_surfaces_no_new_key_does_not_sweep(self):
+        """The listener's narrowing, asserted on the registry lookup rather
+        than only on its outcome.
+
+        An update that surfaces nothing new must not reach the registry at
+        all, because the sweep's only mutation is irreversible within the
+        session: a link cleared off one degraded poll would stay cleared
+        until a reload. Counting lookups is what distinguishes "swept and
+        found nothing to do" from "did not sweep"; the cleared-row count
+        cannot tell those apart."""
         coordinator, hass, entry = self._build_coordinator()
-        _updated, async_get, async_entries = self._make_fake_device_registry(self.ROW_ID, self.SENSOR_KEY)
+        _updated, async_get, async_entries = self._make_single_row_device_registry(self.ROW_ID, self.SENSOR_KEY)
+        lookups = []
+
+        def _counting_async_get(hass_arg):
+            lookups.append(hass_arg)
+            return async_get(hass_arg)
 
         await coordinator.async_config_entry_first_refresh()
 
         with (
-            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_get", side_effect=_counting_async_get),
             patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
         ):
             _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
+            assert len(lookups) == 1
 
-        assert len(coordinator._listeners) == 1
-        remove = entry.async_on_unload.call_args[0][0]
-        remove()
-        assert coordinator._listeners == []
+            # Poll 2: still below the debounce, so no key surfaced.
+            await coordinator.async_refresh()
+            assert len(lookups) == 1
+
+            # Poll 3: the silent key appears, which is the one case the
+            # listener exists for.
+            await coordinator.async_refresh()
+            assert len(lookups) == 2
+
+            # Poll 4: same keys as poll 3, so no sweep.
+            await coordinator.async_refresh()
+            assert len(lookups) == 2
+
+    @pytest.mark.asyncio
+    async def test_the_update_listener_stops_sweeping_once_unregistered(self):
+        """The listener goes through entry.async_on_unload like every other
+        one, so a reload does not accumulate a second sweep per update.
+
+        Asserted through the observable contract (does a later update still
+        sweep) rather than by counting coordinator._listeners, which is a
+        conftest-stub private whose list shape diverges from real Home
+        Assistant's dict and would break on a purely additive stub
+        hardening."""
+        coordinator, hass, entry = self._build_coordinator()
+        _updated, async_get, async_entries = self._make_single_row_device_registry(self.ROW_ID, self.SENSOR_KEY)
+        lookups = []
+
+        def _counting_async_get(hass_arg):
+            lookups.append(hass_arg)
+            return async_get(hass_arg)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=_counting_async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
+            remove = entry.async_on_unload.call_args[0][0]
+
+            # Armed: a newly surfaced key sweeps.
+            coordinator.data["sensors"]["100_200_9"] = {"hub_paired": False}
+            coordinator.async_update_listeners()
+            assert len(lookups) == 2
+
+            remove()
+
+            # Disarmed: the same trigger now does nothing at all.
+            coordinator.data["sensors"]["100_200_8"] = {"hub_paired": False}
+            coordinator.async_update_listeners()
+            assert len(lookups) == 2
 
 
 class TestReconcileSubDeviceParentsUnpatchedRegistryStub:
@@ -2092,7 +2165,16 @@ class TestReconcileSubDeviceParentsUnpatchedRegistryStub:
 
 
 class TestReconcileSubDeviceParentsCallSiteOrdering:
-    """Pins where _reconcile_sub_device_parents runs inside async_setup_entry."""
+    """Pins which reconcile entry point async_setup_entry calls, and when.
+
+    Patches _reconcile_sub_device_parents_on_updates, the wrapper, not
+    _reconcile_sub_device_parents, the bare sweep. The distinction is the
+    whole point of this test: the wrapper calls the sweep by the same module
+    global, so patching the sweep is satisfied identically whether setup
+    calls the wrapper or the sweep, and reverting the call site to the bare
+    sweep -- which is exactly the v1.12.0b3 state that failed hardware UAT as
+    a critical issue -- left the suite green at 100% branch coverage.
+    """
 
     @pytest.mark.asyncio
     async def test_reconcile_runs_once_after_first_refresh_and_before_forward_setups(self):
@@ -2125,9 +2207,40 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
         with (
             patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
             patch("custom_components.rainpoint.coordinator.RainPointCoordinator", return_value=mock_coordinator),
-            patch("custom_components.rainpoint._reconcile_sub_device_parents", side_effect=_reconcile) as mock_reconcile,
+            patch(
+                "custom_components.rainpoint._reconcile_sub_device_parents_on_updates",
+                side_effect=_reconcile,
+            ) as mock_reconcile,
         ):
             await async_setup_entry(hass, entry)
 
         assert mock_reconcile.call_count == 1
         assert order == ["first_refresh", "reconcile", "forward_setups"]
+
+    @pytest.mark.asyncio
+    async def test_setup_arms_the_update_listener_through_async_on_unload(self):
+        """The half GAP-1 turned on: setup must leave the reconcile armed for
+        later updates, not merely run it once. Asserted against the real
+        _reconcile_sub_device_parents_on_updates (unpatched) so the listener
+        registration is the production one, with only the sweep it calls
+        stubbed out."""
+        hass = _make_hass()
+        entry = _make_entry()
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {"sensors": {}}
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch("custom_components.rainpoint.coordinator.RainPointCoordinator", return_value=mock_coordinator),
+            patch("custom_components.rainpoint._reconcile_sub_device_parents"),
+        ):
+            await async_setup_entry(hass, entry)
+
+        assert mock_coordinator.async_add_listener.call_count == 1
+        entry.async_on_unload.assert_any_call(mock_coordinator.async_add_listener.return_value)
