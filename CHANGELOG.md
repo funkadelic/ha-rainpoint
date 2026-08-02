@@ -2,6 +2,20 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.12.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.11.0...v1.12.0) (2026-08-02)
+
+
+### Added
+
+* parent a sub-device to the record that carries it ([#138](https://github.com/funkadelic/ha-rainpoint/issues/138)) ([d3d7a93](https://github.com/funkadelic/ha-rainpoint/commit/d3d7a936fe76db8db77dc58d881affa6bf132048))
+* surface hub cloud connectivity and gate valve availability on it ([3b50777](https://github.com/funkadelic/ha-rainpoint/commit/3b5077745206453bff08c1d9a29c59ee22d8f497))
+* surface hub connectivity at push latency instead of poll latency ([af54c9c](https://github.com/funkadelic/ha-rainpoint/commit/af54c9cc4c1ea8c8014938c3a19dfae16b50877d))
+
+
+### Other Changes
+
+* retire internal tracker ids, em-dashes, and vendor wording ([#137](https://github.com/funkadelic/ha-rainpoint/issues/137)) ([e87a43a](https://github.com/funkadelic/ha-rainpoint/commit/e87a43a81f389559f1f3dbc32aa1b696f29918bf))
+
 ## [1.11.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.10.1...v1.11.0) (2026-07-31)
 
 
