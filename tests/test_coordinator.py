@@ -104,6 +104,8 @@ def _make_coord(hids=None):
         _silent_issues=MagicMock(),
         _hub_disconnect_poll_counts={},
         _hub_connectivity_issues=MagicMock(),
+        _last_poll_hub_keys=set(),
+        _hub_absent_poll_counts={},
         data={},
         hass=mock_hass,
         logger=MagicMock(),
@@ -2012,6 +2014,89 @@ class TestSilentIssueSurvivesHubOutage:
             assert delete.call_count == 1
             _hass, _domain, issue_id = delete.call_args.args
             assert issue_id == self.ISSUE_ID
+
+
+class TestSilentIssueSurvivesPartialHubShrink:
+    """A hub missing from a non-empty device list is an outage for that hub
+    only: its still-silent children keep their debounce counter and their
+    not-reporting card through the gap instead of being cleared and
+    re-raised roughly three polls later. This is the churn observed on real
+    hardware (an HTV210B moving mid between two polls), and the case the
+    total-empty-list guard in TestSilentIssueSurvivesHubOutage does not
+    cover, since that guard only fires when every hub disappears at once.
+    """
+
+    @staticmethod
+    def _hub(hid=100, mid=200, addrs=(1,)):
+        """A hub record listing the given addrs as children."""
+        return {
+            "hid": hid,
+            "mid": mid,
+            "name": f"Hub{mid}",
+            "deviceName": f"dev{mid}",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [{"addr": addr, "model": "HTV210B", "name": f"Sub{addr}", "softVer": "1.0"} for addr in addrs],
+        }
+
+    @staticmethod
+    def _arrived_empty(mid):
+        """A status response that arrived and named nobody, for one hub."""
+        return {"mid": mid, "subDeviceStatus": []}
+
+    def _build(self, hubs):
+        """Return (coord, client) with a real issue manager and the given hubs present."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = hubs
+        client.get_multiple_device_status.return_value = [self._arrived_empty(hub["mid"]) for hub in hubs]
+        coord._silent_issues = RainPointSilentDeviceIssues(MagicMock())
+        return coord, client
+
+    @pytest.mark.asyncio
+    async def test_a_shrunken_device_list_is_an_outage_for_the_missing_hub(self):
+        """The mandatory regression test the Phase 15 deep review specified:
+        one poll with a shrunken (not empty) device list mid-sequence must
+        not clear a still-silent child's card.
+
+        References only symbols that already exist before this task's
+        source change (create.call_count, delete.call_count,
+        coord._silent_issues._active, coord._silent_poll_counts), so it
+        fails with a real assertion error against the pre-change source
+        rather than an AttributeError.
+        """
+        hub_a = self._hub(hid=100, mid=200, addrs=(1,))
+        hub_b = self._hub(hid=100, mid=300, addrs=())
+        coord, client = self._build([hub_a, hub_b])
+        issue_id = silent_device_issue_id(100, 200, 1)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            for _ in range(3):
+                await _run(coord)
+            assert create.call_count == 1
+
+            # Poll 4: hub A (mid 200) is missing; hub B (mid 300) is still
+            # present. The list is not empty.
+            client.get_devices_by_hid.return_value = [hub_b]
+            client.get_multiple_device_status.return_value = [self._arrived_empty(300)]
+            await _run(coord)
+
+            assert delete.call_count == 0
+            assert issue_id in coord._silent_issues._active
+            assert coord._silent_poll_counts
+
+            # Poll 5: hub A returns with the same child.
+            client.get_devices_by_hid.return_value = [hub_a, hub_b]
+            client.get_multiple_device_status.return_value = [
+                self._arrived_empty(200),
+                self._arrived_empty(300),
+            ]
+            await _run(coord)
+
+            assert create.call_count == 1
+            assert delete.call_count == 0
 
 
 class TestHubConnectivitySurvivesDeviceListOutage:

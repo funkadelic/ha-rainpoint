@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
@@ -113,6 +114,14 @@ SILENT_DEBOUNCE_POLLS = 3
 # without being too late to be a useful discovery surface for a hub that has
 # genuinely fallen off the RainPoint cloud.
 HUB_DISCONNECT_DEBOUNCE_POLLS = SILENT_DEBOUNCE_POLLS
+
+# Derived for the same reason HUB_DISCONNECT_DEBOUNCE_POLLS is: one debounce
+# concept, one place to retune. Reads differently at its use site, though: it
+# counts how many consecutive absences from the device list stay provisional,
+# so the comparison there is "<=" (absences one through this value suppress,
+# the next one releases), where HUB_DISCONNECT_DEBOUNCE_POLLS's comparison is
+# "<" (a raise fires once the count reaches the threshold).
+HUB_ABSENT_DEBOUNCE_POLLS = SILENT_DEBOUNCE_POLLS
 
 # Hub-level cloud connectivity tri-state. Absent is never coerced to
 # disconnected: HUB_CONNECTIVITY_UNKNOWN covers three distinct causes -- older
@@ -336,6 +345,28 @@ def _resolve_addr_from_sid(sid: str) -> int | None:
 def _sensor_key(hid, mid: int, addr: int) -> str:
     """Return the canonical sensor key, the single definition every caller shares."""
     return f"{hid}_{mid}_{addr}"
+
+
+def _sensor_keys_for_hub_keys(sensor_keys: Iterable[str], hub_keys: set[tuple[Any, int]]) -> set[str]:
+    """Return the subset of sensor_keys whose (hid, mid) half is in hub_keys.
+
+    A hub absent from the device list carries no subDevices to walk, so its
+    children can only be reached through the counters already being tracked
+    for them, and a child with no counter has nothing to protect because it
+    was never silent.
+
+    Each key's hub half is derived with rsplit on the last underscore (the
+    addr), then compared against the same f"{hid}_{mid}" text _sensor_key
+    builds, so an underscore inside a hid cannot produce a wrong match and a
+    neighbouring hid/mid pair cannot match by string prefix.
+    """
+    hub_prefixes = {f"{hid}_{mid}" for hid, mid in hub_keys}
+    protected: set[str] = set()
+    for key in sensor_keys:
+        hub_half, _sep, _addr = key.rpartition("_")
+        if hub_half in hub_prefixes:
+            protected.add(key)
+    return protected
 
 
 def is_hub_record(hub: dict) -> bool:
@@ -716,6 +747,20 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._silent_issues = RainPointSilentDeviceIssues(hass)
         self._hub_disconnect_poll_counts: dict[tuple[Any, int], int] = {}
         self._hub_connectivity_issues = RainPointHubConnectivityIssues(hass)
+        # Cross-poll hub-enumeration memory (D-09, D-12): the (hid, mid) of
+        # every real hub the last trusted poll listed, plus any hub still
+        # within its provisional absence window, and how many consecutive
+        # polls each missing hub has been absent for. This is a different
+        # concept from _silent_poll_counts (per-child silence): it decides
+        # whether a poll's device list can be trusted at all, not whether a
+        # given addr is still reporting. Deliberately not the structure
+        # Backlog ORPH-01 will need, which resolves entity-registry rows
+        # against coordinator.data["sensors"]. Living outside self.data
+        # accepts less of Backlog PUSHOBS-03's instance-attribute-versus-
+        # self.data skew than _hub_disconnect_poll_counts does, because only
+        # the poll (never a push) ever writes this state.
+        self._last_poll_hub_keys: set[tuple[Any, int]] = set()
+        self._hub_absent_poll_counts: dict[tuple[Any, int], int] = {}
 
     def record_valve_command(self, sensor_key: str, zone_num: int) -> datetime:
         """Remember the latest successful valve command time for stale-poll protection."""
@@ -1028,8 +1073,18 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # guard covers both the not-reporting and the hub-connectivity
             # state, since an empty device list is the same outage for both.
             if hubs or not (self._silent_poll_counts or self._hub_disconnect_poll_counts):
-                RainPointCoordinator._prune_silent_state(self, hubs)
-                RainPointCoordinator._sync_silent_device_issues(self, decoded_sensors, absent_hubs)
+                # Must run first, inside this guard: placing it here rather
+                # than before the guard is load-bearing for the empty-list
+                # case above. When that door fires instead, the enumeration
+                # memory below is frozen entirely -- no counter advances and
+                # _last_poll_hub_keys is unchanged -- so a partial list
+                # arriving after a total outage still computes the correct
+                # missing set against the pre-outage memory.
+                missing_hub_keys = RainPointCoordinator._track_missing_hubs(self, hubs)
+                RainPointCoordinator._prune_silent_state(self, hubs, missing_hub_keys=missing_hub_keys)
+                RainPointCoordinator._sync_silent_device_issues(
+                    self, decoded_sensors, absent_hubs, missing_hub_keys=missing_hub_keys
+                )
                 RainPointCoordinator._prune_hub_connectivity_state(self, hubs)
                 RainPointCoordinator._sync_hub_connectivity_issues(self, hubs, hub_connectivity)
             else:
@@ -1408,16 +1463,96 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # already tolerates a missing "value"/"time" pair.
         return _build_sensor_entry(hub, sub, mid, addr, {}, decoded)
 
-    def _prune_silent_state(self, hubs: list[dict]) -> None:
+    def _track_missing_hubs(self, hubs: list[dict]) -> set[tuple[Any, int]]:
+        """Compare this poll's real hubs against the last trusted poll's, and
+        return the (hid, mid) of every hub still within its provisional
+        absence window.
+
+        A hub reappearing at all resets its absence counter regardless of
+        what its subDevices lists (D-03): the hid/mid key alone is what
+        "back" means here, not any judgement about its children. A hub
+        missing for HUB_ABSENT_DEBOUNCE_POLLS or fewer consecutive polls is
+        provisional and keeps its counter and its remembered key; once a
+        missing hub's consecutive-absence count exceeds that threshold it is
+        released, dropping both the counter and the key, so the shrunken
+        list becomes authoritative for it again and the memory this method
+        owns cannot grow without bound (D-01, SC6).
+
+        A restart mid-gap clears every card this method is protecting: the
+        Repairs issue itself survives in Home Assistant's registry, but
+        _last_poll_hub_keys and _hub_absent_poll_counts do not, so the first
+        poll after a restart has no prior list, sees nothing missing, and
+        clears normally. This is pre-existing on every poll-counted surface
+        in this file -- the silent counter, the disconnect counter, and the
+        empty-list guard all reset the same way on a fresh instance, and
+        _sync_hub_connectivity_issues' own docstring already reasons about
+        it -- so this phase introduces no new instance of it (D-08). Fixing
+        it means seeding this state from the issue registry at setup, which
+        lands better alongside Backlog PUSHOBS-04's time-based debounce,
+        where a cloud timestamp survives a restart for free.
+
+        This map answers a different question from Backlog ORPH-01's: it
+        remembers hub enumeration to decide whether a poll is trustworthy,
+        while ORPH-01 needs to find entity-registry rows whose sensor key
+        has vanished from coordinator.data["sensors"]. The two are
+        deliberately not merged (D-11).
+        """
+        current_keys = {(hub["hid"], hub["mid"]) for hub in hubs if is_hub_record(hub)}
+        missing_keys = self._last_poll_hub_keys - current_keys
+
+        # A hub reappearing at all resets its counter, regardless of what its
+        # subDevices lists (D-03).
+        for key in current_keys:
+            self._hub_absent_poll_counts.pop(key, None)
+
+        provisional_keys: set[tuple[Any, int]] = set()
+        for key in missing_keys:
+            count = self._hub_absent_poll_counts.get(key, 0) + 1
+            # "<=" here, not "<": HUB_ABSENT_DEBOUNCE_POLLS counts how many
+            # consecutive absences stay provisional, so absences one through
+            # the threshold suppress and the next one releases. This is the
+            # single most likely thing a later reader will "fix" incorrectly
+            # by copying HUB_DISCONNECT_DEBOUNCE_POLLS's "<" comparison.
+            if count <= HUB_ABSENT_DEBOUNCE_POLLS:
+                self._hub_absent_poll_counts[key] = count
+                provisional_keys.add(key)
+            else:
+                self._hub_absent_poll_counts.pop(key, None)
+
+        self._last_poll_hub_keys = current_keys | provisional_keys
+        return provisional_keys
+
+    def _prune_silent_state(self, hubs: list[dict], *, missing_hub_keys: frozenset[tuple[Any, int]] = frozenset()) -> None:
         """Drop any debounce counter for an addr no hub currently lists.
 
         Runs every poll so a device that leaves subDevices (unpaired, removed)
         cannot accumulate a counter forever.
+
+        missing_hub_keys carries the hub keys currently within their
+        provisional absence window (the enumeration door, D-10): a child of
+        one of those hubs keeps its counter too, since the hub not appearing
+        in this poll's device list says nothing about whether that
+        particular child is still silent -- a missing hub is an outage, not
+        evidence about any addr, so it can neither confirm nor deny that a
+        child is silent (D-05). The increment half of that freeze holds for
+        free: the only site that advances _silent_poll_counts is
+        _build_silent_subdevice, reached from _decode_hub_subdevices, which a
+        missing hub never enters. This function is the reset half, which is
+        what the protected set below closes.
         """
         live_keys = {_sensor_key(hub["hid"], hub["mid"], sd["addr"]) for hub in hubs for sd in hub.get("subDevices", [])}
-        self._silent_poll_counts = {key: count for key, count in self._silent_poll_counts.items() if key in live_keys}
+        protected_keys = _sensor_keys_for_hub_keys(self._silent_poll_counts, missing_hub_keys)
+        self._silent_poll_counts = {
+            key: count for key, count in self._silent_poll_counts.items() if key in live_keys or key in protected_keys
+        }
 
-    def _sync_silent_device_issues(self, decoded_sensors: dict[str, dict], absent_hubs: list[dict]) -> None:
+    def _sync_silent_device_issues(
+        self,
+        decoded_sensors: dict[str, dict],
+        absent_hubs: list[dict],
+        *,
+        missing_hub_keys: frozenset[tuple[Any, int]] = frozenset(),
+    ) -> None:
         """Reconcile the per-device not-reporting repair issue against this poll's sensors.
 
         Translates this poll's sensor entries into plain SilentDeviceRecord
@@ -1434,10 +1569,29 @@ class RainPointCoordinator(DataUpdateCoordinator):
         on the next successful poll. The asymmetry only ever suppresses
         clearing, never raising: a hub that cannot be reached also produces no
         silent entries, so there is nothing to raise from in the first place.
+
+        missing_hub_keys carries the enumeration door alongside the
+        status-fetch door above (D-10): the still-silent children of a hub
+        currently within its provisional absence window. Suppression here is
+        scoped per hub, never global (D-04) -- in a poll where hub A is
+        missing and hub B reported normally, only A's children enter the
+        set, because missing_hub_keys names only A, and B's cards raise and
+        clear on schedule. The asymmetry stated above holds trivially on
+        this door too: a missing hub decodes no sensors, so there is nothing
+        to raise from here either.
         """
         unreachable_ids = {
             silent_device_issue_id(hub["hid"], hub["mid"], sd["addr"]) for hub in absent_hubs for sd in hub.get("subDevices", [])
         }
+        protected_keys = _sensor_keys_for_hub_keys(self._silent_poll_counts, missing_hub_keys)
+        for protected_key in protected_keys:
+            # Exact rather than a reconstruction: the issue id is the sensor
+            # key with the prefix prepended, so recovering the three typed
+            # parts and calling silent_device_issue_id keeps this in lockstep
+            # with the id repairs.py itself builds. Splitting from the right
+            # keeps a hid containing an underscore intact.
+            hid_part, mid_part, addr_part = protected_key.rsplit("_", 2)
+            unreachable_ids.add(silent_device_issue_id(hid_part, int(mid_part), int(addr_part)))
         records = [
             SilentDeviceRecord(
                 hid=entry["hid"],
