@@ -1213,7 +1213,8 @@ class TestOrderingProperties:
 
         assert await async_migrate_entry(hass, entry) is True
 
-        assert "device" in order and "entity" in order
+        assert "device" in order
+        assert "entity" in order
         assert order.index("device") < order.index("entity")
 
     @pytest.mark.asyncio
