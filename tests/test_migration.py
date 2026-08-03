@@ -844,7 +844,7 @@ class TestResidualSweepRetryCadence:
 
     @pytest.mark.asyncio
     async def test_the_first_decline_for_a_hid_is_loud_and_later_ones_are_quiet(self, hass, device_registry, caplog):
-        """WR-01: a persistently unresolvable mid warns once, then goes quiet.
+        """A persistently unresolvable mid warns once, then goes quiet.
 
         Before this fix, every pass after the version-boundary migration logged
         this decline at DEBUG only, so a hub stuck on the non-numeric/negative-mid
@@ -1153,6 +1153,54 @@ class TestResidualSweepAgainstARealCoordinator:
         migrated = device_registry.async_get(hub.id)
         assert migrated.identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
         assert migrated.id == hub.id
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_hubs_value_is_zero_candidates_not_an_unreadable_pass(self, hass, device_registry):
+        """A hubs value that is not a list is a successful read of nothing.
+
+        The distinction matters because None re-arms the sweep unconditionally
+        on every poll and every pushed frame. A malformed value is not a failed
+        observation, it is an observation that yielded no candidate mids, so it
+        must fall through to the ordinary residual path like an empty list does.
+        """
+        import custom_components.rainpoint as rp
+
+        entry = _make_entry(hass)
+        hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        coordinator = await _real_coordinator(hass, entry, _make_client([_poll_record()]))
+
+        coordinator.data = {"hubs": "not a list"}
+        assert rp._read_current_hubs(coordinator) == []
+        # Residual, not None: the pass looked and found no candidate.
+        assert rp._complete_hub_identity_rekey(hass, entry, coordinator) == frozenset({str(HID)})
+        assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}")}
+
+    @pytest.mark.asyncio
+    async def test_a_non_dict_hub_record_is_dropped_rather_than_raising(self, hass, device_registry):
+        """Records come from cloud JSON that nothing validates on the way in.
+
+        Every consumer reaches straight for hub.get(...), so a record that is
+        not a dict would raise AttributeError inside the caller rather than
+        inside the guard, escaping a sweep that documents that it never raises
+        and aborting config entry setup.
+        """
+        import custom_components.rainpoint as rp
+
+        entry = _make_entry(hass)
+        hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        coordinator = await _real_coordinator(hass, entry, _make_client([_poll_record()]))
+
+        # The real record the coordinator built, hid injected, not a raw fixture.
+        good = coordinator.data["hubs"][0]
+        coordinator.data = {"hubs": ["a bare string", None, 42, good]}
+        assert rp._read_current_hubs(coordinator) == [good]
+        # The one well-formed record still drives the re-key to completion.
+        assert rp._complete_hub_identity_rekey(hass, entry, coordinator) == frozenset()
+        assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
 
     @pytest.mark.asyncio
     async def test_a_cleanly_migrated_install_writes_nothing_at_all(self, hass, entity_registry, device_registry, monkeypatch):

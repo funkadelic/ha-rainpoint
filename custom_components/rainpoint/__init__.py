@@ -250,9 +250,22 @@ def _read_current_hubs(coordinator) -> list | None:
 
     A None coordinator raises into the same handler and gets the same verdict,
     so no separate None test is needed here.
+
+    The shape is normalized here rather than at each consumer. Every caller
+    reaches straight for hub.get(...), and is_hub_record is typed for a dict, so
+    a record that is not one raises AttributeError inside the caller rather than
+    inside this guard. That escapes the residual re-key, which documents that it
+    never raises, and aborts config entry setup. The records come from cloud
+    JSON that nothing validates on the way in, so their type is assumed rather
+    than known. select.py already refuses a non-list hubs value for the same
+    reason.
     """
     try:
-        return (coordinator.data or {}).get("hubs", []) or []
+        hubs = (coordinator.data or {}).get("hubs", []) or []
+        if not isinstance(hubs, list):
+            _LOGGER.debug("Coordinator hub records are not a list; treating this pass as zero candidates")
+            return []
+        return [hub for hub in hubs if isinstance(hub, dict)]
     except Exception as exc:
         _LOGGER.debug("Coordinator hub records unreadable; treating this pass as unable to look: %s", exc)
         return None
