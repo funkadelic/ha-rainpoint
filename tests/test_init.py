@@ -2281,7 +2281,13 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
         first refresh. Asserted against the real
         _reconcile_sub_device_parents_on_updates (unpatched) so the listener
         registration is the production one, with only the sweep it calls
-        stubbed out."""
+        stubbed out.
+
+        The hub identity re-key's wrapper also runs here, unpatched, with only
+        its sweep stubbed to the cleanly-migrated verdict. That is what an
+        install with no residual returns, and such an install must arm no
+        listener at all, so the single registration counted below is the
+        reconcile's."""
         hass = _make_hass()
         entry = _make_entry()
 
@@ -2297,6 +2303,7 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
             patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
             patch("custom_components.rainpoint.coordinator.RainPointCoordinator", return_value=mock_coordinator),
             patch("custom_components.rainpoint._reconcile_sub_device_parents"),
+            patch("custom_components.rainpoint._complete_hub_identity_rekey", return_value=frozenset()),
         ):
             await async_setup_entry(hass, entry)
 

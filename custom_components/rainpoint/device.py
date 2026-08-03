@@ -5,7 +5,7 @@ from __future__ import annotations
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 
-from .const import DOMAIN
+from .const import DOMAIN, HUB_IDENTIFIER_PREFIX, HUB_UNIQUE_ID_PREFIX
 
 
 def build_sub_device_info(sensor_info: dict, *, name_fallback: str) -> DeviceInfo:
@@ -60,7 +60,11 @@ def build_sub_device_info(sensor_info: dict, *, name_fallback: str) -> DeviceInf
     addr = sensor_info["addr"]
     optional: dict = {}
     if sensor_info.get("hub_paired", True):
-        optional["via_device"] = (DOMAIN, f"hub_{hid}")
+        # The mid here is the carrying top-level record's, which is exactly the
+        # hub's, because the sensor key is {hid}_{mid}_{addr}. Both sides of
+        # this link read mid through a direct index, so neither can degrade to
+        # a spelling the other does not produce.
+        optional["via_device"] = (DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{hid}_{mid}")
     return DeviceInfo(
         identifiers={(DOMAIN, f"{hid}_{mid}_{addr}")},
         name=sensor_info.get("sub_name") or name_fallback,
@@ -84,9 +88,21 @@ class RainPointHubDevice(Entity):
         hub_info is the raw top-level device record the coordinator collected,
         with hid and brand injected. Held by reference so a later poll's field
         changes are picked up without rebuilding the entity.
+
+        Hub identity is the pair of the home id and the carrying record's mid,
+        not the home id alone: a home can hold more than one hub, and every
+        hub-level entity in a home would otherwise contend for one id, which
+        Home Assistant resolves by dropping the loser's entities silently.
+
+        mid is direct-indexed rather than defaulted, and that is deliberate.
+        The sub-device via_device tuple direct-indexes the same value, so a
+        placeholder on this side alone would emit a parent identifier no device
+        row carries and orphan every sub-device. A hub record with no mid
+        raises here instead, which no live poll can reach: the coordinator
+        direct-indexes the same field twice while shaping its data.
         """
         self._hub_info = hub_info
-        self._attr_unique_id = f"{DOMAIN}_hub_{hub_info['hid']}"
+        self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info['hid']}_{hub_info['mid']}"
         self._attr_name = hub_info.get("name") or "RainPoint Hub"
         self._attr_should_poll = False
 
@@ -94,7 +110,7 @@ class RainPointHubDevice(Entity):
     def device_info(self) -> DeviceInfo:
         """Return device registry information for this hub."""
         return DeviceInfo(
-            identifiers={(DOMAIN, f"hub_{self._hub_info['hid']}")},
+            identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{self._hub_info['hid']}_{self._hub_info['mid']}")},
             name=self._hub_info.get("name") or "RainPoint Hub",
             manufacturer="RainPoint",  # RainPoint is the actual device manufacturer
             model=self._hub_info.get("model") or "Unknown",

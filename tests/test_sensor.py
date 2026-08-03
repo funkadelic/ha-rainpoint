@@ -783,7 +783,7 @@ class TestSensorBaseProperties:
         """Device info via device."""
         sensor = self._make_base()
         via = sensor.device_info["via_device"]
-        assert via == (DOMAIN, "hub_100")
+        assert via == (DOMAIN, "hub_100_200")
 
     def test_extra_state_attributes_rssi(self):
         """Extra state attributes rssi."""

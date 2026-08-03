@@ -92,7 +92,7 @@ class TestRainPointRSSISensor:
         """Diagnostic entities resolve to the same device card as the sensors."""
         info = self._make().device_info
         assert info["serial_number"] == "200_1"
-        assert info["via_device"] == (DOMAIN, "hub_100")
+        assert info["via_device"] == (DOMAIN, "hub_100_200")
 
 
 class TestRainPointBatterySensor:

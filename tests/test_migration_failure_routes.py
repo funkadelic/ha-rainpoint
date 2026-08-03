@@ -193,22 +193,29 @@ class TestNonNumericMidRoute:
         assert int("-5") == -5
         assert min(["-5", "9", "10"], key=int) == "-5"
 
-    def test_hub_identifier_is_currently_keyed_on_the_home_id_alone(self, hass):
+    def test_hub_identifier_carries_a_non_numeric_mid_verbatim(self, hass):
         """Claim: device.py writes the mid into the identifier verbatim, unfiltered.
 
-        ANSWER: confirmed in shape, and pinned against the CURRENT spelling. Today
-        device.py emits hub_{hid} and ignores the mid entirely, which is what this
-        asserts. Once the re-key lands it direct-indexes hub_info['mid'], a bad mid
-        lands in the identifier verbatim, and this assertion must be re-read and
-        updated deliberately rather than patched to green.
+        ANSWER: confirmed, and now measured against the re-keyed spelling rather
+        than predicted. This assertion previously pinned the hid-only identifier
+        and said in its own text that the re-key would turn it into hub_100_-5 and
+        that it must then be re-read rather than patched to green. It was, and it
+        does.
+
+        This is the steady route in one line. device.py direct-indexes the mid and
+        emits it whatever it is, while the migration and the residual sweep both
+        drop the same value through their isdigit filter on every pass. So the
+        device row stays old-shape permanently while every platform forward writes
+        the new-shape identifier, which is how one hub ends up with two device
+        rows and no registry read ever failed.
         """
         from custom_components.rainpoint.device import RainPointHubDevice
 
         dev = RainPointHubDevice(_hub_record(mid=-5))
         idents = dev.device_info["identifiers"]
-        assert idents == {(DOMAIN, f"hub_{HID}")}, (
-            "device.py still emits the hid-only identifier; once the re-key lands this "
-            "becomes hub_100_-5 and this assertion must be updated deliberately"
+        assert idents == {(DOMAIN, f"hub_{HID}_-5")}, (
+            "device.py emits the mid verbatim, so a value the isdigit filter drops still "
+            "reaches the identifier the platforms write"
         )
 
 
