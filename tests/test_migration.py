@@ -842,6 +842,45 @@ class TestResidualSweepRetryCadence:
 
         assert fetches == [], "a settled install must not sweep again on a later mapping change"
 
+    @pytest.mark.asyncio
+    async def test_the_first_decline_for_a_hid_is_loud_and_later_ones_are_quiet(self, hass, device_registry, caplog):
+        """WR-01: a persistently unresolvable mid warns once, then goes quiet.
+
+        Before this fix, every pass after the version-boundary migration logged
+        this decline at DEBUG only, so a hub stuck on the non-numeric/negative-mid
+        steady route (device.py writes the mid verbatim; this sweep's isdigit
+        filter drops it on every pass) had no durable signal past the single
+        WARNING async_migrate_entry logs once at the version boundary. Now the
+        first residual-sweep decline for a given hid is WARNING, and a later
+        decline for that same hid, on the same entry, drops back to DEBUG so a
+        hub that never resolves does not warn on every poll forever.
+        """
+        import logging
+
+        import custom_components.rainpoint as rp
+
+        entry = _make_entry(hass)
+        device_registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub")
+
+        caplog.set_level(logging.DEBUG, logger="custom_components.rainpoint")
+        coordinator = _coordinator([_hub_record(mid=-5)])
+        rp._complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
+        listener = self._armed_listener(coordinator)
+
+        first_pass_warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "No mid available" in r.message]
+        assert len(first_pass_warnings) == 1, "the first decline for this hid must be loud"
+
+        caplog.clear()
+        # A second, unrelated real hub changes the mapping so the gate reopens,
+        # while hid 100's mid stays -5 (still isdigit-false) and declines again.
+        coordinator.data = {"hubs": [_hub_record(mid=-5), _hub_record(hid=HID + 1, mid=300)]}
+        listener()
+
+        second_pass_warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "No mid available" in r.message]
+        second_pass_debugs = [r for r in caplog.records if r.levelno == logging.DEBUG and "No mid available" in r.message]
+        assert second_pass_warnings == [], "a repeat decline for the same hid must not warn a second time"
+        assert len(second_pass_debugs) == 1
+
 
 # ---------------------------------------------------------------------------
 # Real-coordinator scaffolding

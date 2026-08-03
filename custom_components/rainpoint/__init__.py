@@ -736,7 +736,12 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-def _complete_hub_identity_rekey(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> frozenset[str] | None:
+def _complete_hub_identity_rekey(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator,
+    warned_hids: set[str] | None = None,
+) -> frozenset[str] | None:
     """Finish the hub identity re-key for any hub the migration could not resolve.
 
     This is the residual half of the version-boundary migration, not a
@@ -745,6 +750,15 @@ def _complete_hub_identity_rekey(hass: HomeAssistant, entry: ConfigEntry, coordi
     exists because ConfigEntry.async_migrate returns early once the version
     matches, so a hub left unresolved there would keep its old ids permanently,
     behind one warning line nobody reads.
+
+    warned_hids tracks, per config entry, which hids have already had their
+    decline logged at WARNING. The caller (_complete_hub_identity_rekey_on_updates)
+    owns this set as closure-local state and passes it in on every call, so the
+    first decline for a given hid is loud and every later one -- of which there
+    can be one per coordinator update, forever, until a poll supplies a mid --
+    stays at DEBUG. A caller that passes None (e.g. a direct test call) gets a
+    WARNING on every decline instead of silent DEBUG; there is no closure to
+    dedupe against.
 
     The first pass must stay ahead of the platform forward. Placed after it, the
     platforms would already have created a second hub device row under the new
@@ -806,7 +820,15 @@ def _complete_hub_identity_rekey(hass: HomeAssistant, entry: ConfigEntry, coordi
         candidates = [str(hub.get("mid")) for hub in real_hubs if str(hub.get("hid")) == hid and str(hub.get("mid")).isdigit()]
         mid = _resolve_hub_mid(row, hid, entity_rows, device_rows) or (min(candidates, key=int) if candidates else None)
         if mid is None:
-            _LOGGER.debug("No mid available for hub %s this pass; leaving it for a later poll", hid)
+            if warned_hids is None or hid not in warned_hids:
+                if warned_hids is not None:
+                    warned_hids.add(hid)
+                _LOGGER.warning(
+                    "No mid available yet for hub %s; its identity re-key is deferred until a later poll supplies one",
+                    hid,
+                )
+            else:
+                _LOGGER.debug("No mid available for hub %s this pass; leaving it for a later poll", hid)
             continue
         if _move_hub_device_row(device_registry, row, hid, mid):
             _migrate_hub_entity_unique_ids(entity_registry, entity_rows, hid, mid)
@@ -869,9 +891,14 @@ def _complete_hub_identity_rekey_on_updates(hass: HomeAssistant, entry: ConfigEn
     All per-setup state is closure-local. This integration permits more than one
     config entry, and a module-level latch would let one entry's clean pass
     permanently silence another's residual sweep, invisibly on every
-    single-account install.
+    single-account install. warned_hids joins pending and last_hub_mids as a
+    third piece of that closure-local state: it is what turns the very first
+    decline for a given hid, on this entry, into a WARNING instead of a DEBUG
+    line silent from its first run, without making every later update log one
+    too.
     """
-    pending = _complete_hub_identity_rekey(hass, entry, coordinator)
+    warned_hids: set[str] = set()
+    pending = _complete_hub_identity_rekey(hass, entry, coordinator, warned_hids)
     # Seeded from the same snapshot the pass above acted on, so the first update
     # cannot re-present an unchanged mapping as changed.
     last_hub_mids = frozenset(
@@ -890,7 +917,7 @@ def _complete_hub_identity_rekey_on_updates(hass: HomeAssistant, entry: ConfigEn
         # `pending is None` means the previous pass could not look, so no change
         # to the hub list would signal that a retry is worthwhile.
         if pending is None or current_hub_mids != last_hub_mids:
-            pending = _complete_hub_identity_rekey(hass, entry, coordinator)
+            pending = _complete_hub_identity_rekey(hass, entry, coordinator, warned_hids)
         # Assigned on every update, not only on the ones that swept, so a hub
         # that vanishes and returns counts as changed again.
         last_hub_mids = current_hub_mids
