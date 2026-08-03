@@ -148,7 +148,7 @@ async def _build_hub_entities(hass, entry, *, with_push=False):
 
 def _hub_suffix(unique_id, hid, mid):
     """Strip the hub prefix and both identity segments, leaving the suffix."""
-    prefix = f"{DOMAIN}_hub_{hid}_{mid}_"
+    prefix = f"{HUB_UNIQUE_ID_PREFIX}{hid}_{mid}_"
     assert unique_id.startswith(prefix), f"{unique_id} is not keyed on {hid} and {mid}"
     return unique_id[len(prefix) :]
 
