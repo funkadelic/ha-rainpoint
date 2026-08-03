@@ -14,10 +14,11 @@ from tests.helpers import VALVE_ZONES_TLV_PAYLOAD
 class TestRainPointHubDevice:
     """Tests for RainPointHubDevice."""
 
-    def _make_hub(self, hid=100, name="My Hub", model="HTV0540FRF"):
+    def _make_hub(self, hid=100, name="My Hub", model="HTV0540FRF", mid=1001):
         """Create a RainPointHubDevice with a mock coordinator via __new__."""
         hub_info = {
             "hid": hid,
+            "mid": mid,
             "name": name,
             "model": model,
             "softVer": "2.0",
@@ -34,7 +35,7 @@ class TestRainPointHubDevice:
         """device_info should contain the expected identifier tuple."""
         hub = self._make_hub(hid=100)
         info = hub.device_info
-        assert (DOMAIN, "hub_100") in info["identifiers"]
+        assert (DOMAIN, "hub_100_1001") in info["identifiers"]
 
     def test_hub_device_info_name(self):
         """device_info name should match hub_info name."""
@@ -57,9 +58,9 @@ class TestRainPointHubDevice:
         assert hub.available is True
 
     def test_hub_unique_id_format(self):
-        """unique_id should be domain_hub_{hid}."""
-        hub = self._make_hub(hid=42)
-        assert hub._attr_unique_id == f"{DOMAIN}_hub_42"
+        """unique_id should be domain_hub_{hid}_{mid}."""
+        hub = self._make_hub(hid=42, mid=77)
+        assert hub._attr_unique_id == f"{DOMAIN}_hub_42_77"
 
     def test_hub_name_attribute(self):
         """_attr_name should match the hub name."""
@@ -116,7 +117,7 @@ class TestBuildSubDeviceInfo:
     def test_links_to_the_parent_hub_when_hub_paired(self):
         """A sub-device carried by a real hub keeps its via_device link."""
         info = build_sub_device_info(self._info(hid=100, hub_paired=True), name_fallback="Sensor 1")
-        assert info["via_device"] == (DOMAIN, "hub_100")
+        assert info["via_device"] == (DOMAIN, "hub_100_200")
 
     def test_no_via_device_when_not_hub_paired(self):
         """A sub-device carried by the Bluetooth wrapper record gets no parent.
@@ -136,7 +137,7 @@ class TestBuildSubDeviceInfo:
         info = self._info()
         del info["hub_paired"]
         result = build_sub_device_info(info, name_fallback="Sensor 1")
-        assert result["via_device"] == (DOMAIN, "hub_100")
+        assert result["via_device"] == (DOMAIN, "hub_100_200")
 
     def test_only_via_device_differs_between_the_two_polarities(self):
         """Parenting is the only thing that changes; every other field agrees."""
@@ -259,7 +260,7 @@ class TestSubDeviceParentingRealTimeline:
         DeviceInfo assembled by the test."""
         by_key = await self._build()
 
-        assert by_key["100_200_1"].device_info["via_device"] == (DOMAIN, "hub_100")
+        assert by_key["100_200_1"].device_info["via_device"] == (DOMAIN, "hub_100_200")
         assert "via_device" not in by_key["100_201_1"].device_info
 
     @pytest.mark.asyncio
@@ -273,15 +274,12 @@ class TestSubDeviceParentingRealTimeline:
         identifier shape changed. This goes red the moment a future
         change collapses the per-record question back onto the per-home key.
 
-        Debt this test deliberately does not assert on: hub *device* identity
-        and seven hub entity unique_ids remain keyed on the home id (hid),
-        not the carrying record's mid. A second real hub in one home would
-        therefore produce duplicate unique_ids, which Home Assistant rejects,
-        dropping the second hub's entities rather than merely mis-grouping
-        them. The re-key that would fix this is deliberately a separate
-        phase, because no second hub exists on maintainer hardware to verify
-        a fix against, and an assertion on hub unique_ids here would go red
-        on the very change that fixes them.
+        The debt this test used to record is closed. Hub device identity and
+        every hub entity unique_id now carry the carrying record's mid
+        alongside the home id, so a second real hub in one home no longer
+        produces duplicate unique_ids for Home Assistant to reject. The
+        sibling assertions on hub identity live in tests/test_hub_identity.py;
+        this test stays scoped to sub-device parenting.
         """
         by_key = await self._build()
 
@@ -298,3 +296,30 @@ class TestSubDeviceParentingRealTimeline:
         assert linked_hid == parentless_hid
         assert linked_addr == parentless_addr
         assert linked_mid != parentless_mid
+
+
+class TestHubAndSubDeviceReadMidTheSameWay:
+    """The two sides of the hub link must be structurally unable to disagree."""
+
+    def test_both_sides_direct_index_mid(self):
+        """A hub record with no mid raises here rather than emitting a parent
+        identifier that no device row carries.
+
+        The raise is the point, and so is its counterpart. is_hub_record tests
+        did, mac, productKey and model, and never mid, so nothing guarantees a
+        hub record carries one. If the hub side degraded to a placeholder while
+        build_sub_device_info kept its direct index, every sub-device would
+        point at a parent that does not exist and Home Assistant would orphan
+        the lot. Both sides read mid the same way instead, so the sub-device's
+        via_device value below is exactly what a hub built from the same record
+        would identify itself as.
+        """
+        hub_info = {"hid": 100, "name": "Hub", "model": "HTV0540FRF"}
+        with pytest.raises(KeyError):
+            RainPointHubDevice(hub_info)
+
+        sub_info = {"hid": 100, "mid": 200, "addr": 1, "sub_name": "Valve", "model": MODEL_VALVE_245}
+        assert build_sub_device_info(sub_info, name_fallback="Valve 1")["via_device"] == (DOMAIN, "hub_100_200")
+
+        hub = RainPointHubDevice({**hub_info, "mid": 200})
+        assert (DOMAIN, "hub_100_200") in hub.device_info["identifiers"]

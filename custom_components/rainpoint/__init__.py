@@ -20,9 +20,11 @@ from .const import (
     GENERIC_CONTROL_OVERRIDE_DISABLED,
     GENERIC_CONTROL_UNIQUE_ID_MARKER,
     GENERIC_UNIQUE_ID_MARKER,
+    PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
+    PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
     UNIQUE_ID_PREFIX,
 )
-from .coordinator import first_hub_record
+from .coordinator import first_hub_record, is_hub_record
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +42,33 @@ _RELOAD_STATUS_NOTIFS: dict[_ReloadStatus, tuple[str, str]] = {
 }
 
 PLATFORMS: list[str] = ["sensor", "binary_sensor", "select", "valve", "number", "switch"]
+
+# Hub identity is spelled {hid}_{mid} everywhere: hub entity unique ids as
+# rainpoint_hub_{hid}_{mid}_{suffix}, the hub device identifier as
+# hub_{hid}_{mid}, and the sub-device via_device tuple as the same identifier.
+_HUB_UNIQUE_ID_PREFIX = f"{DOMAIN}_hub_"
+_HUB_IDENTIFIER_PREFIX = "hub_"
+
+# A closed set, not a prefix-plus-remainder test. hid is shared by every hub in
+# a home, so a two-hub home already holds two rows matching the hub unique-id
+# prefix, and a rule of the form "migrate any remainder that does not already
+# start with this hub's mid" would rewrite the sibling hub's
+# {mid}_connectivity row into a row carrying a foreign mid segment, destroying
+# that entity's identity and orphaning its recorder history. Exact membership
+# cannot do that on any hub's pass. tests/test_hub_identity.py asserts this set
+# equals the suffixes the platforms actually build, so it cannot drift.
+_HUB_MIGRATABLE_SUFFIXES = frozenset(
+    {
+        "rssi",
+        "device_id",
+        "firmware",
+        "mac",
+        "channel",
+        "broadcast",
+        PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
+        PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
+    }
+)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -195,6 +224,33 @@ def _read_current_sensors(coordinator, consequence: str) -> dict:
         return {}
 
 
+def _read_current_hubs(coordinator) -> list | None:
+    """Return the current poll's top-level hub records, or None if unreadable.
+
+    Sibling of _read_current_sensors with one deliberate difference in the
+    return type: None means only that the read raised, and nothing else. A poll
+    that legitimately carried no hub records returns an empty list, which is a
+    successful observation of zero candidates.
+
+    That distinction is load-bearing rather than pedantic. A getDeviceByHid
+    response can omit a hub the previous poll listed, and the coordinator builds
+    its hub list purely from that response, so a real install can poll an empty
+    or hub-less list repeatedly. Collapsing that into None would make the
+    residual re-key's caller treat every such poll as "could not look" and
+    re-run a full two-registry sweep on every poll and every pushed frame,
+    indefinitely, on exactly the installs that already hold a residual. Callers
+    must test `is None`, never `not hubs`.
+
+    A None coordinator raises into the same handler and gets the same verdict,
+    so no separate None test is needed here.
+    """
+    try:
+        return (coordinator.data or {}).get("hubs", []) or []
+    except Exception as exc:
+        _LOGGER.debug("Coordinator hub records unreadable; treating this pass as unable to look: %s", exc)
+        return None
+
+
 def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Remove generic-namespace registry rows that should no longer exist.
 
@@ -312,11 +368,12 @@ def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coord
     ever writes a via_device_id other than None.
 
     Idempotent, and run on every setup plus, through that listener, on an
-    update that surfaces a new sensor key. Not gated behind a config-entry
-    version bump or an async_migrate_entry path: a version-boundary migration
-    only ever runs once, so it could not self-heal if a later cloud re-key
-    mis-parented a device again, and this sweep can, because it re-evaluates
-    every time.
+    update that surfaces a new sensor key. It re-evaluates every time rather
+    than running once at a boundary, and it has to: a later cloud re-key can
+    mis-parent a device again, so this sweep must self-heal. Hub identity is
+    the opposite case and is handled by async_migrate_entry instead, because
+    nothing upstream has any say in this integration's id scheme, so it can
+    only be wrong once.
 
     Scoped to devices present in the current poll on purpose. A registry row
     whose sensor key the current poll does not mention is left alone rather
@@ -445,6 +502,406 @@ def _reconcile_sub_device_parents_on_updates(hass: HomeAssistant, entry: ConfigE
     entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
 
+def _hub_identity(identifier: str) -> tuple[str, str | None] | None:
+    """Split a hub device identifier into (hid, mid), or None if it is not one.
+
+    Accepts both shapes on purpose. The old shape hub_{hid} yields a mid of
+    None; the migrated shape hub_{hid}_{mid} yields both. Anything else,
+    including every sub-device identifier (which carries no hub_ prefix) and a
+    hub_-prefixed value that is neither shape, returns None.
+
+    Recognising the migrated shape is what makes an interrupted run
+    recoverable. The two registries save on independent debounced timers, so a
+    crash can flush the device half without the entity half; a helper that only
+    knew the old shape would skip that hub on the retry and strand its entity
+    rows in the old shape permanently, with the version boundary already burned.
+
+    Takes a str. Both call sites pass `_domain_sensor_key(row) or ""`, which is
+    a str on every path, so no isinstance test is needed or wanted here.
+    """
+    if not identifier.startswith(_HUB_IDENTIFIER_PREFIX):
+        return None
+    remainder = identifier[len(_HUB_IDENTIFIER_PREFIX) :]
+    if remainder and "_" not in remainder:
+        return remainder, None
+    parts = remainder.split("_")
+    if len(parts) == 2 and all(parts):
+        return parts[0], parts[1]
+    return None
+
+
+def _hub_row_identity(row) -> tuple[str, str | None] | None:
+    """Return the (hid, mid) a device row's DOMAIN identifier carries, or None."""
+    return _hub_identity(_domain_sensor_key(row) or "")
+
+
+def _resolve_hub_mid(hub_row, hid: str, entity_rows: list, device_rows: list) -> str | None:
+    """Recover a hub's mid from registry state alone, or None.
+
+    The config entry does not store the mid and no cloud call is available
+    here, because the migration runs before any coordinator or platform exists.
+    Two ordered sources, both already on disk:
+
+      1. A sub-device parented to this exact device row. Its identifier is
+         {hid}_{mid}_{addr}, and the mid in it is this hub's. Scoped to this
+         row, so it stays unambiguous in a home holding several hubs, and it
+         names the hub the sub-devices actually hang off.
+      2. The connectivity entity's unique id, which has carried both segments
+         since it shipped. This source is second because it is ambiguous where
+         the first is not: both hubs in a two-hub home wrote one shared
+         hub_{hid} device row but two connectivity rows, so this source alone
+         would assign the surviving row to whichever hub registry iteration
+         reached first.
+
+    Every candidate must be a decimal integer before it is used at all, and the
+    tie-break is numeric. Both rules matter. The candidates from source 2 are
+    substrings sliced out of persisted unique ids, so a numeric sort key over
+    an unfiltered candidate raises, and this function is called outside the
+    per-row guards, which would turn the whole entry into a migration error. A
+    lexical sort would meanwhile order "10" before "9" and disagree with the
+    residual sweep's tie-break over the same home. A dropped candidate simply
+    does not exist as far as the caller is concerned.
+
+    What the losing hub in a two-hub home loses, and what it does not:
+
+      - The device row. It loses nothing it had, because it never had a row of
+        its own; both hubs shared this one. On the next setup it registers a
+        fresh row under its own identifier with a default name and no area, and
+        its sub-devices re-parent through the ordinary DeviceInfo path. Two
+        device pages either way.
+      - The entity rows. These were not shared. rainpoint_hub_{hid}_mac and its
+        siblings were registered by whichever hub Home Assistant accepted
+        first, and that is the hub whose readings sit in the recorder history
+        behind them. Neither source knows which hub wrote them, so when this
+        picks the other one, all eight rows are silently re-attributed: each row
+        keeps its identity and its history, but the hub it represents changes,
+        and the hub that produced that history gets fresh empty rows on the next
+        start. Nothing detects this and nothing repairs it. It is accepted
+        because the registry carries no record of which hub wrote a row, which
+        is the defect this migration exists to stop creating.
+    """
+    for row in device_rows:
+        parts = (_domain_sensor_key(row) or "").split("_")
+        if getattr(row, "via_device_id", None) == hub_row.id and len(parts) == 3 and parts[0] == hid and parts[1].isdigit():
+            return parts[1]
+
+    prefix = f"{_HUB_UNIQUE_ID_PREFIX}{hid}_"
+    suffix = "_connectivity"
+    candidates = []
+    for row in entity_rows:
+        unique_id = getattr(row, "unique_id", "") or ""
+        middle = unique_id[len(prefix) : -len(suffix)]
+        if unique_id.startswith(prefix) and unique_id.endswith(suffix) and middle.isdigit():
+            candidates.append(middle)
+    return min(candidates, key=int) if candidates else None
+
+
+def _migrate_hub_entity_unique_ids(registry, entity_rows: list, hid: str, mid: str) -> None:
+    """Move this hub's old-shape entity rows onto the {hid}_{mid} spelling.
+
+    Rows are selected by exact membership in _HUB_MIGRATABLE_SUFFIXES. That
+    closed set covers a repeat run (whose remainder is already {mid}_{suffix}),
+    a partially completed run, the sibling hub's connectivity row, and any
+    future id shape added to this namespace, all by construction rather than by
+    a rule about what a remainder looks like.
+
+    A collision skips the row and continues. The registry raises ValueError
+    when the target unique id is already taken; the losing row is left intact
+    rather than removed, because removing it would destroy the recorder history
+    and customizations this migration exists to preserve. The exception is
+    caught narrowly rather than as a bare Exception: this is a known outcome
+    with a known meaning, not a degraded sweep.
+    """
+    prefix = f"{_HUB_UNIQUE_ID_PREFIX}{hid}_"
+    for row in entity_rows:
+        unique_id = getattr(row, "unique_id", "") or ""
+        if not unique_id.startswith(prefix):
+            continue
+        remainder = unique_id[len(prefix) :]
+        if remainder not in _HUB_MIGRATABLE_SUFFIXES:
+            continue
+        target = f"{prefix}{mid}_{remainder}"
+        try:
+            registry.async_update_entity(row.entity_id, new_unique_id=target)
+            _LOGGER.debug("Re-keyed hub entity %s to %s", row.entity_id, target)
+        except ValueError as exc:
+            _LOGGER.warning(
+                "Could not re-key hub entity %s to %s; leaving it on its old id: %s",
+                row.entity_id,
+                target,
+                exc,
+            )
+
+
+def _move_hub_device_row(registry, row, hid: str, mid: str) -> bool:
+    """Re-key one hub device row in place; return whether it now carries the pair.
+
+    Re-keying identifiers leaves device.id unchanged, so every already
+    registered sub-device's via_device_id keeps resolving and no via_device
+    sweep is needed anywhere.
+
+    The failure log is at warning, not debug, and names the row it left behind.
+    The realistic cause is another row already holding the target identifier,
+    which leaves the user with two device pages for one hub: the original
+    keeping its area, its user-set name and every parented sub-device while
+    carrying an identifier nothing writes any more, and the new one carrying
+    the live entities. The device registry offers no in-place merge, so nothing
+    repairs that automatically, and a debug line would make it invisible on a
+    default install.
+    """
+    target = f"{_HUB_IDENTIFIER_PREFIX}{hid}_{mid}"
+    try:
+        registry.async_update_device(row.id, new_identifiers={(DOMAIN, target)})
+        return True
+    except Exception as exc:
+        _LOGGER.warning(
+            "Could not re-key hub device row %s (device id %s) to %s; it stays on its old identifier: %s",
+            _domain_sensor_key(row),
+            getattr(row, "id", None),
+            target,
+            exc,
+        )
+        return False
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Move hub identity from the home id to the {hid}_{mid} pair, in place.
+
+    Three hub-level platforms build one entity per real hub while the id inside
+    carries only the home id, so a second hub in one home produces duplicate
+    unique ids and Home Assistant drops the second hub's entities silently.
+    This runs once, at the config-entry version boundary, before any platform
+    sets up.
+
+    Ordering is load-bearing: the device row moves before that hub's entity
+    rows. Reversing it creates a second hub device row and abandons the
+    original along with its area, its user-set name and every sub-device
+    parented to it.
+
+    The entity pass is reachable from either identifier shape, and is a sibling
+    of the device pass rather than nested inside it. The two registries save on
+    independent debounced timers, so a crash can flush the device half without
+    the entity half; a retry that required the row to still be old-shape would
+    strand those entity rows forever, with the version already burned.
+
+    A unique-id collision skips that row and logs; it never deletes the losing
+    row and never aborts the loop. The mid is recovered from registry state
+    because the config entry does not carry it and no cloud call is available
+    this early.
+
+    A False return is expensive and is reserved for the one case where nothing
+    at all was read. Home Assistant sets the entry to MIGRATION_ERROR and does
+    not call async_setup_entry, so the integration does not load for that
+    session at all, every entity goes unavailable, and the integrations page
+    shows a migration failure. It is a retry, but not a quiet one, which is
+    exactly why a hub whose mid cannot be resolved does not use it: that hub is
+    left untouched and finished later by _complete_hub_identity_rekey, from the
+    coordinator's own hub record.
+    """
+    entity_registry, entity_rows = _fetch_registry_rows(
+        er.async_get, er.async_entries_for_config_entry, hass, entry, "the hub identity migration"
+    )
+    device_registry, device_rows = _fetch_registry_rows(
+        dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the hub identity migration"
+    )
+    # One combined test rather than two sequential ones: either registry being
+    # unreadable means the same thing and takes the same exit.
+    if entity_registry is None or device_registry is None:
+        return False
+
+    working_set = []
+    for row in device_rows:
+        identity = _hub_row_identity(row)
+        if identity is not None:
+            working_set.append((row, identity[0], identity[1]))
+
+    for row, hid, mid in working_set:
+        if mid is None:
+            mid = _resolve_hub_mid(row, hid, entity_rows, device_rows)
+            if mid is None:
+                _LOGGER.warning(
+                    "Could not resolve the mid for hub device %s; leaving it on its old identity until a poll supplies one",
+                    _domain_sensor_key(row),
+                )
+                continue
+            if not _move_hub_device_row(device_registry, row, hid, mid):
+                # Leave this hub's entity rows alone so the row set stays
+                # internally consistent.
+                continue
+        _migrate_hub_entity_unique_ids(entity_registry, entity_rows, hid, mid)
+
+    # Home Assistant does not write the version itself; an integration that
+    # omits this re-runs its migration on every restart.
+    hass.config_entries.async_update_entry(entry, version=2)
+    return True
+
+
+def _complete_hub_identity_rekey(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> frozenset[str] | None:
+    """Finish the hub identity re-key for any hub the migration could not resolve.
+
+    This is the residual half of the version-boundary migration, not a
+    replacement for it: async_migrate_entry still owns the mechanism and does
+    the work on every install whose mid it can read off the registries. This
+    exists because ConfigEntry.async_migrate returns early once the version
+    matches, so a hub left unresolved there would keep its old ids permanently,
+    behind one warning line nobody reads.
+
+    The first pass must stay ahead of the platform forward. Placed after it, the
+    platforms would already have created a second hub device row under the new
+    identifier and fresh entity rows under the new unique ids, losing exactly
+    the history the migration exists to preserve.
+
+    Candidate mids come only from hub records that pass is_hub_record. The
+    coordinator injects hid into every top-level record the cloud returns and
+    filters nothing, and the Bluetooth wrapper record is kept in that list on
+    purpose so its sub-devices stay discoverable. Wrapper records carry a mid,
+    so an unfiltered candidate list would re-key the hub device row to the
+    wrapper's mid on a single-hub home with a paired Bluetooth valve, and the
+    lowest-mid tie-break would make it deterministic rather than rare.
+
+    Returns three states, and the two falsy ones must never be collapsed:
+
+      - None: could not look. A registry was unreadable, or the read of the
+        coordinator's hub records raised. Nothing was decided, so nothing may
+        be concluded.
+      - A non-empty frozenset: looked, and these hids are still old-shape.
+      - An empty frozenset: looked, and there is nothing outstanding. This is
+        the only state that may close the caller's latch.
+
+    An empty frozenset is a positive claim that this pass found nothing left to
+    do; None asserts only that it could not look. Treating the second as the
+    first would close the latch on an observation that was never made, with the
+    version boundary already burned.
+
+    Never raises, like the two sweeps beside it.
+    """
+    device_registry, device_rows = _fetch_registry_rows(
+        dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the residual hub identity re-key"
+    )
+    entity_registry, entity_rows = _fetch_registry_rows(
+        er.async_get, er.async_entries_for_config_entry, hass, entry, "the residual hub identity re-key"
+    )
+    if device_registry is None or entity_registry is None:
+        return None
+
+    hub_records = _read_current_hubs(coordinator)
+    if hub_records is None:
+        return None
+    real_hubs = [hub for hub in hub_records if is_hub_record(hub)]
+
+    examined = []
+    for row in device_rows:
+        identity = _hub_row_identity(row)
+        if identity is None or identity[1] is not None:
+            continue
+        hid = identity[0]
+        examined.append(row)
+
+        # The coordinator's own record is the authoritative source and the one
+        # the migration could not reach, because it ran before any coordinator
+        # existed. Same isdigit filter and same numeric tie-break as
+        # _resolve_hub_mid, so the two paths cannot pick different hubs for the
+        # same home. hid is an int on a coordinator record and a str off an
+        # identifier, so both sides are normalized before they meet.
+        candidates = [str(hub.get("mid")) for hub in real_hubs if str(hub.get("hid")) == hid and str(hub.get("mid")).isdigit()]
+        mid = _resolve_hub_mid(row, hid, entity_rows, device_rows) or (min(candidates, key=int) if candidates else None)
+        if mid is None:
+            _LOGGER.debug("No mid available for hub %s this pass; leaving it for a later poll", hid)
+            continue
+        if _move_hub_device_row(device_registry, row, hid, mid):
+            _migrate_hub_entity_unique_ids(entity_registry, entity_rows, hid, mid)
+
+    # Derived by re-reading what the registry actually holds, never from a tally
+    # of attempted moves. A hub whose device move raised was attempted and did
+    # not move; a set built from intent would omit it, report nothing
+    # outstanding, and let the caller latch shut with that hub's identity
+    # permanently split across two device rows.
+    residual = set()
+    for row in examined:
+        identity = _hub_row_identity(device_registry.async_get(row.id) or row)
+        if identity is not None and identity[1] is None:
+            residual.add(identity[0])
+    return frozenset(residual)
+
+
+def _complete_hub_identity_rekey_on_updates(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Run the residual re-key now, then again on updates until it is settled.
+
+    A setup-time pass alone is one-shot per setup, and this one's input can be
+    absent at first-refresh time: a getDeviceByHid response can omit a hub the
+    previous poll listed, and the coordinator builds its hub list purely from
+    that response. A first refresh landing inside such an outage would strand
+    the residual hub until the next restart, which on a Home Assistant install
+    can be months.
+
+    Diverges from the parenting reconcile's listener in one direction and
+    converges on it in another. It arms less often: that one arms
+    unconditionally, this one arms nothing at all on an install whose setup pass
+    positively found no residual, which is essentially every install. Once
+    armed it gates the same way, on the input having actually changed, rather
+    than re-reading both registries on every notification. Both matter because
+    listeners fire on every pushed frame as well as every poll.
+
+    Gating on the hub mapping loses nothing; it is not a cost-for-correctness
+    trade. Neither registry-backed source can newly resolve while the hub row is
+    still old-shape. A sub-device cannot acquire a link to it, because the
+    via_device tuple it emits names the migrated identifier and Home Assistant
+    writes UNDEFINED for a via device that does not exist. The connectivity
+    entity cannot appear either, because it is built only by one-shot platform
+    setup from a record that would already have resolved the hid on the setup
+    pass. So the coordinator's hub list gaining a real record for that hid is
+    the only event that can change the answer, and that is what the gate
+    watches.
+
+    The listener's later runs may land after the platform forward even though
+    the first pass must not, and that is safe by registration order rather than
+    by any blanket claim that entity creation is one-shot: it is one-shot for
+    the hub platforms, but sensor.py, valve.py and number.py all carry late
+    adders that create sub-device entities on later polls. This wrapper
+    registers before the forward and those adders register from inside it, and
+    coordinator listeners fire in registration order, so the re-key runs ahead
+    of every adder on every update. If one ever did run first anyway, an
+    unresolvable via_device is UNDEFINED, which the device-update path skips, so
+    an existing parent link is preserved rather than cleared; and a competing
+    new-shape row would make async_update_device raise into the per-row guard,
+    leaving both rows intact rather than merging or dropping either.
+
+    All per-setup state is closure-local. This integration permits more than one
+    config entry, and a module-level latch would let one entry's clean pass
+    permanently silence another's residual sweep, invisibly on every
+    single-account install.
+    """
+    pending = _complete_hub_identity_rekey(hass, entry, coordinator)
+    # Seeded from the same snapshot the pass above acted on, so the first update
+    # cannot re-present an unchanged mapping as changed.
+    last_hub_mids = frozenset(
+        (str(hub.get("hid")), str(hub.get("mid"))) for hub in (_read_current_hubs(coordinator) or []) if is_hub_record(hub)
+    )
+
+    @callback
+    def _on_coordinator_update() -> None:
+        """Re-run the residual re-key only when its one possible input changed."""
+        nonlocal pending, last_hub_mids
+        if pending == frozenset():
+            return
+        current_hub_mids = frozenset(
+            (str(hub.get("hid")), str(hub.get("mid"))) for hub in (_read_current_hubs(coordinator) or []) if is_hub_record(hub)
+        )
+        # `pending is None` means the previous pass could not look, so no change
+        # to the hub list would signal that a retry is worthwhile.
+        if pending is None or current_hub_mids != last_hub_mids:
+            pending = _complete_hub_identity_rekey(hass, entry, coordinator)
+        # Assigned on every update, not only on the ones that swept, so a hub
+        # that vanishes and returns counts as changed again.
+        last_hub_mids = current_hub_mids
+
+    # Armed unless this pass positively observed that nothing is left to do. A
+    # bare truthiness test here would leave a pass that could not read a
+    # registry unarmed, concluding from an observation it never made.
+    if pending != frozenset():
+        entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up RainPoint from a config entry."""
     session = async_get_clientsession(hass)
@@ -497,6 +954,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # number.py. They are ordered by listener registration, not by platform
     # forwarding: this listener is registered first, so it runs first, and the
     # adders' DeviceInfo omits via_device for an unparented record anyway.
+    # Ahead of the platform forward for the same reason, and more sharply: this
+    # is the window in which no DeviceInfo has been written yet this session, so
+    # a hub the version-boundary migration could not resolve is re-keyed before
+    # any platform can create a second device row under the new identifier.
+    _complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
     _remove_stale_generic_entities(hass, entry, coordinator)
     _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
 

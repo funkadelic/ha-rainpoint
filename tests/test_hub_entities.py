@@ -6,7 +6,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.rainpoint.const import PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX
+from custom_components.rainpoint.const import (
+    PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
+    PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
+)
 from custom_components.rainpoint.hub_entities import (
     RainPointHubBroadcastSwitch,
     RainPointHubChannelSelect,
@@ -15,6 +18,7 @@ from custom_components.rainpoint.hub_entities import (
     RainPointHubFirmwareSensor,
     RainPointHubMACSensor,
     RainPointHubRSSISensor,
+    RainPointPushConnectedBinarySensor,
     RainPointPushLastMessageSensor,
     resolve_connectivity_hubs,
     resolve_push_diagnostic_hubs,
@@ -28,10 +32,11 @@ def _make_coordinator():
     return coord
 
 
-def _make_hub_info(hid=100, name="Test Hub", soft_ver="2.0", mac="AA:BB:CC"):
+def _make_hub_info(hid=100, name="Test Hub", soft_ver="2.0", mac="AA:BB:CC", mid=1001):
     """Make hub info helper."""
     return {
         "hid": hid,
+        "mid": mid,
         "name": name,
         "softVer": soft_ver,
         "mac": mac,
@@ -241,7 +246,13 @@ class TestRainPointHubConnectivityBinarySensor:
         assert entity.available is True
 
     def test_unique_id_carries_both_hid_and_mid(self):
-        """Deliberately diverges from the hid-only hub siblings."""
+        """The spelling every hub sibling now shares, and the one that did not move.
+
+        This entity has carried both segments since it shipped. The re-key
+        brought the other seven onto it rather than the other way round, so
+        this assertion is byte-identical to what it was before: a change here
+        would mean the migration moved a row it had no business moving.
+        """
         hub_info = _make_hub_info(hid=100)
         hub_info["mid"] = 200
         entity = self._make(hub_info=hub_info)
@@ -393,7 +404,7 @@ class TestRainPointHubFirmwareSensor:
     def test_native_value_none_when_missing(self):
         """native_value should be None if softVer is missing."""
         coord = _make_coordinator()
-        hub_info = {"hid": 100, "name": "Hub"}  # no softVer
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub"}  # no softVer
         sensor = RainPointHubFirmwareSensor.__new__(RainPointHubFirmwareSensor)
         RainPointHubFirmwareSensor.__init__(sensor, coord, hub_info)
         assert sensor.native_value is None
@@ -604,3 +615,77 @@ class TestRainPointPushLastMessageSensor:
         mqtt_client.add_state_listener.assert_called_once_with(entity._handle_client_state)
         await entity.async_will_remove_from_hass()
         mqtt_client.remove_state_listener.assert_called_once_with(entity._handle_client_state)
+
+
+class TestEveryHubUniqueIdCarriesTheMid:
+    """The eight hub entity ids, spelled out rather than substring-matched.
+
+    The five inline sites and the three that ride on the base are asserted
+    together and in full, because the whole defect being fixed is that an id
+    can look right in a substring test while still colliding with a sibling
+    hub's. Five of these are written inline in hub_entities.py; the rssi and
+    two push diagnostics append to the base id device.py builds, which is why
+    editing that one base site carried them.
+    """
+
+    @staticmethod
+    def _hub(**overrides):
+        return {
+            "hid": 100,
+            "mid": 200,
+            "name": "Hub",
+            "softVer": "2.0",
+            "mac": "AA:BB",
+            "model": "HTV0540FRF",
+            **overrides,
+        }
+
+    def _build(self, cls, *args):
+        entity = cls.__new__(cls)
+        cls.__init__(entity, *args)
+        return entity
+
+    def test_inline_ids(self):
+        """The five sites that spell the segment inline."""
+        coord = _make_coordinator()
+        assert self._build(RainPointHubDeviceIDSensor, coord, self._hub())._attr_unique_id == "rainpoint_hub_100_200_device_id"
+        assert self._build(RainPointHubFirmwareSensor, coord, self._hub())._attr_unique_id == "rainpoint_hub_100_200_firmware"
+        assert self._build(RainPointHubMACSensor, coord, self._hub())._attr_unique_id == "rainpoint_hub_100_200_mac"
+        assert self._build(RainPointHubChannelSelect, coord, self._hub())._attr_unique_id == "rainpoint_hub_100_200_channel"
+        assert self._build(RainPointHubBroadcastSwitch, coord, self._hub())._attr_unique_id == "rainpoint_hub_100_200_broadcast"
+
+    def test_ids_that_ride_on_the_base(self):
+        """The three that append to device.py's base id and were not edited."""
+        coord = _make_coordinator()
+        mqtt_client = MagicMock()
+        assert self._build(RainPointHubRSSISensor, coord, self._hub())._attr_unique_id == "rainpoint_hub_100_200_rssi"
+        assert (
+            self._build(RainPointPushConnectedBinarySensor, mqtt_client, self._hub())._attr_unique_id
+            == f"rainpoint_hub_100_200_{PUSH_CONNECTED_UNIQUE_ID_SUFFIX}"
+        )
+        assert (
+            self._build(RainPointPushLastMessageSensor, mqtt_client, self._hub())._attr_unique_id
+            == f"rainpoint_hub_100_200_{PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX}"
+        )
+
+    def test_two_hubs_in_one_home_share_no_id(self):
+        """The defect this phase exists to fix, asserted directly.
+
+        Both hubs carry the same hid, so before the re-key every one of these
+        pairs was equal and Home Assistant dropped the second hub's entities.
+        """
+        coord = _make_coordinator()
+        hub_a = self._hub()
+        hub_b = self._hub(mid=201)
+        for cls in (
+            RainPointHubDeviceIDSensor,
+            RainPointHubFirmwareSensor,
+            RainPointHubMACSensor,
+            RainPointHubChannelSelect,
+            RainPointHubBroadcastSwitch,
+            RainPointHubRSSISensor,
+            RainPointHubConnectivityBinarySensor,
+        ):
+            a = self._build(cls, coord, hub_a)._attr_unique_id
+            b = self._build(cls, coord, hub_b)._attr_unique_id
+            assert a != b, f"{cls.__name__} still collides across two hubs in one home"

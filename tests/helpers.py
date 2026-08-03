@@ -48,10 +48,12 @@ def make_hub_info(
     model="HTV0540FRF",
     mac="AA:BB:CC:DD:EE:FF",
     softVer="2.0.0",
+    mid=1001,
 ):
     """Return a hub dict matching coordinator hub shape."""
     return {
         "hid": hid,
+        "mid": mid,
         "name": name,
         "model": model,
         "mac": mac,

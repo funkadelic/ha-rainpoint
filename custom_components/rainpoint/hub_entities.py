@@ -129,9 +129,13 @@ class RainPointHubDeviceIDSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:identifier"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
-        """Name the entity after the hub and key the entity to its home id."""
+        """Name the entity after the hub and key the entity to its home id and mid."""
         super().__init__(coordinator, hub_info)
-        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_device_id"
+        # The five inline ids in this file keep the defaulted mid lookup so the
+        # file carries one spelling of the segment. It cannot actually default:
+        # RainPointHubDevice.__init__ ran first and direct-indexes mid, so a
+        # record without one raises before this line executes.
+        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_device_id"
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Device ID"
 
     @property
@@ -147,9 +151,9 @@ class RainPointHubFirmwareSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:chip"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
-        """Name the entity after the hub and key the entity to its home id."""
+        """Name the entity after the hub and key the entity to its home id and mid."""
         super().__init__(coordinator, hub_info)
-        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_firmware"
+        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_firmware"
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Firmware Version"
 
     @property
@@ -163,9 +167,9 @@ class RainPointHubMACSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:network-outline"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
-        """Name the entity after the hub and key the entity to its home id."""
+        """Name the entity after the hub and key the entity to its home id and mid."""
         super().__init__(coordinator, hub_info)
-        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_mac"
+        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_mac"
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} MAC Address"
 
     @property
@@ -196,10 +200,8 @@ class RainPointHubConnectivityBinarySensor(CoordinatorEntity, BinarySensorEntity
         """Build the connectivity entity with a per-hub unique id."""
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
-        # Carries both hid and mid, unlike the hid-only hub siblings above
-        # (device id, firmware, MAC, RF channel): a home can hold more than
-        # one hub, and those siblings would contend for one id. This
-        # divergence is deliberate; do not "fix" it back to match them.
+        # Hub identity carries both the home id and the hub's mid, here and at
+        # every other hub-level site, because a home can hold more than one hub.
         self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_connectivity"
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Cloud Connection"
 
@@ -333,7 +335,7 @@ class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDev
         """
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
-        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_channel"
+        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_channel"
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} RF Channel"
         self._attr_options = _hub_rf_channel_options(hub_info)
         # Current channel comes from the hub record; None renders as unknown when
@@ -452,7 +454,7 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
         """
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
-        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_broadcast"
+        self._attr_unique_id = f"rainpoint_hub_{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_broadcast"
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Automatic Broadcast"
         self._attr_is_on = None  # Unknown until API supports reading
 

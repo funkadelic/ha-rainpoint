@@ -27,7 +27,7 @@ class TestSelectSetupEntry:
     @pytest.mark.asyncio
     async def test_setup_entry_creates_entities_for_each_hub(self):
         """One channel select entity should be created per hub."""
-        hub_info = {"hid": 100, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
         hass, entry, _coord = _make_hass(hubs=[hub_info])
 
         mock_add_entities = MagicMock()

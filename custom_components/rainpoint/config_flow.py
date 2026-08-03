@@ -49,7 +49,7 @@ def _country_selector() -> CountrySelector:
 class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for RainPoint Smart+ devices."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialize the config flow."""

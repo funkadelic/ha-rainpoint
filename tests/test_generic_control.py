@@ -880,7 +880,7 @@ class TestRainPointGenericValveConstruction:
         assert info["manufacturer"] == "RainPoint"
         assert info["model"] == ANCHOR_MODEL
         assert info["serial_number"] == "200_1"
-        assert info["via_device"] == (DOMAIN, "hub_100")
+        assert info["via_device"] == (DOMAIN, "hub_100_200")
 
     def test_icon_is_the_control_marker_icon(self):
         entity, _, _ = _build_anchor_valve()

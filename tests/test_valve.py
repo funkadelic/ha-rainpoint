@@ -59,7 +59,7 @@ class TestValveProperties:
         info = valve.device_info
         assert info["sw_version"] == "1.0"
         assert info["serial_number"] == "200_1"
-        assert info["via_device"] == (DOMAIN, "hub_100")
+        assert info["via_device"] == (DOMAIN, "hub_100_200")
 
     """Tests for RainPointValveEntity properties."""
 

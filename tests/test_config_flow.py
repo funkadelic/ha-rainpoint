@@ -71,6 +71,16 @@ _VALID_USER_INPUT = {
 # ---------------------------------------------------------------------------
 
 
+class TestConfigEntryVersion:
+    """The version boundary the hub identity re-key runs at."""
+
+    def test_config_flow_version_is_two(self):
+        """Home Assistant runs async_migrate_entry only when this is ahead of
+        the stored entry version, so lowering it back would silently skip the
+        re-key on every install that has not yet migrated."""
+        assert RainPointConfigFlow.VERSION == 2
+
+
 class TestConfigFlowUserStep:
     """Tests for ConfigFlowUserStep."""
 

@@ -81,7 +81,7 @@ class TestNumberEntity:
         number = _make_number()
         info = number.device_info
         assert info["serial_number"] == "200_1"
-        assert info["via_device"] == (DOMAIN, "hub_100")
+        assert info["via_device"] == (DOMAIN, "hub_100_200")
 
     def test_native_value_returns_current(self):
         """native_value should return _current_value."""
