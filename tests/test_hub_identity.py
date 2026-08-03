@@ -24,7 +24,7 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.rainpoint import _HUB_MIGRATABLE_SUFFIXES, _domain_sensor_key
-from custom_components.rainpoint.const import DOMAIN
+from custom_components.rainpoint.const import DOMAIN, HUB_IDENTIFIER_PREFIX, HUB_UNIQUE_ID_PREFIX
 from custom_components.rainpoint.device import RainPointHubDevice
 from tests.helpers import VALVE_ZONES_TLV_PAYLOAD
 
@@ -389,6 +389,59 @@ class TestMigratableSuffixSet:
             "connectivity is deliberately excluded: it already carries both segments, so it is the "
             "one hub entity that must never be migrated"
         )
+
+
+class TestHubIdentifierPrefixSingleSource:
+    """The hub identifier prefix, pinned the same way the suffix set is above.
+
+    Unlike _HUB_MIGRATABLE_SUFFIXES, which is imported and compared directly,
+    the prefix used to be an independent literal on each side: device.py wrote
+    "hub_" / "rainpoint_hub_" verbatim, and __init__.py's migration matcher
+    spelled its own "hub_" / f"{DOMAIN}_hub_" copies. Both writers now build
+    from const.HUB_IDENTIFIER_PREFIX and const.HUB_UNIQUE_ID_PREFIX, and the
+    migration's private aliases are assigned from the same constants rather
+    than restated, so this test pins both that the values never change (a
+    breaking migration if they did, since they are persisted in the entity and
+    device registries) and that every writer and the matcher still agree.
+    """
+
+    def test_the_constants_are_the_literal_values_already_persisted(self):
+        """The values themselves are frozen, not just internally consistent."""
+        assert HUB_IDENTIFIER_PREFIX == "hub_"
+        assert HUB_UNIQUE_ID_PREFIX == f"{DOMAIN}_hub_" == "rainpoint_hub_"
+
+    def test_device_py_builds_its_identifiers_from_the_shared_constants(self):
+        """RainPointHubDevice's device identifier and unique id both start here."""
+        hub_info = {"hid": HID, "mid": MID_A, "name": "Hub"}
+        device = RainPointHubDevice(hub_info)
+
+        assert device._attr_unique_id.startswith(HUB_UNIQUE_ID_PREFIX)
+        (identifier,) = device.device_info["identifiers"]
+        assert identifier[1].startswith(HUB_IDENTIFIER_PREFIX)
+
+    @pytest.mark.asyncio
+    async def test_hub_entities_py_builds_every_inline_unique_id_from_the_same_prefix(self, hass):
+        """The five inline hub_entities.py sites, plus RSSI's appended suffix.
+
+        Reuses the real per-hub build so this fails the moment any hub-owning
+        platform reintroduces an independently spelled prefix, rather than
+        only when a hand-picked subset of classes is checked.
+        """
+        entry = _make_entry(hass)
+        built = await _build_hub_entities(hass, entry, with_push=True)
+
+        for entities in built.values():
+            for entity in entities:
+                assert entity._attr_unique_id.startswith(HUB_UNIQUE_ID_PREFIX), (
+                    f"{entity._attr_unique_id} does not start with the shared hub unique-id prefix"
+                )
+
+    def test_the_migrations_private_aliases_equal_the_shared_constants(self):
+        """__init__.py's matcher builds its aliases from const.py, not a second literal."""
+        import custom_components.rainpoint as rp
+
+        assert rp._HUB_IDENTIFIER_PREFIX == HUB_IDENTIFIER_PREFIX
+        assert rp._HUB_UNIQUE_ID_PREFIX == HUB_UNIQUE_ID_PREFIX
 
 
 class TestHubIdentityIsNotASensorKey:

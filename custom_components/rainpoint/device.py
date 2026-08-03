@@ -5,7 +5,7 @@ from __future__ import annotations
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 
-from .const import DOMAIN
+from .const import DOMAIN, HUB_IDENTIFIER_PREFIX, HUB_UNIQUE_ID_PREFIX
 
 
 def build_sub_device_info(sensor_info: dict, *, name_fallback: str) -> DeviceInfo:
@@ -64,7 +64,7 @@ def build_sub_device_info(sensor_info: dict, *, name_fallback: str) -> DeviceInf
         # hub's, because the sensor key is {hid}_{mid}_{addr}. Both sides of
         # this link read mid through a direct index, so neither can degrade to
         # a spelling the other does not produce.
-        optional["via_device"] = (DOMAIN, f"hub_{hid}_{mid}")
+        optional["via_device"] = (DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{hid}_{mid}")
     return DeviceInfo(
         identifiers={(DOMAIN, f"{hid}_{mid}_{addr}")},
         name=sensor_info.get("sub_name") or name_fallback,
@@ -102,7 +102,7 @@ class RainPointHubDevice(Entity):
         direct-indexes the same field twice while shaping its data.
         """
         self._hub_info = hub_info
-        self._attr_unique_id = f"{DOMAIN}_hub_{hub_info['hid']}_{hub_info['mid']}"
+        self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info['hid']}_{hub_info['mid']}"
         self._attr_name = hub_info.get("name") or "RainPoint Hub"
         self._attr_should_poll = False
 
@@ -110,7 +110,7 @@ class RainPointHubDevice(Entity):
     def device_info(self) -> DeviceInfo:
         """Return device registry information for this hub."""
         return DeviceInfo(
-            identifiers={(DOMAIN, f"hub_{self._hub_info['hid']}_{self._hub_info['mid']}")},
+            identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{self._hub_info['hid']}_{self._hub_info['mid']}")},
             name=self._hub_info.get("name") or "RainPoint Hub",
             manufacturer="RainPoint",  # RainPoint is the actual device manufacturer
             model=self._hub_info.get("model") or "Unknown",

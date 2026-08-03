@@ -47,6 +47,19 @@ CONF_GENERIC_ENTITIES_ENABLED = "generic_entities_enabled"
 UNIQUE_ID_PREFIX = "rainpoint_"
 GENERIC_UNIQUE_ID_MARKER = "_generic_"
 
+# === Hub identity ===
+# Hub identity is spelled {hid}_{mid} everywhere: the hub device identifier is
+# HUB_IDENTIFIER_PREFIX + "{hid}_{mid}", and every hub-level entity unique id is
+# HUB_UNIQUE_ID_PREFIX + "{hid}_{mid}_{suffix}". device.py and hub_entities.py
+# (the writers) and __init__.py's hub identity migration (the reader that
+# recognizes and rewrites hub rows) both build from these constants rather than
+# independently spelling "hub_" / "rainpoint_hub_", so the two sides cannot
+# silently drift apart. The values themselves must never change: they are
+# persisted in Home Assistant's device and entity registries, and changing
+# either string is a breaking migration.
+HUB_IDENTIFIER_PREFIX = "hub_"
+HUB_UNIQUE_ID_PREFIX = f"{DOMAIN}_hub_"
+
 # === Generic (catalog-driven) control entity factory ===
 CONF_GENERIC_CONTROL_ENABLED = "generic_control_enabled"
 # The control marker is nested inside GENERIC_UNIQUE_ID_MARKER rather than

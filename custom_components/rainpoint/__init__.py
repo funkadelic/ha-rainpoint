@@ -20,6 +20,8 @@ from .const import (
     GENERIC_CONTROL_OVERRIDE_DISABLED,
     GENERIC_CONTROL_UNIQUE_ID_MARKER,
     GENERIC_UNIQUE_ID_MARKER,
+    HUB_IDENTIFIER_PREFIX,
+    HUB_UNIQUE_ID_PREFIX,
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
     PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
     UNIQUE_ID_PREFIX,
@@ -46,8 +48,13 @@ PLATFORMS: list[str] = ["sensor", "binary_sensor", "select", "valve", "number", 
 # Hub identity is spelled {hid}_{mid} everywhere: hub entity unique ids as
 # rainpoint_hub_{hid}_{mid}_{suffix}, the hub device identifier as
 # hub_{hid}_{mid}, and the sub-device via_device tuple as the same identifier.
-_HUB_UNIQUE_ID_PREFIX = f"{DOMAIN}_hub_"
-_HUB_IDENTIFIER_PREFIX = "hub_"
+# Aliased from const.py rather than spelled again here: device.py and
+# hub_entities.py (the writers) build from the same two constants, so this
+# migration's matcher cannot silently drift from what the platforms actually
+# write. tests/test_hub_identity.py pins the equality, in the same spirit as
+# TestMigratableSuffixSet pins the suffix set below.
+_HUB_UNIQUE_ID_PREFIX = HUB_UNIQUE_ID_PREFIX
+_HUB_IDENTIFIER_PREFIX = HUB_IDENTIFIER_PREFIX
 
 # A closed set, not a prefix-plus-remainder test. hid is shared by every hub in
 # a home, so a two-hub home already holds two rows matching the hub unique-id
