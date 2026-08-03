@@ -841,3 +841,661 @@ class TestResidualSweepRetryCadence:
         listener()
 
         assert fetches == [], "a settled install must not sweep again on a later mapping change"
+
+
+# ---------------------------------------------------------------------------
+# Real-coordinator scaffolding
+#
+# Everything below drives a real RainPointCoordinator through the real
+# construct -> first refresh -> (optionally) platform setup -> async_refresh
+# sequence, rather than assigning coordinator.data. The sweep's whole point is
+# that it reads a freshly polled hub record from the window in which that
+# record exists, and a snapshot handed to it directly answers a different
+# question. It also matters for typing: _collect_hubs re-injects hid as the
+# int the config entry carries, so a hand-built record with a str hid would
+# pass against a broken hub["hid"] == hid comparison and prove nothing.
+# ---------------------------------------------------------------------------
+
+
+def _poll_record(mid=MID, real=True, sub_devices=()):
+    """One top-level record as getDeviceByHid returns it.
+
+    real=False is the Bluetooth wrapper shape, whose identity fields are empty
+    strings rather than missing keys. It still carries a mid, which is why
+    is_hub_record has to filter it out before any candidate is taken.
+    """
+    identity = (
+        {"did": "did-1", "mac": "AA:BB:CC", "productKey": "pk1", "model": "HWG0358WRF", "deviceName": "d"}
+        if real
+        else {"did": "", "mac": "", "productKey": "", "model": "", "deviceName": ""}
+    )
+    return {
+        "mid": mid,
+        "name": "Hub" if real else "",
+        "homeName": "Home",
+        "softVer": "1.2.3",
+        "subDevices": list(sub_devices),
+        **identity,
+    }
+
+
+def _make_client(*polls):
+    """A client whose successive get_devices_by_hid calls return successive polls.
+
+    The last poll repeats for every later call, so a test can drive as many
+    async_refresh() calls as it likes after the sequence it cares about.
+    """
+    from unittest.mock import AsyncMock
+
+    remaining = [list(poll) for poll in polls] or [[]]
+    client = MagicMock()
+    client.restore_tokens = MagicMock()
+    client.export_tokens = MagicMock(return_value={})
+    client.register_relogin_listener = MagicMock()
+    client.list_homes = AsyncMock(return_value=[{"hid": HID, "name": "Home"}])
+
+    async def _by_hid(_hid):
+        return remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+    client.get_devices_by_hid = AsyncMock(side_effect=_by_hid)
+    client.get_multiple_device_status = AsyncMock(return_value=[])
+    client.get_device_status = AsyncMock(return_value={})
+    return client
+
+
+async def _real_coordinator(hass, entry, client):
+    """Construct and first-refresh a real coordinator, as async_setup_entry does."""
+    from custom_components.rainpoint.coordinator import RainPointCoordinator
+
+    coordinator = RainPointCoordinator(hass, client, entry)
+    await coordinator.async_config_entry_first_refresh()
+    return coordinator
+
+
+async def _setup_with_patched_forward(hass, entry, client, device_registry, monkeypatch, built=None):
+    """Drive this integration's own async_setup_entry, forward included.
+
+    Home Assistant's entity-platform layer is not reachable in this repository's
+    test setup, so the forward is supplied by the harness: each platform
+    module's own async_setup_entry runs with a capturing callback, and each
+    built entity's device_info is registered exactly as entity_platform would
+    register it. What that proves is what this integration's setup path does and
+    what the registries end up holding; it does not prove that Home Assistant
+    would have added those entities. Nothing asserted on it depends on the
+    untested layer: the identifier written below is the one device.py computed.
+
+    The client is injected by pre-seeding hass.data rather than by patching
+    RainPointClient, because async_setup_entry reads the stored client before
+    constructing one, so this exercises more of the real path.
+    """
+    import importlib
+
+    import custom_components.rainpoint as rp
+
+    built = {} if built is None else built
+    hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})["client"] = client
+
+    async def fake_forward(cfg_entry, platforms):
+        for platform in platforms:
+            module = importlib.import_module(f"custom_components.rainpoint.{platform}")
+            captured = []
+
+            def add(entities, update_before_add=False, _c=captured):
+                _c.extend(entities)
+
+            await module.async_setup_entry(hass, cfg_entry, add)
+            built[platform] = captured
+            for entity in captured:
+                info = getattr(entity, "device_info", None)
+                if info:
+                    device_registry.async_get_or_create(config_entry_id=cfg_entry.entry_id, **info)
+
+    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", fake_forward)
+    result = await rp.async_setup_entry(hass, entry)
+    return result, built
+
+
+class TestResidualSweepAgainstARealCoordinator:
+    """The sweep driven through real polls, in the real order."""
+
+    @pytest.mark.asyncio
+    async def test_a_hub_absent_from_the_first_poll_is_finished_on_a_later_one(self, hass, entity_registry, device_registry):
+        """The device-list outage route, end to end and in the real order.
+
+        The first poll omits the hub entirely, so the setup pass has no record
+        to read and the row must still be old-shape at that point. The poll that
+        returns the hub finishes it. A setup-only call leaves the row old-shape
+        at the end of this test, which on a real install means waiting for the
+        next restart.
+        """
+        from custom_components.rainpoint import _complete_hub_identity_rekey_on_updates
+
+        entry = _make_entry(hass)
+        hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        row = entity_registry.async_get_or_create(
+            "sensor", DOMAIN, f"{DOMAIN}_hub_{HID}_mac", config_entry=entry, suggested_object_id="hub_mac"
+        )
+        entity_registry.async_update_entity(row.entity_id, name="My Hub MAC")
+
+        coordinator = await _real_coordinator(hass, entry, _make_client([], [_poll_record()]))
+        _complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
+        assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}")}
+
+        await coordinator.async_refresh()
+
+        migrated = device_registry.async_get(hub.id)
+        assert migrated.identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
+        assert migrated.id == hub.id
+        moved = entity_registry.async_get(row.entity_id)
+        assert moved.unique_id == f"{DOMAIN}_hub_{HID}_{MID}_mac"
+        assert moved.name == "My Hub MAC"
+
+    @pytest.mark.asyncio
+    async def test_the_hid_comparison_survives_the_int_versus_str_boundary(self, hass, device_registry):
+        """hid is an int on a coordinator record and a str off an identifier.
+
+        This record is built by the real _collect_hubs, which re-injects the
+        int the config entry carries, so an unnormalized comparison here is
+        100 == "100" and the sweep would resolve nothing at all while looking
+        wired up. A fixture that handed the sweep a stringified hid would pass
+        against exactly that bug.
+        """
+        from custom_components.rainpoint import _complete_hub_identity_rekey
+
+        entry = _make_entry(hass)
+        hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        coordinator = await _real_coordinator(hass, entry, _make_client([_poll_record()]))
+        assert isinstance(coordinator.data["hubs"][0]["hid"], int)
+
+        assert _complete_hub_identity_rekey(hass, entry, coordinator) == frozenset()
+        assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
+
+    @pytest.mark.asyncio
+    async def test_an_unchanged_poll_costs_no_registry_reads_and_a_changed_one_sweeps(self, hass, device_registry, monkeypatch):
+        """The gate, across real refreshes, with both halves in one test.
+
+        A gate that never opens satisfies the closing half alone, which is the
+        exact bug the gate risks introducing, so the poll that returns the hub
+        has to be asserted in the same place as the polls that do not.
+        """
+        import custom_components.rainpoint as rp
+
+        entry = _make_entry(hass)
+        hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        client = _make_client([], [], [], [_poll_record()])
+        coordinator = await _real_coordinator(hass, entry, client)
+        rp._complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
+
+        fetches = []
+        real_fetch = rp._fetch_registry_rows
+        monkeypatch.setattr(
+            rp,
+            "_fetch_registry_rows",
+            lambda *args, **kwargs: (fetches.append(args[-1]), real_fetch(*args, **kwargs))[1],
+        )
+
+        await coordinator.async_refresh()
+        await coordinator.async_refresh()
+        assert fetches == [], "an unchanged hub mapping must not re-read either registry"
+
+        await coordinator.async_refresh()
+        assert fetches, "the poll that returned the hub must re-run the sweep"
+        assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
+
+    @pytest.mark.asyncio
+    async def test_the_latch_closes_through_the_armed_listener(self, hass, device_registry, monkeypatch):
+        """Driven through the listener, because the latch lives in its closure.
+
+        A direct second call to the sweep re-enters nothing and would prove
+        nothing about the latch. Patching the registry fetch to raise before the
+        third refresh is what proves the listener returned on the latch without
+        touching a registry at all.
+        """
+        import custom_components.rainpoint as rp
+
+        entry = _make_entry(hass)
+        hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        coordinator = await _real_coordinator(hass, entry, _make_client([], [_poll_record()], [_poll_record(mid=999)]))
+        rp._complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
+
+        await coordinator.async_refresh()
+        assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
+
+        def boom(*args, **kwargs):
+            raise AssertionError("a latched listener must not reach the registries")
+
+        monkeypatch.setattr(rp, "_fetch_registry_rows", boom)
+        await coordinator.async_refresh()
+
+    @pytest.mark.asyncio
+    async def test_a_coordinator_read_that_raises_declines_and_the_next_poll_completes(self, hass, device_registry, monkeypatch):
+        """The other half of could-not-look, and the only driver for its second return.
+
+        Every other case fails a registry read; nothing else makes the
+        coordinator read fail. The read itself is made to raise rather than the
+        snapshot being swapped for a different one, because only a raise reaches
+        the guard. Declining is then shown to have been useful: the next real
+        poll completes the re-key.
+        """
+        import custom_components.rainpoint as rp
+
+        entry = _make_entry(hass)
+        hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        coordinator = await _real_coordinator(hass, entry, _make_client([_poll_record()]))
+
+        real_data = coordinator.data
+
+        class _Unreadable:
+            def get(self, *args, **kwargs):
+                raise RuntimeError("coordinator data unreadable")
+
+            def __bool__(self):
+                return True
+
+        coordinator.data = _Unreadable()
+        assert rp._complete_hub_identity_rekey(hass, entry, coordinator) is None
+        assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}")}
+
+        rp._complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
+        assert coordinator._listeners, "a pass that could not look must stay armed"
+
+        coordinator.data = real_data
+        await coordinator.async_refresh()
+        migrated = device_registry.async_get(hub.id)
+        assert migrated.identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
+        assert migrated.id == hub.id
+
+    @pytest.mark.asyncio
+    async def test_a_cleanly_migrated_install_writes_nothing_at_all(self, hass, entity_registry, device_registry, monkeypatch):
+        """No-op asserted on calls, not on end state.
+
+        An unchanged end state is also what a sweep that rewrote every row with
+        its existing value would leave behind, and that would be a real defect
+        on a two-hub home.
+        """
+        from custom_components.rainpoint import _complete_hub_identity_rekey
+
+        entry = _make_entry(hass)
+        _seed_old_shape_install(entry, entity_registry, device_registry)
+        assert await async_migrate_entry(hass, entry) is True
+        coordinator = await _real_coordinator(hass, entry, _make_client([_poll_record()]))
+
+        calls = []
+        monkeypatch.setattr(device_registry, "async_update_device", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(entity_registry, "async_update_entity", lambda *a, **k: calls.append(a))
+
+        assert _complete_hub_identity_rekey(hass, entry, coordinator) == frozenset()
+        assert calls == []
+
+
+class TestOrderingProperties:
+    """Two orderings the design rests on, recorded rather than argued."""
+
+    @pytest.mark.asyncio
+    async def test_every_hub_device_move_precedes_that_hubs_entity_moves(
+        self, hass, entity_registry, device_registry, monkeypatch
+    ):
+        """Real call indices across both registries, so a reorder goes red.
+
+        Home Assistant already guarantees the platform-setup half of this
+        hazard by running the migration before setup, and both halves here are
+        in-place updates with no get-or-create between them, so swapping the two
+        loops cannot by itself create a second device row. What this pins is the
+        ordering as a standing property, so a future edit that emits a
+        DeviceInfo from inside either path, or moves this work after the
+        platform forward, fails rather than ships.
+        """
+        entry = _make_entry(hass)
+        _seed_old_shape_install(entry, entity_registry, device_registry)
+
+        order = []
+        real_device_update = device_registry.async_update_device
+        real_entity_update = entity_registry.async_update_entity
+        monkeypatch.setattr(
+            device_registry,
+            "async_update_device",
+            lambda *a, **k: (order.append("device"), real_device_update(*a, **k))[1],
+        )
+        monkeypatch.setattr(
+            entity_registry,
+            "async_update_entity",
+            lambda *a, **k: (order.append("entity"), real_entity_update(*a, **k))[1],
+        )
+
+        assert await async_migrate_entry(hass, entry) is True
+
+        assert "device" in order and "entity" in order
+        assert order.index("device") < order.index("entity")
+
+    @pytest.mark.asyncio
+    async def test_the_rekey_listener_runs_before_the_late_entity_adders(self, hass, device_registry, monkeypatch):
+        """Registration order is fire order, and this integration sets it.
+
+        The wrapper registers inside async_setup_entry and sensor.py's adder
+        registers inside the platform setup the forward invokes, so the re-key
+        runs ahead of every late adder on every update. That is what makes a
+        post-forward listener run safe: a poll that both returns a previously
+        absent hub and surfaces a new sub-device re-keys the hub row first, and
+        the adder writes its DeviceInfo against an already-migrated parent.
+
+        Home Assistant's entity-platform layer is not exercised here, but it
+        contributes nothing to this ordering, which is set entirely by this
+        integration's own code.
+        """
+
+        entry = _make_entry(hass)
+        device_registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub")
+        client = _make_client([], [_poll_record()])
+
+        # Instrument registration rather than registering anything: each
+        # listener is wrapped in place, so the order below is the order this
+        # integration's own code chose, not one the test picked.
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+
+        fired = []
+        real_add_listener = RainPointCoordinator.async_add_listener
+
+        def instrumented(self, update_callback, context=None):
+            label = getattr(update_callback, "__qualname__", repr(update_callback))
+
+            def recording(*args, **kwargs):
+                fired.append(label)
+                return update_callback(*args, **kwargs)
+
+            return real_add_listener(self, recording, context)
+
+        monkeypatch.setattr(RainPointCoordinator, "async_add_listener", instrumented)
+
+        assert (await _setup_with_patched_forward(hass, entry, client, device_registry, monkeypatch))[0] is True
+        coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+        fired.clear()
+
+        await coordinator.async_refresh()
+
+        rekey = next(i for i, label in enumerate(fired) if "_complete_hub_identity_rekey_on_updates" in label)
+        adder = next(i for i, label in enumerate(fired) if "async_on_coordinator_update" in label)
+        assert rekey < adder
+
+
+class TestTheCompetingRowWindow:
+    """The one route that leaves a hub permanently split across two device rows."""
+
+    @pytest.mark.asyncio
+    async def test_a_setup_pass_that_could_not_look_leaves_two_rows_and_says_so(
+        self, hass, entity_registry, device_registry, monkeypatch, caplog
+    ):
+        """The headline data-loss window, driven through this integration's own setup.
+
+        With the re-key sweep unable to read a registry on its setup pass,
+        async_setup_entry continues to the platform forward, the hub platforms
+        write the migrated identifier, and a fresh device row appears beside the
+        old-shape one. Every later sweep then collides on that identifier and
+        the original row stays old-shape permanently, keeping its area, its
+        user-set name and its sub-devices while nothing writes to it any more.
+
+        The patch is scoped by caller, not by call index: three sweeps call
+        _fetch_registry_rows during one setup, so failing the first call or the
+        first N calls would starve the wrong one and produce a green test about
+        nothing. Only the residual re-key's own fetches are failed here.
+
+        Home Assistant's entity-platform layer is not exercised, so what this
+        proves is what this integration's setup path does and what the
+        registries end up holding, not that HA would have added those entities.
+        The competing identifier under assertion is the one device.py computed.
+        """
+        import custom_components.rainpoint as rp
+
+        entry = _make_entry(hass, version=2)
+        old = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        device_registry.async_update_device(old.id, name_by_user="Kitchen Hub")
+        child = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
+            via_device=(DOMAIN, f"hub_{HID}"),
+            name="Child",
+        )
+        row = entity_registry.async_get_or_create(
+            "sensor", DOMAIN, f"{DOMAIN}_hub_{HID}_mac", config_entry=entry, suggested_object_id="hub_mac"
+        )
+
+        real_fetch = rp._fetch_registry_rows
+        starve = {"on": True}
+
+        def scoped_fetch(get_registry, entries_for, hass_arg, entry_arg, sweep):
+            if starve["on"] and sweep == "the residual hub identity re-key":
+                return None, []
+            return real_fetch(get_registry, entries_for, hass_arg, entry_arg, sweep)
+
+        monkeypatch.setattr(rp, "_fetch_registry_rows", scoped_fetch)
+
+        client = _make_client([_poll_record()])
+        result, _built = await _setup_with_patched_forward(hass, entry, client, device_registry, monkeypatch)
+        assert result is True
+
+        competing = device_registry.async_get_device(identifiers={(DOMAIN, f"hub_{HID}_{MID}")})
+        assert competing is not None, "the platform forward must have written the migrated identifier"
+        assert competing.id != old.id
+
+        starve["on"] = False
+        caplog.clear()
+        coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+        with caplog.at_level("DEBUG"):
+            await coordinator.async_refresh()
+
+        abandoned = device_registry.async_get(old.id)
+        assert abandoned.identifiers == {(DOMAIN, f"hub_{HID}")}
+        assert abandoned.name_by_user == "Kitchen Hub"
+        assert device_registry.async_get(child.id).via_device_id == old.id
+        assert entity_registry.async_get(row.entity_id).unique_id == f"{DOMAIN}_hub_{HID}_mac"
+
+        # The level is the whole difference between a permanent state a user can
+        # see and one that is invisible on a default install, so it is asserted
+        # on the record rather than by grepping caplog.text.
+        warnings = [
+            record
+            for record in caplog.records
+            if record.levelno >= 30 and "Could not re-key hub device row" in record.getMessage()
+        ]
+        assert warnings, "the abandoned row must be named at warning level"
+
+        assert rp._complete_hub_identity_rekey(hass, entry, coordinator) == frozenset({str(HID)})
+
+    @pytest.mark.asyncio
+    async def test_the_sweep_reports_a_collided_hub_residual_and_stays_armed(self, hass, device_registry, caplog):
+        """The residual set is a re-read of row shape, not a tally of intent.
+
+        An implementation that built the set from the hids it decided to move
+        returns an empty frozenset here, which would latch the wrapper shut over
+        a hub that is still old-shape and still needs a pass.
+        """
+        import custom_components.rainpoint as rp
+
+        entry = _make_entry(hass)
+        old = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        competing = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}_{MID}")}, name="Competing"
+        )
+        coordinator = await _real_coordinator(hass, entry, _make_client([_poll_record()]))
+
+        with caplog.at_level("DEBUG"):
+            residual = rp._complete_hub_identity_rekey(hass, entry, coordinator)
+
+        assert residual == frozenset({str(HID)})
+        assert device_registry.async_get(old.id).identifiers == {(DOMAIN, f"hub_{HID}")}
+        assert device_registry.async_get(competing.id).id == competing.id
+        assert [r for r in caplog.records if r.levelno >= 30 and "Could not re-key hub device row" in r.getMessage()]
+
+        rp._complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
+        assert coordinator._listeners, "a hub left old-shape must keep the listener armed"
+
+    @pytest.mark.asyncio
+    async def test_the_migration_continues_past_a_collided_hub(self, hass, entity_registry, device_registry, caplog):
+        """A caught device move must not cost the rest of the loop.
+
+        The second hub migrating on both halves is what proves the loop
+        continued rather than stopping at the caught row.
+        """
+        entry = _make_entry(hass)
+        hid2 = 101
+        old = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub A"
+        )
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}_{MID}")}, name="Competing"
+        )
+        second = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{hid2}")}, name="Hub B"
+        )
+        colliding_row = entity_registry.async_get_or_create(
+            "sensor", DOMAIN, f"{DOMAIN}_hub_{HID}_mac", config_entry=entry, suggested_object_id="hub_a_mac"
+        )
+        second_row = entity_registry.async_get_or_create(
+            "sensor", DOMAIN, f"{DOMAIN}_hub_{hid2}_mac", config_entry=entry, suggested_object_id="hub_b_mac"
+        )
+        for hid, mid in ((HID, MID), (hid2, 301)):
+            entity_registry.async_get_or_create(
+                "binary_sensor",
+                DOMAIN,
+                f"{DOMAIN}_hub_{hid}_{mid}_connectivity",
+                config_entry=entry,
+                suggested_object_id=f"conn_{hid}",
+            )
+
+        with caplog.at_level("WARNING"):
+            assert await async_migrate_entry(hass, entry) is True
+        assert entry.version == 2
+
+        assert device_registry.async_get(old.id).identifiers == {(DOMAIN, f"hub_{HID}")}
+        # Hub A's entity row does move, and by the competing row's own entity
+        # pass rather than by the caught one's: that row is already new-shape,
+        # so it is in the working set with nothing to do on the device half.
+        # The caught hub's own pass touched neither half, which is what the
+        # injected-failure case above isolates.
+        assert entity_registry.async_get(colliding_row.entity_id).unique_id == f"{DOMAIN}_hub_{HID}_{MID}_mac"
+        assert device_registry.async_get(second.id).identifiers == {(DOMAIN, f"hub_{hid2}_301")}
+        assert entity_registry.async_get(second_row.entity_id).unique_id == f"{DOMAIN}_hub_{hid2}_301_mac"
+        assert [r for r in caplog.records if r.levelno >= 30 and "Could not re-key hub device row" in r.getMessage()]
+
+
+class TestSelectionScope:
+    """What the migration must never touch."""
+
+    @pytest.mark.asyncio
+    async def test_a_sub_device_device_row_is_never_passed_to_the_device_registry(
+        self, hass, entity_registry, device_registry, monkeypatch
+    ):
+        """A sub-device identifier carries no hub prefix, so it is not a candidate."""
+        entry = _make_entry(hass)
+        _hub, child, _rows = _seed_old_shape_install(entry, entity_registry, device_registry)
+
+        moved = []
+        real_update = device_registry.async_update_device
+        monkeypatch.setattr(
+            device_registry,
+            "async_update_device",
+            lambda device_id, **kwargs: (moved.append(device_id), real_update(device_id, **kwargs))[1],
+        )
+
+        assert await async_migrate_entry(hass, entry) is True
+        assert child.id not in moved
+        assert device_registry.async_get(child.id).identifiers == {(DOMAIN, f"{HID}_{MID}_{ADDR}")}
+
+    @pytest.mark.asyncio
+    async def test_the_losing_row_of_a_collision_keeps_its_whole_identity(self, hass, entity_registry, device_registry):
+        """Skipped, never deleted: the recorder history behind it is the point."""
+        entry = _make_entry(hass)
+        _hub, _child, rows = _seed_old_shape_install(entry, entity_registry, device_registry)
+        entity_registry.async_get_or_create(
+            "sensor", DOMAIN, f"{DOMAIN}_hub_{HID}_{MID}_mac", config_entry=entry, suggested_object_id="squatter"
+        )
+        before = entity_registry.async_get(rows["mac"].entity_id)
+
+        assert await async_migrate_entry(hass, entry) is True
+
+        after = entity_registry.async_get(before.entity_id)
+        assert after is not None
+        assert after.unique_id == before.unique_id
+        assert after.entity_id == before.entity_id
+        assert after.name == before.name
+
+
+class TestMidResolutionOrdering:
+    """Each source alone, and the tie-break's independence from creation order."""
+
+    @pytest.mark.asyncio
+    async def test_source_one_alone_resolves_the_mid(self, hass, device_registry):
+        """A parented sub-device and no connectivity entity at all."""
+        entry = _make_entry(hass)
+        hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
+            via_device=(DOMAIN, f"hub_{HID}"),
+            name="Child",
+        )
+
+        assert await async_migrate_entry(hass, entry) is True
+        assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
+
+    @pytest.mark.asyncio
+    async def test_source_two_alone_resolves_the_mid(self, hass, entity_registry, device_registry):
+        """A connectivity entity and no parented sub-device at all.
+
+        This is the population that has run 1.12.0, where the connectivity row
+        has shipped and is the only thing on disk carrying the mid.
+        """
+        entry = _make_entry(hass)
+        hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        entity_registry.async_get_or_create(
+            "binary_sensor",
+            DOMAIN,
+            f"{DOMAIN}_hub_{HID}_{MID}_connectivity",
+            config_entry=entry,
+            suggested_object_id="conn",
+        )
+
+        assert await async_migrate_entry(hass, entry) is True
+        assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("creation_order", [(9, 10), (10, 9)])
+    async def test_the_tie_break_ignores_registry_iteration_order(self, hass, entity_registry, device_registry, creation_order):
+        """Same outcome whichever row was created first.
+
+        Without a tie-break the surviving device row, with its area, its
+        user-set name and every sub-device parented to it, would be assigned to
+        one of the two hubs by luck of iteration.
+        """
+        entry = _make_entry(hass)
+        hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+        for mid in creation_order:
+            entity_registry.async_get_or_create(
+                "binary_sensor",
+                DOMAIN,
+                f"{DOMAIN}_hub_{HID}_{mid}_connectivity",
+                config_entry=entry,
+                suggested_object_id=f"conn_{mid}",
+            )
+
+        assert await async_migrate_entry(hass, entry) is True
+        assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}_9")}
