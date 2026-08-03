@@ -743,6 +743,66 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+def _resolve_residual_hub_mid(row, hid: str, real_hubs: list, entity_rows, device_rows) -> str | None:
+    """Resolve one old-shape hub row's mid, preferring the registry-backed sources.
+
+    The coordinator's own record is the authoritative source and the one the
+    migration could not reach, because it ran before any coordinator existed. It
+    is consulted only as a fallback so the registry-backed answer wins where
+    both exist, which keeps this path and _resolve_hub_mid from ever picking
+    different hubs for the same home.
+
+    Same isdigit filter and same numeric tie-break as _resolve_hub_mid. The
+    filter earns its place twice over: it stops a non-numeric segment reaching
+    key=int, and it stops a negative mid winning a minimum tie-break outright.
+    hid is an int on a coordinator record and a str off an identifier, so both
+    sides are normalized before they meet.
+    """
+    candidates = [str(hub.get("mid")) for hub in real_hubs if str(hub.get("hid")) == hid and str(hub.get("mid")).isdigit()]
+    return _resolve_hub_mid(row, hid, entity_rows, device_rows) or (min(candidates, key=int) if candidates else None)
+
+
+def _log_residual_mid_decline(hid: str, warned_hids: set[str] | None) -> None:
+    """Log a hub whose mid no source could supply, loudly once and quietly after.
+
+    warned_hids is the caller's closure-local record of which hids have already
+    been announced. The first decline for a hid is a WARNING, because a hub that
+    never resolves stays split across two device rows permanently and the
+    version boundary is already burned; every later decline is DEBUG, because
+    there can be one per coordinator update, forever.
+
+    A caller passing None owns no closure to dedupe against (a direct test call,
+    say), so it gets the WARNING every time rather than silent DEBUG. Announcing
+    twice is a much cheaper failure than announcing never.
+    """
+    if warned_hids is not None and hid in warned_hids:
+        _LOGGER.debug("No mid available for hub %s this pass; leaving it for a later poll", hid)
+        return
+    if warned_hids is not None:
+        warned_hids.add(hid)
+    _LOGGER.warning(
+        "No mid available yet for hub %s; its identity re-key is deferred until a later poll supplies one",
+        hid,
+    )
+
+
+def _residual_old_shape_hids(device_registry, examined: list) -> frozenset[str]:
+    """Re-read the rows this pass touched and report which are still old-shape.
+
+    Derived by re-reading what the registry actually holds, never from a tally
+    of attempted moves. A hub whose device move raised was attempted and did not
+    move; a set built from intent would omit it, report nothing outstanding, and
+    let the caller latch shut with that hub's identity permanently split across
+    two device rows.
+    """
+    residual = set()
+    for row in examined:
+        identity = _hub_row_identity(device_registry.async_get(row.id) or row)
+        if identity is not None and identity[1] is None:
+            residual.add(identity[0])
+    return frozenset(residual)
+
+
 def _complete_hub_identity_rekey(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -818,39 +878,14 @@ def _complete_hub_identity_rekey(
         hid = identity[0]
         examined.append(row)
 
-        # The coordinator's own record is the authoritative source and the one
-        # the migration could not reach, because it ran before any coordinator
-        # existed. Same isdigit filter and same numeric tie-break as
-        # _resolve_hub_mid, so the two paths cannot pick different hubs for the
-        # same home. hid is an int on a coordinator record and a str off an
-        # identifier, so both sides are normalized before they meet.
-        candidates = [str(hub.get("mid")) for hub in real_hubs if str(hub.get("hid")) == hid and str(hub.get("mid")).isdigit()]
-        mid = _resolve_hub_mid(row, hid, entity_rows, device_rows) or (min(candidates, key=int) if candidates else None)
+        mid = _resolve_residual_hub_mid(row, hid, real_hubs, entity_rows, device_rows)
         if mid is None:
-            if warned_hids is None or hid not in warned_hids:
-                if warned_hids is not None:
-                    warned_hids.add(hid)
-                _LOGGER.warning(
-                    "No mid available yet for hub %s; its identity re-key is deferred until a later poll supplies one",
-                    hid,
-                )
-            else:
-                _LOGGER.debug("No mid available for hub %s this pass; leaving it for a later poll", hid)
+            _log_residual_mid_decline(hid, warned_hids)
             continue
         if _move_hub_device_row(device_registry, row, hid, mid):
             _migrate_hub_entity_unique_ids(entity_registry, entity_rows, hid, mid)
 
-    # Derived by re-reading what the registry actually holds, never from a tally
-    # of attempted moves. A hub whose device move raised was attempted and did
-    # not move; a set built from intent would omit it, report nothing
-    # outstanding, and let the caller latch shut with that hub's identity
-    # permanently split across two device rows.
-    residual = set()
-    for row in examined:
-        identity = _hub_row_identity(device_registry.async_get(row.id) or row)
-        if identity is not None and identity[1] is None:
-            residual.add(identity[0])
-    return frozenset(residual)
+    return _residual_old_shape_hids(device_registry, examined)
 
 
 def _complete_hub_identity_rekey_on_updates(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
