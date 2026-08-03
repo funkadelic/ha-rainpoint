@@ -5,6 +5,11 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.12.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.12.0...v1.12.1) (2026-08-02)
 
 
+### What's new
+
+- **A "Not Reporting" notice no longer vanishes and comes back for no reason.** When RainPoint returned a device list that was missing a hub it had listed moments earlier, the integration took that at face value: the notices under **Settings → Repairs** for that hub's quiet devices were cleared, then raised again a few minutes later, on a poll where nothing had actually changed. A hub briefly missing from the list is now read as a gap in RainPoint's reporting rather than as news about your devices, so those notices stay put and the hub holds its last known **Cloud Connection** state until the list recovers. A hub that genuinely has been removed still clears its notices as before.
+
+
 ### Fixed
 
 * keep a not-reporting card through a partial device-list outage ([#139](https://github.com/funkadelic/ha-rainpoint/issues/139)) ([163c525](https://github.com/funkadelic/ha-rainpoint/commit/163c525e42ae4ce55f72e7b54a76b8cdabab9d92))
