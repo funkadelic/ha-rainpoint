@@ -17,6 +17,7 @@ import importlib
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.rainpoint.const import DOMAIN
@@ -73,7 +74,7 @@ def _make_client(device_lists):
     return client
 
 
-async def _setup_with_patched_forward(hass, entry, client, built):
+async def _setup_with_patched_forward(hass, entry, client, built, monkeypatch):
     """Drive the integration's own async_setup_entry; HA's platform layer is unreachable."""
     import custom_components.rainpoint as rp
 
@@ -90,7 +91,7 @@ async def _setup_with_patched_forward(hass, entry, client, built):
             await mod.async_setup_entry(hass, cfg_entry, add)
             built[platform] = captured
 
-    hass.config_entries.async_forward_entry_setups = fake_forward
+    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", fake_forward)
     return await rp.async_setup_entry(hass, entry)
 
 
@@ -117,15 +118,10 @@ class TestCompetingRowIsPermanent:
         )
         assert old.id != new.id
 
-        raised = []
         for _ in range(3):
-            try:
+            with pytest.raises(dr.DeviceIdentifierCollisionError):
                 device_registry.async_update_device(old.id, new_identifiers={(DOMAIN, f"hub_{HID}_{MID}")})
-                raised.append(None)
-            except Exception as exc:
-                raised.append(type(exc).__name__)
 
-        assert raised == ["DeviceIdentifierCollisionError"] * 3
         survivor = device_registry.async_get(old.id)
         assert survivor.identifiers == {(DOMAIN, f"hub_{HID}")}
         assert survivor.name_by_user == "Kitchen Hub"
@@ -153,6 +149,14 @@ class TestCompetingRowIsPermanent:
             identifiers={(DOMAIN, f"hub_{HID}_{MID}")},
             name="Competing hub",
         )
+
+        # The failed re-key is the point: without attempting it, this test would
+        # only prove that creating an unrelated third row leaves the child alone,
+        # and would still pass if a failed re-key relocated children.
+        with pytest.raises(dr.DeviceIdentifierCollisionError):
+            device_registry.async_update_device(old.id, new_identifiers={(DOMAIN, f"hub_{HID}_{MID}")})
+
+        assert device_registry.async_get(old.id).identifiers == {(DOMAIN, f"hub_{HID}")}
         assert device_registry.async_get(child.id).via_device_id == old.id
 
 
@@ -168,27 +172,35 @@ class TestNonNumericMidRoute:
         """
         assert not str(mid).isdigit()
 
-    @pytest.mark.parametrize("mid", [-5, "abc"])
-    def test_int_coercion_raises_on_the_same_values(self, mid):
-        """Claim: this is why the filter must run BEFORE min(..., key=int).
+    def test_int_coercion_raises_on_a_non_numeric_mid(self):
+        """Claim: a lowest-value tie-break on an unfiltered candidate can raise.
 
-        ANSWER: confirmed for 'abc'; NOT confirmed for -5, which int() accepts.
-        A negative mid passes key=int and would be selected, so the filter is the
-        only thing standing between it and a hub identifier the platforms never match.
+        ANSWER: confirmed. int("abc") raises ValueError, so an unfiltered candidate
+        reaching min(..., key=int) takes the whole call down with it.
         """
-        if str(mid).lstrip("-").isdigit():
-            assert int(mid) == -5
-        else:
-            with pytest.raises(ValueError):
-                int(mid)
+        with pytest.raises(ValueError):
+            int("abc")
 
-    def test_platform_still_emits_the_bad_mid_into_the_identifier(self, hass):
-        """Claim: while the sweep drops the mid, device.py still writes it at the forward.
+    def test_int_coercion_silently_accepts_a_negative_mid(self):
+        """Claim: the same tie-break is safe once non-numeric candidates are filtered.
 
-        ANSWER: confirmed in shape. Today device.py emits hub_{hid}; after the re-key
-        it direct-indexes hub_info['mid'], so a non-numeric mid lands in the identifier
-        verbatim. Pinned here against the CURRENT spelling so it goes red when the
-        re-key lands and has to be re-read against the new one.
+        ANSWER: NOT confirmed, and this is the surprise. int(-5) succeeds, and since
+        the tie-break takes the minimum, a negative candidate would be selected ahead
+        of every real mid rather than raising. The isdigit filter is therefore doing
+        two different jobs: preventing a raise for one class of bad value and a silent
+        wrong selection for another. It must run before the tie-break for both.
+        """
+        assert int("-5") == -5
+        assert min(["-5", "9", "10"], key=int) == "-5"
+
+    def test_hub_identifier_is_currently_keyed_on_the_home_id_alone(self, hass):
+        """Claim: device.py writes the mid into the identifier verbatim, unfiltered.
+
+        ANSWER: confirmed in shape, and pinned against the CURRENT spelling. Today
+        device.py emits hub_{hid} and ignores the mid entirely, which is what this
+        asserts. Once the re-key lands it direct-indexes hub_info['mid'], a bad mid
+        lands in the identifier verbatim, and this assertion must be re-read and
+        updated deliberately rather than patched to green.
         """
         from custom_components.rainpoint.device import RainPointHubDevice
 
@@ -204,7 +216,7 @@ class TestPlatformOneShotProperty:
     """Source 2 of the gate-lossless argument: the connectivity entity is one-shot."""
 
     @pytest.mark.asyncio
-    async def test_no_hub_entities_are_created_on_a_later_poll(self, hass, device_registry):
+    async def test_no_hub_entities_are_created_on_a_later_poll(self, hass, device_registry, monkeypatch):
         """Claim: a hub absent from the first poll gets no entities, then or later.
 
         ANSWER: confirmed for every hub platform including binary_sensor, which is
@@ -215,7 +227,7 @@ class TestPlatformOneShotProperty:
         entry = _make_entry(hass)
         client = _make_client([[], [_hub_record()]])
         built = {}
-        assert await _setup_with_patched_forward(hass, entry, client, built) is True
+        assert await _setup_with_patched_forward(hass, entry, client, built, monkeypatch) is True
         assert sum(len(v) for v in built.values()) == 0
         assert built["binary_sensor"] == []
 
@@ -229,7 +241,7 @@ class TestListenerOrdering:
     """The composite ordering claim, measured through the existing analog."""
 
     @pytest.mark.asyncio
-    async def test_setup_registered_listener_fires_before_the_late_adders(self, hass, device_registry):
+    async def test_setup_registered_listener_fires_before_the_late_adders(self, hass, device_registry, monkeypatch):
         """Claim: a listener registered in async_setup_entry runs before sensor.py's adder.
 
         ANSWER: confirmed, using _reconcile_sub_device_parents_on_updates as the
@@ -249,7 +261,7 @@ class TestListenerOrdering:
         entry = _make_entry(hass)
         client = _make_client([[_hub_record()]])
         built = {}
-        assert await _setup_with_patched_forward(hass, entry, client, built) is True
+        assert await _setup_with_patched_forward(hass, entry, client, built, monkeypatch) is True
 
         coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
         assert isinstance(coordinator._listeners, list), (
@@ -274,5 +286,8 @@ class TestListenerOrdering:
         setup_time = [i for i, lbl in enumerate(fired) if "reconcile_sub_device_parents" in lbl]
         late_adders = [i for i, lbl in enumerate(fired) if any(m in lbl for m in (".sensor.", ".valve.", ".number."))]
         assert setup_time, f"setup-registered listener not found in {fired}"
-        if late_adders:
-            assert max(setup_time) < min(late_adders), fired
+        # Unconditional on purpose: guarding this behind `if late_adders` would let
+        # it pass without testing anything the moment platform setup or listener
+        # registration changed, which is the failure this test exists to catch.
+        assert late_adders, f"no late adder listeners registered; ordering is untested in {fired}"
+        assert max(setup_time) < min(late_adders), fired
