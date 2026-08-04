@@ -264,8 +264,8 @@ class TestOrphanedKeyEndToEnd:
 
         issue_id = create.call_args.args[2]
         kwargs = create.call_args.kwargs
-        assert issue_id == orphaned_entities_issue_id(SENSOR_KEY)
-        assert issue_id == f"orphaned_device_entities_{SENSOR_KEY}"
+        assert issue_id == orphaned_entities_issue_id(SENSOR_KEY, ENTRY_ID)
+        assert issue_id == f"orphaned_device_entities_{ENTRY_ID}_{SENSOR_KEY}"
         assert kwargs["is_fixable"] is True
         assert kwargs["translation_key"] == "orphaned_device_entities"
         assert kwargs["data"] == {"entry_id": ENTRY_ID, "sensor_key": SENSOR_KEY}
@@ -1488,7 +1488,7 @@ class TestOrphanedKeyReKeyEndState:
         # Exactly one card, and it names the old key rather than the new one.
         issue_id = raised[0].args[2]
         flow_data = raised[0].kwargs["data"]
-        assert issue_id == orphaned_entities_issue_id(REKEY_OLD_KEY)
+        assert issue_id == orphaned_entities_issue_id(REKEY_OLD_KEY, ENTRY_ID)
         assert flow_data["sensor_key"] == REKEY_OLD_KEY
 
         entity_rows, device_rows = self._registry_rows_from(captured, domains)

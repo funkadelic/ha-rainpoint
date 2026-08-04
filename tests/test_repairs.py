@@ -969,16 +969,26 @@ class TestOrphanedEntitiesIssueId:
 
     def test_id_shape(self):
         """Pinned because the id drives dedup across every update."""
-        assert orphaned_entities_issue_id("100_200_1") == f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_100_200_1"
+        assert orphaned_entities_issue_id("100_200_1", "e1") == f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_e1_100_200_1"
+
+    def test_two_config_entries_sharing_a_key_get_two_distinct_ids(self):
+        """A sensor key is {hid}_{mid}_{addr}, so two config entries resolving
+        the same home produce the same key for the same sub-device.
+
+        An unscoped id would make both entries dedup against one card and,
+        worse, make either entry's unload withdraw a card the other raised and
+        never consented to. This manager is the only one that withdraws its own
+        cards, which is why neither sibling id needs the entry."""
+        assert orphaned_entities_issue_id("100_200_1", "e1") != orphaned_entities_issue_id("100_200_1", "e2")
 
     def test_two_distinct_keys_give_two_distinct_ids(self):
         """One card per key means two keys must never converge on one card."""
-        assert orphaned_entities_issue_id("100_200_1") != orphaned_entities_issue_id("100_200_2")
+        assert orphaned_entities_issue_id("100_200_1", "e1") != orphaned_entities_issue_id("100_200_2", "e1")
 
     def test_a_longer_addr_does_not_collide_with_a_shorter_one(self):
         """The case a prefix match would confuse, and the reason the flow reads
         the key from the issue data rather than parsing it back out of the id."""
-        assert orphaned_entities_issue_id("100_200_1") != orphaned_entities_issue_id("100_200_11")
+        assert orphaned_entities_issue_id("100_200_1", "e1") != orphaned_entities_issue_id("100_200_11", "e1")
 
 
 class TestRainPointOrphanedEntityIssues:
@@ -994,7 +1004,7 @@ class TestRainPointOrphanedEntityIssues:
         create.assert_called_once()
         _hass, domain, issue_id = create.call_args.args
         assert domain == DOMAIN
-        assert issue_id == orphaned_entities_issue_id("100_200_1")
+        assert issue_id == orphaned_entities_issue_id("100_200_1", "e1")
         kwargs = create.call_args.kwargs
         assert kwargs["is_fixable"] is True
         assert kwargs["severity"] == repairs.ir.IssueSeverity.WARNING
@@ -1034,7 +1044,7 @@ class TestRainPointOrphanedEntityIssues:
         delete.assert_called_once()
         _hass, domain, issue_id = delete.call_args.args
         assert domain == DOMAIN
-        assert issue_id == orphaned_entities_issue_id("100_200_1")
+        assert issue_id == orphaned_entities_issue_id("100_200_1", "e1")
 
     def test_a_non_orphaned_record_clears_even_an_id_this_instance_never_raised(self, issue_mocks):
         """A fresh manager after a reload has no memory of what a prior session
@@ -1100,7 +1110,7 @@ class TestRainPointOrphanedEntityIssues:
         card the registry still holds must not be raised a second time."""
         create, _delete = issue_mocks
         manager = RainPointOrphanedEntityIssues(MagicMock())
-        issue_id = orphaned_entities_issue_id("100_200_1")
+        issue_id = orphaned_entities_issue_id("100_200_1", "e1")
 
         with patch.object(repairs.ir, "async_get", return_value=self._registry_holding(issue_id)):
             manager.async_sync([_make_orphan_record()])
@@ -1119,7 +1129,7 @@ class TestRainPointOrphanedEntityIssues:
         with leftover entities and no surface left to act on."""
         create, _delete = issue_mocks
         manager = RainPointOrphanedEntityIssues(MagicMock())
-        issue_id = orphaned_entities_issue_id("100_200_1")
+        issue_id = orphaned_entities_issue_id("100_200_1", "e1")
 
         with patch.object(repairs.ir, "async_get", return_value=self._registry_holding(issue_id)):
             manager.async_sync([_make_orphan_record()])
@@ -1165,8 +1175,8 @@ class TestRainPointOrphanedEntityIssues:
             manager.async_clear_all()
 
         assert sorted(call.args[2] for call in delete.call_args_list) == [
-            orphaned_entities_issue_id("100_200_1"),
-            orphaned_entities_issue_id("100_200_2"),
+            orphaned_entities_issue_id("100_200_1", "e1"),
+            orphaned_entities_issue_id("100_200_2", "e1"),
         ]
         assert manager._active == set()
         messages = [r.getMessage() for r in caplog.records]
@@ -1342,7 +1352,7 @@ class TestRainPointOrphanedEntitiesRepairFlow:
             step = await flow.async_step_init()
 
         assert step["description_placeholders"] == supplied
-        registry.async_get_issue.assert_called_once_with(DOMAIN, orphaned_entities_issue_id("100_200_1"))
+        registry.async_get_issue.assert_called_once_with(DOMAIN, orphaned_entities_issue_id("100_200_1", "e1"))
 
     @pytest.mark.asyncio
     async def test_an_absent_issue_yields_no_placeholders(self):

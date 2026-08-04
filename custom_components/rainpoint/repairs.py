@@ -462,9 +462,18 @@ class OrphanedEntitiesRecord:
     orphaned: bool
 
 
-def orphaned_entities_issue_id(sensor_key: str) -> str:
-    """Return the per-key issue id; this string is itself the dedup key."""
-    return f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_{sensor_key}"
+def orphaned_entities_issue_id(sensor_key: str, entry_id: str) -> str:
+    """Return the per-entry, per-key issue id; this string is itself the dedup key.
+
+    Scoped to the config entry as well as the key, which its two non-fixable
+    siblings do not need to be. A sensor key is {hid}_{mid}_{addr}, so two
+    RainPoint config entries resolving the same home -- two accounts sharing an
+    invited home, the same premise the device-row release is built on -- produce
+    the same key for the same sub-device. Without the entry id both would then
+    raise, dedup and withdraw one another's card: unloading either entry would
+    delete a card the other raised and never consented to.
+    """
+    return f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_{entry_id}_{sensor_key}"
 
 
 class RainPointOrphanedEntityIssues:
@@ -508,7 +517,7 @@ class RainPointOrphanedEntityIssues:
         """
         mentioned: set[str] = set()
         for record in records:
-            issue_id = orphaned_entities_issue_id(record.sensor_key)
+            issue_id = orphaned_entities_issue_id(record.sensor_key, record.entry_id)
             mentioned.add(issue_id)
             if record.orphaned:
                 self._raise_issue(issue_id, record)
@@ -520,6 +529,10 @@ class RainPointOrphanedEntityIssues:
     @callback
     def async_clear_all(self) -> None:
         """Withdraw every card this instance raised, on config entry unload.
+
+        Every id in the active set carries this entry's own id, so this
+        withdraws only what this entry raised even when a second RainPoint
+        entry resolves the same home and therefore the same sensor keys.
 
         This manager is the one that needs it, and the reason is that its
         record source is session-scoped bookkeeping rather than the current
@@ -699,6 +712,11 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         """The one sensor key this flow is allowed to act on."""
         return str(self._flow_data.get("sensor_key", ""))
 
+    @property
+    def _entry_id(self) -> str:
+        """The one config entry this flow is allowed to act on."""
+        return str(self._flow_data.get("entry_id", ""))
+
     async def async_step_init(self, user_input: dict | None = None):
         """Handle the first step of the fix flow."""
         return await self.async_step_confirm()
@@ -727,7 +745,8 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         user with a broken dialog.
         """
         try:
-            issue = ir.async_get(self.hass).async_get_issue(DOMAIN, orphaned_entities_issue_id(self._sensor_key))
+            issue_id = orphaned_entities_issue_id(self._sensor_key, self._entry_id)
+            issue = ir.async_get(self.hass).async_get_issue(DOMAIN, issue_id)
             if issue is None:
                 return None
             return issue.translation_placeholders
