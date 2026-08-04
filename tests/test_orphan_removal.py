@@ -21,16 +21,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.rainpoint import (
+    _build_orphaned_entity_records,
+    _read_aged_out_keys,
     _remove_orphaned_key_rows,
+    _sync_orphaned_entity_issues,
     _sync_orphaned_entity_issues_on_updates,
     repairs,
 )
-from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_VALVE_245
+from custom_components.rainpoint.const import (
+    CONF_HIDS,
+    DOMAIN,
+    MODEL_MOISTURE_SIMPLE,
+    MODEL_VALVE_245,
+)
 from custom_components.rainpoint.coordinator import (
     ORPHANED_KEY_DEBOUNCE_POLLS,
     RainPointCoordinator,
 )
-from custom_components.rainpoint.entity import LATE_ADDER_STORE_KEY
+from custom_components.rainpoint.entity import LATE_ADDER_STORE_KEY, LateEntityAdder
 from custom_components.rainpoint.repairs import (
     async_create_fix_flow,
     orphaned_entities_issue_id,
@@ -60,9 +68,9 @@ _REGISTRY_ROWS = [
 ]
 
 
-def _hub_record(*, with_child: bool) -> list[dict]:
+def _hub_record(*, with_child: bool, model: str = MODEL_VALVE_245) -> list[dict]:
     """One real valve hub whose subDevices either lists its child or does not."""
-    sub_devices = [{"addr": ADDR, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}]
+    sub_devices = [{"addr": ADDR, "name": "Hub A", "model": model, "softVer": "127"}]
     return [
         {
             "mid": MID,
@@ -109,10 +117,10 @@ def _make_entity_registry():
     return removed, _async_get, _async_entries_for_config_entry
 
 
-def _build_timeline(*, zones_reported: bool = True):
+def _build_timeline(*, zones_reported: bool = True, model: str = MODEL_VALVE_245):
     """Return (coordinator, hass, entry, client) for one real valve hub."""
     client = AsyncMock()
-    client.get_devices_by_hid.return_value = _hub_record(with_child=True)
+    client.get_devices_by_hid.return_value = _hub_record(with_child=True, model=model)
     client.get_multiple_device_status.return_value = make_valve_zone_status(mid=MID, zones_reported=zones_reported)
 
     entry = MagicMock()
@@ -132,6 +140,11 @@ def _capturing_add_entities():
     """Return (captured, async_add_entities) recording every emitted entity."""
     captured: list = []
     return captured, MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+
+def _ledger_entity(unique_id):
+    """A stand-in carrying only the attribute the ledger records."""
+    return SimpleNamespace(_attr_unique_id=unique_id)
 
 
 class TestOrphanedKeyEndToEnd:
@@ -229,3 +242,269 @@ class TestOrphanedKeyEndToEnd:
             assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 0
 
         assert removed == []
+
+
+class TestOrphanedCardLifecycle:
+    """A card only ever appears for a sustained absence, and clears itself."""
+
+    @staticmethod
+    async def _armed_timeline(model: str = MODEL_VALVE_245):
+        """Drive construct -> first refresh -> sweep armed -> platform setup.
+
+        The shared preamble of every lifecycle test, in the order a real
+        install runs it. Callers drive their own polls off the returned client
+        and coordinator and assert between them.
+        """
+        coordinator, hass, entry, client = _build_timeline(model=model)
+        _captured, async_add_entities = _capturing_add_entities()
+
+        await coordinator.async_config_entry_first_refresh()
+        _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+        await valve_async_setup_entry(hass, entry, async_add_entities)
+        return coordinator, hass, entry, client
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_returns_below_the_threshold_never_raises_a_card(self):
+        """A shrunken poll that reverses must not be visible to the user at
+        all, which is the whole reason the window is polls rather than one."""
+        coordinator, _hass, _entry, client = await self._armed_timeline()
+        removed, async_get, async_entries = _make_entity_registry()
+
+        with (
+            patch.object(repairs.ir, "async_create_issue") as create,
+            patch.object(repairs.ir, "async_delete_issue"),
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS - 1):
+                await coordinator.async_refresh()
+            assert create.call_count == 0
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=True)
+            await coordinator.async_refresh()
+
+            # The counter restarts from zero on any reappearance, so the next
+            # absence starts a fresh window rather than resuming this one.
+            assert coordinator._orphaned_key_poll_counts == {}
+            assert create.call_count == 0
+
+        assert removed == []
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_returns_after_the_card_clears_it_without_deleting(self):
+        """A user who has not acted yet must not be left holding a card that
+        claims a currently-reporting device is orphaned."""
+        coordinator, _hass, _entry, client = await self._armed_timeline()
+        removed, async_get, async_entries = _make_entity_registry()
+
+        with (
+            patch.object(repairs.ir, "async_create_issue") as create,
+            patch.object(repairs.ir, "async_delete_issue") as delete,
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+            assert create.call_count == 1
+            raised_id = create.call_args.args[2]
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=True)
+            delete.reset_mock()
+            await coordinator.async_refresh()
+
+            # Filtered on this card's own id: the not-reporting manager shares
+            # this patched delete and clears its own issue on the same poll.
+            cleared = [call.args[2] for call in delete.call_args_list if call.args[2] == raised_id]
+            assert cleared == [raised_id]
+            assert create.call_count == 1
+
+        assert removed == []
+
+    @pytest.mark.asyncio
+    async def test_a_key_no_adder_recorded_anything_for_never_gets_a_card(self):
+        """The blast-radius limit as an observable: the moisture sensor's key
+        ages out exactly the same way, but the valve adder emitted nothing for
+        it, so there is no row to offer and therefore no card."""
+        coordinator, _hass, _entry, client = await self._armed_timeline(model=MODEL_MOISTURE_SIMPLE)
+
+        with (
+            patch.object(repairs.ir, "async_create_issue") as create,
+            patch.object(repairs.ir, "async_delete_issue"),
+        ):
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False, model=MODEL_MOISTURE_SIMPLE)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS + 2):
+                await coordinator.async_refresh()
+
+            # The coordinator's own verdict is unchanged: it counts keys, not
+            # entities, and knows nothing about what any adder emitted.
+            assert SENSOR_KEY in coordinator.aged_out_sensor_keys()
+            assert create.call_count == 0
+
+
+class _BrokenAdder:
+    """An adder whose ledger raises, standing in for a malformed platform."""
+
+    @property
+    def ledger(self):
+        """Fail the way a half-constructed adder would."""
+        raise RuntimeError("no ledger")
+
+    def forget(self, key):
+        """Fail on the forget half too."""
+        raise RuntimeError("cannot forget")
+
+
+class TestOrphanedSweepGuards:
+    """Every read on this path degrades rather than raising.
+
+    The sweep runs inside a coordinator listener and the remover runs inside a
+    Repairs flow step, so an exception in either breaks something much larger
+    than the read that produced it.
+    """
+
+    def test_a_coordinator_without_the_accessor_offers_nothing(self):
+        """Coordinator stand-ins are common on this path, and one predating
+        the accessor must not raise into a listener."""
+        assert _read_aged_out_keys(SimpleNamespace()) == frozenset()
+
+    def test_a_coordinator_answering_with_a_non_iterable_offers_nothing(self):
+        """The other shape of the same failure, caught at the same place
+        rather than at some later and less obvious point."""
+        assert _read_aged_out_keys(SimpleNamespace(aged_out_sensor_keys=lambda: 1)) == frozenset()
+
+    def test_no_coordinator_at_all_offers_nothing(self):
+        """A setup that never got as far as building one."""
+        assert _read_aged_out_keys(None) == frozenset()
+
+    def test_one_malformed_adder_does_not_abort_the_record_build(self):
+        """The other platforms' keys must still be reconciled."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        good = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity("z1")])
+        good.collect(SENSOR_KEY, {"addr": ADDR, "model": "M", "sub_name": "S", "hub_name": "H"})
+        store = {LATE_ADDER_STORE_KEY: [_BrokenAdder(), good]}
+
+        records = _build_orphaned_entity_records(store, ENTRY_ID, frozenset({SENSOR_KEY}))
+
+        assert [(r.sensor_key, r.entity_count, r.orphaned) for r in records] == [(SENSOR_KEY, 1, True)]
+
+    def test_a_manager_that_raises_leaves_every_card_alone(self):
+        """The outer guard, which is what keeps this off the update path's
+        error surface entirely."""
+        manager = MagicMock()
+        manager.async_sync.side_effect = RuntimeError("registry down")
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        _sync_orphaned_entity_issues(hass, entry, None, manager)
+
+    def test_an_unwritable_entry_store_still_arms_the_listener(self):
+        """A config entry whose store cannot be written loses its removal
+        executor, and that is all: the cards still reconcile."""
+        coordinator = MagicMock()
+        hass = SimpleNamespace(data={})
+        entry = MagicMock()
+        entry.entry_id = ENTRY_ID
+
+        _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+
+        coordinator.async_add_listener.assert_called_once()
+
+    def test_the_listener_reconciles_on_every_update(self):
+        """Both the raise and the clear are idempotent, so there is no arming
+        gate and no update this sweep deliberately sits out."""
+        coordinator = MagicMock()
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {}}})
+        entry = MagicMock()
+        entry.entry_id = ENTRY_ID
+
+        with patch("custom_components.rainpoint.RainPointOrphanedEntityIssues") as manager_cls:
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            listener = coordinator.async_add_listener.call_args.args[0]
+            listener()
+            listener()
+
+        assert manager_cls.return_value.async_sync.call_count == 3
+
+    def test_an_unreadable_entry_store_removes_nothing(self):
+        """The remover's first guard, reached by a flow submitted after its
+        config entry unloaded."""
+        hass = SimpleNamespace(data={})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 0
+
+    def test_one_malformed_adder_does_not_stop_the_others_being_resolved(self):
+        """The per-adder guard on the resolve half, and on the forget half."""
+        removed, async_get, async_entries = _make_entity_registry()
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        good = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)])
+        good.collect(SENSOR_KEY, {})
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [_BrokenAdder(), good]}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 1
+
+        assert removed == ["valve.zone1"]
+        assert good.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+
+    def test_an_unreadable_registry_removes_nothing_and_forgets_nothing(self):
+        """Forgetting without removing would leave a key able to re-offer a
+        unique_id whose row still exists."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)])
+        adder.collect(SENSOR_KEY, {})
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        with patch("custom_components.rainpoint.er.async_get", side_effect=RuntimeError("no registry")):
+            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 0
+
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_1_UNIQUE_ID})
+
+    def test_a_row_that_cannot_be_removed_is_skipped_and_the_rest_proceed(self):
+        """Per-row guarding, matching the generic sweep's shape."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(
+            coordinator,
+            lambda ents: None,
+            lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID), _ledger_entity(ZONE_2_UNIQUE_ID)],
+        )
+        adder.collect(SENSOR_KEY, {})
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        class _StubbornRegistry:
+            """Refuses one row and accepts the other."""
+
+            def __init__(self):
+                self.removed = []
+
+            def async_remove(self, entity_id):
+                """Fail on the first row only."""
+                if entity_id == "valve.zone1":
+                    raise RuntimeError("row is busy")
+                self.removed.append(entity_id)
+
+        registry = _StubbornRegistry()
+        rows = [
+            SimpleNamespace(entity_id="valve.zone1", unique_id=ZONE_1_UNIQUE_ID),
+            SimpleNamespace(entity_id="valve.zone2", unique_id=ZONE_2_UNIQUE_ID),
+        ]
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", return_value=registry),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", return_value=rows),
+        ):
+            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 1
+
+        assert registry.removed == ["valve.zone2"]
+        # The bookkeeping is still corrected: the rows this key names are
+        # either gone or unreachable, and holding their ids would strand the
+        # key if it ever returned.
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()

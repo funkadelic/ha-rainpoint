@@ -531,9 +531,9 @@ def _read_aged_out_keys(coordinator) -> frozenset[str]:
     coordinator means this update offers nothing for removal, which is the
     safe direction for a surface whose only outcome is a deletion offer.
 
-    The guard is not decorative. Many existing tests hand async_setup_entry a
-    MagicMock coordinator, whose accessor returns a mock rather than a set, so
-    the failure this catches is routine rather than exotic.
+    The guard is not decorative. Coordinator stand-ins are common on this
+    path, and one that predates the accessor or answers with something that
+    is not iterable raises here rather than at some later, less obvious point.
     """
     try:
         return frozenset(coordinator.aged_out_sensor_keys()) if coordinator is not None else frozenset()
@@ -554,7 +554,10 @@ def _build_orphaned_entity_records(entry_store: dict, entry_id: str, aged_out: f
 
     A record is built for every session key, not only the aged-out ones, with
     `orphaned` carrying the verdict. That is what lets the manager clear a
-    card for a key that came back.
+    card for a key that came back, and the clear has to be unconditional on
+    the manager's side because a fresh manager after a reload has no memory of
+    what a prior session raised; deleting an id it never raised is already a
+    no-op, while skipping the delete would strand that card forever.
 
     Each adder is read behind its own guard, so one malformed adder cannot
     abort the sweep for the others.

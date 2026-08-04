@@ -540,6 +540,12 @@ class RainPointOrphanedEntityIssues:
                 severity=ir.IssueSeverity.WARNING,
                 translation_key=ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
                 data={"entry_id": record.entry_id, "sensor_key": record.sensor_key},
+                # The threat, stated where the values are: Home Assistant
+                # renders this card and its confirm dialog as Markdown, and
+                # sub_name, model, addr and hub_name all arrive from the
+                # RainPoint payload with nothing validating them. Every one of
+                # them goes through the sanitizer; the two counts are this
+                # integration's own and are only stringified.
                 translation_placeholders={
                     "sub_name": _sanitize_placeholder(record.sub_name),
                     "model": _sanitize_placeholder(record.model),
