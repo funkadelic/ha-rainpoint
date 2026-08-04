@@ -22,6 +22,8 @@ import pytest
 
 from custom_components.rainpoint import (
     _build_orphaned_entity_records,
+    _device_row_for_sensor_key,
+    _device_row_is_empty,
     _read_aged_out_keys,
     _remove_orphaned_key_rows,
     _sync_orphaned_entity_issues,
@@ -508,3 +510,327 @@ class TestOrphanedSweepGuards:
         # either gone or unreachable, and holding their ids would strand the
         # key if it ever returned.
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+
+
+SUB_DEVICE_ROW_ID = "device_sub_1"
+
+# Four unique_ids one adder emitted for SENSOR_KEY this session, all landing on
+# the same sub-device row. Four rather than two so "removed every row this key
+# names" cannot be satisfied by a partial sweep.
+EMITTED_UNIQUE_IDS = tuple(f"rainpoint_{SENSOR_KEY}_zone{zone}" for zone in (1, 2, 3, 4))
+
+EMITTED_ENTITY_ROWS = tuple(
+    SimpleNamespace(
+        config_entry_id=ENTRY_ID,
+        entity_id=f"valve.emitted_zone{zone}",
+        unique_id=f"rainpoint_{SENSOR_KEY}_zone{zone}",
+        device_id=SUB_DEVICE_ROW_ID,
+    )
+    for zone in (1, 2, 3, 4)
+)
+
+# A row on the same device that no adder emitted: a manually created template
+# entity, a row from a previous unique_id shape, anything at all. Its presence
+# is what must keep the device row intact.
+UNEMITTED_SAME_ENTRY_ROW = SimpleNamespace(
+    config_entry_id=ENTRY_ID,
+    entity_id="sensor.left_behind",
+    unique_id="rainpoint_something_this_session_never_emitted",
+    device_id=SUB_DEVICE_ROW_ID,
+)
+
+# The same row, on a different config entry. The device-row emptiness test is
+# scoped to this entry, so this one is not in the candidate set at all.
+UNEMITTED_FOREIGN_ENTRY_ROW = SimpleNamespace(
+    config_entry_id=FOREIGN_ENTRY_ID,
+    entity_id="sensor.left_behind_elsewhere",
+    unique_id="rainpoint_something_this_session_never_emitted",
+    device_id=SUB_DEVICE_ROW_ID,
+)
+
+SUB_DEVICE_ROW = SimpleNamespace(
+    id=SUB_DEVICE_ROW_ID,
+    identifiers={(DOMAIN, SENSOR_KEY)},
+    config_entry_id=ENTRY_ID,
+)
+UNRELATED_DEVICE_ROW = SimpleNamespace(
+    id="device_sub_9",
+    identifiers={(DOMAIN, f"{HID}_{MID}_9")},
+    config_entry_id=ENTRY_ID,
+)
+MALFORMED_DEVICE_ROW = SimpleNamespace(
+    id="device_malformed",
+    identifiers="not-a-set-of-tuples",
+    config_entry_id=ENTRY_ID,
+)
+NO_DOMAIN_DEVICE_ROW = SimpleNamespace(
+    id="device_no_domain",
+    identifiers={("other_integration", SENSOR_KEY)},
+    config_entry_id=ENTRY_ID,
+)
+# No identifiers attribute at all, which is the one shape that raises inside
+# _domain_sensor_key rather than answering None.
+MISSING_IDENTIFIERS_DEVICE_ROW = SimpleNamespace(
+    id="device_missing_identifiers",
+    config_entry_id=ENTRY_ID,
+)
+# Carries the very same DOMAIN identifier on a foreign config entry. The
+# device-registry fetch is entry scoped, so it is never a candidate.
+FOREIGN_DEVICE_ROW = SimpleNamespace(
+    id="device_foreign",
+    identifiers={(DOMAIN, SENSOR_KEY)},
+    config_entry_id=FOREIGN_ENTRY_ID,
+)
+
+# Ordered so every skip-and-continue guard is exercised before the matching row
+# is reached, rather than the match being the first thing the search sees.
+DEFAULT_DEVICE_ROWS = (
+    MALFORMED_DEVICE_ROW,
+    NO_DOMAIN_DEVICE_ROW,
+    MISSING_IDENTIFIERS_DEVICE_ROW,
+    UNRELATED_DEVICE_ROW,
+    SUB_DEVICE_ROW,
+    FOREIGN_DEVICE_ROW,
+)
+
+
+def _make_device_registry(rows, *, get_raises=False, remove_raises=False):
+    """Return (removed, async_get, async_entries) over seeded device rows.
+
+    Rows are re-derived per call and the config-entry scope is honoured, so a
+    foreign-entry row carrying the identical DOMAIN identifier is never in the
+    candidate set rather than being filtered out by luck.
+    """
+    removed: list[str] = []
+
+    class _FakeDeviceRegistry:
+        """Records each device-row removal against that row's own id."""
+
+        def async_remove_device(self, device_id):
+            """Record one device-row removal, or fail if armed to."""
+            if remove_raises:
+                raise RuntimeError(f"device row {device_id} is busy")
+            removed.append(device_id)
+
+    registry = _FakeDeviceRegistry()
+
+    def _async_get(hass):
+        """Return the seeded fake registry, or raise to drive the lookup guard."""
+        if get_raises:
+            raise RuntimeError("device registry unavailable")
+        return registry
+
+    def _async_entries_for_config_entry(reg, entry_id):
+        """Return this config entry's device rows, re-derived per call."""
+        return [
+            SimpleNamespace(**{k: v for k, v in vars(row).items() if k != "config_entry_id"})
+            for row in rows
+            if row.config_entry_id == entry_id and row.id not in removed
+        ]
+
+    return removed, _async_get, _async_entries_for_config_entry
+
+
+def _make_device_aware_entity_registry(rows, *, get_raises_after=None):
+    """Return (removed, async_get, async_entries) over rows carrying a device_id.
+
+    Sibling of _make_entity_registry with the one field the device-row half
+    reads. `get_raises_after` arms the Nth-and-later lookup to fail, which is
+    how the post-removal re-fetch is driven into its own guard while the first
+    fetch still succeeds and still removes the entity rows.
+    """
+    removed: list[str] = []
+    lookups: list[int] = []
+
+    class _FakeEntityRegistry:
+        """Records each entity removal against the row's own entity id."""
+
+        def async_remove(self, entity_id):
+            """Record one removal call."""
+            removed.append(entity_id)
+
+    registry = _FakeEntityRegistry()
+
+    def _async_get(hass):
+        """Return the seeded fake registry, or raise once the arm point passes."""
+        lookups.append(1)
+        if get_raises_after is not None and len(lookups) > get_raises_after:
+            raise RuntimeError("entity registry unavailable")
+        return registry
+
+    def _async_entries_for_config_entry(reg, entry_id):
+        """Return this config entry's surviving rows, re-derived per call."""
+        return [
+            SimpleNamespace(entity_id=row.entity_id, unique_id=row.unique_id, device_id=row.device_id)
+            for row in rows
+            if row.config_entry_id == entry_id and row.entity_id not in removed
+        ]
+
+    return removed, _async_get, _async_entries_for_config_entry
+
+
+class TestOrphanedDeviceRowRemoval:
+    """The confirmed removal takes the emptied sub-device row too.
+
+    Removing the entity rows alone leaves an empty device card on the user's
+    device page, which trades one cosmetic defect for another. The emptiness
+    test is what makes taking the row safe: a row still carrying any entity for
+    this config entry is left completely alone, whatever that entity is and
+    whichever session or integration created it.
+    """
+
+    @staticmethod
+    def _drive(
+        *,
+        entity_rows=EMITTED_ENTITY_ROWS,
+        device_rows=DEFAULT_DEVICE_ROWS,
+        device_get_raises=False,
+        device_remove_raises=False,
+        entity_get_raises_after=None,
+    ):
+        """Run the confirmed removal for SENSOR_KEY over one seeded pair of registries.
+
+        Returns (count, removed_entity_ids, removed_device_ids, adder) so each
+        case can assert on the entity half, the device half and the adder's
+        bookkeeping independently.
+        """
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(
+            coordinator,
+            lambda ents: None,
+            lambda k, i: [_ledger_entity(unique_id) for unique_id in EMITTED_UNIQUE_IDS],
+        )
+        adder.collect(SENSOR_KEY, {})
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        removed_entities, entity_get, entity_entries = _make_device_aware_entity_registry(
+            entity_rows, get_raises_after=entity_get_raises_after
+        )
+        removed_devices, device_get, device_entries = _make_device_registry(
+            device_rows, get_raises=device_get_raises, remove_raises=device_remove_raises
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=entity_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=entity_entries),
+            patch("custom_components.rainpoint.dr.async_get", side_effect=device_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=device_entries),
+        ):
+            count = _remove_orphaned_key_rows(hass, entry, SENSOR_KEY)
+
+        return count, removed_entities, removed_devices, adder
+
+    def test_the_emptied_sub_device_row_goes_with_its_entities(self):
+        """The whole point of the device half: after a confirm the physical
+        device has neither a leftover entity set nor a leftover device page."""
+        count, removed_entities, removed_devices, adder = self._drive()
+
+        assert count == 4
+        assert sorted(removed_entities) == [f"valve.emitted_zone{zone}" for zone in (1, 2, 3, 4)]
+        # Exactly one call, naming that row and no other. The unrelated row,
+        # the malformed row and the foreign-entry row all survive.
+        assert removed_devices == [SUB_DEVICE_ROW_ID]
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+
+    def test_a_row_still_carrying_an_entity_this_session_did_not_emit_is_left_alone(self):
+        """The emptiness test, as the guard it exists to be. A cascade removal
+        would have taken this row and the entity on it; the entity removals are
+        individual and by unique_id precisely so it cannot."""
+        count, removed_entities, removed_devices, _adder = self._drive(
+            entity_rows=(*EMITTED_ENTITY_ROWS, UNEMITTED_SAME_ENTRY_ROW),
+        )
+
+        assert count == 4
+        assert "sensor.left_behind" not in removed_entities
+        assert removed_devices == []
+
+    def test_a_leftover_entity_on_another_config_entry_does_not_block_the_removal(self):
+        """The one case where "empty for this config entry" and "empty" differ.
+
+        The entity fetch is entry scoped, so a row belonging to another entry is
+        not in the candidate set at all and the device row is taken. That is the
+        deliberate reading, not an accident of the fetch: every other sweep in
+        this integration refuses to read rows outside its own entry, and a
+        sub-device row identified by this integration's DOMAIN identifier is not
+        a shape another entry legitimately shares."""
+        count, _removed_entities, removed_devices, _adder = self._drive(
+            entity_rows=(*EMITTED_ENTITY_ROWS, UNEMITTED_FOREIGN_ENTRY_ROW),
+        )
+
+        assert count == 4
+        assert removed_devices == [SUB_DEVICE_ROW_ID]
+
+    def test_no_device_row_carrying_the_key_removes_the_entities_and_nothing_else(self):
+        """A sub-device whose device row was already removed, or was never
+        created, must not turn the confirm step into an error."""
+        count, removed_entities, removed_devices, adder = self._drive(
+            device_rows=(UNRELATED_DEVICE_ROW, FOREIGN_DEVICE_ROW),
+        )
+
+        assert count == 4
+        assert len(removed_entities) == 4
+        assert removed_devices == []
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+
+    def test_an_unreadable_device_registry_skips_the_device_half_only(self):
+        """The entity removals are already done by then and must stand. The
+        device row is a second, weaker claim, and failing to make it is not a
+        reason to undo the first."""
+        count, removed_entities, removed_devices, adder = self._drive(device_get_raises=True)
+
+        assert count == 4
+        assert len(removed_entities) == 4
+        assert removed_devices == []
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+
+    def test_an_unreadable_post_removal_entity_fetch_leaves_the_device_row_in_place(self):
+        """Emptiness is a claim that has to be positively established. A fetch
+        that could not answer establishes nothing, so the row stays: reading an
+        unreadable registry as "no rows, therefore empty" would remove a device
+        row on the strength of a failed lookup."""
+        count, removed_entities, removed_devices, adder = self._drive(entity_get_raises_after=1)
+
+        assert count == 4
+        assert len(removed_entities) == 4
+        assert removed_devices == []
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+
+    def test_a_device_row_that_refuses_to_be_removed_does_not_break_the_confirm(self):
+        """The removal runs inside a Repairs flow step, so nothing here may
+        propagate. The entity removals and the lockstep forget both stand."""
+        count, removed_entities, removed_devices, adder = self._drive(device_remove_raises=True)
+
+        assert count == 4
+        assert len(removed_entities) == 4
+        assert removed_devices == []
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+
+    def test_malformed_and_foreign_device_rows_are_never_the_candidate(self):
+        """The resolve half in isolation: a row with no identifiers attribute,
+        a row whose identifiers are not tuples, and a row carrying another
+        integration's identifier are all skipped rather than matched, and one
+        of them cannot abort the search for the rest."""
+        rows = [
+            MISSING_IDENTIFIERS_DEVICE_ROW,
+            MALFORMED_DEVICE_ROW,
+            NO_DOMAIN_DEVICE_ROW,
+            UNRELATED_DEVICE_ROW,
+            SUB_DEVICE_ROW,
+        ]
+
+        assert _device_row_for_sensor_key(rows, SENSOR_KEY) is SUB_DEVICE_ROW
+        assert _device_row_for_sensor_key(rows, "no_such_key") is None
+        assert _device_row_for_sensor_key([], SENSOR_KEY) is None
+
+    def test_emptiness_is_answered_for_this_entry_and_survives_a_row_without_a_device_id(self):
+        """The predicate in isolation, including the row shape that carries no
+        device_id at all, which must read as "not on this device" rather than
+        raising."""
+        on_the_row = SimpleNamespace(device_id=SUB_DEVICE_ROW_ID)
+        on_another_row = SimpleNamespace(device_id="device_sub_9")
+        no_device_id = SimpleNamespace()
+
+        assert _device_row_is_empty([], SUB_DEVICE_ROW_ID) is True
+        assert _device_row_is_empty([on_another_row, no_device_id], SUB_DEVICE_ROW_ID) is True
+        assert _device_row_is_empty([on_another_row, on_the_row], SUB_DEVICE_ROW_ID) is False

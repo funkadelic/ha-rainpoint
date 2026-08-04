@@ -649,8 +649,47 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
     entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
 
+def _device_row_for_sensor_key(rows, sensor_key: str):
+    """Return the device row whose DOMAIN identifier is this sensor key, or None.
+
+    Resolved through _domain_sensor_key rather than by building an identifier
+    tuple and testing membership. That function already owns the malformed
+    identifiers case and already proves the device-row-to-sensor-key round
+    trip both existing sweeps rely on, so a second spelling of the same match
+    would only be somewhere for the two to drift apart.
+
+    Each row is guarded on its own, matching the per-row discipline of the
+    sweeps beside this one: a row whose identifiers cannot be read at all is
+    skipped rather than aborting the search for the rest.
+    """
+    for row in rows:
+        try:
+            if _domain_sensor_key(row) == sensor_key:
+                return row
+        except Exception as exc:
+            _LOGGER.debug("Could not read identifiers on device row %s: %s", getattr(row, "id", None), exc)
+    return None
+
+
+def _device_row_is_empty(entity_rows, device_id) -> bool:
+    """Return True when no row in entity_rows sits on this device row.
+
+    Scope is exactly what the caller hands in: entity_rows is the
+    config-entry-scoped set, so this answers "empty for this config entry" and
+    deliberately not "empty". Both halves of that are consequences worth
+    naming. A row also carrying an entity from another config entry reads as
+    empty here and is removed. A row carrying any entity from this entry does
+    not, including one this session never emitted and including one that is
+    disabled.
+
+    device_id is read with getattr so a row shape that carries no device_id at
+    all reads as "not on this device" rather than raising.
+    """
+    return not any(getattr(row, "device_id", None) == device_id for row in entity_rows)
+
+
 def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_key: str) -> int:
-    """Remove this session's entity rows for one sensor key, and forget them.
+    """Remove this session's rows for one sensor key, and drop the bookkeeping.
 
     The only removal executor on this path, reached only from the fix flow's
     confirm step, which is reached only after a human submits the form.
@@ -660,12 +699,14 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
     carry a unique_id this session's adders recorded for this exact key, which
     no foreign row can satisfy.
 
-    Never raises: the entry store read, the registry lookup, each row removal
-    and each adder's forget are guarded independently, because this runs
-    inside a Repairs flow step.
+    The sub-device's own device registry row goes too, but only once it carries
+    no entity for this config entry. Removing the entity rows alone would leave
+    an empty device card on the user's device page, which is a different
+    cosmetic defect rather than a fix.
 
-    Removing the sub-device's own device registry row once it is empty is
-    deliberately not done here yet.
+    Never raises: the entry store read, both registry lookups, each row
+    removal and each adder's bookkeeping drop are guarded independently,
+    because this runs inside a Repairs flow step.
     """
     try:
         entry_store = hass.data[DOMAIN][entry.entry_id]
@@ -683,7 +724,7 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
 
     if not doomed:
         # No adder in this session emitted anything for this key, so there is
-        # nothing in scope and nothing to forget. This is the ordinary
+        # nothing in scope and no bookkeeping to drop. This is the ordinary
         # post-restart shape rather than an error: a non-persistent issue is
         # not restored across a restart, but a card raised in one session can
         # still race a reload, and the correct answer there is to remove
@@ -706,6 +747,50 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
         except Exception as exc:
             _LOGGER.debug("Failed to remove orphaned entity %s: %s", getattr(row, "entity_id", None), exc)
 
+    # The emptiness test below has to read the registry as it stands after the
+    # removals above, so the rows are re-fetched rather than reused. The list
+    # the loop just iterated still names every row it removed, so testing
+    # against it would conclude the device row always still carries entities:
+    # a silent no-op that a test asserting only the end state would not catch.
+    surviving_registry, surviving_rows = _fetch_registry_rows(
+        er.async_get, er.async_entries_for_config_entry, hass, entry, "the orphaned device row check"
+    )
+    # An unreadable device registry yields no rows, so this answers None and
+    # the device half is skipped behind the debug line _fetch_registry_rows has
+    # already written.
+    _device_registry, device_rows = _fetch_registry_rows(
+        dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the orphaned device row sweep"
+    )
+    candidate = _device_row_for_sensor_key(device_rows, sensor_key)
+    candidate_id = getattr(candidate, "id", None) if candidate is not None else None
+
+    # A surviving_registry of None means the re-read could not be made at all.
+    # Emptiness is a claim that has to be positively established, and a failed
+    # lookup establishes nothing, so the row stays exactly where it is.
+    if surviving_registry is not None and candidate_id:
+        if _device_row_is_empty(surviving_rows, candidate_id):
+            # The device registry's own removal call cascades: it takes every
+            # entity sitting on the row, including any this session did not
+            # emit, which is precisely the blast radius this path declined.
+            # What makes the call below safe is the emptiness test, not the
+            # call itself, so the two must never be separated.
+            try:
+                _device_registry.async_remove_device(candidate_id)
+                _LOGGER.info("Removed the emptied device row %s for sensor key %s", candidate_id, sensor_key)
+            except Exception as exc:
+                _LOGGER.debug("Failed to remove the emptied device row %s: %s", candidate_id, exc)
+        else:
+            _LOGGER.debug(
+                "Device row %s still carries entities for this config entry; leaving it in place",
+                candidate_id,
+            )
+
+    # Ordering above is load bearing, in both directions. Moving this forget
+    # ahead of the device half would drop the ledger while the emptiness test
+    # still needs the entity ids it resolved from; moving the device removal
+    # ahead of the entity removals would make the emptiness test trivially
+    # false and take nothing at all.
+    #
     # Forgotten at the same moment the rows go, and only then. Runs even when
     # no row was actually removed, since the ledger held ids and the rows
     # being already gone leaves the bookkeeping as the only thing left to
