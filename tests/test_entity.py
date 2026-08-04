@@ -287,7 +287,7 @@ class TestLateEntityAdder:
         """Wire an adder over a coordinator stub, returning it with the sink."""
         coordinator = SimpleNamespace(data={"sensors": sensors})
         added = []
-        adder = LateEntityAdder(coordinator, added.extend, build)
+        adder = LateEntityAdder(coordinator, added.extend, build, "valve")
         return coordinator, adder, added
 
     def test_collect_returns_entities_once_and_never_again(self):
@@ -344,7 +344,7 @@ class TestLateEntityAdder:
         """A refresh that failed leaves data None; the listener still runs."""
         coordinator = SimpleNamespace(data=None)
         added = []
-        adder = LateEntityAdder(coordinator, added.extend, lambda k, i: [_FakeEntity(k)])
+        adder = LateEntityAdder(coordinator, added.extend, lambda k, i: [_FakeEntity(k)], "valve")
 
         adder.async_on_coordinator_update()
 
@@ -360,7 +360,7 @@ class TestEmittedEntityLedger:
         row unreachable and therefore unremovable."""
         zones = ["z1"]
         coordinator = SimpleNamespace(data={"sensors": {}})
-        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity(z) for z in zones])
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity(z) for z in zones], "valve")
 
         adder.collect("k", {})
         zones.append("z2")
@@ -373,7 +373,7 @@ class TestEmittedEntityLedger:
         that did emit it, so recording the builder's full output again would
         be indistinguishable until the builder stopped being deterministic."""
         coordinator = SimpleNamespace(data={"sensors": {}})
-        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")])
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
 
         adder.collect("k", {})
         adder.collect("k", {})
@@ -384,7 +384,7 @@ class TestEmittedEntityLedger:
         """No unique_id means no registry row, so the key is out of scope for
         removal entirely rather than recorded with nothing to remove."""
         coordinator = SimpleNamespace(data={"sensors": {}})
-        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity(None)])
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity(None)], "valve")
 
         adder.collect("k", {})
 
@@ -395,7 +395,7 @@ class TestEmittedEntityLedger:
         """The card has to name a device whose key has left the poll entirely,
         so the descriptor is what survives it."""
         coordinator = SimpleNamespace(data={"sensors": {}})
-        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")])
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
 
         adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "Old", "hub_name": "Hub A"})
         adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "New", "hub_name": "Hub A"})
@@ -417,7 +417,7 @@ class TestEmittedEntityLedger:
         those would leave one entry per key on every adder that forget can
         never reach, since it only runs for keys with recorded unique_ids."""
         coordinator = SimpleNamespace(data={"sensors": {}})
-        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [])
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [], "valve")
 
         adder.collect("k", {"addr": 1, "model": "HCS026FRF", "sub_name": "Soil", "hub_name": "Hub A"})
 
@@ -428,7 +428,7 @@ class TestEmittedEntityLedger:
         """The lockstep half: the ids only stop being remembered when the rows
         they name have actually been removed, and then in both places."""
         coordinator = SimpleNamespace(data={"sensors": {}})
-        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")])
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
         adder.collect("k", {})
 
         adder.forget("k")
@@ -441,7 +441,7 @@ class TestEmittedEntityLedger:
         """Without this, a removed key that returns gains no entities until a
         reload, which would be a new silent failure mode of its own."""
         coordinator = SimpleNamespace(data={"sensors": {}})
-        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")])
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
         adder.collect("k", {})
 
         adder.forget("k")
@@ -452,7 +452,7 @@ class TestEmittedEntityLedger:
         """The remover calls forget on every adder, including ones that never
         emitted for that key."""
         coordinator = SimpleNamespace(data={"sensors": {}})
-        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")])
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
         adder.collect("k", {})
 
         adder.forget("other")

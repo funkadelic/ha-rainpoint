@@ -377,6 +377,13 @@ class _LateSensorEntityAdder:
         self._coordinator = coordinator
         self._async_add_entities = async_add_entities
         self._generic_enabled = generic_enabled
+        # Fixed, unlike LateEntityAdder's, because this class serves exactly
+        # one platform and both the trusted and the generic rows it emits are
+        # sensors. The removal sweep matches on it alongside the unique_id,
+        # since registry uniqueness is per domain. It cannot be read off an
+        # entity: these are recorded before Home Assistant registers them, and
+        # an unregistered entity has no domain.
+        self.domain = "sensor"
         # Neither set is pruned on key absence, unlike the coordinator's
         # _silent_poll_counts, and that asymmetry still holds. That counter is
         # per-poll state a returning device must restart from zero. These are a

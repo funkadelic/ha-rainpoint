@@ -64,7 +64,8 @@ async def async_setup_entry(
             built.extend(build_generic_duration_entities(coordinator, key, info, base_slug))
         return built
 
-    adder = LateEntityAdder(coordinator, async_add_entities, build)
+    # The literal the PLATFORMS list and every entity_id prefix already use.
+    adder = LateEntityAdder(coordinator, async_add_entities, build, "number")
     # Published before anything is emitted, so the removal sweep can ask this
     # adder what it created for a key that later vanishes.
     register_late_adder(data, adder)

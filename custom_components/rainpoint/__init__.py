@@ -743,10 +743,18 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
         return 0
 
     adders = late_adders(entry_store)
-    doomed: set[str] = set()
+    # (domain, unique_id) rather than unique_id alone. Entity registry
+    # uniqueness is per domain, so two rows in different domains may
+    # legitimately carry the same id and matching on the id alone would take
+    # both. No such collision exists across the four id shapes this integration
+    # builds today, so this closes a latent hole rather than a live one, but an
+    # exact-pair list is the whole reason this path does not reason about
+    # unique_id prefixes. The domain comes from the adder that recorded the id,
+    # which is fixed per platform.
+    doomed: set[tuple[str, str]] = set()
     for adder in adders:
         try:
-            doomed.update(adder.ledger.unique_ids_for(sensor_key))
+            doomed.update((adder.domain, unique_id) for unique_id in adder.ledger.unique_ids_for(sensor_key))
         except Exception as exc:
             _LOGGER.debug("Skipping an unreadable late adder while resolving sensor key %s: %s", sensor_key, exc)
 
@@ -780,16 +788,21 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
     # decides whether the bookkeeping may be dropped below: a row that raised
     # is still registered, still holds its unique_id, and releasing that id
     # would let a returning key offer it a second time.
-    failed: set[str] = set()
+    failed: set[tuple[str, str]] = set()
     for row in rows:
-        unique_id = getattr(row, "unique_id", None)
-        if unique_id not in doomed:
+        entity_id = getattr(row, "entity_id", "") or ""
+        # Derived from the entity_id rather than read off a domain attribute,
+        # because that is how Home Assistant itself derives it and it holds for
+        # any row shape the registry hands back. A row with no dot yields the
+        # whole string, which matches no adder domain and is therefore skipped.
+        row_key = (entity_id.split(".", 1)[0], getattr(row, "unique_id", None))
+        if row_key not in doomed:
             continue
         try:
             registry.async_remove(row.entity_id)
             removed += 1
         except Exception as exc:
-            failed.add(unique_id)
+            failed.add(row_key)
             _LOGGER.debug("Failed to remove orphaned entity %s: %s", getattr(row, "entity_id", None), exc)
 
     # The emptiness test below has to read the registry as it stands after the

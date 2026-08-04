@@ -178,11 +178,22 @@ class LateEntityAdder:
         coordinator: RainPointCoordinator,
         async_add_entities: Callable[[list], None],
         build: Callable[[str, dict], list],
+        domain: str,
     ) -> None:
-        """Wrap a platform's per-key builder in add-once bookkeeping."""
+        """Wrap a platform's per-key builder in add-once bookkeeping.
+
+        domain is the entity domain this adder emits into. It is supplied by
+        the platform rather than read off an entity because an entity has no
+        domain until Home Assistant has registered it, and these are recorded
+        before they are added. One adder instance serves exactly one platform's
+        setup, so the value is fixed for the life of the adder. The removal
+        sweep matches on it alongside the unique_id, since registry uniqueness
+        is per domain and two domains may legitimately carry the same id.
+        """
         self._coordinator = coordinator
         self._async_add_entities = async_add_entities
         self._build = build
+        self.domain = domain
         self._emitted: set[str] = set()
         self.ledger = EmittedEntityLedger()
 

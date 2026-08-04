@@ -63,13 +63,20 @@ ZONE_1_UNIQUE_ID = f"rainpoint_{SENSOR_KEY}_zone1"
 ZONE_2_UNIQUE_ID = f"rainpoint_{SENSOR_KEY}_zone2"
 
 # (config entry id, entity_id, unique_id). Two rows this session's valve adder
-# really emits, one same-entry row for a different sensor key, and one row on a
-# foreign config entry carrying the very same unique_id. The last two are the
-# blast-radius assertion: neither may ever be removed.
+# really emits, one same-entry row for a different sensor key, one row on this
+# same entry in a different domain carrying the very same unique_id, and one
+# row on a foreign config entry carrying it too. The last three are the
+# blast-radius assertion: none may ever be removed.
+#
+# The sensor-domain row is the one registry uniqueness actually permits.
+# Uniqueness is per (domain, platform, unique_id), so an id is only ever a
+# partial identifier, and a sweep matching on the id alone would take this row
+# as readily as the valve one that shares it.
 _REGISTRY_ROWS = [
     (ENTRY_ID, "valve.zone1", ZONE_1_UNIQUE_ID),
     (ENTRY_ID, "valve.zone2", ZONE_2_UNIQUE_ID),
     (ENTRY_ID, "valve.unrelated", f"rainpoint_{HID}_{MID}_9_zone1"),
+    (ENTRY_ID, "sensor.same_id_other_domain", ZONE_1_UNIQUE_ID),
     (FOREIGN_ENTRY_ID, "valve.foreign", ZONE_1_UNIQUE_ID),
 ]
 
@@ -146,6 +153,32 @@ def _capturing_add_entities():
     """Return (captured, async_add_entities) recording every emitted entity."""
     captured: list = []
     return captured, MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+
+def _capturing_add_entities_by_domain():
+    """Return (captured, domains, make_add) tagging each id with its platform.
+
+    Home Assistant builds an entity_id as <domain>.<object_id>, where the
+    domain is the emitting platform's. A test double that cannot say which
+    platform produced an entity cannot build a faithful entity_id, and the
+    removal path matches on (domain, unique_id).
+    """
+    captured: list = []
+    domains: dict[str, str] = {}
+
+    def make_add(domain):
+        """Return an async_add_entities that tags what it captures."""
+
+        def _add(ents, **kw):
+            for entity in ents:
+                unique_id = getattr(entity, "_attr_unique_id", None)
+                if unique_id is not None:
+                    domains[unique_id] = domain
+                captured.append(entity)
+
+        return MagicMock(side_effect=_add)
+
+    return captured, domains, make_add
 
 
 def _ledger_entity(unique_id):
@@ -521,7 +554,7 @@ class TestOrphanedSweepGuards:
     def test_one_malformed_adder_does_not_abort_the_record_build(self):
         """The other platforms' keys must still be reconciled."""
         coordinator = SimpleNamespace(data={"sensors": {}})
-        good = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity("z1")])
+        good = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity("z1")], "valve")
         good.collect(SENSOR_KEY, {"addr": ADDR, "model": "M", "sub_name": "S", "hub_name": "H"})
         store = {LATE_ADDER_STORE_KEY: [_BrokenAdder(), good]}
 
@@ -617,7 +650,7 @@ class TestOrphanedSweepGuards:
         confirm with no ledger entry behind it looks to the user exactly like a
         successful removal. The log line is the only breadcrumb left."""
         coordinator = SimpleNamespace(data={"sensors": {}})
-        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [])
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [], "valve")
         hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
         entry = SimpleNamespace(entry_id=ENTRY_ID)
 
@@ -630,7 +663,7 @@ class TestOrphanedSweepGuards:
         """The per-adder guard on the resolve half, and on the forget half."""
         removed, async_get, async_entries = _make_entity_registry()
         coordinator = SimpleNamespace(data={"sensors": {}})
-        good = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)])
+        good = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)], "valve")
         good.collect(SENSOR_KEY, {})
         hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [_BrokenAdder(), good]}}})
         entry = SimpleNamespace(entry_id=ENTRY_ID)
@@ -644,11 +677,37 @@ class TestOrphanedSweepGuards:
         assert removed == ["valve.zone1"]
         assert good.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
 
+    def test_a_row_in_another_domain_sharing_the_unique_id_is_left_alone(self):
+        """Entity registry uniqueness is per (domain, platform, unique_id), so
+        the same unique_id may legitimately exist in two domains and an id on
+        its own does not identify a row.
+
+        The valve adder recorded this id, so a sweep matching on the id alone
+        would take the sensor-domain row carrying it as readily as the valve
+        one, destroying an entity no adder ever emitted along with its recorder
+        history. The seeded rows include exactly that pair.
+        """
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)], "valve")
+        adder.collect(SENSOR_KEY, {})
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+        removed, async_get, async_entries = _make_entity_registry()
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 1
+
+        assert removed == ["valve.zone1"]
+        assert "sensor.same_id_other_domain" not in removed
+
     def test_an_unreadable_registry_removes_nothing_and_forgets_nothing(self):
         """Forgetting without removing would leave a key able to re-offer a
         unique_id whose row still exists."""
         coordinator = SimpleNamespace(data={"sensors": {}})
-        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)])
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)], "valve")
         adder.collect(SENSOR_KEY, {})
         hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
         entry = SimpleNamespace(entry_id=ENTRY_ID)
@@ -673,6 +732,7 @@ class TestOrphanedSweepGuards:
             coordinator,
             lambda ents: None,
             lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID), _ledger_entity(ZONE_2_UNIQUE_ID)],
+            "valve",
         )
         adder.collect(SENSOR_KEY, {})
         hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
@@ -924,6 +984,7 @@ class TestOrphanedDeviceRowRemoval:
             coordinator,
             lambda ents: None,
             lambda k, i: [_ledger_entity(unique_id) for unique_id in EMITTED_UNIQUE_IDS],
+            "valve",
         )
         adder.collect(SENSOR_KEY, {})
         hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
@@ -1168,20 +1229,27 @@ class TestOrphanedKeyReKeyEndState:
             [_rekey_hub_record(REKEY_NEW_MID, [REKEY_NEW_ADDR])],
             _rekey_status([(REKEY_NEW_MID, REKEY_NEW_ADDR)]),
         )
-        captured, async_add_entities = _capturing_add_entities()
+        captured, _domains, make_add = _capturing_add_entities_by_domain()
 
         await coordinator.async_config_entry_first_refresh()
-        await sensor_async_setup_entry(hass, entry, async_add_entities)
-        await valve_async_setup_entry(hass, entry, async_add_entities)
+        await sensor_async_setup_entry(hass, entry, make_add("sensor"))
+        await valve_async_setup_entry(hass, entry, make_add("valve"))
 
         return _unique_ids_for(captured, REKEY_NEW_KEY)
 
     @staticmethod
-    def _registry_rows_from(captured):
+    def _registry_rows_from(captured, domains):
         """Mirror what Home Assistant would have registered for these entities.
 
         Each sub-device entity lands on its own key's device row, and the
         hub-level entities land on a hub row that must survive untouched.
+
+        The entity_id is built as <domain>.<object_id> from the domain of the
+        platform that emitted the entity, which is what Home Assistant does.
+        Using the integration name there instead would make every row's domain
+        the same string and quietly defeat the removal path's (domain,
+        unique_id) match, which is the one thing keeping it from taking a row
+        that shares an id across two domains.
         """
         entity_rows = []
         for entity in captured:
@@ -1197,7 +1265,7 @@ class TestOrphanedKeyReKeyEndState:
             entity_rows.append(
                 SimpleNamespace(
                     config_entry_id=ENTRY_ID,
-                    entity_id=f"rainpoint.{unique_id}",
+                    entity_id=f"{domains[unique_id]}.{unique_id}",
                     unique_id=unique_id,
                     device_id=device_id,
                 )
@@ -1231,13 +1299,13 @@ class TestOrphanedKeyReKeyEndState:
             [_rekey_hub_record(REKEY_OLD_MID, [REKEY_OLD_ADDR])],
             _rekey_status([(REKEY_OLD_MID, REKEY_OLD_ADDR)]),
         )
-        captured, async_add_entities = _capturing_add_entities()
+        captured, domains, make_add = _capturing_add_entities_by_domain()
 
         with _patched_issue_registry() as (create, _delete):
             await coordinator.async_config_entry_first_refresh()
             _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
-            await sensor_async_setup_entry(hass, entry, async_add_entities)
-            await valve_async_setup_entry(hass, entry, async_add_entities)
+            await sensor_async_setup_entry(hass, entry, make_add("sensor"))
+            await valve_async_setup_entry(hass, entry, make_add("valve"))
 
             # Polls 1 and 2: one device at the old key, nothing counted.
             await coordinator.async_refresh()
@@ -1294,7 +1362,7 @@ class TestOrphanedKeyReKeyEndState:
         assert issue_id == orphaned_entities_issue_id(REKEY_OLD_KEY)
         assert flow_data["sensor_key"] == REKEY_OLD_KEY
 
-        entity_rows, device_rows = self._registry_rows_from(captured)
+        entity_rows, device_rows = self._registry_rows_from(captured, domains)
         removed_entities, entity_get, entity_entries = _make_device_aware_entity_registry(entity_rows)
         device_events, device_get, device_entries = _make_device_registry(device_rows)
 
