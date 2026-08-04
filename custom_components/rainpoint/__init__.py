@@ -678,8 +678,11 @@ def _device_row_is_empty(entity_rows, device_id) -> bool:
     config-entry-scoped set, so this answers "empty for this config entry" and
     deliberately not "empty". Both halves of that are consequences worth
     naming. A row also carrying an entity from another config entry reads as
-    empty here and is removed. A row carrying any entity from this entry does
-    not, including one this session never emitted and including one that is
+    empty here, which is why the caller releases the row with a config-entry
+    scoped update rather than an unscoped removal: this predicate establishes
+    nothing about a foreign entry's entities and must never be relied on to.
+    A row carrying any entity from this entry does not read as empty,
+    including one this session never emitted and including one that is
     disabled.
 
     device_id is read with getattr so a row shape that carries no device_id at
@@ -769,16 +772,26 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
     # lookup establishes nothing, so the row stays exactly where it is.
     if surviving_registry is not None and candidate_id:
         if _device_row_is_empty(surviving_rows, candidate_id):
-            # The device registry's own removal call cascades: it takes every
-            # entity sitting on the row, including any this session did not
-            # emit, which is precisely the blast radius this path declined.
-            # What makes the call below safe is the emptiness test, not the
-            # call itself, so the two must never be separated.
+            # Scoped to this config entry, deliberately, because the emptiness
+            # test above cannot make the unscoped call safe: it answers "empty
+            # for this config entry", while async_remove_device's cascade
+            # deletes every entity on the row whose own config entry is in the
+            # row's config_entries set. A row shared with a second RainPoint
+            # entry -- two accounts resolving the same home -- reads as empty
+            # here while still carrying that entry's entities, and the cascade
+            # would take them and their recorder history without them ever
+            # having been named on the card the user confirmed.
+            #
+            # async_update_device drops only this entry's link. The device
+            # registry removes the row itself when this entry was its last one,
+            # so the single-entry case is unchanged, and merely unlinks when
+            # another entry still owns it, which takes only the entities of
+            # entries that were dropped -- none, since this entry has none left.
             try:
-                _device_registry.async_remove_device(candidate_id)
-                _LOGGER.info("Removed the emptied device row %s for sensor key %s", candidate_id, sensor_key)
+                _device_registry.async_update_device(candidate_id, remove_config_entry_id=entry.entry_id)
+                _LOGGER.info("Released the emptied device row %s for sensor key %s", candidate_id, sensor_key)
             except Exception as exc:
-                _LOGGER.debug("Failed to remove the emptied device row %s: %s", candidate_id, exc)
+                _LOGGER.debug("Failed to release the emptied device row %s: %s", candidate_id, exc)
         else:
             _LOGGER.debug(
                 "Device row %s still carries entities for this config entry; leaving it in place",

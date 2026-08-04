@@ -552,35 +552,44 @@ UNEMITTED_FOREIGN_ENTRY_ROW = SimpleNamespace(
 SUB_DEVICE_ROW = SimpleNamespace(
     id=SUB_DEVICE_ROW_ID,
     identifiers={(DOMAIN, SENSOR_KEY)},
-    config_entry_id=ENTRY_ID,
+    config_entries=frozenset({ENTRY_ID}),
 )
 UNRELATED_DEVICE_ROW = SimpleNamespace(
     id="device_sub_9",
     identifiers={(DOMAIN, f"{HID}_{MID}_9")},
-    config_entry_id=ENTRY_ID,
+    config_entries=frozenset({ENTRY_ID}),
 )
 MALFORMED_DEVICE_ROW = SimpleNamespace(
     id="device_malformed",
     identifiers="not-a-set-of-tuples",
-    config_entry_id=ENTRY_ID,
+    config_entries=frozenset({ENTRY_ID}),
 )
 NO_DOMAIN_DEVICE_ROW = SimpleNamespace(
     id="device_no_domain",
     identifiers={("other_integration", SENSOR_KEY)},
-    config_entry_id=ENTRY_ID,
+    config_entries=frozenset({ENTRY_ID}),
 )
 # No identifiers attribute at all, which is the one shape that raises inside
 # _domain_sensor_key rather than answering None.
 MISSING_IDENTIFIERS_DEVICE_ROW = SimpleNamespace(
     id="device_missing_identifiers",
-    config_entry_id=ENTRY_ID,
+    config_entries=frozenset({ENTRY_ID}),
 )
 # Carries the very same DOMAIN identifier on a foreign config entry. The
 # device-registry fetch is entry scoped, so it is never a candidate.
 FOREIGN_DEVICE_ROW = SimpleNamespace(
     id="device_foreign",
     identifiers={(DOMAIN, SENSOR_KEY)},
-    config_entry_id=FOREIGN_ENTRY_ID,
+    config_entries=frozenset({FOREIGN_ENTRY_ID}),
+)
+# One row carrying both config entries, which is what Home Assistant builds
+# when two RainPoint entries -- two accounts resolving the same invited home --
+# claim the same (DOMAIN, sensor_key) identifier. This is the shape the
+# unscoped device removal would have cascaded through.
+SHARED_SUB_DEVICE_ROW = SimpleNamespace(
+    id=SUB_DEVICE_ROW_ID,
+    identifiers={(DOMAIN, SENSOR_KEY)},
+    config_entries=frozenset({ENTRY_ID, FOREIGN_ENTRY_ID}),
 )
 
 # Ordered so every skip-and-continue guard is exercised before the matching row
@@ -596,22 +605,34 @@ DEFAULT_DEVICE_ROWS = (
 
 
 def _make_device_registry(rows, *, get_raises=False, remove_raises=False):
-    """Return (removed, async_get, async_entries) over seeded device rows.
+    """Return (events, async_get, async_entries) over seeded device rows.
 
     Rows are re-derived per call and the config-entry scope is honoured, so a
     foreign-entry row carrying the identical DOMAIN identifier is never in the
     candidate set rather than being filtered out by luck.
+
+    async_update_device models the branch Home Assistant's own device registry
+    takes for remove_config_entry_id: it removes the row outright only when
+    this entry was its last one, and otherwise drops the link and leaves the
+    row, and every other entry's entities on it, in place. Recording those two
+    outcomes separately is what lets a test tell "the row went" apart from
+    "this entry let go of a row it shares".
     """
-    removed: list[str] = []
+    events = SimpleNamespace(removed=[], unlinked=[])
 
     class _FakeDeviceRegistry:
-        """Records each device-row removal against that row's own id."""
+        """Records each device-row release against that row's own id."""
 
-        def async_remove_device(self, device_id):
-            """Record one device-row removal, or fail if armed to."""
+        def async_update_device(self, device_id, *, remove_config_entry_id=None):
+            """Drop one config entry's link, removing the row if it was the last."""
             if remove_raises:
                 raise RuntimeError(f"device row {device_id} is busy")
-            removed.append(device_id)
+            row = next((candidate for candidate in rows if candidate.id == device_id), None)
+            entries = getattr(row, "config_entries", frozenset()) if row is not None else frozenset()
+            if entries == {remove_config_entry_id}:
+                events.removed.append(device_id)
+            else:
+                events.unlinked.append((device_id, remove_config_entry_id))
 
     registry = _FakeDeviceRegistry()
 
@@ -624,12 +645,12 @@ def _make_device_registry(rows, *, get_raises=False, remove_raises=False):
     def _async_entries_for_config_entry(reg, entry_id):
         """Return this config entry's device rows, re-derived per call."""
         return [
-            SimpleNamespace(**{k: v for k, v in vars(row).items() if k != "config_entry_id"})
+            SimpleNamespace(**{k: v for k, v in vars(row).items() if k != "config_entries"})
             for row in rows
-            if row.config_entry_id == entry_id and row.id not in removed
+            if entry_id in row.config_entries and row.id not in events.removed
         ]
 
-    return removed, _async_get, _async_entries_for_config_entry
+    return events, _async_get, _async_entries_for_config_entry
 
 
 def _make_device_aware_entity_registry(rows, *, get_raises_after=None):
@@ -691,9 +712,11 @@ class TestOrphanedDeviceRowRemoval:
     ):
         """Run the confirmed removal for SENSOR_KEY over one seeded pair of registries.
 
-        Returns (count, removed_entity_ids, removed_device_ids, adder) so each
-        case can assert on the entity half, the device half and the adder's
-        bookkeeping independently.
+        Returns (count, removed_entity_ids, device_events, adder) so each case
+        can assert on the entity half, the device half and the adder's
+        bookkeeping independently. device_events carries both device-registry
+        outcomes: .removed for rows that went, .unlinked for rows this entry
+        merely let go of.
         """
         coordinator = SimpleNamespace(data={"sensors": {}})
         adder = LateEntityAdder(
@@ -708,7 +731,7 @@ class TestOrphanedDeviceRowRemoval:
         removed_entities, entity_get, entity_entries = _make_device_aware_entity_registry(
             entity_rows, get_raises_after=entity_get_raises_after
         )
-        removed_devices, device_get, device_entries = _make_device_registry(
+        device_events, device_get, device_entries = _make_device_registry(
             device_rows, get_raises=device_get_raises, remove_raises=device_remove_raises
         )
 
@@ -720,69 +743,80 @@ class TestOrphanedDeviceRowRemoval:
         ):
             count = _remove_orphaned_key_rows(hass, entry, SENSOR_KEY)
 
-        return count, removed_entities, removed_devices, adder
+        return count, removed_entities, device_events, adder
 
     def test_the_emptied_sub_device_row_goes_with_its_entities(self):
         """The whole point of the device half: after a confirm the physical
         device has neither a leftover entity set nor a leftover device page."""
-        count, removed_entities, removed_devices, adder = self._drive()
+        count, removed_entities, device_events, adder = self._drive()
 
         assert count == 4
         assert sorted(removed_entities) == [f"valve.emitted_zone{zone}" for zone in (1, 2, 3, 4)]
-        # Exactly one call, naming that row and no other. The unrelated row,
-        # the malformed row and the foreign-entry row all survive.
-        assert removed_devices == [SUB_DEVICE_ROW_ID]
+        # Exactly one row released, naming that row and no other. The unrelated
+        # row, the malformed row and the foreign-entry row all survive. This
+        # entry was the row's only one, so the release removes it outright.
+        assert device_events.removed == [SUB_DEVICE_ROW_ID]
+        assert device_events.unlinked == []
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
 
     def test_a_row_still_carrying_an_entity_this_session_did_not_emit_is_left_alone(self):
         """The emptiness test, as the guard it exists to be. A cascade removal
         would have taken this row and the entity on it; the entity removals are
         individual and by unique_id precisely so it cannot."""
-        count, removed_entities, removed_devices, _adder = self._drive(
+        count, removed_entities, device_events, _adder = self._drive(
             entity_rows=(*EMITTED_ENTITY_ROWS, UNEMITTED_SAME_ENTRY_ROW),
         )
 
         assert count == 4
         assert "sensor.left_behind" not in removed_entities
-        assert removed_devices == []
+        assert device_events.removed == []
+        assert device_events.unlinked == []
 
-    def test_a_leftover_entity_on_another_config_entry_does_not_block_the_removal(self):
+    def test_a_row_shared_with_another_config_entry_is_released_not_removed(self):
         """The one case where "empty for this config entry" and "empty" differ.
 
-        The entity fetch is entry scoped, so a row belonging to another entry is
-        not in the candidate set at all and the device row is taken. That is the
-        deliberate reading, not an accident of the fetch: every other sweep in
-        this integration refuses to read rows outside its own entry, and a
-        sub-device row identified by this integration's DOMAIN identifier is not
-        a shape another entry legitimately shares."""
-        count, _removed_entities, removed_devices, _adder = self._drive(
+        Two RainPoint entries resolving the same invited home claim the same
+        (DOMAIN, sensor_key) identifier, so Home Assistant merges them into one
+        row carrying both. The emptiness test is entry scoped and reads that
+        row as empty, which is exactly why the release has to be entry scoped
+        too: an unscoped device removal cascades into every entity whose config
+        entry is on the row, so the foreign entry would silently lose its
+        entities and their recorder history to a card that never named them.
+        Dropping only this entry's link leaves the row, and that entry's
+        entities, standing."""
+        count, removed_entities, device_events, _adder = self._drive(
             entity_rows=(*EMITTED_ENTITY_ROWS, UNEMITTED_FOREIGN_ENTRY_ROW),
+            device_rows=(SHARED_SUB_DEVICE_ROW,),
         )
 
         assert count == 4
-        assert removed_devices == [SUB_DEVICE_ROW_ID]
+        assert device_events.removed == []
+        assert device_events.unlinked == [(SUB_DEVICE_ROW_ID, ENTRY_ID)]
+        assert "sensor.left_behind_elsewhere" not in removed_entities
 
     def test_no_device_row_carrying_the_key_removes_the_entities_and_nothing_else(self):
         """A sub-device whose device row was already removed, or was never
         created, must not turn the confirm step into an error."""
-        count, removed_entities, removed_devices, adder = self._drive(
+        count, removed_entities, device_events, adder = self._drive(
             device_rows=(UNRELATED_DEVICE_ROW, FOREIGN_DEVICE_ROW),
         )
 
         assert count == 4
         assert len(removed_entities) == 4
-        assert removed_devices == []
+        assert device_events.removed == []
+        assert device_events.unlinked == []
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
 
     def test_an_unreadable_device_registry_skips_the_device_half_only(self):
         """The entity removals are already done by then and must stand. The
         device row is a second, weaker claim, and failing to make it is not a
         reason to undo the first."""
-        count, removed_entities, removed_devices, adder = self._drive(device_get_raises=True)
+        count, removed_entities, device_events, adder = self._drive(device_get_raises=True)
 
         assert count == 4
         assert len(removed_entities) == 4
-        assert removed_devices == []
+        assert device_events.removed == []
+        assert device_events.unlinked == []
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
 
     def test_an_unreadable_post_removal_entity_fetch_leaves_the_device_row_in_place(self):
@@ -790,21 +824,23 @@ class TestOrphanedDeviceRowRemoval:
         that could not answer establishes nothing, so the row stays: reading an
         unreadable registry as "no rows, therefore empty" would remove a device
         row on the strength of a failed lookup."""
-        count, removed_entities, removed_devices, adder = self._drive(entity_get_raises_after=1)
+        count, removed_entities, device_events, adder = self._drive(entity_get_raises_after=1)
 
         assert count == 4
         assert len(removed_entities) == 4
-        assert removed_devices == []
+        assert device_events.removed == []
+        assert device_events.unlinked == []
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
 
-    def test_a_device_row_that_refuses_to_be_removed_does_not_break_the_confirm(self):
+    def test_a_device_row_that_refuses_to_be_released_does_not_break_the_confirm(self):
         """The removal runs inside a Repairs flow step, so nothing here may
         propagate. The entity removals and the lockstep forget both stand."""
-        count, removed_entities, removed_devices, adder = self._drive(device_remove_raises=True)
+        count, removed_entities, device_events, adder = self._drive(device_remove_raises=True)
 
         assert count == 4
         assert len(removed_entities) == 4
-        assert removed_devices == []
+        assert device_events.removed == []
+        assert device_events.unlinked == []
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
 
     def test_malformed_and_foreign_device_rows_are_never_the_candidate(self):
@@ -970,17 +1006,17 @@ class TestOrphanedKeyReKeyEndState:
             SimpleNamespace(
                 id=f"device_{REKEY_OLD_KEY}",
                 identifiers={(DOMAIN, REKEY_OLD_KEY)},
-                config_entry_id=ENTRY_ID,
+                config_entries=frozenset({ENTRY_ID}),
             ),
             SimpleNamespace(
                 id=f"device_{REKEY_NEW_KEY}",
                 identifiers={(DOMAIN, REKEY_NEW_KEY)},
-                config_entry_id=ENTRY_ID,
+                config_entries=frozenset({ENTRY_ID}),
             ),
             SimpleNamespace(
                 id="device_hub",
                 identifiers={(DOMAIN, f"hub_{REKEY_HID}_{REKEY_NEW_MID}")},
-                config_entry_id=ENTRY_ID,
+                config_entries=frozenset({ENTRY_ID}),
             ),
         ]
         return entity_rows, device_rows
@@ -1062,7 +1098,7 @@ class TestOrphanedKeyReKeyEndState:
 
         entity_rows, device_rows = self._registry_rows_from(captured)
         removed_entities, entity_get, entity_entries = _make_device_aware_entity_registry(entity_rows)
-        removed_devices, device_get, device_entries = _make_device_registry(device_rows)
+        device_events, device_get, device_entries = _make_device_registry(device_rows)
 
         flow = await async_create_fix_flow(hass, issue_id, flow_data)
         flow.hass = hass
@@ -1077,7 +1113,8 @@ class TestOrphanedKeyReKeyEndState:
             assert shown["step_id"] == "confirm"
             # Opening the card removes nothing at all.
             assert removed_entities == []
-            assert removed_devices == []
+            assert device_events.removed == []
+            assert device_events.unlinked == []
 
             result = await flow.async_step_confirm({})
 
@@ -1092,4 +1129,5 @@ class TestOrphanedKeyReKeyEndState:
 
         # Exactly one device row for the physical device, and the hub row and
         # the new key's row both survive.
-        assert removed_devices == [f"device_{REKEY_OLD_KEY}"]
+        assert device_events.removed == [f"device_{REKEY_OLD_KEY}"]
+        assert device_events.unlinked == []
