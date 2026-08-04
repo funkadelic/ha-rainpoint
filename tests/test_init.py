@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import inspect
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2410,3 +2411,74 @@ class TestOrphanSweepCallSiteOrdering:
             coordinator.async_update_listeners()
 
         assert order == ["sweep", "adder"]
+
+
+class TestPriorPhaseSweepsUnchanged:
+    """The leftover-entity removal path widened no sweep that came before it.
+
+    Its removals reach a row through one session's own ledger for one key, and
+    nothing else in this module learned a new removal reason to make that
+    possible. The eight functions below are the whole prior surface that
+    deletes, moves or rewrites a registry row, and the load-bearing assertion
+    is that none of them has acquired any knowledge of the removal path: not
+    the coordinator's aged-out accessor, not the adder store, not the ledger,
+    not the remover, and not the executor.
+
+    Asserted on the source rather than on behaviour on purpose. A behavioural
+    regression suite proves each function still does what it did; it cannot
+    prove that none of them grew a second reason nobody exercised yet. The
+    distinctive markers are the other half: a function gutted down to a stub
+    would satisfy the negative assertion trivially.
+    """
+
+    # Every symbol the leftover-entity removal path introduced. "forget" is the
+    # broadest of them deliberately: it is a substring test, so any spelling of
+    # the lockstep drop reaching one of these functions trips it.
+    REMOVAL_PATH_SYMBOLS = (
+        "aged_out_sensor_keys",
+        "late_adders",
+        "orphan_entity_remover",
+        "EmittedEntityLedger",
+        "forget",
+        "_remove_orphaned_key_rows",
+        "_device_row_for_sensor_key",
+        "_device_row_is_empty",
+    )
+
+    # One marker per function that no other function in this module carries, so
+    # "unchanged" cannot be satisfied by an empty body.
+    DISTINCTIVE_MARKERS: ClassVar[dict[str, str]] = {
+        "_remove_stale_generic_entities": "the generic entity sweep",
+        "_generic_row_removal_reason": "generic entities are disabled",
+        "_generic_control_row_removal_reason": "generic control is disabled",
+        "_reconcile_sub_device_parents": "the sub-device parenting reconcile",
+        "_reconcile_sub_device_parents_on_updates": "seeding an empty swept-key set",
+        "_complete_hub_identity_rekey": "the residual hub identity re-key",
+        "_complete_hub_identity_rekey_on_updates": "_complete_hub_identity_rekey(",
+        "async_migrate_entry": "async_update_entry(entry, version=2)",
+    }
+
+    @pytest.mark.parametrize("name", sorted(DISTINCTIVE_MARKERS))
+    def test_the_prior_sweep_still_carries_its_own_distinctive_marker(self, name):
+        """Each function is still the function it was, not a stub that would
+        pass the negative assertion below for the wrong reason."""
+        import custom_components.rainpoint as package
+
+        source = inspect.getsource(getattr(package, name))
+
+        assert self.DISTINCTIVE_MARKERS[name] in source
+
+    @pytest.mark.parametrize("name", sorted(DISTINCTIVE_MARKERS))
+    def test_the_prior_sweep_references_nothing_the_removal_path_added(self, name):
+        """No prior sweep or migration learned about the removal path.
+
+        The removal reaches a generic-namespace row through the key's ledger,
+        and it never widened the generic sweep to do it. The same holds for the
+        parenting reconcile, the residual hub re-key and the version-boundary
+        migration."""
+        import custom_components.rainpoint as package
+
+        source = inspect.getsource(getattr(package, name))
+
+        offenders = [symbol for symbol in self.REMOVAL_PATH_SYMBOLS if symbol in source]
+        assert offenders == []
