@@ -21,4 +21,4 @@ jobs:
       # Dependabot cannot bump this. Refresh it by hand periodically: hassfest
       # validates against Home Assistant's current requirements, so a stale pin
       # stops catching new ones.
-      - uses: home-assistant/actions/hassfest@e3fb68ebda13d88a0d695082f471ba2c83d025fb # master as of 2026-07-21
+      - uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb # master as of 2026-07-21
