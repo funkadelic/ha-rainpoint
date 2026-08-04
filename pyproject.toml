@@ -36,12 +36,16 @@ select = [
 known-first-party = ["custom_components.rainpoint"]
 
 # Editor-only. No CI job runs a type checker, and ruff remains the enforced
-# linter. This exists so an editor's Pyright reports the integration rather
-# than the test suite: the tests deliberately pass SimpleNamespace and
-# MagicMock fakes where Home Assistant types are annotated, and conftest.py
-# stubs whole modules by assigning attributes onto them. Both are documented
-# patterns, not defects, and they account for the large majority of the
-# findings. Including tests here would bury the source findings under them.
+# linter. This exists so an editor's Pyright reports real source rather than
+# the test suite: the tests deliberately pass SimpleNamespace and MagicMock
+# fakes where Home Assistant types are annotated, and conftest.py stubs whole
+# modules by assigning attributes onto them. Both are documented patterns, not
+# defects, and they account for the large majority of the findings. Including
+# tests here would bury the source findings under them.
+#
+# scripts/ is real maintainer source rather than a test fake, so it is in
+# scope for the same reason custom_components is, and its presence here keeps
+# this block consistent with the maintainer's own pyrightconfig.json.
 [tool.pyright]
-include = ["custom_components"]
+include = ["custom_components", "scripts"]
 exclude = ["**/__pycache__"]
