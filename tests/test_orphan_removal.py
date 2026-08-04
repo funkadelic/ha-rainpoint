@@ -15,6 +15,7 @@ under a green suite at full branch coverage.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -150,6 +151,39 @@ def _ledger_entity(unique_id):
     return SimpleNamespace(_attr_unique_id=unique_id)
 
 
+@contextmanager
+def _patched_issue_registry():
+    """Patch the issue registry so create and delete really change what it holds.
+
+    The three functions are one mechanism. Mocking the two writers while
+    leaving the reader answering an empty registry would make every raise look
+    like a card Home Assistant had already deleted, and the manager reconciles
+    its dedup against that reader precisely because Home Assistant deletes a
+    fixable issue itself when its flow finishes. So the double has to model the
+    registry rather than only record calls.
+
+    Yields the (create, delete) mocks, which still record every call.
+    """
+    held: dict[tuple[str, str], object] = {}
+
+    def _create(hass, domain, issue_id, **kwargs):
+        """Record the raised card the way the registry would hold it."""
+        held[(domain, issue_id)] = SimpleNamespace(translation_placeholders=kwargs.get("translation_placeholders"))
+
+    def _delete(hass, domain, issue_id):
+        """Drop a card, and stay a no-op for an id the registry never held."""
+        held.pop((domain, issue_id), None)
+
+    registry = SimpleNamespace(async_get_issue=lambda domain, issue_id: held.get((domain, issue_id)))
+
+    with (
+        patch.object(repairs.ir, "async_create_issue", side_effect=_create) as create,
+        patch.object(repairs.ir, "async_delete_issue", side_effect=_delete) as delete,
+        patch.object(repairs.ir, "async_get", return_value=registry),
+    ):
+        yield create, delete
+
+
 class TestOrphanedKeyEndToEnd:
     """A vanished key becomes one confirmable card that removes its own rows."""
 
@@ -160,10 +194,7 @@ class TestOrphanedKeyEndToEnd:
         removed, async_get, async_entries = _make_entity_registry()
         captured, async_add_entities = _capturing_add_entities()
 
-        with (
-            patch.object(repairs.ir, "async_create_issue") as create,
-            patch.object(repairs.ir, "async_delete_issue"),
-        ):
+        with _patched_issue_registry() as (create, _delete):
             await coordinator.async_config_entry_first_refresh()
             _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
             await valve_async_setup_entry(hass, entry, async_add_entities)
@@ -233,6 +264,51 @@ class TestOrphanedKeyEndToEnd:
         assert ZONE_2_UNIQUE_ID not in adder._emitted
 
     @pytest.mark.asyncio
+    async def test_a_confirm_that_removed_nothing_gets_its_card_back_on_the_next_poll(self):
+        """A confirm can reach the executor and remove nothing: the entity
+        registry lookup can fail, and the entry store can be unreadable. Home
+        Assistant deletes a fixable issue itself whenever its flow finishes, so
+        the card goes either way, and the user is left with the same stranded
+        entities and no surface to act on unless the next sweep raises again.
+
+        Driven rather than asserted on an end state, because the whole property
+        is an ordering one: raise, submit, no-op, delete, and the very next
+        poll has to produce the card again."""
+        coordinator, hass, entry, client = _build_timeline()
+        _captured, async_add_entities = _capturing_add_entities()
+
+        with _patched_issue_registry() as (create, _delete):
+            await coordinator.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            await valve_async_setup_entry(hass, entry, async_add_entities)
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+            assert create.call_count == 1
+            issue_id = create.call_args.args[2]
+
+            flow = await async_create_fix_flow(hass, issue_id, create.call_args.kwargs["data"])
+            flow.hass = hass
+
+            # The confirm reaches the executor, whose entity registry lookup
+            # fails, so it removes nothing and forgets nothing.
+            with patch("custom_components.rainpoint.er.async_get", side_effect=RuntimeError("registry down")):
+                result = await flow.async_step_confirm({})
+            assert result["type"] == "create_entry"
+
+            # Home Assistant's own repairs flow manager deletes the issue on
+            # any non-abort result, which this integration never sees and
+            # cannot prevent. Modelled here because that deletion is the whole
+            # premise of the defect.
+            repairs.ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+            await coordinator.async_refresh()
+
+            assert create.call_count == 2
+            assert create.call_args.args[2] == issue_id
+
+    @pytest.mark.asyncio
     async def test_a_key_this_session_never_emitted_for_removes_nothing(self):
         """The empty-union early return: no ledger entry, no registry touched."""
         _coordinator, hass, entry, _client = _build_timeline()
@@ -274,8 +350,7 @@ class TestOrphanedCardLifecycle:
         removed, async_get, async_entries = _make_entity_registry()
 
         with (
-            patch.object(repairs.ir, "async_create_issue") as create,
-            patch.object(repairs.ir, "async_delete_issue"),
+            _patched_issue_registry() as (create, _delete),
             patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
             patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
         ):
@@ -302,8 +377,7 @@ class TestOrphanedCardLifecycle:
         removed, async_get, async_entries = _make_entity_registry()
 
         with (
-            patch.object(repairs.ir, "async_create_issue") as create,
-            patch.object(repairs.ir, "async_delete_issue") as delete,
+            _patched_issue_registry() as (create, delete),
             patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
             patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
         ):
@@ -332,10 +406,7 @@ class TestOrphanedCardLifecycle:
         it, so there is no row to offer and therefore no card."""
         coordinator, _hass, _entry, client = await self._armed_timeline(model=MODEL_MOISTURE_SIMPLE)
 
-        with (
-            patch.object(repairs.ir, "async_create_issue") as create,
-            patch.object(repairs.ir, "async_delete_issue"),
-        ):
+        with _patched_issue_registry() as (create, _delete):
             client.get_devices_by_hid.return_value = _hub_record(with_child=False, model=MODEL_MOISTURE_SIMPLE)
             for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS + 2):
                 await coordinator.async_refresh()
@@ -1032,10 +1103,7 @@ class TestOrphanedKeyReKeyEndState:
         )
         captured, async_add_entities = _capturing_add_entities()
 
-        with (
-            patch.object(repairs.ir, "async_create_issue") as create,
-            patch.object(repairs.ir, "async_delete_issue"),
-        ):
+        with _patched_issue_registry() as (create, _delete):
             await coordinator.async_config_entry_first_refresh()
             _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
             await sensor_async_setup_entry(hass, entry, async_add_entities)

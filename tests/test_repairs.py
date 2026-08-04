@@ -1088,6 +1088,68 @@ class TestRainPointOrphanedEntityIssues:
         assert create.call_count == 2
         assert [r.getMessage() for r in caplog.records if "Failed to create the orphaned entities" in r.getMessage()]
 
+    @staticmethod
+    def _registry_holding(*issue_ids):
+        """Return an issue registry stand-in holding exactly these ids."""
+        held = {(DOMAIN, issue_id): object() for issue_id in issue_ids}
+        return SimpleNamespace(async_get_issue=lambda domain, issue_id: held.get((domain, issue_id)))
+
+    def test_a_card_the_registry_still_holds_is_not_raised_twice(self, issue_mocks):
+        """The ordinary dedup, reconciled rather than assumed. A key stays aged
+        out for as long as it stays gone and every update reconciles, so the
+        card the registry still holds must not be raised a second time."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        issue_id = orphaned_entities_issue_id("100_200_1")
+
+        with patch.object(repairs.ir, "async_get", return_value=self._registry_holding(issue_id)):
+            manager.async_sync([_make_orphan_record()])
+            manager.async_sync([_make_orphan_record()])
+
+        create.assert_called_once()
+
+    def test_a_card_home_assistant_deleted_after_a_no_op_confirm_is_raised_again(self, issue_mocks):
+        """The hole the reconcile exists to close, and the one place this card
+        differs from the two non-fixable ones.
+
+        Home Assistant's repairs flow manager deletes a fixable issue itself on
+        any non-abort flow result, so a confirm that removed nothing leaves the
+        card gone from the UI while the active set still holds its id. Deduping
+        on that set alone would suppress every later raise and leave the user
+        with leftover entities and no surface left to act on."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        issue_id = orphaned_entities_issue_id("100_200_1")
+
+        with patch.object(repairs.ir, "async_get", return_value=self._registry_holding(issue_id)):
+            manager.async_sync([_make_orphan_record()])
+        create.assert_called_once()
+
+        # The submit: Home Assistant deleted the card, the key never left the
+        # ledger, and the very next sweep still finds it orphaned.
+        with patch.object(repairs.ir, "async_get", return_value=self._registry_holding()):
+            manager.async_sync([_make_orphan_record()])
+
+        assert create.call_count == 2
+
+    def test_an_unreadable_issue_registry_leaves_the_dedup_in_force(self, issue_mocks, caplog):
+        """A failed read establishes nothing, and the safe direction for a card
+        whose only outcome is a deletion offer is to keep the dedup: a
+        suppressed re-raise costs one poll interval, a wrong re-raise stacks a
+        second card over a live one."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        with (
+            patch.object(repairs.ir, "async_get", side_effect=RuntimeError("registry down")),
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"),
+        ):
+            manager.async_sync([_make_orphan_record()])
+            manager.async_sync([_make_orphan_record()])
+
+        create.assert_called_once()
+        assert [r.getMessage() for r in caplog.records if "Could not reconcile the orphaned entities issue" in r.getMessage()]
+
     def test_a_failed_clear_is_swallowed_and_logged(self, issue_mocks, caplog):
         """A registry error on the way out must not raise into a listener."""
         _create, delete = issue_mocks
