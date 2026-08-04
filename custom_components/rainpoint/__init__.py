@@ -719,6 +719,113 @@ def _device_row_is_empty(entity_rows, device_id) -> bool:
     return not any(getattr(row, "device_id", None) == device_id for row in entity_rows)
 
 
+def _resolve_doomed_rows(adders, sensor_key: str) -> tuple[set[tuple[str, str]], list]:
+    """Return the rows in scope for one sensor key, and the adders that named them.
+
+    Split out of _remove_orphaned_key_rows so that function reads as its four
+    steps; the pair returned here is what makes its first and last steps agree.
+
+    (domain, unique_id) rather than unique_id alone. Entity registry
+    uniqueness is per domain, so two rows in different domains may
+    legitimately carry the same id and matching on the id alone would take
+    both. No such collision exists across the four id shapes this integration
+    builds today, so this closes a latent hole rather than a live one, but an
+    exact-pair list is the whole reason this path does not reason about
+    unique_id prefixes. The domain comes from the adder that recorded the id,
+    which is fixed per platform.
+
+    The second half of the pair is the adders whose ids really did enter scope,
+    which is the only population the caller's forget may touch. An adder
+    skipped here contributed nothing, so no row of its was ever a candidate and
+    every one of them certainly still exists; releasing its ids anyway would
+    let a returning device offer a live unique_id a second time, which is
+    exactly what the caller's removal guard exists to prevent. The resolve and
+    the forget have to agree about which adders they skipped, whatever the read
+    that failed -- an unreadable ledger and an unreadable domain are the same
+    fact here.
+    """
+    doomed: set[tuple[str, str]] = set()
+    resolved: list = []
+    for adder in adders:
+        try:
+            doomed.update((adder.domain, unique_id) for unique_id in adder.ledger.unique_ids_for(sensor_key))
+        except Exception as exc:
+            _LOGGER.debug("Skipping an unreadable late adder while resolving sensor key %s: %s", sensor_key, exc)
+            continue
+        resolved.append(adder)
+    return doomed, resolved
+
+
+def _release_emptied_device_row(hass: HomeAssistant, entry: ConfigEntry, sensor_key: str) -> None:
+    """Release this sub-device's device row, but only once it carries nothing.
+
+    Split out of _remove_orphaned_key_rows, and it runs only after that
+    function's entity removals: both registry reads here are deliberately
+    fresh, because the emptiness test has to see the registry as it stands
+    after those removals. Reusing the list the removal loop iterated would
+    conclude the row always still carries entities, a silent no-op that a test
+    asserting only the end state would not catch.
+
+    Never raises, for the same reason its caller does not: this runs inside a
+    Repairs flow step.
+    """
+    surviving_registry, surviving_rows = _fetch_registry_rows(
+        er.async_get, er.async_entries_for_config_entry, hass, entry, "the orphaned device row check"
+    )
+    # An unreadable device registry yields no rows, so this answers None and
+    # the device half is skipped behind the debug line _fetch_registry_rows has
+    # already written.
+    _device_registry, device_rows = _fetch_registry_rows(
+        dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the orphaned device row sweep"
+    )
+    candidate = _device_row_for_sensor_key(device_rows, sensor_key)
+    candidate_id = getattr(candidate, "id", None) if candidate is not None else None
+
+    # A surviving_registry of None means the re-read could not be made at all.
+    # Emptiness is a claim that has to be positively established, and a failed
+    # lookup establishes nothing, so the row stays exactly where it is.
+    # _device_registry is tested directly rather than relied on transitively.
+    # A failed device-registry fetch already yields no rows, so no candidate can
+    # resolve and this branch is unreachable with a None registry, but that is
+    # three inferences away from the call below. Stating it here keeps the guard
+    # local to the thing it guards.
+    if surviving_registry is None or _device_registry is None or not candidate_id:
+        return
+
+    if not _device_row_is_empty(surviving_rows, candidate_id):
+        # Info rather than debug: this is the one outcome a user sees as a
+        # device page that survived a confirmed removal, carrying whatever
+        # rows no adder ledger named -- the generic control switches, which
+        # have no late adder, are the known case. Making that visible
+        # without turning debug logging on is the difference between an
+        # explicable leftover and an apparent failure.
+        _LOGGER.info(
+            "Device row %s still carries entities for this config entry; leaving it in place",
+            candidate_id,
+        )
+        return
+
+    # Scoped to this config entry, deliberately, because the emptiness test
+    # above cannot make the unscoped call safe: it answers "empty for this
+    # config entry", while async_remove_device's cascade deletes every entity
+    # on the row whose own config entry is in the row's config_entries set. A
+    # row shared with a second RainPoint entry -- two accounts resolving the
+    # same home -- reads as empty here while still carrying that entry's
+    # entities, and the cascade would take them and their recorder history
+    # without them ever having been named on the card the user confirmed.
+    #
+    # async_update_device drops only this entry's link. The device registry
+    # removes the row itself when this entry was its last one, so the
+    # single-entry case is unchanged, and merely unlinks when another entry
+    # still owns it, which takes only the entities of entries that were
+    # dropped -- none, since this entry has none left.
+    try:
+        _device_registry.async_update_device(candidate_id, remove_config_entry_id=entry.entry_id)
+        _LOGGER.info("Released the emptied device row %s for sensor key %s", candidate_id, sensor_key)
+    except Exception as exc:
+        _LOGGER.debug("Failed to release the emptied device row %s: %s", candidate_id, exc)
+
+
 def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_key: str) -> int:
     """Remove this session's rows for one sensor key, and drop the bookkeeping.
 
@@ -745,32 +852,7 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
         _LOGGER.debug("Entry store unreadable; removing nothing for sensor key %s: %s", sensor_key, exc)
         return 0
 
-    adders = late_adders(entry_store)
-    # (domain, unique_id) rather than unique_id alone. Entity registry
-    # uniqueness is per domain, so two rows in different domains may
-    # legitimately carry the same id and matching on the id alone would take
-    # both. No such collision exists across the four id shapes this integration
-    # builds today, so this closes a latent hole rather than a live one, but an
-    # exact-pair list is the whole reason this path does not reason about
-    # unique_id prefixes. The domain comes from the adder that recorded the id,
-    # which is fixed per platform.
-    doomed: set[tuple[str, str]] = set()
-    # The adders whose ids really did enter scope above, which is the only
-    # population the forget below may touch. An adder skipped here contributed
-    # nothing to doomed, so no row of its was ever a candidate and every one of
-    # them certainly still exists; releasing its ids anyway would let a
-    # returning device offer a live unique_id a second time, which is exactly
-    # what the removal guard further down exists to prevent. The two loops have
-    # to agree about which adders they skipped, whatever the read that failed --
-    # an unreadable ledger and an unreadable domain are the same fact here.
-    resolved: list = []
-    for adder in adders:
-        try:
-            doomed.update((adder.domain, unique_id) for unique_id in adder.ledger.unique_ids_for(sensor_key))
-        except Exception as exc:
-            _LOGGER.debug("Skipping an unreadable late adder while resolving sensor key %s: %s", sensor_key, exc)
-            continue
-        resolved.append(adder)
+    doomed, resolved = _resolve_doomed_rows(late_adders(entry_store), sensor_key)
 
     if not doomed:
         # No adder in this session emitted anything for this key, so there is
@@ -819,64 +901,7 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
             failed.add(row_key)
             _LOGGER.debug("Failed to remove orphaned entity %s: %s", getattr(row, "entity_id", None), exc)
 
-    # The emptiness test below has to read the registry as it stands after the
-    # removals above, so the rows are re-fetched rather than reused. The list
-    # the loop just iterated still names every row it removed, so testing
-    # against it would conclude the device row always still carries entities:
-    # a silent no-op that a test asserting only the end state would not catch.
-    surviving_registry, surviving_rows = _fetch_registry_rows(
-        er.async_get, er.async_entries_for_config_entry, hass, entry, "the orphaned device row check"
-    )
-    # An unreadable device registry yields no rows, so this answers None and
-    # the device half is skipped behind the debug line _fetch_registry_rows has
-    # already written.
-    _device_registry, device_rows = _fetch_registry_rows(
-        dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the orphaned device row sweep"
-    )
-    candidate = _device_row_for_sensor_key(device_rows, sensor_key)
-    candidate_id = getattr(candidate, "id", None) if candidate is not None else None
-
-    # A surviving_registry of None means the re-read could not be made at all.
-    # Emptiness is a claim that has to be positively established, and a failed
-    # lookup establishes nothing, so the row stays exactly where it is.
-    # _device_registry is tested directly rather than relied on transitively.
-    # A failed device-registry fetch already yields no rows, so no candidate can
-    # resolve and this branch is unreachable with a None registry, but that is
-    # three inferences away from the call below. Stating it here keeps the guard
-    # local to the thing it guards.
-    if surviving_registry is not None and _device_registry is not None and candidate_id:
-        if _device_row_is_empty(surviving_rows, candidate_id):
-            # Scoped to this config entry, deliberately, because the emptiness
-            # test above cannot make the unscoped call safe: it answers "empty
-            # for this config entry", while async_remove_device's cascade
-            # deletes every entity on the row whose own config entry is in the
-            # row's config_entries set. A row shared with a second RainPoint
-            # entry -- two accounts resolving the same home -- reads as empty
-            # here while still carrying that entry's entities, and the cascade
-            # would take them and their recorder history without them ever
-            # having been named on the card the user confirmed.
-            #
-            # async_update_device drops only this entry's link. The device
-            # registry removes the row itself when this entry was its last one,
-            # so the single-entry case is unchanged, and merely unlinks when
-            # another entry still owns it, which takes only the entities of
-            # entries that were dropped -- none, since this entry has none left.
-            try:
-                _device_registry.async_update_device(candidate_id, remove_config_entry_id=entry.entry_id)
-                _LOGGER.info("Released the emptied device row %s for sensor key %s", candidate_id, sensor_key)
-            except Exception as exc:
-                _LOGGER.debug("Failed to release the emptied device row %s: %s", candidate_id, exc)
-        else:
-            # Info rather than debug: this is the one outcome a user sees as a
-            # device page that survived a confirmed removal, carrying whatever
-            # rows no adder ledger named -- the generic control switches, which
-            # have no late adder, are the known case. Making that visible
-            # without turning debug logging on is the difference between an
-            # explicable leftover and an apparent failure.
-            _LOGGER.info(
-                "Device row %s still carries entities for this config entry; leaving it in place",
-                candidate_id,
-            )
+    _release_emptied_device_row(hass, entry, sensor_key)
 
     # Ordering above is load bearing, in both directions. Moving this forget
     # ahead of the device half would drop the ledger while the emptiness test
