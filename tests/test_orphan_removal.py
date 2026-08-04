@@ -375,6 +375,40 @@ class TestOrphanedCardLifecycle:
         assert coordinator._orphaned_key_poll_counts == {}
 
     @pytest.mark.asyncio
+    async def test_a_hub_that_enumerates_nothing_and_then_recovers_costs_the_key_nothing(self):
+        """This is why the empty enumeration is counted rather than frozen, and
+        it is the whole defence, so it is pinned rather than left implicit.
+
+        A guard refusing to ever trust an empty enumeration was considered and
+        declined. It would have cost the surface every hub whose only
+        sub-device is unpaired, which for a one-valve install is the entire
+        feature, and it would have bought protection this reset already
+        provides: a degraded device-list response has to stay empty for
+        ORPHANED_KEY_DEBOUNCE_POLLS consecutive polls, around an hour, before
+        any card can appear. The transient partial response that motivated the
+        hub-level absence window is a one-poll shrink, and one poll costs
+        nothing here.
+        """
+        coordinator, _hass, _entry, client = await self._armed_timeline()
+
+        client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+        for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS - 1):
+            await coordinator.async_refresh()
+        assert coordinator._orphaned_key_poll_counts[SENSOR_KEY] == ORPHANED_KEY_DEBOUNCE_POLLS - 1
+
+        client.get_devices_by_hid.return_value = _hub_record(with_child=True)
+        await coordinator.async_refresh()
+
+        assert SENSOR_KEY not in coordinator._orphaned_key_poll_counts
+        assert coordinator.aged_out_sensor_keys() == frozenset()
+
+        # And the count really restarts from zero rather than resuming, so a
+        # second degradation gets the full window again.
+        client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+        await coordinator.async_refresh()
+        assert coordinator._orphaned_key_poll_counts[SENSOR_KEY] == 1
+
+    @pytest.mark.asyncio
     async def test_a_key_that_returns_below_the_threshold_never_raises_a_card(self):
         """A shrunken poll that reverses must not be visible to the user at
         all, which is the whole reason the window is polls rather than one."""
