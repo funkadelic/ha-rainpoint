@@ -620,11 +620,14 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
     register from inside that forward: coordinator listeners fire in
     registration order, so this always runs ahead of every adder on an update.
 
-    Unlike the two existing wrappers it walks no registry at all on the update
-    path. Every registry mutation lives in the fix flow, behind a human's
-    confirmation, so the per-update cost is a read of in-memory bookkeeping
-    and the accepted cost of a third listener is smaller here than for either
-    of them. That is also why it needs no arming gate: both the raise and the
+    Unlike the two existing wrappers it walks neither the entity nor the
+    device registry on the update path. The only registry read is a keyed
+    issue-registry lookup per active card, which is what the fixable card's
+    dedup reconcile costs; every registry mutation lives in the fix flow,
+    behind a human's confirmation. So the per-update cost is a read of
+    in-memory bookkeeping plus one dict lookup per raised card, and the
+    accepted cost of a third listener is smaller here than for either of
+    them. That is also why it needs no arming gate: both the raise and the
     clear are idempotent, so running on every update, including every pushed
     frame, is safe.
     """
