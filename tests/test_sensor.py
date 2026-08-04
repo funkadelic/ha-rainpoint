@@ -2405,6 +2405,25 @@ class TestLateSensorEntityAdderLedger:
         assert recorded == {e._attr_unique_id for e in emitted}
         assert set(generic_ids) <= recorded
 
+    def test_forget_releases_the_generic_rows_with_the_rest_of_the_key(self):
+        """The observable behind the key governing: an aged-out key's generic
+        rows are dropped and re-offered exactly once alongside its trusted
+        ones, without _remove_stale_generic_entities being involved at all."""
+        adder = self._adder(generic_enabled=True)
+        key = "100_200_1"
+        first = adder.collect(key, self._generic_entry())
+        generic_ids = {e._attr_unique_id for e in first if GENERIC_UNIQUE_ID_MARKER in e._attr_unique_id}
+        assert generic_ids
+
+        adder.forget(key)
+        assert adder.ledger.unique_ids_for(key) == frozenset()
+
+        second = adder.collect(key, self._generic_entry())
+        reoffered = [e._attr_unique_id for e in second if GENERIC_UNIQUE_ID_MARKER in e._attr_unique_id]
+
+        assert sorted(reoffered) == sorted(generic_ids)
+        assert len(reoffered) == len(set(reoffered))
+
 
 class TestLateSensorEntityAdderForget:
     """Dropping one key's record, in lockstep with an actual removal of its rows."""

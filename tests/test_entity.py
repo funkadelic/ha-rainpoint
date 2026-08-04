@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from custom_components.rainpoint.entity import (
     LATE_ADDER_STORE_KEY,
     EmittedEntityLedger,
@@ -14,6 +16,7 @@ from custom_components.rainpoint.entity import (
     register_late_adder,
     sub_device_attributes,
 )
+from tests.helpers import make_coordinator_data, make_sensor_entry
 
 
 def _coordinator(entry):
@@ -465,3 +468,129 @@ class TestLateAdderStore:
         """Called from a coordinator listener and from a Repairs flow step,
         where raising breaks something much larger than this read."""
         assert late_adders(object()) == []
+
+
+class _AddEntitiesSpy:
+    """Every unique_id ever handed to Home Assistant, call by call.
+
+    Accumulating rather than remembering the last call is the point: the
+    property under test is about the whole session, and asserting on the last
+    call alone would pass against an adder that offered the same id twice.
+    """
+
+    def __init__(self):
+        """Start with no calls recorded."""
+        self.calls: list[list] = []
+
+    def __call__(self, entities, **kwargs):
+        """Record one async_add_entities call's unique_ids."""
+        self.calls.append([getattr(e, "_attr_unique_id", None) for e in entities])
+
+    @property
+    def all_ids(self) -> list:
+        """Return every unique_id across every call, in order."""
+        return [unique_id for call in self.calls for unique_id in call]
+
+    def count(self, unique_id) -> int:
+        """Return how many times one unique_id was offered in total."""
+        return self.all_ids.count(unique_id)
+
+
+def _valve_entry():
+    """A reporting valve hub entry, the per-zone platform shape."""
+    from custom_components.rainpoint.const import MODEL_VALVE_245
+
+    return make_sensor_entry(
+        hid=100,
+        mid=200,
+        addr=1,
+        model=MODEL_VALVE_245,
+        sub_name="Valve Hub",
+        data={"type": "valve_hub", "zones": {1: {"open": False, "duration_seconds": 0}}},
+    )
+
+
+def _moisture_entry():
+    """A reporting moisture entry, the per-key platform shape."""
+    from custom_components.rainpoint.const import MODEL_MOISTURE_SIMPLE
+
+    return make_sensor_entry(
+        hid=100,
+        mid=200,
+        addr=1,
+        model=MODEL_MOISTURE_SIMPLE,
+        sub_name="Soil",
+        data={"type": "moisture_simple", "moisture_percent": 42, "rssi_dbm": -70, "battery_percent": 80},
+    )
+
+
+async def _setup_platform_adder(module_name, entry_builder):
+    """Run one platform's real async_setup_entry and return (adder, spy, key).
+
+    The adder is fetched back out of the entry store rather than rebuilt, so
+    the build closure under test is the platform's genuine one and the store
+    wiring is exercised at the same time.
+    """
+    import importlib
+
+    from custom_components.rainpoint.const import DOMAIN
+
+    module = importlib.import_module(f"custom_components.rainpoint.{module_name}")
+    key = "100_200_1"
+    coordinator = MagicMock()
+    coordinator.data = make_coordinator_data(sensors={key: entry_builder()})
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.options = {}
+    hass.data = {DOMAIN: {"e1": {"coordinator": coordinator}}}
+
+    spy = _AddEntitiesSpy()
+    await module.async_setup_entry(hass, entry, spy)
+
+    adder = late_adders(hass.data[DOMAIN]["e1"])[0]
+    return adder, spy, key
+
+
+class TestNoUniqueIdIsEverOfferedTwice:
+    """The whole emit, gate, forget, re-emit cycle, on all three platforms' adders.
+
+    Forgetting a key is coupled to an actual removal of its rows, so the
+    add-once guarantee has to survive a repeat collect before the forget and
+    has to release exactly once after it. Asserted with an accumulating spy
+    rather than on the last call, because an adder that offered an id twice
+    would still show a correct last call.
+    """
+
+    @pytest.mark.parametrize(
+        ("module_name", "entry_builder"),
+        [
+            ("valve", _valve_entry),
+            ("number", _valve_entry),
+            ("sensor", _moisture_entry),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_the_full_cycle_offers_each_id_once_per_genuine_emission(self, module_name, entry_builder):
+        """Emit, gate, forget, re-emit: two emissions, never two offers of one."""
+        adder, spy, key = await _setup_platform_adder(module_name, entry_builder)
+
+        recorded = adder.ledger.unique_ids_for(key)
+        assert recorded, "the platform emitted nothing, so the cycle proves nothing"
+        assert all(spy.count(unique_id) == 1 for unique_id in recorded)
+
+        # The gate still holds: a repeat while the ledger holds the ids offers
+        # nothing, which is the half of the guarantee that must not regress.
+        adder.async_on_coordinator_update()
+        assert all(spy.count(unique_id) == 1 for unique_id in recorded)
+
+        adder.forget(key)
+        assert adder.ledger.unique_ids_for(key) == frozenset()
+
+        adder.async_on_coordinator_update()
+        assert all(spy.count(unique_id) == 2 for unique_id in recorded)
+        assert adder.ledger.unique_ids_for(key) == recorded
+
+        # No single call ever carried a duplicate, on any leg of the cycle.
+        for call in spy.calls:
+            assert len(call) == len(set(call))

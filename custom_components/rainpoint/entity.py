@@ -106,7 +106,14 @@ class EmittedEntityLedger:
         return frozenset(self._by_key)
 
     def forget(self, key: str) -> frozenset[str]:
-        """Drop one key's entry and return the unique_ids it held."""
+        """Drop one key's entry and return the unique_ids it held.
+
+        Reached only from an adder's own forget, which __init__'s
+        _remove_orphaned_key_rows calls once those rows are actually gone.
+        That coupling is what keeps the never-offer-twice property the adders'
+        add-once bookkeeping exists for: forgetting on a key's absence instead
+        would release ids whose registry rows still exist.
+        """
         dropped = frozenset(self._by_key.pop(key, set()))
         self._descriptors.pop(key, None)
         return dropped
