@@ -884,26 +884,42 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
     # Forgotten at the same moment the rows go, and only then. It still runs
     # when this sweep removed nothing, because a row that was already absent
     # from the fetch leaves the bookkeeping as the only thing left to correct.
-    # It does not run when a removal was attempted and raised: that row is
-    # still registered and still holds its unique_id, and both adders' add-once
-    # bookkeeping is per key rather than per id, so there is no partial forget
-    # to make. Releasing the key would let a returning device offer a live
-    # unique_id a second time, which Home Assistant rejects outright.
+    # An id whose removal was attempted and raised is held rather than
+    # released: that row is still registered and still holds its unique_id, and
+    # releasing it would let a returning device offer a live unique_id a second
+    # time, which Home Assistant rejects outright.
+    #
+    # Held per id rather than per key wherever the adder's own bookkeeping can
+    # express it, which is not uniform across the three. LateEntityAdder, which
+    # serves the valve and number platforms, is id-indexed on both halves, so a
+    # partial failure costs it only the ids it names and a returning key gets
+    # every other entity back without a reload. _LateSensorEntityAdder's two
+    # add-once marks are the sensor key itself, so it holds a key with any
+    # failed row whole; that is the coarser cost and the recoverable one, since
+    # a returning key gains nothing there until a reload while releasing a live
+    # id is a collision Home Assistant answers by dropping the entity.
+    #
+    # kept_ids is scoped by the adder's declared domain, which over-approximates
+    # only if two adders ever come to share one. That errs in the safe
+    # direction: the extra ids are held rather than released, and the ledger
+    # keeps only ids the key actually holds.
     if failed:
         _LOGGER.warning(
-            "Kept the bookkeeping for sensor key %s: %d leftover row(s) could not be removed and still hold their unique ids",
-            sensor_key,
+            "Kept the bookkeeping for %d leftover row(s) under sensor key %s: they could not be removed and still "
+            "hold their unique ids, so the card is offered again and a retry can take them. If the device returns "
+            "first, reload the integration or it will come back with an incomplete entity set",
             len(failed),
+            sensor_key,
         )
-    else:
-        # resolved rather than adders: see the note at its construction. An
-        # adder the resolve loop skipped kept every row it holds, so it keeps
-        # its bookkeeping too.
-        for adder in resolved:
-            try:
-                adder.forget(sensor_key)
-            except Exception as exc:
-                _LOGGER.debug("Could not forget sensor key %s on a late adder: %s", sensor_key, exc)
+    # resolved rather than adders: see the note at its construction. An adder
+    # the resolve loop skipped kept every row it holds, so it keeps its
+    # bookkeeping too.
+    for adder in resolved:
+        try:
+            kept_ids = frozenset(unique_id for domain, unique_id in failed if domain == adder.domain)
+            adder.forget(sensor_key, kept_ids)
+        except Exception as exc:
+            _LOGGER.debug("Could not forget sensor key %s on a late adder: %s", sensor_key, exc)
 
     # Carries the key and an integer count only, never a cloud-supplied
     # string, matching the log discipline the coordinator's counting side uses.

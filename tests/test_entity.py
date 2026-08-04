@@ -459,6 +459,39 @@ class TestEmittedEntityLedger:
 
         assert adder.ledger.unique_ids_for("k") == frozenset({"z1"})
 
+    def test_a_held_id_keeps_its_key_described_while_the_rest_are_released(self):
+        """The partial forget, which this adder can express because both halves
+        of its bookkeeping are indexed by id.
+
+        The held id names a row that is still registered, so releasing it would
+        let a returning key offer a live unique_id a second time. The key keeps
+        its descriptor alongside it, because a record still has to be buildable
+        for it or the card could never be offered again for a retry.
+        """
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1"), _FakeEntity("z2")], "valve")
+        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "Front", "hub_name": "Hub A"})
+
+        adder.forget("k", frozenset({"z1"}))
+
+        assert adder.ledger.unique_ids_for("k") == frozenset({"z1"})
+        assert adder.ledger.descriptor_for("k")["sub_name"] == "Front"
+        assert adder._emitted == {"z1"}
+
+    def test_holding_an_id_this_key_never_held_still_drops_the_key(self):
+        """The held set is intersected against the key's own ids, so a caller
+        that over-approximates cannot resurrect an id from nowhere or gate a
+        key whose rows all went."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
+        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "Front", "hub_name": "Hub A"})
+
+        adder.forget("k", frozenset({"elsewhere"}))
+
+        assert adder.ledger.unique_ids_for("k") == frozenset()
+        assert adder.ledger.descriptor_for("k") == {}
+        assert adder._emitted == set()
+
 
 class TestLateAdderStore:
     """The slot the removal sweep reaches the platforms' adders through."""

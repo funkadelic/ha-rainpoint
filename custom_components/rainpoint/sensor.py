@@ -421,7 +421,7 @@ class _LateSensorEntityAdder:
         self.ledger.record(key, info, built)
         return built
 
-    def forget(self, key: str) -> None:
+    def forget(self, key: str, kept_ids: frozenset[str] = frozenset()) -> None:
         """Drop one key's ledger entry and both add-once marks for it.
 
         Called only alongside an actual removal of those registry rows, from
@@ -434,7 +434,20 @@ class _LateSensorEntityAdder:
         leave the other permanently gating an emission whose rows no longer
         exist, and that half of its entity set could never come back without a
         reload.
+
+        ``kept_ids`` names the ids whose rows the sweep failed to remove, and
+        this class cannot honour a partial the way LateEntityAdder can. Both
+        add-once marks are the sensor key itself, so clearing them would
+        re-offer every id under the key, including the ones whose rows are
+        still registered; holding them while dropping the ledger's other ids
+        would gate an emission with no record left of what it was gating. So a
+        key with any failed row is held whole. That is the coarser of the two
+        costs and the recoverable one: a returning key gains nothing here until
+        a reload, where releasing a live id is a unique_id collision Home
+        Assistant answers by dropping the entity outright.
         """
+        if self.ledger.unique_ids_for(key) & kept_ids:
+            return
         self.ledger.forget(key)
         self._keys_with_model_entities.discard(key)
         self._keys_with_silent_entity.discard(key)

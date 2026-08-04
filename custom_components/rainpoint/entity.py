@@ -112,17 +112,31 @@ class EmittedEntityLedger:
         """
         return frozenset(self._by_key)
 
-    def forget(self, key: str) -> frozenset[str]:
-        """Drop one key's entry and return the unique_ids it held.
+    def forget(self, key: str, kept_ids: frozenset[str] = frozenset()) -> frozenset[str]:
+        """Drop one key's entry except the ids named, and return what was dropped.
 
         Reached only from an adder's own forget, which __init__'s
         _remove_orphaned_key_rows calls once those rows are actually gone.
         That coupling is what keeps the never-offer-twice property the adders'
         add-once bookkeeping exists for: forgetting on a key's absence instead
         would release ids whose registry rows still exist.
+
+        ``kept_ids`` names the ids whose rows that sweep tried and failed to
+        remove. Those rows are still registered and still hold their unique_ids,
+        so they are held here rather than released, and the key keeps its
+        descriptor so a record can still be built for it and the card offered
+        again. An empty ``kept_ids``, which is every ordinary removal, drops the
+        key whole. Only ids this key actually holds are ever kept, so a caller
+        that over-approximates the set cannot resurrect an id from nowhere.
         """
-        dropped = frozenset(self._by_key.pop(key, set()))
-        self._descriptors.pop(key, None)
+        held = self._by_key.get(key, set())
+        kept = held & kept_ids
+        dropped = frozenset(held - kept)
+        if kept:
+            self._by_key[key] = kept
+        else:
+            self._by_key.pop(key, None)
+            self._descriptors.pop(key, None)
         return dropped
 
 
@@ -219,13 +233,20 @@ class LateEntityAdder:
         self.ledger.record(key, info, fresh)
         return fresh
 
-    def forget(self, key: str) -> None:
-        """Drop one key's ledger entry and the unique_ids it held.
+    def forget(self, key: str, kept_ids: frozenset[str] = frozenset()) -> None:
+        """Drop one key's ledger entry and its unique_ids, except those named.
 
         Called only alongside an actual removal of those registry rows, so the
         add-once guarantee still holds for every row that exists.
+
+        ``kept_ids`` names the ids whose rows the sweep failed to remove. Both
+        halves of this adder's bookkeeping are indexed by id -- the ledger's map
+        and ``_emitted`` -- so a partial failure costs only the ids it actually
+        names. Every other id is released, and a key that returns gets those
+        entities back without a reload. That is the whole reason the sweep
+        hands the failures down rather than skipping the forget outright.
         """
-        for unique_id in self.ledger.forget(key):
+        for unique_id in self.ledger.forget(key, kept_ids):
             self._emitted.discard(unique_id)
 
     @callback

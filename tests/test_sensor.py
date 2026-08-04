@@ -2477,6 +2477,39 @@ class TestLateSensorEntityAdderForget:
         assert adder.ledger.unique_ids_for(key) != frozenset()
         assert key in adder._keys_with_model_entities
 
+    def test_a_key_with_any_failed_row_is_held_whole(self):
+        """This adder is the one that cannot express a partial forget.
+
+        Its two add-once marks are the sensor key itself, so clearing them
+        would re-offer every id under the key, including the one whose row is
+        still registered and still holds its unique_id. Holding the key whole
+        is the coarser cost and the recoverable one: a returning key gains
+        nothing here until a reload, where releasing a live id is a collision
+        Home Assistant answers by dropping the entity outright.
+        """
+        adder = self._adder()
+        key = "100_200_1"
+        recorded = {e._attr_unique_id for e in adder.collect(key, TestLateSensorEntityAdder._reporting_entry())}
+        assert len(recorded) > 1
+
+        adder.forget(key, frozenset({next(iter(recorded))}))
+
+        assert adder.ledger.unique_ids_for(key) == recorded
+        assert key in adder._keys_with_model_entities
+        assert adder.collect(key, TestLateSensorEntityAdder._reporting_entry()) == []
+
+    def test_a_failure_under_another_key_leaves_this_one_forgotten(self):
+        """The held set is intersected against the key's own ids, so a failure
+        recorded elsewhere in the same domain cannot gate an unrelated key."""
+        adder = self._adder()
+        key = "100_200_1"
+        adder.collect(key, TestLateSensorEntityAdder._reporting_entry())
+
+        adder.forget(key, frozenset({"rainpoint_100_200_9_battery"}))
+
+        assert adder.ledger.unique_ids_for(key) == frozenset()
+        assert key not in adder._keys_with_model_entities
+
 
 class TestSensorAdderRegistration:
     """The sensor platform publishes its adder where the removal sweep reads."""

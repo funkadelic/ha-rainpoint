@@ -846,16 +846,19 @@ class TestOrphanedSweepGuards:
 
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_1_UNIQUE_ID})
 
-    def test_a_row_that_cannot_be_removed_is_skipped_and_keeps_the_bookkeeping(self, caplog):
+    def test_a_row_that_cannot_be_removed_keeps_its_own_id_and_only_its_own(self, caplog):
         """Per-row guarding, matching the generic sweep's shape, plus the
         condition that guarding puts on the forget.
 
         A row whose removal raised is still registered and still holds its
-        unique_id. Both adders' add-once bookkeeping is per key, not per id, so
-        there is no partial forget to make: releasing the key would let a
-        returning device offer that live unique_id a second time, which Home
-        Assistant rejects and which the never-offer-twice property exists
-        precisely to prevent."""
+        unique_id, so that id is held: releasing it would let a returning
+        device offer a live unique_id a second time, which Home Assistant
+        rejects and which the never-offer-twice property exists precisely to
+        prevent. The id beside it names a row that really did go, so holding
+        that one too would leave a returning device missing exactly the
+        entities the sweep succeeded in removing, with no recovery short of a
+        reload. This adder's bookkeeping is id-indexed on both halves, so the
+        held set is exactly the failures."""
         coordinator = SimpleNamespace(data={"sensors": {}})
         adder = LateEntityAdder(
             coordinator,
@@ -893,14 +896,60 @@ class TestOrphanedSweepGuards:
             assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 1
 
         assert registry.removed == ["valve.zone2"]
-        # Held, whole. The cost is that a returning key gains nothing until a
-        # reload, which is recoverable; the cost of releasing is a unique_id
-        # collision Home Assistant answers by dropping the new entity, which is
-        # not recoverable short of a restart.
-        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_1_UNIQUE_ID, ZONE_2_UNIQUE_ID})
-        assert ZONE_1_UNIQUE_ID in adder._emitted
-        assert ZONE_2_UNIQUE_ID in adder._emitted
-        assert [r.getMessage() for r in caplog.records if "Kept the bookkeeping for sensor key" in r.getMessage()]
+        # Exactly the failure is held. Releasing it would be a unique_id
+        # collision Home Assistant answers by dropping the new entity; holding
+        # its neighbour would leave a returning device short of the entity the
+        # sweep did remove.
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_1_UNIQUE_ID})
+        assert adder._emitted == {ZONE_1_UNIQUE_ID}
+        # The descriptor survives with the held id, so a record can still be
+        # built for the key and the card offered again for a retry.
+        assert adder.ledger.descriptor_for(SENSOR_KEY) != {}
+        assert [r.getMessage() for r in caplog.records if "Kept the bookkeeping for" in r.getMessage()]
+
+    def test_a_key_that_returns_after_a_partial_failure_regains_the_removed_rows(self):
+        """The silent failure mode the per-id hold exists to close.
+
+        Holding the whole key would leave the ledger naming ids whose rows are
+        gone, so a key that returns before the user retries would have those
+        entities suppressed as already-emitted and come back with an entity set
+        missing exactly the rows the sweep did remove, with no recovery short
+        of a reload.
+        """
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(
+            coordinator,
+            lambda ents: None,
+            lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID), _ledger_entity(ZONE_2_UNIQUE_ID)],
+            "valve",
+        )
+        adder.collect(SENSOR_KEY, {})
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        class _StubbornRegistry:
+            """Refuses the first row and accepts the second."""
+
+            def async_remove(self, entity_id):
+                """Fail on the first row only."""
+                if entity_id == "valve.zone1":
+                    raise RuntimeError("row is busy")
+
+        rows = [
+            SimpleNamespace(entity_id="valve.zone1", unique_id=ZONE_1_UNIQUE_ID),
+            SimpleNamespace(entity_id="valve.zone2", unique_id=ZONE_2_UNIQUE_ID),
+        ]
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", return_value=_StubbornRegistry()),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", return_value=rows),
+        ):
+            _remove_orphaned_key_rows(hass, entry, SENSOR_KEY)
+
+        # Only the row that really went is offered again. The one still holding
+        # its unique_id stays suppressed, which is what stops the returning
+        # device colliding with it.
+        assert [e._attr_unique_id for e in adder.collect(SENSOR_KEY, {})] == [ZONE_2_UNIQUE_ID]
 
 
 SUB_DEVICE_ROW_ID = "device_sub_1"
