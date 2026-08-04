@@ -1181,9 +1181,18 @@ class TestRainPointOrphanedEntityIssues:
         assert manager._active == set()
         messages = [r.getMessage() for r in caplog.records]
         # Withdrawn, not resolved: nothing about either device changed.
-        assert len([m for m in messages if "withdrawing the orphaned entities repair issue" in m]) == 2
+        withdrawn = [r for r in caplog.records if "withdrawing the orphaned entities repair issue" in r.getMessage()]
+        assert len(withdrawn) == 2
         assert not [m for m in messages if "lists this device again" in m]
         assert not [m for m in messages if "No leftover entities remain" in m]
+        # Warning, unlike the other two clear reasons, and the level is the
+        # assertion rather than incidental. A recovery and a removal both end
+        # with nothing left to offer; a withdrawal ends with the rows still
+        # registered and no surface left to offer them through, so it is the
+        # only one of the three that leaves the user with work to do. The line
+        # has to say so.
+        assert {r.levelno for r in withdrawn} == {logging.WARNING}
+        assert all("remove them from the entity registry by hand" in r.getMessage() for r in withdrawn)
 
     def test_unload_is_a_no_op_when_no_card_is_active(self, issue_mocks):
         """The ordinary unload, which is every unload on a healthy account."""

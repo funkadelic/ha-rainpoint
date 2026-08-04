@@ -686,8 +686,22 @@ class RainPointOrphanedEntityIssues:
                     issue_id,
                 )
             elif reason == _CLEAR_REASON_UNLOADED:
-                _LOGGER.info(
-                    "Unloading this config entry; withdrawing the orphaned entities repair issue (id=%s)",
+                # Warning rather than info, unlike the other two reasons, and
+                # the only one of the three that leaves the user worse off. A
+                # recovery and a removal both end with nothing left to offer;
+                # a withdrawal ends with the leftover rows still registered and
+                # no surface left to offer them through, because the same fact
+                # that makes the card unclearable after a reload makes it
+                # unraisable. The rows have to be removed from the entity
+                # registry by hand from here, so the line names them.
+                #
+                # It cannot become noise: was_active gates it, so it fires only
+                # where a card was genuinely up at unload, and at most once per
+                # withdrawn card.
+                _LOGGER.warning(
+                    "Unloading this config entry; withdrawing the orphaned entities repair issue (id=%s). "
+                    "Its leftover entity rows are still registered and will not be offered again after the reload; "
+                    "remove them from the entity registry by hand",
                     issue_id,
                 )
             else:
