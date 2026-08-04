@@ -233,6 +233,10 @@ _AUTOLINK_PREFIX_RE = re.compile(r"www\.", re.IGNORECASE)
 # account, not a recovery, and one message cannot honestly describe both.
 _CLEAR_REASON_RECOVERED = "recovered"
 _CLEAR_REASON_REMOVED = "removed"
+# A third reason, used by the orphaned-entities manager alone: the config entry
+# that raised the card is being unloaded, so the card is withdrawn rather than
+# resolved. Nothing about the device changed.
+_CLEAR_REASON_UNLOADED = "unloaded"
 
 
 def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
@@ -513,6 +517,34 @@ class RainPointOrphanedEntityIssues:
         for stale_id in self._active - mentioned:
             self._clear_issue(stale_id, reason=_CLEAR_REASON_REMOVED)
 
+    @callback
+    def async_clear_all(self) -> None:
+        """Withdraw every card this instance raised, on config entry unload.
+
+        This manager is the one that needs it, and the reason is that its
+        record source is session-scoped bookkeeping rather than the current
+        poll. Its two siblings rebuild their records from every poll's
+        coordinator data, so a stale id is always mentioned again after a
+        reload and the stale-set sweep clears it. A departed sensor key cannot
+        be mentioned again: it is absent from the hub's enumeration, so no
+        fresh adder ledger ever records it and no record is ever built for it.
+
+        Without this, a card raised before a reload survives it -- the issue
+        registry is not per entry, and only is_persistent decides survival
+        across a restart -- while the fresh manager's active set, the fresh
+        adder ledgers and the fresh absence counters all know nothing about it.
+        Nothing could then clear it, and its Submit button resolved to an
+        executor that removes nothing while Home Assistant deleted the card
+        anyway, telling the user leftover entities had been removed when they
+        had not.
+
+        Withdrawn rather than resolved: nothing about the device changed, and
+        the next session raises the card again for as long as the key is still
+        being counted.
+        """
+        for issue_id in sorted(self._active):
+            self._clear_issue(issue_id, reason=_CLEAR_REASON_UNLOADED)
+
     def _raise_issue(self, issue_id: str, record: OrphanedEntitiesRecord) -> None:
         """Raise one key's fixable issue, at most once per active period.
 
@@ -610,17 +642,28 @@ class RainPointOrphanedEntityIssues:
         guarding the delete on the active set would strand it forever, while
         the log line is gated so it fires once per raised-then-resolved
         transition rather than on every update.
+
+        Three reasons rather than the siblings' two, because this manager also
+        withdraws its cards on unload, and a withdrawal is neither a recovery
+        nor a removal from the account.
         """
         was_active = issue_id in self._active
         self._active.discard(issue_id)
         try:
             ir.async_delete_issue(self._hass, DOMAIN, issue_id)
-            if was_active and reason == _CLEAR_REASON_RECOVERED:
+            if not was_active:
+                return
+            if reason == _CLEAR_REASON_RECOVERED:
                 _LOGGER.info(
                     "RainPoint lists this device again; clearing the orphaned entities repair issue (id=%s)",
                     issue_id,
                 )
-            elif was_active:
+            elif reason == _CLEAR_REASON_UNLOADED:
+                _LOGGER.info(
+                    "Unloading this config entry; withdrawing the orphaned entities repair issue (id=%s)",
+                    issue_id,
+                )
+            else:
                 _LOGGER.info(
                     "No leftover entities remain to offer; clearing the orphaned entities repair issue (id=%s)",
                     issue_id,

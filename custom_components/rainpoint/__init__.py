@@ -648,6 +648,31 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
 
     entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
+    @callback
+    def _withdraw_cards() -> None:
+        """Withdraw this entry's orphan cards as it unloads.
+
+        The issue registry is not per config entry and only is_persistent
+        decides survival across a restart, so a card raised before a reload
+        survives the reload while every structure that could clear it is
+        rebuilt empty: the manager's active set, the adder ledgers whose
+        contents are the only record source here, and the coordinator's
+        absence counters. A departed key is absent from the hub's enumeration,
+        so no fresh ledger can record it and no fresh record can mention it,
+        which leaves the stale-set sweep with nothing to sweep. The card would
+        then sit there for the life of the install offering a Submit that
+        resolves to an executor with nothing in scope.
+
+        Never raises: this runs on the unload path, where an exception would
+        block the teardown of everything registered after it.
+        """
+        try:
+            manager.async_clear_all()
+        except Exception as exc:
+            _LOGGER.debug("Could not withdraw the orphaned entity cards on unload: %s", exc)
+
+    entry.async_on_unload(_withdraw_cards)
+
 
 def _device_row_for_sensor_key(rows, sensor_key: str):
     """Return the device row whose DOMAIN identifier is this sensor key, or None.
@@ -727,11 +752,21 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
 
     if not doomed:
         # No adder in this session emitted anything for this key, so there is
-        # nothing in scope and no bookkeeping to drop. This is the ordinary
-        # post-restart shape rather than an error: a non-persistent issue is
-        # not restored across a restart, but a card raised in one session can
-        # still race a reload, and the correct answer there is to remove
-        # nothing at all.
+        # nothing in scope and no bookkeeping to drop. Removing nothing is the
+        # correct answer rather than an error: the ledgers are this path's only
+        # authority on what it may take, and a card that outlived the session
+        # whose ledgers named its rows has no scope left.
+        #
+        # Logged at warning rather than returned silently, because Home
+        # Assistant deletes a fixable issue itself once its flow finishes: the
+        # user pressed a button that said it would remove leftover entities,
+        # the card disappeared, and nothing happened. That needs a breadcrumb
+        # in the log, and the surviving rows still need removing by hand.
+        _LOGGER.warning(
+            "Nothing in scope for sensor key %s; its leftover entity rows were not removed. "
+            "The card outlived the session that recorded them, so remove them from the entity registry by hand",
+            sensor_key,
+        )
         return 0
 
     registry, rows = _fetch_registry_rows(

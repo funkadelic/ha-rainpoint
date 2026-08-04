@@ -15,6 +15,7 @@ under a green suite at full branch coverage.
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -501,6 +502,43 @@ class TestOrphanedSweepGuards:
 
         assert manager_cls.return_value.async_sync.call_count == 3
 
+    def test_the_cards_are_withdrawn_when_the_config_entry_unloads(self):
+        """A card that outlives a reload can never be cleared again, because
+        every structure that could clear it is rebuilt empty and a departed key
+        can never be mentioned by a fresh record."""
+        coordinator = MagicMock()
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {}}})
+        entry = MagicMock()
+        entry.entry_id = ENTRY_ID
+
+        with patch("custom_components.rainpoint.RainPointOrphanedEntityIssues") as manager_cls:
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            manager_cls.return_value.async_clear_all.assert_not_called()
+
+            # The unload hook is the second thing registered, after the
+            # listener's own remover.
+            for call in entry.async_on_unload.call_args_list:
+                call.args[0]()
+
+        manager_cls.return_value.async_clear_all.assert_called_once()
+
+    def test_a_withdrawal_that_raises_does_not_block_the_unload(self, caplog):
+        """Everything registered after this hook still has to be torn down."""
+        coordinator = MagicMock()
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {}}})
+        entry = MagicMock()
+        entry.entry_id = ENTRY_ID
+
+        with patch("custom_components.rainpoint.RainPointOrphanedEntityIssues") as manager_cls:
+            manager_cls.return_value.async_clear_all.side_effect = RuntimeError("registry down")
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+
+            with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint"):
+                for call in entry.async_on_unload.call_args_list:
+                    call.args[0]()
+
+        assert [r.getMessage() for r in caplog.records if "Could not withdraw the orphaned entity cards" in r.getMessage()]
+
     def test_an_unreadable_entry_store_removes_nothing(self):
         """The remover's first guard, reached by a flow submitted after its
         config entry unloaded."""
@@ -508,6 +546,20 @@ class TestOrphanedSweepGuards:
         entry = SimpleNamespace(entry_id=ENTRY_ID)
 
         assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 0
+
+    def test_a_card_with_nothing_in_scope_says_so_rather_than_returning_silently(self, caplog):
+        """Home Assistant deletes a fixable issue once its flow finishes, so a
+        confirm with no ledger entry behind it looks to the user exactly like a
+        successful removal. The log line is the only breadcrumb left."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [])
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint"):
+            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 0
+
+        assert [r.getMessage() for r in caplog.records if "Nothing in scope for sensor key" in r.getMessage()]
 
     def test_one_malformed_adder_does_not_stop_the_others_being_resolved(self):
         """The per-adder guard on the resolve half, and on the forget half."""

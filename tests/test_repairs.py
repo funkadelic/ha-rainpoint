@@ -1150,6 +1150,40 @@ class TestRainPointOrphanedEntityIssues:
         create.assert_called_once()
         assert [r.getMessage() for r in caplog.records if "Could not reconcile the orphaned entities issue" in r.getMessage()]
 
+    def test_unload_withdraws_every_card_this_instance_raised(self, issue_mocks, caplog):
+        """A card raised before a reload survives it, because the issue
+        registry is not per config entry. Every structure that could clear it
+        afterwards is rebuilt empty, and a key that has left the hub's
+        enumeration can never be mentioned by a fresh record, so the stale-set
+        sweep has nothing to sweep and the card is stuck for good."""
+        _create, delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        manager.async_sync([_make_orphan_record(), _make_orphan_record(sensor_key="100_200_2")])
+        delete.reset_mock()
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_clear_all()
+
+        assert sorted(call.args[2] for call in delete.call_args_list) == [
+            orphaned_entities_issue_id("100_200_1"),
+            orphaned_entities_issue_id("100_200_2"),
+        ]
+        assert manager._active == set()
+        messages = [r.getMessage() for r in caplog.records]
+        # Withdrawn, not resolved: nothing about either device changed.
+        assert len([m for m in messages if "withdrawing the orphaned entities repair issue" in m]) == 2
+        assert not [m for m in messages if "lists this device again" in m]
+        assert not [m for m in messages if "No leftover entities remain" in m]
+
+    def test_unload_is_a_no_op_when_no_card_is_active(self, issue_mocks):
+        """The ordinary unload, which is every unload on a healthy account."""
+        _create, delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_clear_all()
+
+        delete.assert_not_called()
+
     def test_a_failed_clear_is_swallowed_and_logged(self, issue_mocks, caplog):
         """A registry error on the way out must not raise into a listener."""
         _create, delete = issue_mocks
