@@ -594,8 +594,14 @@ class RainPointOrphanedEntityIssues:
         would then suppress every later attempt and strand the user with
         leftover entities and no surface left to act on.
         """
-        if issue_id in self._active and not self._issue_is_gone(issue_id):
-            return
+        if issue_id in self._active:
+            if self._issue_still_registered(issue_id):
+                return
+            # Home Assistant deleted it out from under this set, so the mark is
+            # stale. Dropped here rather than inside the test above, so the
+            # predicate stays a predicate and reordering this condition cannot
+            # silently change the bookkeeping.
+            self._active.discard(issue_id)
         try:
             ir.async_create_issue(
                 self._hass,
@@ -637,25 +643,23 @@ class RainPointOrphanedEntityIssues:
                 issue_exc,
             )
 
-    def _issue_is_gone(self, issue_id: str) -> bool:
-        """Return True when the registry no longer holds an id this set marks active.
+    def _issue_still_registered(self, issue_id: str) -> bool:
+        """Return True when the issue registry still holds this id.
 
-        Drops the stale mark as it goes, so the caller's next test is a plain
-        set miss rather than a second registry read.
+        A predicate and nothing else: it reads, it does not touch the active
+        set. The caller owns the mark, so the bookkeeping cannot be changed by
+        reordering or short-circuiting the condition it sits in.
 
-        An unreadable registry answers False, which keeps the dedup in force.
+        An unreadable registry answers True, which keeps the dedup in force.
         That is the safe direction for a card whose only outcome is an offer to
         delete: a suppressed re-raise costs the user one poll interval, while
         raising on a failed read could stack a second card over a live one.
         """
         try:
-            if ir.async_get(self._hass).async_get_issue(DOMAIN, issue_id) is not None:
-                return False
+            return ir.async_get(self._hass).async_get_issue(DOMAIN, issue_id) is not None
         except Exception as exc:
             _LOGGER.debug("Could not reconcile the orphaned entities issue (id=%s) against the registry: %s", issue_id, exc)
-            return False
-        self._active.discard(issue_id)
-        return True
+            return True
 
     def _clear_issue(self, issue_id: str, *, reason: str = _CLEAR_REASON_RECOVERED) -> None:
         """Delete one key's issue, unconditionally rather than only when active.
