@@ -2854,6 +2854,127 @@ class TestTrackOrphanedKeys:
         assert "Sub1" not in aged_lines[0].getMessage()
 
 
+class TestOrphanedKeyCounterIsInertOnExistingSurfaces:
+    """The removal counter's input is the subDevices enumeration and nothing
+    else, so the not-reporting surface, the shrink guard and both push entry
+    points all behave exactly as they did before it existed."""
+
+    KEY = "100_200_1"
+
+    _hub = staticmethod(TestOrphanedKeyCounterFreeze._hub)
+    _arrived_empty = staticmethod(TestOrphanedKeyCounterFreeze._arrived_empty)
+
+    def _build(self, hubs):
+        """Return (coord, client) with a real issue manager and the given hubs present."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = hubs
+        client.get_multiple_device_status.return_value = [self._arrived_empty(hub["mid"]) for hub in hubs]
+        coord._silent_issues = RainPointSilentDeviceIssues(MagicMock())
+        return coord, client
+
+    @pytest.mark.asyncio
+    async def test_a_silent_but_still_listed_device_never_starts_a_removal_count(self):
+        """A device that is merely quiet stays listed in subDevices, so it
+        never leaves the enumeration and never starts a removal count, driven
+        past both thresholds rather than only past the silent one."""
+        coord, _client = self._build([self._hub(mid=200, addrs=(1,))])
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            for poll in range(1, _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS + 3):
+                await _run(coord)
+                assert coord._orphaned_key_poll_counts == {}
+                assert coord._aged_out_sensor_keys == frozenset()
+                if poll < _coord_module.SILENT_DEBOUNCE_POLLS:
+                    assert create.call_count == 0
+
+            # The silent card was raised on schedule and exactly once.
+            assert create.call_count == 1
+            assert coord._silent_poll_counts[self.KEY] >= _coord_module.SILENT_DEBOUNCE_POLLS
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_goes_silent_then_leaves_is_counted_from_the_poll_it_left(self):
+        """The two counters move independently: the removal count starts on the
+        poll the key left the enumeration, not on the poll it went quiet, and
+        the silent counter is pruned exactly as it was before."""
+        coord, client = self._build([self._hub(mid=200, addrs=(1,))])
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            for _ in range(_coord_module.SILENT_DEBOUNCE_POLLS + 2):
+                await _run(coord)
+            assert coord._silent_poll_counts[self.KEY] == _coord_module.SILENT_DEBOUNCE_POLLS + 2
+            assert coord._orphaned_key_poll_counts == {}
+
+            hub_without_child = self._hub(mid=200, addrs=())
+            client.get_devices_by_hid.return_value = [hub_without_child]
+            client.get_multiple_device_status.return_value = [self._arrived_empty(200)]
+            await _run(coord)
+
+            assert coord._orphaned_key_poll_counts[self.KEY] == 1
+            assert self.KEY not in coord._silent_poll_counts
+
+    def test_both_push_entry_points_leave_the_orphan_counter_untouched(self):
+        """No push path reads or writes any of the three structures this
+        counter owns; only the poll does."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+        coord.data["hub_connectivity"] = {}
+        coord._last_poll_sensor_keys = {self.KEY}
+        coord._orphaned_key_poll_counts = {self.KEY: 5}
+        coord._aged_out_sensor_keys = frozenset({"100_200_9"})
+        device_ts = int(datetime(2024, 6, 1, tzinfo=UTC).timestamp() * 1000)
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, device_ts)
+        _APPLY_HUB(coord, 200, False, device_ts)
+
+        assert coord._last_poll_sensor_keys == {self.KEY}
+        assert coord._orphaned_key_poll_counts == {self.KEY: 5}
+        assert coord._aged_out_sensor_keys == frozenset({"100_200_9"})
+
+    @pytest.mark.asyncio
+    async def test_the_existing_shrink_guard_timeline_produces_no_aged_out_key(self):
+        """The shrink guard's own timeline, re-driven with the aged-out set
+        asserted empty at every step: the new counter must be inert across a
+        sequence that guard already owns."""
+        hub_a = self._hub(hid=100, mid=200, addrs=(1,))
+        hub_b = self._hub(hid=100, mid=300, addrs=())
+        coord, client = self._build([hub_a, hub_b])
+        issue_id = silent_device_issue_id(100, 200, 1)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            for _ in range(3):
+                await _run(coord)
+                assert coord._aged_out_sensor_keys == frozenset()
+            assert create.call_count == 1
+
+            client.get_devices_by_hid.return_value = [hub_b]
+            client.get_multiple_device_status.return_value = [self._arrived_empty(300)]
+            await _run(coord)
+
+            assert delete.call_count == 0
+            assert issue_id in coord._silent_issues._active
+            assert coord._aged_out_sensor_keys == frozenset()
+
+            client.get_devices_by_hid.return_value = [hub_a, hub_b]
+            client.get_multiple_device_status.return_value = [
+                self._arrived_empty(200),
+                self._arrived_empty(300),
+            ]
+            await _run(coord)
+
+            assert create.call_count == 1
+            assert delete.call_count == 0
+            assert coord._aged_out_sensor_keys == frozenset()
+
+
 class TestHubConnectivitySurvivesDeviceListOutage:
     """An active hub-connectivity issue and its debounce counter must survive a
     poll in which the device list itself came back empty, mirroring
