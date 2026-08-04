@@ -27,7 +27,7 @@ from .const import (
 )
 from .coordinator import RainPointCoordinator, hub_connected_flag, hub_connectivity_record
 from .device import build_sub_device_info
-from .entity import LateEntityAdder, sub_device_attributes
+from .entity import LateEntityAdder, register_late_adder, sub_device_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,6 +79,9 @@ async def async_setup_entry(
         return built
 
     adder = LateEntityAdder(coordinator, async_add_entities, build)
+    # Published before anything is emitted, so the removal sweep can ask this
+    # adder what it created for a key that later vanishes.
+    register_late_adder(data, adder)
 
     entities: list = []
     for key, info in sensors_cfg.items():

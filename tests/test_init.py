@@ -2286,8 +2286,14 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
         The hub identity re-key's wrapper also runs here, unpatched, with only
         its sweep stubbed to the cleanly-migrated verdict. That is what an
         install with no residual returns, and such an install must arm no
-        listener at all, so the single registration counted below is the
-        reconcile's."""
+        listener at all, so it contributes none of the registrations counted
+        below.
+
+        The orphaned entity sweep's wrapper is the second registration. It
+        arms unconditionally, unlike the re-key's, because both its raise and
+        its clear are idempotent and it walks no registry on the update path.
+        Counting both rather than loosening the assertion keeps this test able
+        to catch an accidental extra listener."""
         hass = _make_hass()
         entry = _make_entry()
 
@@ -2307,5 +2313,5 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
         ):
             await async_setup_entry(hass, entry)
 
-        assert mock_coordinator.async_add_listener.call_count == 1
+        assert mock_coordinator.async_add_listener.call_count == 2
         entry.async_on_unload.assert_any_call(mock_coordinator.async_add_listener.return_value)

@@ -5,7 +5,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from custom_components.rainpoint.entity import LateEntityAdder, RainPointSubDeviceEntity, sub_device_attributes
+from custom_components.rainpoint.entity import (
+    LATE_ADDER_STORE_KEY,
+    EmittedEntityLedger,
+    LateEntityAdder,
+    RainPointSubDeviceEntity,
+    late_adders,
+    register_late_adder,
+    sub_device_attributes,
+)
 
 
 def _coordinator(entry):
@@ -338,3 +346,122 @@ class TestLateEntityAdder:
         adder.async_on_coordinator_update()
 
         assert added == []
+
+
+class TestEmittedEntityLedger:
+    """What an adder emitted, indexed by the key that produced it."""
+
+    def test_a_key_gaining_entities_across_polls_ends_with_all_of_them(self):
+        """The append rule: a per-zone platform emits for one key over several
+        polls, so replacing rather than appending would leave the first zone's
+        row unreachable and therefore unremovable."""
+        zones = ["z1"]
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity(z) for z in zones])
+
+        adder.collect("k", {})
+        zones.append("z2")
+        adder.collect("k", {})
+
+        assert adder.ledger.unique_ids_for("k") == frozenset({"z1", "z2"})
+
+    def test_only_what_was_handed_to_home_assistant_is_recorded(self):
+        """An entity suppressed as already emitted was recorded on the poll
+        that did emit it, so recording the builder's full output again would
+        be indistinguishable until the builder stopped being deterministic."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")])
+
+        adder.collect("k", {})
+        adder.collect("k", {})
+
+        assert adder.ledger.unique_ids_for("k") == frozenset({"z1"})
+
+    def test_an_entity_with_no_unique_id_leaves_the_key_invisible(self):
+        """No unique_id means no registry row, so the key is out of scope for
+        removal entirely rather than recorded with nothing to remove."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity(None)])
+
+        adder.collect("k", {})
+
+        assert adder.ledger.unique_ids_for("k") == frozenset()
+        assert "k" not in adder.ledger.keys()  # noqa: SIM118 -- a named accessor, not a mapping
+
+    def test_the_descriptor_carries_the_last_listing_seen(self):
+        """The card has to name a device whose key has left the poll entirely,
+        so the descriptor is what survives it."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")])
+
+        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "Old", "hub_name": "Hub A"})
+        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "New", "hub_name": "Hub A"})
+
+        assert adder.ledger.descriptor_for("k") == {
+            "addr": 1,
+            "model": "HTV245FRF",
+            "sub_name": "New",
+            "hub_name": "Hub A",
+        }
+
+    def test_an_unknown_key_has_no_descriptor(self):
+        """Reading a key nothing was recorded for must not raise."""
+        assert EmittedEntityLedger().descriptor_for("nope") == {}
+
+    def test_forget_drops_the_key_from_both_structures_at_once(self):
+        """The lockstep half: the ids only stop being remembered when the rows
+        they name have actually been removed, and then in both places."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")])
+        adder.collect("k", {})
+
+        adder.forget("k")
+
+        assert adder.ledger.unique_ids_for("k") == frozenset()
+        assert adder.ledger.descriptor_for("k") == {}
+        assert "z1" not in adder._emitted
+
+    def test_forgetting_a_key_lets_a_later_reappearance_emit_again(self):
+        """Without this, a removed key that returns gains no entities until a
+        reload, which would be a new silent failure mode of its own."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")])
+        adder.collect("k", {})
+
+        adder.forget("k")
+
+        assert [e._attr_unique_id for e in adder.collect("k", {})] == ["z1"]
+
+    def test_forgetting_an_unrecorded_key_is_a_no_op(self):
+        """The remover calls forget on every adder, including ones that never
+        emitted for that key."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")])
+        adder.collect("k", {})
+
+        adder.forget("other")
+
+        assert adder.ledger.unique_ids_for("k") == frozenset({"z1"})
+
+
+class TestLateAdderStore:
+    """The slot the removal sweep reaches the platforms' adders through."""
+
+    def test_registering_appends_rather_than_replaces(self):
+        """Three platforms publish into one entry store, and the sweep needs
+        all of them, not the last one."""
+        store: dict = {}
+        register_late_adder(store, "first")
+        register_late_adder(store, "second")
+
+        assert store[LATE_ADDER_STORE_KEY] == ["first", "second"]
+        assert late_adders(store) == ["first", "second"]
+
+    def test_an_entry_store_with_no_adders_reads_as_none(self):
+        """A config entry whose platforms have not set up yet is ordinary."""
+        assert late_adders({}) == []
+
+    def test_an_unreadable_entry_store_degrades_instead_of_raising(self):
+        """Called from a coordinator listener and from a Repairs flow step,
+        where raising breaks something much larger than this read."""
+        assert late_adders(object()) == []

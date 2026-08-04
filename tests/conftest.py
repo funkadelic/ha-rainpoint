@@ -107,6 +107,7 @@ _HA_STUBS = [
     "homeassistant.components.binary_sensor",
     "homeassistant.components.number",
     "homeassistant.components.switch",
+    "homeassistant.components.repairs",
     "homeassistant.const",
     "homeassistant.data_entry_flow",
     "homeassistant.exceptions",
@@ -382,6 +383,42 @@ class _FakeOptionsFlow:
 
 
 sys.modules["homeassistant.config_entries"].OptionsFlow = _FakeOptionsFlow
+
+
+# ---------------------------------------------------------------------------
+# Real RepairsFlow base so repairs.py can subclass it. Both halves of this are
+# load bearing, for the same two reasons the _FakeConfigFlow block above is: a
+# MagicMock cannot be subclassed, and a MagicMock parent package exposes no
+# __path__, so `from homeassistant.components.repairs import RepairsFlow` fails
+# at import time unless the submodule is in _HA_STUBS *and* carries a real
+# class. hass, issue_id and data are assigned by the real flow manager; they
+# default to None here so a test can construct a flow directly and set only
+# what it needs. The two step helpers return plain dicts carrying their
+# arguments, so a test can assert on a returned step with no flow manager
+# running.
+# ---------------------------------------------------------------------------
+class _FakeRepairsFlow:
+    """Minimal stand-in for homeassistant.components.repairs.RepairsFlow."""
+
+    hass = None
+    issue_id = None
+    data = None
+
+    def async_show_form(self, *, step_id, data_schema=None, description_placeholders=None):
+        """Return the form step as plain data."""
+        return {
+            "type": "form",
+            "step_id": step_id,
+            "data_schema": data_schema,
+            "description_placeholders": description_placeholders,
+        }
+
+    def async_create_entry(self, *, title="", data=None):
+        """Return the created entry as plain data."""
+        return {"type": "create_entry", "title": title, "data": data}
+
+
+sys.modules["homeassistant.components.repairs"].RepairsFlow = _FakeRepairsFlow
 
 
 class _FakeClientError(OSError):

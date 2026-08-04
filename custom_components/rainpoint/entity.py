@@ -16,6 +16,7 @@ own constructors and call ``sub_device_attributes`` directly.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -30,6 +31,105 @@ from .coordinator import (
     hub_connectivity_record,
 )
 from .device import build_sub_device_info
+
+_LOGGER = logging.getLogger(__name__)
+
+# The hass.data[DOMAIN][entry_id] slot every platform publishes its adder into.
+# The adders are otherwise local to each platform's async_setup_entry, and the
+# removal sweep needs to ask them what they emitted.
+LATE_ADDER_STORE_KEY = "late_adders"
+
+
+class EmittedEntityLedger:
+    """What one adder emitted, indexed by the sensor key that produced it.
+
+    The adders' own bookkeeping cannot answer this: an emitted-unique_id set
+    carries no key, and a key set carries no unique_ids. Removing exactly the
+    rows a given key produced needs both halves in one structure, and asking
+    for an exact list is what keeps the removal off string reasoning about
+    unique_id prefixes.
+
+    Also carries a small descriptor per key -- address, model, sub-device name
+    and hub name -- so a card can still name the device after its key has left
+    coordinator.data["sensors"] entirely. Those are raw cloud strings here;
+    they are sanitized at the card boundary, not at record time, so nothing
+    downstream can be handed an unsanitized value by accident.
+    """
+
+    def __init__(self) -> None:
+        """Start empty; every entry is written by record and dropped by forget."""
+        self._by_key: dict[str, set[str]] = {}
+        self._descriptors: dict[str, dict] = {}
+
+    def record(self, key: str, info: dict, entities: list) -> None:
+        """Add the unique_ids of entities actually emitted for one sensor key.
+
+        Appends rather than replaces, because a per-zone platform emits
+        entities for the same key across several polls: a valve reporting zone
+        1 now and zone 2 later must end with both ids under the one key.
+
+        An entity with no unique_id is skipped: it has no registry row, so
+        there is nothing to remove for it later.
+
+        The descriptor is last-write-wins, so a device that gets renamed or
+        re-modelled in the cloud is named by its most recent listing.
+        """
+        for entity in entities:
+            unique_id = getattr(entity, "_attr_unique_id", None)
+            if unique_id is None:
+                continue
+            self._by_key.setdefault(key, set()).add(unique_id)
+        self._descriptors[key] = {
+            "addr": info.get("addr"),
+            "model": info.get("model"),
+            "sub_name": info.get("sub_name"),
+            "hub_name": info.get("hub_name"),
+        }
+
+    def unique_ids_for(self, key: str) -> frozenset[str]:
+        """Return the unique_ids recorded for one sensor key."""
+        return frozenset(self._by_key.get(key, ()))
+
+    def descriptor_for(self, key: str) -> dict:
+        """Return the cloud-supplied descriptor for one sensor key, or {}."""
+        return dict(self._descriptors.get(key, {}))
+
+    def keys(self) -> frozenset[str]:
+        """Return every key with at least one recorded unique_id.
+
+        An entry is created only once a non-None unique_id has been seen for
+        the key, so membership here is exactly that condition. A key whose
+        entities all lacked a unique_id has no registry row to remove and is
+        therefore invisible to the removal sweep, which is the scope limit
+        rather than an accident of this structure.
+        """
+        return frozenset(self._by_key)
+
+    def forget(self, key: str) -> frozenset[str]:
+        """Drop one key's entry and return the unique_ids it held."""
+        dropped = frozenset(self._by_key.pop(key, set()))
+        self._descriptors.pop(key, None)
+        return dropped
+
+
+def register_late_adder(entry_store: dict, adder) -> None:
+    """Publish one platform's adder so the removal sweep can reach it."""
+    entry_store.setdefault(LATE_ADDER_STORE_KEY, []).append(adder)
+
+
+def late_adders(entry_store: dict) -> list:
+    """Return the registered adders, or an empty list if the slot is unreadable.
+
+    Never raises: the callers are a coordinator listener and a Repairs flow
+    step, and an exception in either breaks something far larger than this
+    read. Matches the degrade-to-empty contract the registry sweeps' own
+    guards carry.
+    """
+    try:
+        return list(entry_store.get(LATE_ADDER_STORE_KEY) or [])
+    except Exception as exc:
+        _LOGGER.debug("Late adder registry unreadable; treating this entry as having none: %s", exc)
+        return []
 
 
 class LateEntityAdder:
@@ -48,11 +148,15 @@ class LateEntityAdder:
     without being handed the first again, and a repeated unique_id is an error
     in Home Assistant.
 
-    The emitted set is deliberately never pruned. A key vanishing from the
-    coordinator does not remove the entities already registered for it, so
-    forgetting the key would let a later reappearance offer the same unique_id
-    a second time. It is bounded by the number of distinct entities the
-    installation has ever produced in one session.
+    The emitted set is pruned only in lockstep with an actual removal of the
+    rows it names, through ``forget``, and never on key absence alone. A key
+    vanishing from the coordinator does not remove the entities already
+    registered for it, so forgetting it there would let a later reappearance
+    offer the same unique_id a second time, which is an error in Home
+    Assistant. Once those rows genuinely no longer exist that reasoning
+    inverts, and holding the ids would leave a returning key with no entities
+    until a reload. It is bounded by the number of distinct entities the
+    installation has produced in one session.
     """
 
     def __init__(
@@ -66,6 +170,7 @@ class LateEntityAdder:
         self._async_add_entities = async_add_entities
         self._build = build
         self._emitted: set[str] = set()
+        self.ledger = EmittedEntityLedger()
 
     def collect(self, key: str, info: dict) -> list:
         """Return the not-yet-emitted entities for one sensor key.
@@ -81,7 +186,22 @@ class LateEntityAdder:
             if unique_id is not None:
                 self._emitted.add(unique_id)
             fresh.append(entity)
+        # Records what was actually handed to Home Assistant, never the
+        # builder's full output: an entity suppressed as already-emitted was
+        # recorded on the poll that did emit it, and recording the full output
+        # would be indistinguishable until the day the builder stopped being
+        # deterministic.
+        self.ledger.record(key, info, fresh)
         return fresh
+
+    def forget(self, key: str) -> None:
+        """Drop one key's ledger entry and the unique_ids it held.
+
+        Called only alongside an actual removal of those registry rows, so the
+        add-once guarantee still holds for every row that exists.
+        """
+        for unique_id in self.ledger.forget(key):
+            self._emitted.discard(unique_id)
 
     @callback
     def async_on_coordinator_update(self) -> None:
