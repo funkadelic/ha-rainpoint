@@ -1783,6 +1783,30 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 len(missing_hub_keys),
             )
 
+        # A hub that is present but enumerates nothing is trusted from the very
+        # first poll: it is in neither the missing nor the provisional hub set,
+        # so the freeze above does not reach it, and every child it stopped
+        # listing starts counting on that same poll. That shape is a genuine
+        # unpair-everything and an equally genuine partial-degradation response
+        # from getDeviceByHid, and the integration cannot tell the two apart.
+        # Logged rather than guarded, because the guard is a decision about
+        # whether an empty enumeration is ever authoritative and what it costs
+        # an account that really did unpair its last sub-device. Until that is
+        # settled, the case has to at least be visible before the cards appear,
+        # so the count is a warning naming the hub key and integer counts only.
+        for hub in hubs:
+            if hub.get("subDevices"):
+                continue
+            hub_key = f"{hub['hid']}_{hub['mid']}"
+            counted = {key for key in missing - frozen if key.rpartition("_")[0] == hub_key}
+            if counted:
+                _LOGGER.warning(
+                    "Hub %s is listed but enumerates no sub-devices; counting %d of its previously listed "
+                    "key(s) toward removal, which an outage on this endpoint is indistinguishable from",
+                    hub_key,
+                    len(counted),
+                )
+
         # A key that reappears at all restarts from zero.
         for key in live_keys:
             self._orphaned_key_poll_counts.pop(key, None)

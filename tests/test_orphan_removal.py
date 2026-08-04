@@ -32,6 +32,7 @@ from custom_components.rainpoint import (
     _sync_orphaned_entity_issues_on_updates,
     repairs,
 )
+from custom_components.rainpoint import coordinator as coordinator_module
 from custom_components.rainpoint.const import (
     CONF_HIDS,
     DOMAIN,
@@ -342,6 +343,36 @@ class TestOrphanedCardLifecycle:
         _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
         await valve_async_setup_entry(hass, entry, async_add_entities)
         return coordinator, hass, entry, client
+
+    @pytest.mark.asyncio
+    async def test_a_hub_that_enumerates_nothing_says_so_on_the_poll_it_starts_counting(self, caplog):
+        """A hub that is present but lists no sub-devices is trusted from the
+        first poll: it is in neither the missing nor the provisional hub set,
+        so the hub-outage freeze never reaches it and its children all start
+        counting at once. That shape is a real unpair-everything and a real
+        partial-degradation response from the device list, and the integration
+        cannot tell them apart, so the case has to be visible in the log well
+        before the cards appear."""
+        coordinator, _hass, _entry, client = await self._armed_timeline()
+
+        client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.coordinator"):
+            await coordinator.async_refresh()
+
+        assert coordinator._orphaned_key_poll_counts[SENSOR_KEY] == 1
+        assert [r.getMessage() for r in caplog.records if "is listed but enumerates no sub-devices" in r.getMessage()]
+
+    @pytest.mark.asyncio
+    async def test_a_hub_that_still_enumerates_its_children_stays_quiet(self):
+        """The control: the warning must not fire on an ordinary poll, or it
+        would be one line per hub per two minutes on every healthy install."""
+        coordinator, _hass, _entry, _client = await self._armed_timeline()
+
+        with patch.object(coordinator_module._LOGGER, "warning") as warned:
+            await coordinator.async_refresh()
+
+        assert not [call for call in warned.call_args_list if "enumerates no sub-devices" in call.args[0]]
+        assert coordinator._orphaned_key_poll_counts == {}
 
     @pytest.mark.asyncio
     async def test_a_key_that_returns_below_the_threshold_never_raises_a_card(self):
