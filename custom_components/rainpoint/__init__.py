@@ -752,11 +752,22 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
     # unique_id prefixes. The domain comes from the adder that recorded the id,
     # which is fixed per platform.
     doomed: set[tuple[str, str]] = set()
+    # The adders whose ids really did enter scope above, which is the only
+    # population the forget below may touch. An adder skipped here contributed
+    # nothing to doomed, so no row of its was ever a candidate and every one of
+    # them certainly still exists; releasing its ids anyway would let a
+    # returning device offer a live unique_id a second time, which is exactly
+    # what the removal guard further down exists to prevent. The two loops have
+    # to agree about which adders they skipped, whatever the read that failed --
+    # an unreadable ledger and an unreadable domain are the same fact here.
+    resolved: list = []
     for adder in adders:
         try:
             doomed.update((adder.domain, unique_id) for unique_id in adder.ledger.unique_ids_for(sensor_key))
         except Exception as exc:
             _LOGGER.debug("Skipping an unreadable late adder while resolving sensor key %s: %s", sensor_key, exc)
+            continue
+        resolved.append(adder)
 
     if not doomed:
         # No adder in this session emitted anything for this key, so there is
@@ -885,7 +896,10 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
             len(failed),
         )
     else:
-        for adder in adders:
+        # resolved rather than adders: see the note at its construction. An
+        # adder the resolve loop skipped kept every row it holds, so it keeps
+        # its bookkeeping too.
+        for adder in resolved:
             try:
                 adder.forget(sensor_key)
             except Exception as exc:

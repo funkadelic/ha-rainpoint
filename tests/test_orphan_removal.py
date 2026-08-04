@@ -43,7 +43,11 @@ from custom_components.rainpoint.coordinator import (
     ORPHANED_KEY_DEBOUNCE_POLLS,
     RainPointCoordinator,
 )
-from custom_components.rainpoint.entity import LATE_ADDER_STORE_KEY, LateEntityAdder
+from custom_components.rainpoint.entity import (
+    LATE_ADDER_STORE_KEY,
+    EmittedEntityLedger,
+    LateEntityAdder,
+)
 from custom_components.rainpoint.repairs import (
     async_create_fix_flow,
     orphaned_entities_issue_id,
@@ -529,6 +533,51 @@ class _BrokenAdder:
         raise RuntimeError("cannot forget")
 
 
+class _UnresolvableAdder:
+    """An adder the resolve half cannot read, but whose forget would succeed.
+
+    The asymmetry _BrokenAdder cannot express. That one raises on both halves,
+    so a forget loop carrying no memory of which adders the resolve loop
+    skipped still looks correct against it: its forget raises anyway and the
+    per-adder guard swallows it. Here the forget would succeed, which is the
+    only shape that can show ids being released for rows that were never even
+    candidates for removal.
+    """
+
+    def __init__(self):
+        """Hold one recorded id and a log of the forgets that reached it."""
+        self.ledger = EmittedEntityLedger()
+        self.ledger.record(SENSOR_KEY, {}, [_ledger_entity(ZONE_2_UNIQUE_ID)])
+        self.forgotten: list[str] = []
+
+    @property
+    def domain(self):
+        """Fail the way a half-constructed adder would."""
+        raise RuntimeError("no domain")
+
+    def forget(self, key):
+        """Record that the sweep released this adder's bookkeeping."""
+        self.forgotten.append(key)
+
+
+class _UnforgettableAdder:
+    """An adder that resolves cleanly and then raises on the forget.
+
+    The other half of the per-adder discipline: a failure to release one
+    adder's bookkeeping must not stop the adder beside it releasing its own.
+    """
+
+    def __init__(self):
+        """Hold one recorded id under a real domain, so the resolve succeeds."""
+        self.ledger = EmittedEntityLedger()
+        self.ledger.record(SENSOR_KEY, {}, [_ledger_entity(ZONE_2_UNIQUE_ID)])
+        self.domain = "valve"
+
+    def forget(self, key):
+        """Fail the way a half-torn-down adder would."""
+        raise RuntimeError("cannot forget")
+
+
 class TestOrphanedSweepGuards:
     """Every read on this path degrades rather than raising.
 
@@ -660,12 +709,44 @@ class TestOrphanedSweepGuards:
         assert [r.getMessage() for r in caplog.records if "Nothing in scope for sensor key" in r.getMessage()]
 
     def test_one_malformed_adder_does_not_stop_the_others_being_resolved(self):
-        """The per-adder guard on the resolve half, and on the forget half."""
+        """The per-adder guard on the resolve half, and on the forget half.
+
+        _BrokenAdder fails the resolve and is therefore skipped by both loops.
+        _UnforgettableAdder resolves cleanly and raises only on the forget,
+        which must leave the adder beside it releasing its own bookkeeping.
+        """
         removed, async_get, async_entries = _make_entity_registry()
         coordinator = SimpleNamespace(data={"sensors": {}})
         good = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)], "valve")
         good.collect(SENSOR_KEY, {})
-        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [_BrokenAdder(), good]}}})
+        stubborn = _UnforgettableAdder()
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [_BrokenAdder(), stubborn, good]}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 2
+
+        assert removed == ["valve.zone1", "valve.zone2"]
+        assert good.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+
+    def test_an_adder_the_resolve_half_skipped_is_never_forgotten(self):
+        """The two loops have to agree about which adders they skipped.
+
+        An adder that could not be read while resolving contributed nothing to
+        the doomed set, so not one of its rows was ever a candidate and every
+        one of them is still registered holding its unique_id. Forgetting it
+        anyway would release those ids, which is the very state the removal
+        guard exists to prevent, arriving through the resolve guard instead.
+        """
+        removed, async_get, async_entries = _make_entity_registry()
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        good = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)], "valve")
+        good.collect(SENSOR_KEY, {})
+        unresolvable = _UnresolvableAdder()
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [unresolvable, good]}}})
         entry = SimpleNamespace(entry_id=ENTRY_ID)
 
         with (
@@ -674,7 +755,11 @@ class TestOrphanedSweepGuards:
         ):
             assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 1
 
+        # Its id was never in scope, so its row survives untouched.
         assert removed == ["valve.zone1"]
+        assert unresolvable.forgotten == []
+        assert unresolvable.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_2_UNIQUE_ID})
+        # The readable adder is unaffected by its neighbour's failure.
         assert good.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
 
     def test_a_row_in_another_domain_sharing_the_unique_id_is_left_alone(self):
