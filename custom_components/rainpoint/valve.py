@@ -98,7 +98,7 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(adder.async_on_coordinator_update))
 
 
-class RainPointValveEntity(CoordinatorEntity, ValveEntity):
+class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity):
     """Represents a single irrigation zone on a RainPoint valve hub."""
 
     _attr_should_poll = False

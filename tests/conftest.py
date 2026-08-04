@@ -216,6 +216,19 @@ class _CoordinatorEntity(_HABaseEntity):
         """Init helper."""
         self.coordinator = coordinator
 
+    def __class_getitem__(cls, _item):
+        """Accept the generic parameter the real CoordinatorEntity takes.
+
+        The platform entity bases subscript it (CoordinatorEntity[
+        RainPointCoordinator]) so a type checker knows self.coordinator is a
+        RainPointCoordinator rather than the bare DataUpdateCoordinator. That
+        subscript is evaluated at class-definition time, so a stand-in that is
+        not subscriptable fails every import in the suite. Returns the class
+        itself, which is what Generic.__class_getitem__ resolves to for
+        inheritance purposes.
+        """
+        return cls
+
 
 class _RestoreEntity:
     """Minimal RestoreEntity stand-in.

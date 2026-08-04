@@ -285,7 +285,7 @@ def sub_device_attributes(coordinator: RainPointCoordinator, sensor_key: str) ->
     return attrs
 
 
-class RainPointSubDeviceEntity(CoordinatorEntity):
+class RainPointSubDeviceEntity(CoordinatorEntity[RainPointCoordinator]):
     """Coordinator-backed entity bound to a single sub-device.
 
     ``_device_name_prefix`` only ever reaches a user for a sub-device the cloud

@@ -80,6 +80,13 @@ def resolve_connectivity_hubs(coordinator: RainPointCoordinator) -> list[dict]:
     return [hub for hub in _hub_records(coordinator) if is_hub_record(hub)]
 
 
+# The four hub classes below deliberately leave CoordinatorEntity
+# unparameterized, unlike the sub-device bases in entity.py, valve.py, number.py
+# and generic_control.py. Each initializes every base in its inheritance chain
+# explicitly rather than cooperatively, through the unbound
+# CoordinatorEntity.__init__(self, coordinator), and a subscripted base makes
+# that call's self parameter unsatisfiable. They read nothing off the
+# coordinator that the narrower type would have caught.
 class RainPointHubSensorBase(CoordinatorEntity, SensorEntity, RainPointHubDevice):
     """Base class for RainPoint hub sensors."""
 

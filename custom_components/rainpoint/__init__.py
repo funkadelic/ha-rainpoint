@@ -825,7 +825,12 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
     # A surviving_registry of None means the re-read could not be made at all.
     # Emptiness is a claim that has to be positively established, and a failed
     # lookup establishes nothing, so the row stays exactly where it is.
-    if surviving_registry is not None and candidate_id:
+    # _device_registry is tested directly rather than relied on transitively.
+    # A failed device-registry fetch already yields no rows, so no candidate can
+    # resolve and this branch is unreachable with a None registry, but that is
+    # three inferences away from the call below. Stating it here keeps the guard
+    # local to the thing it guards.
+    if surviving_registry is not None and _device_registry is not None and candidate_id:
         if _device_row_is_empty(surviving_rows, candidate_id):
             # Scoped to this config entry, deliberately, because the emptiness
             # test above cannot make the unscoped call safe: it answers "empty

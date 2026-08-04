@@ -83,7 +83,7 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(adder.async_on_coordinator_update))
 
 
-class _RainPointDurationNumberBase(CoordinatorEntity, NumberEntity, RestoreEntity):
+class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], NumberEntity, RestoreEntity):
     """Shared restore, value, attribute, and device-page behaviour for a duration entity.
 
     The two concrete classes below differ only in their constructors and class

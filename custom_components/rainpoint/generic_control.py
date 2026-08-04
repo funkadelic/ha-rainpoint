@@ -57,6 +57,7 @@ from .const import (
     GENERIC_CONTROL_UNIQUE_ID_MARKER,
     UNIQUE_ID_PREFIX,
 )
+from .coordinator import RainPointCoordinator
 from .device import build_sub_device_info
 from .generic_entities import (
     _IDENTITY_SPECS,
@@ -478,7 +479,7 @@ def build_generic_switch_entities(coordinator, sensor_key: str, sensor_info: dic
     )
 
 
-class RainPointGenericControlBase(CoordinatorEntity):
+class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
     """Shared unique_id/name/device_info/run-state/command plumbing for a control entity.
 
     Semantics come from generic_entities._IDENTITY_SPECS -- the same curated
