@@ -52,7 +52,12 @@ from .diagnostic_sensors import (
     RainPointLastUpdatedSensor,
     RainPointRSSISensor,
 )
-from .entity import RainPointSubDeviceEntity, sub_device_attributes
+from .entity import (
+    EmittedEntityLedger,
+    RainPointSubDeviceEntity,
+    register_late_adder,
+    sub_device_attributes,
+)
 from .hub_entities import (
     RainPointHubDeviceIDSensor,
     RainPointHubFirmwareSensor,
@@ -372,16 +377,20 @@ class _LateSensorEntityAdder:
         self._coordinator = coordinator
         self._async_add_entities = async_add_entities
         self._generic_enabled = generic_enabled
-        # Both sets are deliberately never pruned, unlike the coordinator's
-        # _silent_poll_counts, and the asymmetry is the point. That counter is
+        # Neither set is pruned on key absence, unlike the coordinator's
+        # _silent_poll_counts, and that asymmetry still holds. That counter is
         # per-poll state a returning device must restart from zero. These are a
         # record of what has already been handed to Home Assistant, and a key
         # leaving coordinator.data does not remove the entities registered for
-        # it, so forgetting the key would let the same unique_id be offered a
-        # second time if the key came back. Bounded by the number of distinct
-        # sensor keys the installation produces in one session.
+        # it, so forgetting the key there would let the same unique_id be
+        # offered a second time if the key came back. Once those rows genuinely
+        # no longer exist that reasoning inverts, so both sets are cleared
+        # through forget, in lockstep with an actual removal and never on
+        # absence alone. Bounded by the number of distinct sensor keys the
+        # installation produces in one session.
         self._keys_with_model_entities: set[str] = set()
         self._keys_with_silent_entity: set[str] = set()
+        self.ledger = EmittedEntityLedger()
 
     def collect(self, key: str, info: dict) -> list:
         """Return the entities to add for one sensor key, recording that they were added.
@@ -397,7 +406,31 @@ class _LateSensorEntityAdder:
             if key in self._keys_with_model_entities:
                 return []
             self._keys_with_model_entities.add(key)
-        return list(_create_sensor_entities(self._coordinator, key, info, self._generic_enabled))
+        built = list(_create_sensor_entities(self._coordinator, key, info, self._generic_enabled))
+        # Recorded after the gate, so an emission this call suppressed adds
+        # nothing. Generic rows come back in the same list as the trusted ones,
+        # which is what makes the key govern the removal rather than the
+        # namespace a row happens to sit in.
+        self.ledger.record(key, info, built)
+        return built
+
+    def forget(self, key: str) -> None:
+        """Drop one key's ledger entry and both add-once marks for it.
+
+        Called only alongside an actual removal of those registry rows, from
+        the sweep's remover, which is the coupling that keeps the
+        never-offer-twice property the two sets exist to protect.
+
+        Both discards are unconditional and neither depends on the other. A
+        device that was silent at setup and started reporting later is recorded
+        in both sets, so clearing only the one matching its current state would
+        leave the other permanently gating an emission whose rows no longer
+        exist, and that half of its entity set could never come back without a
+        reload.
+        """
+        self.ledger.forget(key)
+        self._keys_with_model_entities.discard(key)
+        self._keys_with_silent_entity.discard(key)
 
     @callback
     def async_on_coordinator_update(self) -> None:
@@ -429,6 +462,9 @@ async def async_setup_entry(
     generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
 
     adder = _LateSensorEntityAdder(coordinator, async_add_entities, generic_enabled)
+    # Published before anything is emitted, so the removal sweep can ask this
+    # adder what it created for a key that later vanishes.
+    register_late_adder(data, adder)
 
     entities: list[RainPointSensorBase] = []
     entities.extend(_create_hub_entities(coordinator, hubs_cfg))

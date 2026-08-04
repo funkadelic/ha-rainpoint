@@ -8,6 +8,7 @@ import pytest
 
 from custom_components.rainpoint.const import CONF_GENERIC_CONTROL_ENABLED, DOMAIN, MODEL_VALVE_345
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+from custom_components.rainpoint.entity import LateEntityAdder, late_adders, register_late_adder
 from custom_components.rainpoint.number import (
     DURATION_DEFAULT_MINUTES,
     DURATION_MAX_MINUTES,
@@ -764,3 +765,47 @@ class TestNumberSetupEntryGenericControl:
         assert len(entities) == 1
         assert isinstance(entities[0], RainPointGenericZoneDurationNumber)
         assert entities[0]._attr_unique_id == "rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration"
+
+
+class TestNumberAdderRegistration:
+    """The number platform publishes its adder where the removal sweep reads."""
+
+    @staticmethod
+    def _hass_and_entry():
+        """A hass/entry pair whose entry store is a real dict, not a mock."""
+        coord = MagicMock()
+        coord.data = {"sensors": {}}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+        return hass, entry
+
+    @pytest.mark.asyncio
+    async def test_setup_registers_exactly_the_adder_it_built(self):
+        """The sweep reaches every platform's adder through one entry slot."""
+        from custom_components.rainpoint.number import async_setup_entry
+
+        hass, entry = self._hass_and_entry()
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        registered = late_adders(hass.data[DOMAIN]["e"])
+        assert len(registered) == 1
+        assert isinstance(registered[0], LateEntityAdder)
+
+    @pytest.mark.asyncio
+    async def test_a_second_platforms_registration_appends(self):
+        """Three platforms share one slot, and the sweep needs all three."""
+        from custom_components.rainpoint.number import async_setup_entry
+
+        hass, entry = self._hass_and_entry()
+        store = hass.data[DOMAIN]["e"]
+        register_late_adder(store, "an earlier platform")
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        registered = late_adders(store)
+        assert registered[0] == "an earlier platform"
+        assert isinstance(registered[1], LateEntityAdder)
