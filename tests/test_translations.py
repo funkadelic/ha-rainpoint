@@ -13,8 +13,6 @@ import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 import custom_components.rainpoint as rainpoint_pkg
 from custom_components.rainpoint import repairs
 from custom_components.rainpoint.repairs import (
@@ -69,14 +67,40 @@ class TestIssueCopyStructure:
         assert isinstance(data.get("issues"), dict)
         assert data["issues"], "issues block must not be empty"
 
-    @pytest.mark.parametrize("field", ["title", "description"])
-    def test_every_issue_entry_has_non_empty_copy(self, field):
+    def test_every_issue_entry_has_a_non_empty_title(self):
         """Iterated rather than named, so a fifth issue added later is covered
         without editing this test."""
         for key, entry in _load_en_translations()["issues"].items():
-            value = entry.get(field)
-            assert isinstance(value, str), f"issues.{key}.{field} must be a string"
-            assert value.strip(), f"issues.{key}.{field} must not be empty"
+            value = entry.get("title")
+            assert isinstance(value, str), f"issues.{key}.title must be a string"
+            assert value.strip(), f"issues.{key}.title must not be empty"
+
+    def test_every_issue_entry_has_a_non_empty_body_wherever_its_body_lives(self):
+        """A card's body is its description, or its confirm step's description
+        when it is fixable. Both are the same thing to a user, so both are
+        required; which key holds it is decided by the test below."""
+        for key, entry in _load_en_translations()["issues"].items():
+            if "fix_flow" in entry:
+                value = entry["fix_flow"]["step"]["confirm"].get("description")
+                where = f"issues.{key}.fix_flow.step.confirm.description"
+            else:
+                value = entry.get("description")
+                where = f"issues.{key}.description"
+            assert isinstance(value, str), f"{where} must be a string"
+            assert value.strip(), f"{where} must not be empty"
+
+    def test_a_fixable_issue_carries_no_description_of_its_own(self):
+        """hassfest marks description and fix_flow mutually exclusive, and it
+        is the only gate that checks: nothing in the local suite, ruff or the
+        HACS validation reads this file against Home Assistant's schema, so a
+        fixable issue that also carries a description passes everything here
+        and fails CI. A fixable card renders its body from the flow's step, so
+        a description there would also be copy no user is ever shown."""
+        for key, entry in _load_en_translations()["issues"].items():
+            if "fix_flow" in entry:
+                assert "description" not in entry, (
+                    f"issues.{key} is fixable, so its body belongs in fix_flow.step.confirm.description"
+                )
 
     def test_no_issue_copy_ships_a_link_of_its_own(self):
         """The placeholders are sanitized so cloud text cannot plant a link in
@@ -166,10 +190,11 @@ class TestHubDisconnectedIssuePlaceholderParity:
 class TestOrphanedEntitiesIssuePlaceholderParity:
     """The copy's placeholders and the ones _raise_issue supplies must match.
 
-    Carries one assertion its two siblings do not: this is the integration's
-    only fixable issue, so its confirm dialog is a second piece of copy fed by
-    the same placeholder dict, and a name present there but not on the card
-    would ship a dialog with a literal brace.
+    Reads the confirm step rather than a description, which its two siblings
+    do not: this is the integration's only fixable issue, and a fixable issue
+    may not carry a description at all. Its whole body is the flow's step, fed
+    by the placeholder dict the card supplied, which the flow reads back off
+    the raised issue.
     """
 
     @staticmethod
@@ -193,32 +218,25 @@ class TestOrphanedEntitiesIssuePlaceholderParity:
         return create.call_args.kwargs["translation_placeholders"]
 
     def test_copy_placeholders_match_the_ones_the_code_supplies(self):
-        """A mismatch in either direction ships a card with a literal brace or a blank."""
+        """A mismatch in either direction ships a card with a literal brace or a blank.
+
+        Equality, not a subset, and it spans both halves: every name the code
+        supplies has to be shown somewhere, and every name shown has to have a
+        supplier. The card's own title carries none of them, so the confirm
+        step is where they all have to land.
+        """
         entry = _orphaned_entities_entry()
-        in_copy = _placeholders_in(entry["title"]) | _placeholders_in(entry["description"])
+        confirm = entry["fix_flow"]["step"]["confirm"]
+        in_copy = _placeholders_in(entry["title"]) | _placeholders_in(confirm["title"]) | _placeholders_in(confirm["description"])
         assert in_copy == set(self._supplied_placeholders())
 
     def test_copy_renders_with_the_supplied_values_and_leaves_no_brace(self):
         """Proves the parity holds under an actual render, not just by name comparison."""
         entry = _orphaned_entities_entry()
-        supplied = self._supplied_placeholders()
-        rendered = entry["description"].format(**supplied)
-        assert "{" not in rendered
-        assert "}" not in rendered
-        assert entry["title"].format(**supplied)
-
-    def test_the_confirm_step_only_uses_placeholders_the_card_supplies(self):
-        """The dialog reuses the card's own placeholder dict, so a name it uses
-        and the card does not has no supplier at all."""
-        confirm = _orphaned_entities_entry()["fix_flow"]["step"]["confirm"]
-        in_confirm = _placeholders_in(confirm["title"]) | _placeholders_in(confirm["description"])
-        assert in_confirm <= set(self._supplied_placeholders())
-
-    def test_the_confirm_step_renders_with_the_supplied_values(self):
-        """The same render proof for the second half of the card."""
-        confirm = _orphaned_entities_entry()["fix_flow"]["step"]["confirm"]
+        confirm = entry["fix_flow"]["step"]["confirm"]
         supplied = self._supplied_placeholders()
         rendered = confirm["description"].format(**supplied)
         assert "{" not in rendered
         assert "}" not in rendered
         assert confirm["title"].format(**supplied)
+        assert entry["title"].format(**supplied)
