@@ -400,6 +400,50 @@ class TestOrphanedCardLifecycle:
         assert [r.getMessage() for r in caplog.records if "is listed but enumerates no sub-devices" in r.getMessage()]
 
     @pytest.mark.asyncio
+    async def test_a_hub_that_keeps_enumerating_nothing_is_warned_about_once(self, caplog):
+        """The warning is a breadcrumb for an edge, not a per-poll readout.
+
+        The state it reports is permanent once it holds: the enumeration
+        memory only ever grows and a present hub is never frozen, so every one
+        of its keys stays counted on every later poll, including long after the
+        user confirmed the removal. Warning on the state rather than on the
+        transition put one line per hub in the log every two minutes for the
+        life of the session, which a one-poll assertion cannot see.
+        """
+        coordinator, _hass, _entry, client = await self._armed_timeline()
+
+        client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.coordinator"):
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS + 5):
+                await coordinator.async_refresh()
+
+        # The key really was counted on every one of those polls, so the single
+        # line is a gate rather than the counting having stopped.
+        assert coordinator._orphaned_key_poll_counts[SENSOR_KEY] == ORPHANED_KEY_DEBOUNCE_POLLS + 5
+        assert len([r for r in caplog.records if "enumerates no sub-devices" in r.getMessage()]) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_hub_that_recovers_and_degrades_again_is_warned_about_again(self):
+        """The gate re-arms, so a second degradation gets its own breadcrumb
+        rather than being swallowed by the first one's mark."""
+        coordinator, _hass, _entry, client = await self._armed_timeline()
+
+        with patch.object(coordinator_module._LOGGER, "warning") as warned:
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            await coordinator.async_refresh()
+            await coordinator.async_refresh()
+            assert len([call for call in warned.call_args_list if "enumerates no sub-devices" in call.args[0]]) == 1
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=True)
+            await coordinator.async_refresh()
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            await coordinator.async_refresh()
+            await coordinator.async_refresh()
+
+        assert len([call for call in warned.call_args_list if "enumerates no sub-devices" in call.args[0]]) == 2
+
+    @pytest.mark.asyncio
     async def test_a_hub_that_still_enumerates_its_children_stays_quiet(self):
         """The control: the warning must not fire on an ordinary poll, or it
         would be one line per hub per two minutes on every healthy install."""

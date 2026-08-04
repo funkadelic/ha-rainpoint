@@ -803,6 +803,11 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._last_poll_sensor_keys: set[str] = set()
         self._orphaned_key_poll_counts: dict[str, int] = {}
         self._aged_out_sensor_keys: frozenset[str] = frozenset()
+        # The hub keys whose empty enumeration has already been warned about,
+        # so that warning fires on the edge rather than on every poll. Sized by
+        # the number of hubs in the account, and rebuilt whole on every poll
+        # that reaches the counting step.
+        self._warned_empty_enumeration: set[str] = set()
 
     def record_valve_command(self, sensor_key: str, zone_num: int) -> datetime:
         """Remember the latest successful valve command time for stale-poll protection."""
@@ -1794,18 +1799,38 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # an account that really did unpair its last sub-device. Until that is
         # settled, the case has to at least be visible before the cards appear,
         # so the count is a warning naming the hub key and integer counts only.
+        #
+        # Gated on the transition rather than on the state, the same way the
+        # age-out breadcrumb below is. The state is permanent once it holds:
+        # missing only ever grows, and a hub that is present is never frozen,
+        # so a hub that stops enumerating its children keeps every one of those
+        # keys counted on every later poll. Warning on the state would put one
+        # line per hub in the log every 120 seconds for the life of the
+        # session, including long after the user confirmed the removal, since
+        # the fix flow never reaches coordinator state.
+        newly_empty: set[str] = set()
         for hub in hubs:
             if hub.get("subDevices"):
                 continue
             hub_key = f"{hub['hid']}_{hub['mid']}"
             counted = {key for key in missing - frozen if key.rpartition("_")[0] == hub_key}
-            if counted:
-                _LOGGER.warning(
-                    "Hub %s is listed but enumerates no sub-devices; counting %d of its previously listed "
-                    "key(s) toward removal, which an outage on this endpoint is indistinguishable from",
-                    hub_key,
-                    len(counted),
-                )
+            if not counted:
+                continue
+            newly_empty.add(hub_key)
+            if hub_key in self._warned_empty_enumeration:
+                continue
+            _LOGGER.warning(
+                "Hub %s is listed but enumerates no sub-devices; counting %d of its previously listed "
+                "key(s) toward removal, which an outage on this endpoint is indistinguishable from",
+                hub_key,
+                len(counted),
+            )
+        # Rebuilt whole rather than added to, so a hub that lists children again
+        # re-arms: a second degradation is visible on its own edge instead of
+        # being swallowed by the first one's mark. A hub that vanishes from the
+        # list entirely drops out here too, which is the same re-arm reached
+        # from the other side.
+        self._warned_empty_enumeration = newly_empty
 
         # A key that reappears at all restarts from zero.
         for key in live_keys:

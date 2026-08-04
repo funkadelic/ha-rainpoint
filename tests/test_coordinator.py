@@ -109,6 +109,7 @@ def _make_coord(hids=None):
         _last_poll_sensor_keys=set(),
         _orphaned_key_poll_counts={},
         _aged_out_sensor_keys=frozenset(),
+        _warned_empty_enumeration=set(),
         data={},
         hass=mock_hass,
         logger=MagicMock(),
