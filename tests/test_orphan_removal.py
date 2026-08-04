@@ -45,8 +45,9 @@ from custom_components.rainpoint.repairs import (
     async_create_fix_flow,
     orphaned_entities_issue_id,
 )
+from custom_components.rainpoint.sensor import async_setup_entry as sensor_async_setup_entry
 from custom_components.rainpoint.valve import async_setup_entry as valve_async_setup_entry
-from tests.helpers import make_valve_zone_status
+from tests.helpers import VALVE_ZONES_TLV_PAYLOAD, make_valve_zone_status
 
 HID = 100
 MID = 200
@@ -834,3 +835,261 @@ class TestOrphanedDeviceRowRemoval:
         assert _device_row_is_empty([], SUB_DEVICE_ROW_ID) is True
         assert _device_row_is_empty([on_another_row, no_device_id], SUB_DEVICE_ROW_ID) is True
         assert _device_row_is_empty([on_another_row, on_the_row], SUB_DEVICE_ROW_ID) is False
+
+
+# The identifiers observed on the maintainer's install when a valve moved
+# between two polls. A mid change means a top-level record appeared and another
+# stopped listing the addr, which is what makes this two independent events in
+# one poll rather than one move.
+REKEY_HID = 182509
+REKEY_OLD_MID = 236547
+REKEY_OLD_ADDR = 3
+REKEY_NEW_MID = 346965
+REKEY_NEW_ADDR = 1
+REKEY_OLD_KEY = f"{REKEY_HID}_{REKEY_OLD_MID}_{REKEY_OLD_ADDR}"
+REKEY_NEW_KEY = f"{REKEY_HID}_{REKEY_NEW_MID}_{REKEY_NEW_ADDR}"
+
+
+def _rekey_hub_record(mid: int, addrs) -> dict:
+    """One real hub record at this mid, listing these addrs and no others."""
+    return {
+        "mid": mid,
+        "name": f"Hub {mid}",
+        "deviceName": "d",
+        "productKey": "pk",
+        "homeName": "H",
+        "subDevices": [{"addr": addr, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"} for addr in addrs],
+    }
+
+
+def _rekey_status(entries) -> list[dict]:
+    """A multipleDeviceStatus list from (mid, addr or None) pairs."""
+    return [
+        {
+            "mid": mid,
+            "subDeviceStatus": (
+                [{"id": f"D{addr:02d}", "value": VALVE_ZONES_TLV_PAYLOAD, "time": 1785420002247}] if addr is not None else []
+            ),
+        }
+        for mid, addr in entries
+    ]
+
+
+def _unique_ids_for(entities, sensor_key: str) -> set[str]:
+    """Return the unique_ids among these entities that carry one sensor key."""
+    return {
+        entity._attr_unique_id
+        for entity in entities
+        if getattr(entity, "_attr_unique_id", None) and sensor_key in entity._attr_unique_id
+    }
+
+
+def _entities_for(entities, sensor_key: str) -> list:
+    """Return the entities among these that carry one sensor key."""
+    return [entity for entity in entities if getattr(entity, "_attr_unique_id", None) and sensor_key in entity._attr_unique_id]
+
+
+class TestOrphanedKeyReKeyEndState:
+    """The re-key this whole path exists for, driven end to end.
+
+    The new key gains a full entity set in the same poll the old key vanishes,
+    with no reload and no identity pairing, and the old key's rows and device
+    row go only once a human confirms the card. Every assertion here sits
+    between two real steps of the sequence a live install runs, because the
+    defect is an ordering property: an end-state-only test passes against an
+    implementation that never reaches this device at all.
+    """
+
+    @staticmethod
+    def _build(hub_records, status):
+        """Return (coordinator, hass, entry, client) over these hub records."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = hub_records
+        client.get_multiple_device_status.return_value = status
+
+        entry = MagicMock()
+        entry.entry_id = ENTRY_ID
+        entry.data = {CONF_HIDS: [REKEY_HID]}
+        entry.options = {}
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {ENTRY_ID: {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN][ENTRY_ID]["coordinator"] = coordinator
+        return coordinator, hass, entry, client
+
+    @classmethod
+    async def _ids_a_fresh_install_would_build(cls):
+        """Return the new key's unique_ids as built by an install that never re-keyed.
+
+        Derived independently rather than by transforming the old key's ids, so
+        an implementation that renamed a unique_id across the re-key could not
+        satisfy it by construction.
+        """
+        coordinator, hass, entry, _client = cls._build(
+            [_rekey_hub_record(REKEY_NEW_MID, [REKEY_NEW_ADDR])],
+            _rekey_status([(REKEY_NEW_MID, REKEY_NEW_ADDR)]),
+        )
+        captured, async_add_entities = _capturing_add_entities()
+
+        await coordinator.async_config_entry_first_refresh()
+        await sensor_async_setup_entry(hass, entry, async_add_entities)
+        await valve_async_setup_entry(hass, entry, async_add_entities)
+
+        return _unique_ids_for(captured, REKEY_NEW_KEY)
+
+    @staticmethod
+    def _registry_rows_from(captured):
+        """Mirror what Home Assistant would have registered for these entities.
+
+        Each sub-device entity lands on its own key's device row, and the
+        hub-level entities land on a hub row that must survive untouched.
+        """
+        entity_rows = []
+        for entity in captured:
+            unique_id = getattr(entity, "_attr_unique_id", None)
+            if unique_id is None:
+                continue
+            if REKEY_OLD_KEY in unique_id:
+                device_id = f"device_{REKEY_OLD_KEY}"
+            elif REKEY_NEW_KEY in unique_id:
+                device_id = f"device_{REKEY_NEW_KEY}"
+            else:
+                device_id = "device_hub"
+            entity_rows.append(
+                SimpleNamespace(
+                    config_entry_id=ENTRY_ID,
+                    entity_id=f"rainpoint.{unique_id}",
+                    unique_id=unique_id,
+                    device_id=device_id,
+                )
+            )
+
+        device_rows = [
+            SimpleNamespace(
+                id=f"device_{REKEY_OLD_KEY}",
+                identifiers={(DOMAIN, REKEY_OLD_KEY)},
+                config_entry_id=ENTRY_ID,
+            ),
+            SimpleNamespace(
+                id=f"device_{REKEY_NEW_KEY}",
+                identifiers={(DOMAIN, REKEY_NEW_KEY)},
+                config_entry_id=ENTRY_ID,
+            ),
+            SimpleNamespace(
+                id="device_hub",
+                identifiers={(DOMAIN, f"hub_{REKEY_HID}_{REKEY_NEW_MID}")},
+                config_entry_id=ENTRY_ID,
+            ),
+        ]
+        return entity_rows, device_rows
+
+    @pytest.mark.asyncio
+    async def test_a_mid_change_ends_with_one_entity_set_and_one_device_row(self):
+        """The whole timeline, in the order a live install runs it."""
+        from_scratch_ids = await self._ids_a_fresh_install_would_build()
+
+        coordinator, hass, entry, client = self._build(
+            [_rekey_hub_record(REKEY_OLD_MID, [REKEY_OLD_ADDR])],
+            _rekey_status([(REKEY_OLD_MID, REKEY_OLD_ADDR)]),
+        )
+        captured, async_add_entities = _capturing_add_entities()
+
+        with (
+            patch.object(repairs.ir, "async_create_issue") as create,
+            patch.object(repairs.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            await sensor_async_setup_entry(hass, entry, async_add_entities)
+            await valve_async_setup_entry(hass, entry, async_add_entities)
+
+            # Polls 1 and 2: one device at the old key, nothing counted.
+            await coordinator.async_refresh()
+            old_key_ids = _unique_ids_for(captured, REKEY_OLD_KEY)
+            assert old_key_ids
+            assert _unique_ids_for(captured, REKEY_NEW_KEY) == set()
+            assert coordinator._orphaned_key_poll_counts == {}
+            emitted_before_rekey = len(captured)
+
+            # Poll 3: the re-key. Two independent events in one poll, not a
+            # move: a record appears at the new mid carrying the device at a
+            # new addr, and the old mid stops listing its addr.
+            client.get_devices_by_hid.return_value = [
+                _rekey_hub_record(REKEY_OLD_MID, []),
+                _rekey_hub_record(REKEY_NEW_MID, [REKEY_NEW_ADDR]),
+            ]
+            client.get_multiple_device_status.return_value = _rekey_status(
+                [(REKEY_OLD_MID, None), (REKEY_NEW_MID, REKEY_NEW_ADDR)]
+            )
+            await coordinator.async_refresh()
+
+            # The new key gained its full entity set immediately, with no
+            # reload, and those entities were added rather than renamed.
+            assert len(captured) > emitted_before_rekey
+            assert _unique_ids_for(captured, REKEY_NEW_KEY) == from_scratch_ids
+            # Nothing compared the two keys: no id was carried across, so the
+            # two sets are disjoint and the old ids are all still present.
+            assert from_scratch_ids.isdisjoint(old_key_ids)
+            assert _unique_ids_for(captured, REKEY_OLD_KEY) == old_key_ids
+
+            # The control assertion that makes "exactly one set" meaningful
+            # later: right now both sets exist and only the old one is dead.
+            assert all(not entity.available for entity in _entities_for(captured, REKEY_OLD_KEY))
+            assert any(entity.available for entity in _entities_for(captured, REKEY_NEW_KEY))
+
+            # The old key is now being counted, one poll per absence.
+            assert coordinator._orphaned_key_poll_counts[REKEY_OLD_KEY] == 1
+            assert REKEY_NEW_KEY not in coordinator._orphaned_key_poll_counts
+
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS - 2):
+                await coordinator.async_refresh()
+
+            raised = [call for call in create.call_args_list if call.args[2].startswith("orphaned_device_entities_")]
+            assert coordinator._orphaned_key_poll_counts[REKEY_OLD_KEY] == ORPHANED_KEY_DEBOUNCE_POLLS - 1
+            assert raised == []
+
+            await coordinator.async_refresh()
+            raised = [call for call in create.call_args_list if call.args[2].startswith("orphaned_device_entities_")]
+            assert len(raised) == 1
+
+        # Exactly one card, and it names the old key rather than the new one.
+        issue_id = raised[0].args[2]
+        flow_data = raised[0].kwargs["data"]
+        assert issue_id == orphaned_entities_issue_id(REKEY_OLD_KEY)
+        assert flow_data["sensor_key"] == REKEY_OLD_KEY
+
+        entity_rows, device_rows = self._registry_rows_from(captured)
+        removed_entities, entity_get, entity_entries = _make_device_aware_entity_registry(entity_rows)
+        removed_devices, device_get, device_entries = _make_device_registry(device_rows)
+
+        flow = await async_create_fix_flow(hass, issue_id, flow_data)
+        flow.hass = hass
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=entity_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=entity_entries),
+            patch("custom_components.rainpoint.dr.async_get", side_effect=device_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=device_entries),
+        ):
+            shown = await flow.async_step_init()
+            assert shown["step_id"] == "confirm"
+            # Opening the card removes nothing at all.
+            assert removed_entities == []
+            assert removed_devices == []
+
+            result = await flow.async_step_confirm({})
+
+        assert result["type"] == "create_entry"
+
+        # Exactly one entity set for the physical device, and it is the
+        # current key's. The hub-level rows are untouched.
+        surviving = [row for row in entity_rows if row.entity_id not in removed_entities]
+        assert {row.unique_id for row in surviving if row.device_id != "device_hub"} == from_scratch_ids
+        assert not [row for row in surviving if REKEY_OLD_KEY in row.unique_id]
+        assert {row.device_id for row in surviving} == {f"device_{REKEY_NEW_KEY}", "device_hub"}
+
+        # Exactly one device row for the physical device, and the hub row and
+        # the new key's row both survive.
+        assert removed_devices == [f"device_{REKEY_OLD_KEY}"]

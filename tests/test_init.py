@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2315,3 +2316,97 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
 
         assert mock_coordinator.async_add_listener.call_count == 2
         entry.async_on_unload.assert_any_call(mock_coordinator.async_add_listener.return_value)
+
+
+class _OrderingCoordinator:
+    """A coordinator stand-in that fires its listeners in registration order.
+
+    Home Assistant's DataUpdateCoordinator notifies in registration order, and
+    that is the only reason the orphan sweep can be said to run ahead of the
+    late adders. Modelling the ordering explicitly here keeps the behavioural
+    half of that claim honest rather than resting on a MagicMock.
+    """
+
+    def __init__(self):
+        """Start with the empty poll shape every consumer here reads."""
+        self.data = {"sensors": {}, "hubs": []}
+        self.listeners = []
+
+    def async_add_listener(self, callback_fn):
+        """Register one listener and return its remover."""
+        self.listeners.append(callback_fn)
+        return lambda: None
+
+    def async_update_listeners(self):
+        """Notify every listener in the order it registered."""
+        for callback_fn in list(self.listeners):
+            callback_fn()
+
+    async def async_config_entry_first_refresh(self):
+        """Stand in for the first refresh, which needs to do nothing here."""
+
+    def aged_out_sensor_keys(self):
+        """No key has aged out in this fixture."""
+        return frozenset()
+
+
+class TestOrphanSweepCallSiteOrdering:
+    """Pins where the orphaned-entity sweep's wrapper sits in setup.
+
+    Two independent assertions, because either alone is satisfiable by a
+    broken call site. The source assertion catches a wrapper moved after the
+    platform forward even on an install where no adder happens to register;
+    the behavioural one catches a source order that reads correctly while the
+    listener is armed somewhere else entirely.
+    """
+
+    def test_the_wrapper_is_called_after_the_parenting_pass_and_before_the_forward(self):
+        """A wrapper registered after the platform forward would run after
+        every late adder on every update, inverting the isolation this
+        listener has its own registration for."""
+        source = inspect.getsource(async_setup_entry)
+
+        parenting = source.index("_reconcile_sub_device_parents_on_updates")
+        orphan = source.index("_sync_orphaned_entity_issues_on_updates")
+        forward = source.index("async_forward_entry_setups")
+
+        assert parenting < orphan < forward
+
+    @pytest.mark.asyncio
+    async def test_the_sweep_listener_fires_before_a_late_adder_registered_in_the_forward(self):
+        """The same claim as a behaviour: the adders register from inside the
+        platform forward, so a wrapper registered before it always notifies
+        first."""
+        hass = _make_hass()
+        entry = _make_entry()
+        order: list[str] = []
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        coordinator = _OrderingCoordinator()
+
+        async def _forward_setups(entry_arg, platforms):
+            """Register a late adder's listener the way a platform setup does."""
+            coordinator.async_add_listener(lambda: order.append("adder"))
+
+        hass.config_entries.async_forward_entry_setups = AsyncMock(side_effect=_forward_setups)
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch("custom_components.rainpoint.coordinator.RainPointCoordinator", return_value=coordinator),
+            patch("custom_components.rainpoint._reconcile_sub_device_parents"),
+            patch("custom_components.rainpoint._complete_hub_identity_rekey", return_value=frozenset()),
+            patch(
+                "custom_components.rainpoint._sync_orphaned_entity_issues",
+                side_effect=lambda *args: order.append("sweep"),
+            ),
+        ):
+            await async_setup_entry(hass, entry)
+
+            # The setup-time pass, before any listener has fired.
+            assert order == ["sweep"]
+
+            order.clear()
+            coordinator.async_update_listeners()
+
+        assert order == ["sweep", "adder"]
