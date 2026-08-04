@@ -72,13 +72,20 @@ class EmittedEntityLedger:
         there is nothing to remove for it later.
 
         The descriptor is last-write-wins, so a device that gets renamed or
-        re-modelled in the cloud is named by its most recent listing.
+        re-modelled in the cloud is named by its most recent listing. It is
+        written only for a key this ledger holds unique_ids for, which is the
+        only population anything downstream reads a descriptor for. Writing it
+        unconditionally would leave one entry per sensor key in the account on
+        every adder, including keys that adder builds nothing for, and forget
+        would never reach them because it only runs for keys with recorded ids.
         """
         for entity in entities:
             unique_id = getattr(entity, "_attr_unique_id", None)
             if unique_id is None:
                 continue
             self._by_key.setdefault(key, set()).add(unique_id)
+        if key not in self._by_key:
+            return
         self._descriptors[key] = {
             "addr": info.get("addr"),
             "model": info.get("model"),

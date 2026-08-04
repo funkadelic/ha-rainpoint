@@ -18,12 +18,12 @@
     },
     "orphaned_device_entities": {
       "title": "A device's entities are left over from an older listing",
-      "description": "RainPoint has stopped listing this device on its hub, and has not listed it across the last {missed_polls} checks, which run a couple of minutes apart.\n\n- **Device:** {sub_name}\n- **Model:** {model}\n- **Address:** {address}\n- **Hub:** {hub_name}\n\nThe {entity_count} entities this integration created for it in this session are now permanently unavailable.\n\nThis usually means RainPoint moved the device to a different parent record on its side. When that happens a fresh set of entities for the same hardware already exists alongside these leftover ones, so you may be seeing each reading twice.\n\nRemoving the leftover entities also removes the history recorded against them, and that cannot be undone.",
+      "description": "RainPoint has stopped listing this device on its hub, and has not listed it across the last {missed_polls} checks, which run a couple of minutes apart.\n\n- **Device:** {sub_name}\n- **Model:** {model}\n- **Address:** {address}\n- **Hub:** {hub_name}\n\nUp to {entity_count} entities this integration created for it in this session are now permanently unavailable.\n\nThis usually means RainPoint moved the device to a different parent record on its side. When that happens a fresh set of entities for the same hardware already exists alongside these leftover ones, so you may be seeing each reading twice.\n\nRemoving the leftover entities also removes the history recorded against them, and that cannot be undone.",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Remove the leftover entities",
-            "description": "This removes the {entity_count} entities created for **{sub_name}** ({model}) at address {address} on hub {hub_name}, along with the history recorded against them.\n\nSelect **Submit** to remove them."
+            "description": "This removes up to {entity_count} entities created for **{sub_name}** ({model}) at address {address} on hub {hub_name}, along with the history recorded against them.\n\nSelect **Submit** to remove them."
           }
         }
       }

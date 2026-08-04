@@ -411,6 +411,19 @@ class TestEmittedEntityLedger:
         """Reading a key nothing was recorded for must not raise."""
         assert EmittedEntityLedger().descriptor_for("nope") == {}
 
+    def test_a_key_this_adder_builds_nothing_for_is_not_described(self):
+        """collect runs for every sensor key in the account on every update,
+        including the ones a given platform builds no entity for. Describing
+        those would leave one entry per key on every adder that forget can
+        never reach, since it only runs for keys with recorded unique_ids."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [])
+
+        adder.collect("k", {"addr": 1, "model": "HCS026FRF", "sub_name": "Soil", "hub_name": "Hub A"})
+
+        assert adder.ledger.descriptor_for("k") == {}
+        assert adder.ledger._descriptors == {}
+
     def test_forget_drops_the_key_from_both_structures_at_once(self):
         """The lockstep half: the ids only stop being remembered when the rows
         they name have actually been removed, and then in both places."""

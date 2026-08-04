@@ -835,7 +835,13 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
             except Exception as exc:
                 _LOGGER.debug("Failed to release the emptied device row %s: %s", candidate_id, exc)
         else:
-            _LOGGER.debug(
+            # Info rather than debug: this is the one outcome a user sees as a
+            # device page that survived a confirmed removal, carrying whatever
+            # rows no adder ledger named -- the generic control switches, which
+            # have no late adder, are the known case. Making that visible
+            # without turning debug logging on is the difference between an
+            # explicable leftover and an apparent failure.
+            _LOGGER.info(
                 "Device row %s still carries entities for this config entry; leaving it in place",
                 candidate_id,
             )
