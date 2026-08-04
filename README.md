@@ -128,6 +128,18 @@ Everything above clears on its own after the hub reconnects: the Repairs notice 
 
 ---
 
+## When a device's entities are left over
+
+RainPoint sometimes moves a device to a different parent record on its side, which changes the identity this integration builds its entity IDs from. A fresh set of entities then appears for the same physical device while the old set stays behind, permanently unavailable, so every reading looks like it exists twice.
+
+Home Assistant raises a **Settings → Repairs** card, "A device's entities are left over from an older listing", once the old listing has been absent from thirty consecutive checks, roughly an hour at the default two-minute polling interval. The window is deliberately long, and it pauses entirely while the device's hub is itself missing from your account listing, so a cloud-side blip cannot strand a healthy device's entities.
+
+Nothing is removed automatically. That card's **Submit** button is the only thing in this integration that deletes an entity, and it deletes the history recorded against those entities along with them, which cannot be undone. If you would rather keep the history, leave the card alone: the leftover entities stay where they are, unavailable but intact. The leftover device page is released at the same time as the entities, once it carries nothing else.
+
+One thing to know before deferring it: the card is withdrawn when the integration reloads or Home Assistant restarts, and it is not raised again, because the old listing is gone from your account and nothing is left to notice its entities. Removing them after that means removing them by hand under **Settings → Devices & services → Entities**.
+
+---
+
 ## Real-time push updates (opt-in)
 
 In addition to the 120-second polling that always runs, the integration can optionally surface device state changes in near real time over an MQTT push connection. Push is additive, opt-in, and off by default, and polling keeps running as the fallback no matter what, so nothing breaks if you leave push off or the connection drops.
