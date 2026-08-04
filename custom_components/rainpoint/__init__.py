@@ -776,13 +776,20 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
         return 0
 
     removed = 0
+    # Ids whose registry row this sweep tried and failed to take. They are what
+    # decides whether the bookkeeping may be dropped below: a row that raised
+    # is still registered, still holds its unique_id, and releasing that id
+    # would let a returning key offer it a second time.
+    failed: set[str] = set()
     for row in rows:
-        if getattr(row, "unique_id", None) not in doomed:
+        unique_id = getattr(row, "unique_id", None)
+        if unique_id not in doomed:
             continue
         try:
             registry.async_remove(row.entity_id)
             removed += 1
         except Exception as exc:
+            failed.add(unique_id)
             _LOGGER.debug("Failed to remove orphaned entity %s: %s", getattr(row, "entity_id", None), exc)
 
     # The emptiness test below has to read the registry as it stands after the
@@ -839,15 +846,26 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
     # ahead of the entity removals would make the emptiness test trivially
     # false and take nothing at all.
     #
-    # Forgotten at the same moment the rows go, and only then. Runs even when
-    # no row was actually removed, since the ledger held ids and the rows
-    # being already gone leaves the bookkeeping as the only thing left to
-    # correct.
-    for adder in adders:
-        try:
-            adder.forget(sensor_key)
-        except Exception as exc:
-            _LOGGER.debug("Could not forget sensor key %s on a late adder: %s", sensor_key, exc)
+    # Forgotten at the same moment the rows go, and only then. It still runs
+    # when this sweep removed nothing, because a row that was already absent
+    # from the fetch leaves the bookkeeping as the only thing left to correct.
+    # It does not run when a removal was attempted and raised: that row is
+    # still registered and still holds its unique_id, and both adders' add-once
+    # bookkeeping is per key rather than per id, so there is no partial forget
+    # to make. Releasing the key would let a returning device offer a live
+    # unique_id a second time, which Home Assistant rejects outright.
+    if failed:
+        _LOGGER.warning(
+            "Kept the bookkeeping for sensor key %s: %d leftover row(s) could not be removed and still hold their unique ids",
+            sensor_key,
+            len(failed),
+        )
+    else:
+        for adder in adders:
+            try:
+                adder.forget(sensor_key)
+            except Exception as exc:
+                _LOGGER.debug("Could not forget sensor key %s on a late adder: %s", sensor_key, exc)
 
     # Carries the key and an integer count only, never a cloud-supplied
     # string, matching the log discipline the coordinator's counting side uses.

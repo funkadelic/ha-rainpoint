@@ -593,8 +593,16 @@ class TestOrphanedSweepGuards:
 
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_1_UNIQUE_ID})
 
-    def test_a_row_that_cannot_be_removed_is_skipped_and_the_rest_proceed(self):
-        """Per-row guarding, matching the generic sweep's shape."""
+    def test_a_row_that_cannot_be_removed_is_skipped_and_keeps_the_bookkeeping(self, caplog):
+        """Per-row guarding, matching the generic sweep's shape, plus the
+        condition that guarding puts on the forget.
+
+        A row whose removal raised is still registered and still holds its
+        unique_id. Both adders' add-once bookkeeping is per key, not per id, so
+        there is no partial forget to make: releasing the key would let a
+        returning device offer that live unique_id a second time, which Home
+        Assistant rejects and which the never-offer-twice property exists
+        precisely to prevent."""
         coordinator = SimpleNamespace(data={"sensors": {}})
         adder = LateEntityAdder(
             coordinator,
@@ -626,14 +634,19 @@ class TestOrphanedSweepGuards:
         with (
             patch("custom_components.rainpoint.er.async_get", return_value=registry),
             patch("custom_components.rainpoint.er.async_entries_for_config_entry", return_value=rows),
+            caplog.at_level(logging.WARNING, logger="custom_components.rainpoint"),
         ):
             assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 1
 
         assert registry.removed == ["valve.zone2"]
-        # The bookkeeping is still corrected: the rows this key names are
-        # either gone or unreachable, and holding their ids would strand the
-        # key if it ever returned.
-        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+        # Held, whole. The cost is that a returning key gains nothing until a
+        # reload, which is recoverable; the cost of releasing is a unique_id
+        # collision Home Assistant answers by dropping the new entity, which is
+        # not recoverable short of a restart.
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_1_UNIQUE_ID, ZONE_2_UNIQUE_ID})
+        assert ZONE_1_UNIQUE_ID in adder._emitted
+        assert ZONE_2_UNIQUE_ID in adder._emitted
+        assert [r.getMessage() for r in caplog.records if "Kept the bookkeeping for sensor key" in r.getMessage()]
 
 
 SUB_DEVICE_ROW_ID = "device_sub_1"
