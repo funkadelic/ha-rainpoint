@@ -1173,6 +1173,11 @@ class RainPointCoordinator(DataUpdateCoordinator):
             missing_hub_keys: frozenset[tuple[Any, int]] = frozenset()
             if hubs:
                 missing_hub_keys = RainPointCoordinator._track_missing_hubs(self, hubs)
+                # Ordering requirement, not a convenience: the call above must
+                # run first, because its return value is what decides which
+                # keys the tracker below is allowed to count, and its release
+                # rule is what lifts the freeze.
+                #
                 # Inside this `if hubs:` block rather than the outer branch,
                 # for the same reason the enumeration memory is: an empty
                 # device list is a total outage and must freeze this counter
@@ -1718,9 +1723,44 @@ class RainPointCoordinator(DataUpdateCoordinator):
         coordinator counts, and the listener in the package __init__ decides
         what, if anything, to offer for removal.
 
-        Every log line this method might grow carries only the sensor key and
-        integer counts, never a cloud-supplied name or model, following
-        _track_missing_hubs' discipline.
+        A key whose hub is inside its provisional absence window is skipped
+        entirely: not incremented, not reset, and not newly aged out. Its
+        stored count is left exactly as it is, so it resumes where it stopped.
+        The reason transfers verbatim from _prune_silent_state: a missing hub
+        is an outage, not evidence about any addr, so it can neither confirm
+        nor deny that a child has left, and no key may ever be offered for
+        removal on evidence a poll did not contain. Keeping a frozen key in
+        _last_poll_sensor_keys is what makes the resume work; dropping it
+        there would stop it being counted the moment its hub came back.
+
+        A key that already reached the threshold keeps its aged-out verdict
+        through the freeze. Withdrawing it would clear the card on the outage
+        and re-raise it once the hub returned, which is the clear-then-reraise
+        cycle every outage guard in this file exists to prevent, arriving from
+        the other side.
+
+        Nothing carries a released hub forward, and nothing needs to:
+        _track_missing_hubs drops a hub from _hub_absent_poll_counts and
+        _last_poll_hub_keys once its absences exceed
+        HUB_ABSENT_DEBOUNCE_POLLS, so it stops appearing in missing_hub_keys
+        and the freeze lifts by itself on that same poll. The total protection
+        for a child of a departing hub is HUB_ABSENT_DEBOUNCE_POLLS and
+        ORPHANED_KEY_DEBOUNCE_POLLS in series, not one window alone. Staying
+        frozen for as long as the hub is absent was rejected: an account that
+        genuinely loses a hub would keep every child's leftover entities
+        forever.
+
+        The Bluetooth wrapper record is never in missing_hub_keys, because
+        is_hub_record is False for it and _track_missing_hubs therefore never
+        remembers it, so its children are counted rather than frozen when it
+        disappears. That is correct rather than an oversight: a wrapper record
+        vanishing as a hub's mid changes is the observed case this whole
+        surface exists for, and freezing on it would make the surface unable
+        to fire on its own reproduction.
+
+        Every log line here carries only the sensor key and integer counts,
+        never a cloud-supplied name or model, following _track_missing_hubs'
+        discipline.
         """
         # The same comprehension _prune_silent_state builds, over the same
         # enumeration. The Bluetooth wrapper record is deliberately not
@@ -1730,15 +1770,26 @@ class RainPointCoordinator(DataUpdateCoordinator):
         missing = self._last_poll_sensor_keys - live_keys
         # A missing hub is an outage, not evidence about any addr, so its
         # children's counters neither advance nor reset while it is inside its
-        # provisional absence window. The only caller passes an empty set
-        # today, so this resolves to empty; the parameter exists now so
-        # enabling the freeze is a call-site change rather than a change here.
+        # provisional absence window.
         frozen = _sensor_keys_for_hub_keys(missing, missing_hub_keys)
+        if frozen:
+            # One line per frozen poll rather than one per key per poll, so a
+            # frozen window is visible in production logs without drowning
+            # them. Carries integer counts only.
+            _LOGGER.debug(
+                "Freezing %d orphan candidate key(s) under %d provisionally missing hub(s); "
+                "neither counting nor resetting them this poll",
+                len(frozen),
+                len(missing_hub_keys),
+            )
 
         # A key that reappears at all restarts from zero.
         for key in live_keys:
             self._orphaned_key_poll_counts.pop(key, None)
 
+        # Read before the caller reassigns it, so the breadcrumb below fires
+        # once per age-out transition rather than on every later poll.
+        previously_aged_out = self._aged_out_sensor_keys
         aged_out: set[str] = set()
         for key in missing - frozen:
             count = self._orphaned_key_poll_counts.get(key, 0) + 1
@@ -1749,6 +1800,21 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # carries at its own use site above.
             if count >= ORPHANED_KEY_DEBOUNCE_POLLS:
                 aged_out.add(key)
+                if key not in previously_aged_out:
+                    # The moment a card can appear, so it gets its own
+                    # breadcrumb. Carries the sensor key and integer counts
+                    # only -- never sub.get("name") or a model string.
+                    _LOGGER.info(
+                        "Sensor key %s no longer listed by its hub for %d consecutive polls; "
+                        "offering its leftover entities for removal",
+                        key,
+                        count,
+                    )
+
+        # A frozen key that had already reached the threshold keeps its
+        # verdict, read from its own stored count rather than from the caller's
+        # copy of the last returned set.
+        aged_out |= {key for key in frozen if self._orphaned_key_poll_counts.get(key, 0) >= ORPHANED_KEY_DEBOUNCE_POLLS}
 
         # A key is remembered once it has been seen and stays remembered while
         # it is being counted, so this holds one entry per sensor key that has
