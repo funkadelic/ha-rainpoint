@@ -1821,8 +1821,18 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # vanished in this session -- the same session-scoped bound the late
         # adders' add-once sets carry. It is deliberately not dropped on
         # age-out: dropping it would stop the key being counted and the card
-        # would flap. It leaves for good once the fix flow's forget empties the
-        # adders' ledgers, after which the sweep builds no record for it at all.
+        # would flap.
+        #
+        # Since missing is _last_poll_sensor_keys - live_keys, this assignment
+        # is old | live_keys and the set only ever grows. Nothing prunes it, and
+        # nothing prunes _orphaned_key_poll_counts either except a key
+        # reappearing, so a confirmed removal leaves the key here and keeps
+        # incrementing its count and reporting it aged out for the rest of the
+        # session. That is inert rather than correct: the fix flow's forget
+        # reaches the adders' ledgers and hass.data only, never coordinator
+        # state, and it is the ledger that _build_orphaned_entity_records gates
+        # on, so an emptied key yields no record and no card whatever this holds.
+        # Both structures are session bounded and both go on a reload.
         self._last_poll_sensor_keys = live_keys | missing
         return frozenset(aged_out)
 
