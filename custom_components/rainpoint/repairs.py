@@ -551,9 +551,19 @@ class RainPointOrphanedEntityIssues:
         anyway, telling the user leftover entities had been removed when they
         had not.
 
-        Withdrawn rather than resolved: nothing about the device changed, and
-        the next session raises the card again for as long as the key is still
-        being counted.
+        Withdrawn rather than resolved: nothing about the device changed. The
+        next session does not raise it again either, for exactly the reason
+        nothing could have cleared it. A departed key is absent from every
+        fresh ledger, so no fresh record mentions it, so no raise is ever
+        reached for it. The leftover rows therefore survive the reload with no
+        surface left to offer them, and removing them then means removing them
+        from the entity registry by hand.
+
+        That is the deliberate trade, and it is the better half of a choice
+        with no clean side: the alternative is a card that outlives its own
+        scope, whose Submit resolves to an executor with nothing left to act on
+        and which Home Assistant deletes anyway, telling the user leftover
+        entities were removed when they were not.
         """
         for issue_id in sorted(self._active):
             self._clear_issue(issue_id, reason=_CLEAR_REASON_UNLOADED)
