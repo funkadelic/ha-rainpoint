@@ -105,6 +105,19 @@ SILENT_DEVICE_ISSUE_ID_PREFIX = "device_not_reporting"
 # so a home holding several hubs raises one issue per hub rather than
 # colliding on a single id.
 HUB_CONNECTIVITY_ISSUE_ID_PREFIX = "hub_disconnected"
+# Both the repair issue's translation key and the stem of its per-entry,
+# per-key issue id (see repairs.orphaned_entities_issue_id). The issue id
+# itself is the dedup key: it is built as
+# f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_{entry_id}_{sensor_key}", and a sensor
+# key is already {hid}_{mid}_{addr}. An account holding several vanished keys
+# therefore raises one issue per key rather than colliding on a single id.
+# The entry id is in there and is not in either sibling's id, because this is
+# the only manager that withdraws its own cards: a sensor key is not unique
+# across config entries resolving the same home, and an unscoped id would let
+# one entry's unload delete a card another entry raised. The translation key
+# is this bare prefix, so the two are independent and the id shape can change
+# without touching translations/en.json.
+ORPHANED_ENTITIES_ISSUE_ID_PREFIX = "orphaned_device_entities"
 # Committed, variant-keyed force-disable list. Each member is a
 # (model, modelCode-as-string) tuple, keyed exactly the way the product
 # catalog itself is keyed: get_catalog_entry's UNCODED_VARIANT sentinel ("*")

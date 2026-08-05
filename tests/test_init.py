@@ -2,7 +2,9 @@
 
 import asyncio
 import contextlib
+import inspect
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2286,8 +2288,14 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
         The hub identity re-key's wrapper also runs here, unpatched, with only
         its sweep stubbed to the cleanly-migrated verdict. That is what an
         install with no residual returns, and such an install must arm no
-        listener at all, so the single registration counted below is the
-        reconcile's."""
+        listener at all, so it contributes none of the registrations counted
+        below.
+
+        The orphaned entity sweep's wrapper is the second registration. It
+        arms unconditionally, unlike the re-key's, because both its raise and
+        its clear are idempotent and it walks no registry on the update path.
+        Counting both rather than loosening the assertion keeps this test able
+        to catch an accidental extra listener."""
         hass = _make_hass()
         entry = _make_entry()
 
@@ -2307,5 +2315,170 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
         ):
             await async_setup_entry(hass, entry)
 
-        assert mock_coordinator.async_add_listener.call_count == 1
+        assert mock_coordinator.async_add_listener.call_count == 2
         entry.async_on_unload.assert_any_call(mock_coordinator.async_add_listener.return_value)
+
+
+class _OrderingCoordinator:
+    """A coordinator stand-in that fires its listeners in registration order.
+
+    Home Assistant's DataUpdateCoordinator notifies in registration order, and
+    that is the only reason the orphan sweep can be said to run ahead of the
+    late adders. Modelling the ordering explicitly here keeps the behavioural
+    half of that claim honest rather than resting on a MagicMock.
+    """
+
+    def __init__(self):
+        """Start with the empty poll shape every consumer here reads."""
+        self.data = {"sensors": {}, "hubs": []}
+        self.listeners = []
+
+    def async_add_listener(self, callback_fn):
+        """Register one listener and return its remover."""
+        self.listeners.append(callback_fn)
+        return lambda: None
+
+    def async_update_listeners(self):
+        """Notify every listener in the order it registered."""
+        for callback_fn in list(self.listeners):
+            callback_fn()
+
+    async def async_config_entry_first_refresh(self):
+        """Stand in for the first refresh, which needs to do nothing here."""
+
+    def aged_out_sensor_keys(self):
+        """No key has aged out in this fixture."""
+        return frozenset()
+
+
+class TestOrphanSweepCallSiteOrdering:
+    """Pins where the orphaned-entity sweep's wrapper sits in setup.
+
+    Two independent assertions, because either alone is satisfiable by a
+    broken call site. The source assertion catches a wrapper moved after the
+    platform forward even on an install where no adder happens to register;
+    the behavioural one catches a source order that reads correctly while the
+    listener is armed somewhere else entirely.
+    """
+
+    def test_the_wrapper_is_called_after_the_parenting_pass_and_before_the_forward(self):
+        """A wrapper registered after the platform forward would run after
+        every late adder on every update, inverting the isolation this
+        listener has its own registration for."""
+        source = inspect.getsource(async_setup_entry)
+
+        parenting = source.index("_reconcile_sub_device_parents_on_updates")
+        orphan = source.index("_sync_orphaned_entity_issues_on_updates")
+        forward = source.index("async_forward_entry_setups")
+
+        assert parenting < orphan < forward
+
+    @pytest.mark.asyncio
+    async def test_the_sweep_listener_fires_before_a_late_adder_registered_in_the_forward(self):
+        """The same claim as a behaviour: the adders register from inside the
+        platform forward, so a wrapper registered before it always notifies
+        first."""
+        hass = _make_hass()
+        entry = _make_entry()
+        order: list[str] = []
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        coordinator = _OrderingCoordinator()
+
+        async def _forward_setups(entry_arg, platforms):
+            """Register a late adder's listener the way a platform setup does."""
+            coordinator.async_add_listener(lambda: order.append("adder"))
+
+        hass.config_entries.async_forward_entry_setups = AsyncMock(side_effect=_forward_setups)
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch("custom_components.rainpoint.coordinator.RainPointCoordinator", return_value=coordinator),
+            patch("custom_components.rainpoint._reconcile_sub_device_parents"),
+            patch("custom_components.rainpoint._complete_hub_identity_rekey", return_value=frozenset()),
+            patch(
+                "custom_components.rainpoint._sync_orphaned_entity_issues",
+                side_effect=lambda *args: order.append("sweep"),
+            ),
+        ):
+            await async_setup_entry(hass, entry)
+
+            # The setup-time pass, before any listener has fired.
+            assert order == ["sweep"]
+
+            order.clear()
+            coordinator.async_update_listeners()
+
+        assert order == ["sweep", "adder"]
+
+
+class TestPriorPhaseSweepsUnchanged:
+    """The leftover-entity removal path widened no sweep that came before it.
+
+    Its removals reach a row through one session's own ledger for one key, and
+    nothing else in this module learned a new removal reason to make that
+    possible. The eight functions below are the whole prior surface that
+    deletes, moves or rewrites a registry row, and the load-bearing assertion
+    is that none of them has acquired any knowledge of the removal path: not
+    the coordinator's aged-out accessor, not the adder store, not the ledger,
+    not the remover, and not the executor.
+
+    Asserted on the source rather than on behaviour on purpose. A behavioural
+    regression suite proves each function still does what it did; it cannot
+    prove that none of them grew a second reason nobody exercised yet. The
+    distinctive markers are the other half: a function gutted down to a stub
+    would satisfy the negative assertion trivially.
+    """
+
+    # Every symbol the leftover-entity removal path introduced. "forget" is the
+    # broadest of them deliberately: it is a substring test, so any spelling of
+    # the lockstep drop reaching one of these functions trips it.
+    REMOVAL_PATH_SYMBOLS = (
+        "aged_out_sensor_keys",
+        "late_adders",
+        "orphan_entity_remover",
+        "EmittedEntityLedger",
+        "forget",
+        "_remove_orphaned_key_rows",
+        "_device_row_for_sensor_key",
+        "_device_row_is_empty",
+    )
+
+    # One marker per function that no other function in this module carries, so
+    # "unchanged" cannot be satisfied by an empty body.
+    DISTINCTIVE_MARKERS: ClassVar[dict[str, str]] = {
+        "_remove_stale_generic_entities": "the generic entity sweep",
+        "_generic_row_removal_reason": "generic entities are disabled",
+        "_generic_control_row_removal_reason": "generic control is disabled",
+        "_reconcile_sub_device_parents": "the sub-device parenting reconcile",
+        "_reconcile_sub_device_parents_on_updates": "seeding an empty swept-key set",
+        "_complete_hub_identity_rekey": "the residual hub identity re-key",
+        "_complete_hub_identity_rekey_on_updates": "_complete_hub_identity_rekey(",
+        "async_migrate_entry": "async_update_entry(entry, version=2)",
+    }
+
+    @pytest.mark.parametrize("name", sorted(DISTINCTIVE_MARKERS))
+    def test_the_prior_sweep_still_carries_its_own_distinctive_marker(self, name):
+        """Each function is still the function it was, not a stub that would
+        pass the negative assertion below for the wrong reason."""
+        import custom_components.rainpoint as package
+
+        source = inspect.getsource(getattr(package, name))
+
+        assert self.DISTINCTIVE_MARKERS[name] in source
+
+    @pytest.mark.parametrize("name", sorted(DISTINCTIVE_MARKERS))
+    def test_the_prior_sweep_references_nothing_the_removal_path_added(self, name):
+        """No prior sweep or migration learned about the removal path.
+
+        The removal reaches a generic-namespace row through the key's ledger,
+        and it never widened the generic sweep to do it. The same holds for the
+        parenting reconcile, the residual hub re-key and the version-boundary
+        migration."""
+        import custom_components.rainpoint as package
+
+        source = inspect.getsource(getattr(package, name))
+
+        offenders = [symbol for symbol in self.REMOVAL_PATH_SYMBOLS if symbol in source]
+        assert offenders == []

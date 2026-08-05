@@ -34,6 +34,15 @@ Two independent lifecycles live here:
   coordinator's data shape, is driven by plain ``HubConnectivityRecord``
   instances the coordinator builds, and is reconciled from the coordinator's
   poll loop only.
+
+- ``RainPointOrphanedEntityIssues`` raises the same one-per-subject card for a
+  sensor key that has left the hub's sub-device enumeration and stayed gone,
+  whose entities are therefore stranded and permanently unavailable. It is the
+  integration's only fixable issue: ``RainPointOrphanedEntitiesRepairFlow``,
+  reached through the module-level ``async_create_fix_flow`` hook, is where the
+  removal actually happens, so nothing is ever deleted without a human
+  confirming it. Like its siblings it holds no knowledge of the coordinator's
+  data shape and is driven by plain ``OrphanedEntitiesRecord`` instances.
 """
 
 from __future__ import annotations
@@ -46,6 +55,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+import voluptuous as vol
+from homeassistant.components.repairs import RepairsFlow
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
@@ -54,6 +65,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from .const import (
     DOMAIN,
     HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
+    ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
     PUSH_WATCHDOG_ISSUE_ID,
     PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS,
@@ -221,6 +233,10 @@ _AUTOLINK_PREFIX_RE = re.compile(r"www\.", re.IGNORECASE)
 # account, not a recovery, and one message cannot honestly describe both.
 _CLEAR_REASON_RECOVERED = "recovered"
 _CLEAR_REASON_REMOVED = "removed"
+# A third reason, used by the orphaned-entities manager alone: the config entry
+# that raised the card is being unloaded, so the card is withdrawn rather than
+# resolved. Nothing about the device changed.
+_CLEAR_REASON_UNLOADED = "unloaded"
 
 
 def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
@@ -418,6 +434,398 @@ class RainPointSilentDeviceIssues:
                 issue_id,
                 issue_exc,
             )
+
+
+@dataclass(frozen=True)
+class OrphanedEntitiesRecord:
+    """One sensor key's leftover-entity state, as plain data for the Repairs surface.
+
+    Sibling of SilentDeviceRecord and deliberately not the coordinator's own
+    state: the caller translates whatever it knows into this shape before
+    calling ``RainPointOrphanedEntityIssues.async_sync``, so this module never
+    has to learn the coordinator's data layout, the entity registry's, or the
+    late adders'.
+
+    ``entry_id`` rides along because the fix flow needs it to find the config
+    entry whose rows it may touch, and the issue's ``data`` is the only place
+    a flow can read it from.
+    """
+
+    entry_id: str
+    sensor_key: str
+    addr: Any
+    model: str | None
+    sub_name: str | None
+    hub_name: str | None
+    entity_count: int
+    missed_polls: int
+    orphaned: bool
+    # Defaults to True so the record stays constructible from the eight fields
+    # that describe the leftover rows themselves; only the card's hub line
+    # reads it. False is the Bluetooth wrapper record's child, which never had
+    # a hub for the card to name.
+    hub_paired: bool = True
+
+
+def orphaned_entities_issue_id(sensor_key: str, entry_id: str) -> str:
+    """Return the per-entry, per-key issue id; this string is itself the dedup key.
+
+    Scoped to the config entry as well as the key, which its two non-fixable
+    siblings do not need to be. A sensor key is {hid}_{mid}_{addr}, so two
+    RainPoint config entries resolving the same home -- two accounts sharing an
+    invited home, the same premise the device-row release is built on -- produce
+    the same key for the same sub-device. Without the entry id both would then
+    raise, dedup and withdraw one another's card: unloading either entry would
+    delete a card the other raised and never consented to.
+    """
+    return f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_{entry_id}_{sensor_key}"
+
+
+class RainPointOrphanedEntityIssues:
+    """Raises and clears one fixable Repairs issue per orphaned sensor key.
+
+    Structurally the same raise-once / clear-on-return reconcile as
+    RainPointSilentDeviceIssues, with two differences that matter.
+
+    The issue is fixable, which no other issue in this integration is: the
+    card carries a confirmation flow, and confirming it is the only way an
+    entity registry row is ever removed here.
+
+    There is no unreachable-ids third bucket. A key whose hub could not be
+    reached never reaches the aged-out set in the first place, because the
+    freeze is applied where the counting happens, so there is nothing for this
+    class to leave alone.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Start with an empty active set, which is per-instance by design.
+
+        A reload builds a fresh instance with no memory of what a prior
+        session raised, which is why _clear_issue deletes unconditionally
+        rather than only when it believes the issue is active.
+        """
+        self._hass = hass
+        self._active: set[str] = set()
+
+    def async_sync(self, records: list[OrphanedEntitiesRecord]) -> None:
+        """Reconcile the active issue set against one update's worth of records.
+
+        An orphaned record raises its issue once (deduped on _active). A
+        record that is no longer orphaned -- a key that came back before the
+        user acted -- clears its issue unconditionally rather than only when
+        active, for the same reason its sibling does: a fresh instance after a
+        reload has no memory of an issue a prior session raised, and
+        async_delete_issue is already a no-op for an unknown id. Any still
+        active id no record mentions at all is cleared as a removal rather
+        than a recovery, which is what happens once a confirmed fix has
+        emptied the ledger entry that produced the record.
+        """
+        mentioned: set[str] = set()
+        for record in records:
+            issue_id = orphaned_entities_issue_id(record.sensor_key, record.entry_id)
+            mentioned.add(issue_id)
+            if record.orphaned:
+                self._raise_issue(issue_id, record)
+            else:
+                self._clear_issue(issue_id)
+        for stale_id in self._active - mentioned:
+            self._clear_issue(stale_id, reason=_CLEAR_REASON_REMOVED)
+
+    @callback
+    def async_clear_all(self) -> None:
+        """Withdraw every card this instance raised, on config entry unload.
+
+        Every id in the active set carries this entry's own id, so this
+        withdraws only what this entry raised even when a second RainPoint
+        entry resolves the same home and therefore the same sensor keys.
+
+        This manager is the one that needs it, and the reason is that its
+        record source is session-scoped bookkeeping rather than the current
+        poll. Its two siblings rebuild their records from every poll's
+        coordinator data, so a stale id is always mentioned again after a
+        reload and the stale-set sweep clears it. A departed sensor key cannot
+        be mentioned again: it is absent from the hub's enumeration, so no
+        fresh adder ledger ever records it and no record is ever built for it.
+
+        Without this, a card raised before a reload survives it -- the issue
+        registry is not per entry, and only is_persistent decides survival
+        across a restart -- while the fresh manager's active set, the fresh
+        adder ledgers and the fresh absence counters all know nothing about it.
+        Nothing could then clear it, and its Submit button resolved to an
+        executor that removes nothing while Home Assistant deleted the card
+        anyway, telling the user leftover entities had been removed when they
+        had not.
+
+        Withdrawn rather than resolved: nothing about the device changed. The
+        next session does not raise it again either, for exactly the reason
+        nothing could have cleared it. A departed key is absent from every
+        fresh ledger, so no fresh record mentions it, so no raise is ever
+        reached for it. The leftover rows therefore survive the reload with no
+        surface left to offer them, and removing them then means removing them
+        from the entity registry by hand.
+
+        That is the deliberate trade, and it is the better half of a choice
+        with no clean side: the alternative is a card that outlives its own
+        scope, whose Submit resolves to an executor with nothing left to act on
+        and which Home Assistant deletes anyway, telling the user leftover
+        entities were removed when they were not.
+        """
+        for issue_id in sorted(self._active):
+            self._clear_issue(issue_id, reason=_CLEAR_REASON_UNLOADED)
+
+    def _raise_issue(self, issue_id: str, record: OrphanedEntitiesRecord) -> None:
+        """Raise one key's fixable issue, at most once per active period.
+
+        Every cloud-supplied placeholder is sanitized on the way in. Home
+        Assistant renders both this card and its confirm dialog as Markdown,
+        and sub_name, model, addr and hub_name all arrive from the RainPoint
+        payload unvalidated, so an unfiltered value could plant a link, an
+        image or raw HTML in a card whose whole purpose is to ask the user to
+        approve a destructive action. The two integers are this integration's
+        own and are stringified rather than sanitized.
+
+        is_persistent is deliberately not passed. The default False means the
+        issue registry does not restore this card across a restart, so no
+        stale card can outlive the session that raised it, and the sweep
+        simply raises it again once the key ages out in the new session.
+
+        The dedup is reconciled against the issue registry rather than trusted
+        on its own, which is where this diverges from its two non-fixable
+        siblings. Home Assistant's own repairs flow manager deletes a fixable
+        issue whenever its flow finishes anything other than an abort, so a
+        confirm that reached the executor and removed nothing -- an unreadable
+        entry store, an unreadable entity registry -- leaves the card gone from
+        the UI while this set still holds its id. Deduping on the set alone
+        would then suppress every later attempt and strand the user with
+        leftover entities and no surface left to act on.
+        """
+        if issue_id in self._active:
+            if self._issue_still_registered(issue_id):
+                return
+            # Home Assistant deleted it out from under this set, so the mark is
+            # stale. Dropped here rather than inside the test above, so the
+            # predicate stays a predicate and reordering this condition cannot
+            # silently change the bookkeeping.
+            self._active.discard(issue_id)
+        try:
+            ir.async_create_issue(
+                self._hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=True,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
+                data={"entry_id": record.entry_id, "sensor_key": record.sensor_key},
+                # The threat, stated where the values are: Home Assistant
+                # renders this card and its confirm dialog as Markdown, and
+                # sub_name, model, addr and hub_name all arrive from the
+                # RainPoint payload with nothing validating them. Every one of
+                # them goes through the sanitizer; the two counts are this
+                # integration's own and are only stringified.
+                translation_placeholders={
+                    "sub_name": _sanitize_placeholder(record.sub_name),
+                    "model": _sanitize_placeholder(record.model),
+                    "address": _sanitize_placeholder(record.addr),
+                    # The literal "none" for a device that never had a hub,
+                    # exactly as the not-reporting card does and for the same
+                    # reason: the sanitizer's "unknown" fallback reads as lost
+                    # state, when the truth is that there is no hub to name. A
+                    # Bluetooth wrapper record carries an empty name, so
+                    # without this the card's least useful line is the one
+                    # naming a hub the device was never on. The literal is
+                    # ours, not the cloud's, so it needs no sanitizing.
+                    "hub_name": _sanitize_placeholder(record.hub_name) if record.hub_paired else "none",
+                    "entity_count": str(record.entity_count),
+                    "missed_polls": str(record.missed_polls),
+                },
+            )
+            # Marked active only once the registry accepted it, for the same
+            # reason its sibling does: marking first would let one transient
+            # registry error suppress every later attempt for this key.
+            self._active.add(issue_id)
+            _LOGGER.warning(
+                "RainPoint no longer lists sensor key %s after %s checks; offering its %s leftover entity/entities for removal",
+                record.sensor_key,
+                record.missed_polls,
+                record.entity_count,
+            )
+        except Exception as issue_exc:
+            _LOGGER.debug(
+                "Failed to create the orphaned entities repair issue (id=%s): %s",
+                issue_id,
+                issue_exc,
+            )
+
+    def _issue_still_registered(self, issue_id: str) -> bool:
+        """Return True when the issue registry still holds this id.
+
+        A predicate and nothing else: it reads, it does not touch the active
+        set. The caller owns the mark, so the bookkeeping cannot be changed by
+        reordering or short-circuiting the condition it sits in.
+
+        An unreadable registry answers True, which keeps the dedup in force.
+        That is the safe direction for a card whose only outcome is an offer to
+        delete: a suppressed re-raise costs the user one poll interval, while
+        raising on a failed read could stack a second card over a live one.
+        """
+        try:
+            return ir.async_get(self._hass).async_get_issue(DOMAIN, issue_id) is not None
+        except Exception as exc:
+            _LOGGER.debug("Could not reconcile the orphaned entities issue (id=%s) against the registry: %s", issue_id, exc)
+            return True
+
+    def _clear_issue(self, issue_id: str, *, reason: str = _CLEAR_REASON_RECOVERED) -> None:
+        """Delete one key's issue, unconditionally rather than only when active.
+
+        Same shape and same reasoning as its two siblings: a fresh instance
+        after a reload has no record of an issue a prior session raised, so
+        guarding the delete on the active set would strand it forever, while
+        the log line is gated so it fires once per raised-then-resolved
+        transition rather than on every update.
+
+        Three reasons rather than the siblings' two, because this manager also
+        withdraws its cards on unload, and a withdrawal is neither a recovery
+        nor a removal from the account.
+        """
+        was_active = issue_id in self._active
+        self._active.discard(issue_id)
+        try:
+            ir.async_delete_issue(self._hass, DOMAIN, issue_id)
+            if not was_active:
+                return
+            if reason == _CLEAR_REASON_RECOVERED:
+                _LOGGER.info(
+                    "RainPoint lists this device again; clearing the orphaned entities repair issue (id=%s)",
+                    issue_id,
+                )
+            elif reason == _CLEAR_REASON_UNLOADED:
+                # Warning rather than info, unlike the other two reasons, and
+                # the only one of the three that leaves the user worse off. A
+                # recovery and a removal both end with nothing left to offer;
+                # a withdrawal ends with the leftover rows still registered and
+                # no surface left to offer them through, because the same fact
+                # that makes the card unclearable after a reload makes it
+                # unraisable. The rows have to be removed from the entity
+                # registry by hand from here, so the line names them.
+                #
+                # It cannot become noise: was_active gates it, so it fires only
+                # where a card was genuinely up at unload, and at most once per
+                # withdrawn card.
+                _LOGGER.warning(
+                    "Unloading this config entry; withdrawing the orphaned entities repair issue (id=%s). "
+                    "Its leftover entity rows are still registered and will not be offered again after the reload; "
+                    "remove them from the entity registry by hand",
+                    issue_id,
+                )
+            else:
+                _LOGGER.info(
+                    "No leftover entities remain to offer; clearing the orphaned entities repair issue (id=%s)",
+                    issue_id,
+                )
+        except Exception as issue_exc:
+            _LOGGER.debug(
+                "Failed to delete the orphaned entities repair issue (id=%s): %s",
+                issue_id,
+                issue_exc,
+            )
+
+
+class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
+    """The confirmation dialog behind the orphaned entities card.
+
+    This is the only place in the integration where an entity registry row is
+    removed on account of a device leaving the RainPoint device list, and it
+    is reached only after a human submits this form. There is no automatic
+    path to it and no expiry that deletes on its own.
+
+    Both the config entry and the sensor key come from the issue's own ``data``
+    dict and are never parsed back out of the issue id. The id is opaque by
+    contract, so parsing it would make a future change to its prefix silently
+    resolve to the wrong key and remove another device's entities.
+    """
+
+    def __init__(self, data: dict | None) -> None:
+        """Hold the issue's data dict, which names what may be removed."""
+        self._flow_data = dict(data or {})
+
+    @property
+    def _sensor_key(self) -> str:
+        """The one sensor key this flow is allowed to act on."""
+        return str(self._flow_data.get("sensor_key", ""))
+
+    @property
+    def _entry_id(self) -> str:
+        """The one config entry this flow is allowed to act on."""
+        return str(self._flow_data.get("entry_id", ""))
+
+    async def async_step_init(self, user_input: dict | None = None):
+        """Handle the first step of the fix flow."""
+        return await self.async_step_confirm()
+
+    async def async_step_confirm(self, user_input: dict | None = None):
+        """Show the confirmation form, then remove on submit.
+
+        Showing the form removes nothing; only a submitted form does.
+        """
+        if user_input is not None:
+            self._remove_rows()
+            return self.async_create_entry(data={})
+        return self.async_show_form(
+            step_id="confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders=self._description_placeholders(),
+        )
+
+    def _description_placeholders(self) -> dict | None:
+        """Reuse the raised issue's own placeholders for the confirm dialog.
+
+        Reading them back rather than building a second dict is what keeps the
+        card and the dialog from drifting, and means there is exactly one
+        sanitized supplier for both. An unreadable registry degrades to no
+        placeholders rather than raising out of a flow step and leaving the
+        user with a broken dialog.
+        """
+        try:
+            issue_id = orphaned_entities_issue_id(self._sensor_key, self._entry_id)
+            issue = ir.async_get(self.hass).async_get_issue(DOMAIN, issue_id)
+            if issue is None:
+                return None
+            return issue.translation_placeholders
+        except Exception as exc:
+            _LOGGER.debug("Could not read the orphaned entities issue placeholders: %s", exc)
+            return None
+
+    def _remove_rows(self) -> None:
+        """Call this config entry's removal executor for this key.
+
+        The executor is published by the config entry's own setup, so a flow
+        submitted after that entry was torn down finds nothing and removes
+        nothing. Guarded rather than allowed to raise, because an exception
+        here surfaces as a broken repair dialog.
+        """
+        entry_id = self._flow_data.get("entry_id")
+        try:
+            remover = self.hass.data[DOMAIN][entry_id]["orphan_entity_remover"]
+        except Exception as exc:
+            _LOGGER.debug("No orphaned entity remover is registered for entry %s: %s", entry_id, exc)
+            return
+        try:
+            remover(self._sensor_key)
+        except Exception as exc:
+            _LOGGER.debug("Removing the entities for sensor key %s failed: %s", self._sensor_key, exc)
+
+
+async def async_create_fix_flow(hass: HomeAssistant, issue_id: str, data: dict | None) -> RepairsFlow:
+    """Home Assistant's repairs platform hook, and the integration's first.
+
+    Every other issue this module raises is is_fixable=False and is therefore
+    unreachable from here: Home Assistant only builds a flow for an issue the
+    registry records as fixable.
+
+    The flow is constructed from ``data`` rather than from ``issue_id`` so the
+    id stays opaque; see RainPointOrphanedEntitiesRepairFlow.
+    """
+    return RainPointOrphanedEntitiesRepairFlow(data)
 
 
 @dataclass(frozen=True)

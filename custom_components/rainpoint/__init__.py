@@ -26,7 +26,9 @@ from .const import (
     PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
     UNIQUE_ID_PREFIX,
 )
-from .coordinator import first_hub_record, is_hub_record
+from .coordinator import ORPHANED_KEY_DEBOUNCE_POLLS, first_hub_record, is_hub_record
+from .entity import late_adders
+from .repairs import OrphanedEntitiesRecord, RainPointOrphanedEntityIssues
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -520,6 +522,441 @@ def _reconcile_sub_device_parents_on_updates(hass: HomeAssistant, entry: ConfigE
         swept_keys = current_keys
 
     entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
+
+
+def _read_aged_out_keys(coordinator) -> frozenset[str]:
+    """Return the sensor keys the coordinator says have aged out, or an empty set.
+
+    Sibling of _read_current_sensors and degrades the same way: an unreadable
+    coordinator means this update offers nothing for removal, which is the
+    safe direction for a surface whose only outcome is a deletion offer.
+
+    The guard is not decorative. Coordinator stand-ins are common on this
+    path, and one that predates the accessor or answers with something that
+    is not iterable raises here rather than at some later, less obvious point.
+    """
+    try:
+        return frozenset(coordinator.aged_out_sensor_keys()) if coordinator is not None else frozenset()
+    except Exception as exc:
+        _LOGGER.debug("Aged-out sensor keys unreadable; offering nothing for removal this update: %s", exc)
+        return frozenset()
+
+
+def _build_orphaned_entity_records(entry_store: dict, entry_id: str, aged_out: frozenset[str]) -> list:
+    """Translate this session's adder ledgers into plain records for the card.
+
+    Scope rule, stated as a prohibition rather than a description: a key with
+    no recorded unique_id yields no record, so a registry row this session's
+    adders did not emit can never be named by a card, never reach the fix
+    flow, and never be removed. That protects two populations by
+    construction -- every row from a previous session, and every row written
+    under a previous unique_id shape -- neither of which any ledger holds.
+
+    A record is built for every session key, not only the aged-out ones, with
+    `orphaned` carrying the verdict. That is what lets the manager clear a
+    card for a key that came back, and the clear has to be unconditional on
+    the manager's side because a fresh manager after a reload has no memory of
+    what a prior session raised; deleting an id it never raised is already a
+    no-op, while skipping the delete would strand that card forever.
+
+    Each adder is read behind its own guard, so one malformed adder cannot
+    abort the sweep for the others.
+    """
+    unique_ids: dict[str, set[str]] = {}
+    descriptors: dict[str, dict] = {}
+    for adder in late_adders(entry_store):
+        try:
+            ledger = adder.ledger
+            # The ledger is a class, not a mapping: keys() is its own named
+            # accessor and there is nothing to iterate directly, so SIM118's
+            # "drop the .keys()" advice does not apply here.
+            for key in ledger.keys():  # noqa: SIM118
+                unique_ids.setdefault(key, set()).update(ledger.unique_ids_for(key))
+                descriptors.setdefault(key, ledger.descriptor_for(key))
+        except Exception as exc:
+            _LOGGER.debug("Skipping an unreadable late adder while building orphaned entity records: %s", exc)
+
+    return [
+        OrphanedEntitiesRecord(
+            entry_id=entry_id,
+            sensor_key=key,
+            addr=descriptors[key].get("addr"),
+            model=descriptors[key].get("model"),
+            sub_name=descriptors[key].get("sub_name"),
+            hub_name=descriptors[key].get("hub_name"),
+            entity_count=len(ids),
+            missed_polls=ORPHANED_KEY_DEBOUNCE_POLLS,
+            orphaned=key in aged_out,
+            # Absent from a descriptor written before this key was stamped, and
+            # a missing verdict is not evidence of a Bluetooth pairing, so the
+            # default is the hub-paired reading the card already gave.
+            hub_paired=bool(descriptors[key].get("hub_paired", True)),
+        )
+        for key, ids in unique_ids.items()
+    ]
+
+
+def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordinator, manager) -> None:
+    """Reconcile the orphaned-entity cards against the coordinator's verdict.
+
+    Never raises. Every read below is guarded, and this runs inside a
+    coordinator listener where an exception would break the update for every
+    other consumer of that notification.
+    """
+    try:
+        entry_store = (hass.data.get(DOMAIN) or {}).get(entry.entry_id) or {}
+        records = _build_orphaned_entity_records(entry_store, entry.entry_id, _read_aged_out_keys(coordinator))
+        manager.async_sync(records)
+    except Exception as exc:
+        _LOGGER.debug("Orphaned entity sweep failed; leaving every card exactly as it is: %s", exc)
+
+
+def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Publish the removal executor, sweep once, then sweep on every update.
+
+    This listener is its own rather than a share of the parenting reconcile's.
+    That one arms on sensor keys *appearing*; this one cares about keys
+    *disappearing*, so sharing would mean widening that gate and changing its
+    exposure profile, on the one surface in this integration that can delete.
+
+    Registered before the platform forward, alongside the two existing
+    wrappers, so it holds a defined position relative to the late adders that
+    register from inside that forward: coordinator listeners fire in
+    registration order, so this always runs ahead of every adder on an update.
+
+    Unlike the two existing wrappers it walks neither the entity nor the
+    device registry on the update path. The only registry read is a keyed
+    issue-registry lookup per active card, which is what the fixable card's
+    dedup reconcile costs; every registry mutation lives in the fix flow,
+    behind a human's confirmation. So the per-update cost is a read of
+    in-memory bookkeeping plus one dict lookup per raised card, and the
+    accepted cost of a third listener is smaller here than for either of
+    them. That is also why it needs no arming gate: both the raise and the
+    clear are idempotent, so running on every update, including every pushed
+    frame, is safe.
+    """
+    manager = RainPointOrphanedEntityIssues(hass)
+
+    def _remove(sensor_key: str) -> int:
+        """Remove this config entry's rows for one sensor key."""
+        return _remove_orphaned_key_rows(hass, entry, sensor_key)
+
+    try:
+        hass.data[DOMAIN][entry.entry_id]["orphan_entity_remover"] = _remove
+    except Exception as exc:
+        _LOGGER.debug("Could not publish the orphaned entity remover; its cards will remove nothing: %s", exc)
+
+    _sync_orphaned_entity_issues(hass, entry, coordinator, manager)
+
+    @callback
+    def _on_coordinator_update() -> None:
+        """Re-reconcile every card against this update's verdict."""
+        _sync_orphaned_entity_issues(hass, entry, coordinator, manager)
+
+    entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
+
+    @callback
+    def _withdraw_cards() -> None:
+        """Withdraw this entry's orphan cards as it unloads.
+
+        The issue registry is not per config entry and only is_persistent
+        decides survival across a restart, so a card raised before a reload
+        survives the reload while every structure that could clear it is
+        rebuilt empty: the manager's active set, the adder ledgers whose
+        contents are the only record source here, and the coordinator's
+        absence counters. A departed key is absent from the hub's enumeration,
+        so no fresh ledger can record it and no fresh record can mention it,
+        which leaves the stale-set sweep with nothing to sweep. The card would
+        then sit there for the life of the install offering a Submit that
+        resolves to an executor with nothing in scope.
+
+        Never raises: this runs on the unload path, where an exception would
+        block the teardown of everything registered after it.
+        """
+        try:
+            manager.async_clear_all()
+        except Exception as exc:
+            _LOGGER.debug("Could not withdraw the orphaned entity cards on unload: %s", exc)
+
+    entry.async_on_unload(_withdraw_cards)
+
+
+def _device_row_for_sensor_key(rows, sensor_key: str):
+    """Return the device row whose DOMAIN identifier is this sensor key, or None.
+
+    Resolved through _domain_sensor_key rather than by building an identifier
+    tuple and testing membership. That function already owns the malformed
+    identifiers case and already proves the device-row-to-sensor-key round
+    trip both existing sweeps rely on, so a second spelling of the same match
+    would only be somewhere for the two to drift apart.
+
+    Each row is guarded on its own, matching the per-row discipline of the
+    sweeps beside this one: a row whose identifiers cannot be read at all is
+    skipped rather than aborting the search for the rest.
+    """
+    for row in rows:
+        try:
+            if _domain_sensor_key(row) == sensor_key:
+                return row
+        except Exception as exc:
+            _LOGGER.debug("Could not read identifiers on device row %s: %s", getattr(row, "id", None), exc)
+    return None
+
+
+def _device_row_is_empty(entity_rows, device_id) -> bool:
+    """Return True when no row in entity_rows sits on this device row.
+
+    Scope is exactly what the caller hands in: entity_rows is the
+    config-entry-scoped set, so this answers "empty for this config entry" and
+    deliberately not "empty". Both halves of that are consequences worth
+    naming. A row also carrying an entity from another config entry reads as
+    empty here, which is why the caller releases the row with a config-entry
+    scoped update rather than an unscoped removal: this predicate establishes
+    nothing about a foreign entry's entities and must never be relied on to.
+    A row carrying any entity from this entry does not read as empty,
+    including one this session never emitted and including one that is
+    disabled.
+
+    device_id is read with getattr so a row shape that carries no device_id at
+    all reads as "not on this device" rather than raising.
+    """
+    return not any(getattr(row, "device_id", None) == device_id for row in entity_rows)
+
+
+def _resolve_doomed_rows(adders, sensor_key: str) -> tuple[set[tuple[str, str]], list]:
+    """Return the rows in scope for one sensor key, and the adders that named them.
+
+    Split out of _remove_orphaned_key_rows so that function reads as its four
+    steps; the pair returned here is what makes its first and last steps agree.
+
+    (domain, unique_id) rather than unique_id alone. Entity registry
+    uniqueness is per domain, so two rows in different domains may
+    legitimately carry the same id and matching on the id alone would take
+    both. No such collision exists across the four id shapes this integration
+    builds today, so this closes a latent hole rather than a live one, but an
+    exact-pair list is the whole reason this path does not reason about
+    unique_id prefixes. The domain comes from the adder that recorded the id,
+    which is fixed per platform.
+
+    The second half of the pair is the adders whose ids really did enter scope,
+    which is the only population the caller's forget may touch. An adder
+    skipped here contributed nothing, so no row of its was ever a candidate and
+    every one of them certainly still exists; releasing its ids anyway would
+    let a returning device offer a live unique_id a second time, which is
+    exactly what the caller's removal guard exists to prevent. The resolve and
+    the forget have to agree about which adders they skipped, whatever the read
+    that failed -- an unreadable ledger and an unreadable domain are the same
+    fact here.
+    """
+    doomed: set[tuple[str, str]] = set()
+    resolved: list = []
+    for adder in adders:
+        try:
+            doomed.update((adder.domain, unique_id) for unique_id in adder.ledger.unique_ids_for(sensor_key))
+        except Exception as exc:
+            _LOGGER.debug("Skipping an unreadable late adder while resolving sensor key %s: %s", sensor_key, exc)
+            continue
+        resolved.append(adder)
+    return doomed, resolved
+
+
+def _release_emptied_device_row(hass: HomeAssistant, entry: ConfigEntry, sensor_key: str) -> None:
+    """Release this sub-device's device row, but only once it carries nothing.
+
+    Split out of _remove_orphaned_key_rows, and it runs only after that
+    function's entity removals: both registry reads here are deliberately
+    fresh, because the emptiness test has to see the registry as it stands
+    after those removals. Reusing the list the removal loop iterated would
+    conclude the row always still carries entities, a silent no-op that a test
+    asserting only the end state would not catch.
+
+    Never raises, for the same reason its caller does not: this runs inside a
+    Repairs flow step.
+    """
+    surviving_registry, surviving_rows = _fetch_registry_rows(
+        er.async_get, er.async_entries_for_config_entry, hass, entry, "the orphaned device row check"
+    )
+    # An unreadable device registry yields no rows, so this answers None and
+    # the device half is skipped behind the debug line _fetch_registry_rows has
+    # already written.
+    _device_registry, device_rows = _fetch_registry_rows(
+        dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the orphaned device row sweep"
+    )
+    candidate = _device_row_for_sensor_key(device_rows, sensor_key)
+    candidate_id = getattr(candidate, "id", None) if candidate is not None else None
+
+    # A surviving_registry of None means the re-read could not be made at all.
+    # Emptiness is a claim that has to be positively established, and a failed
+    # lookup establishes nothing, so the row stays exactly where it is.
+    # _device_registry is tested directly rather than relied on transitively.
+    # A failed device-registry fetch already yields no rows, so no candidate can
+    # resolve and this branch is unreachable with a None registry, but that is
+    # three inferences away from the call below. Stating it here keeps the guard
+    # local to the thing it guards.
+    if surviving_registry is None or _device_registry is None or not candidate_id:
+        return
+
+    if not _device_row_is_empty(surviving_rows, candidate_id):
+        # Info rather than debug: this is the one outcome a user sees as a
+        # device page that survived a confirmed removal, carrying whatever
+        # rows no adder ledger named -- the generic control switches, which
+        # have no late adder, are the known case. Making that visible
+        # without turning debug logging on is the difference between an
+        # explicable leftover and an apparent failure.
+        _LOGGER.info(
+            "Device row %s still carries entities for this config entry; leaving it in place",
+            candidate_id,
+        )
+        return
+
+    # Scoped to this config entry, deliberately, because the emptiness test
+    # above cannot make the unscoped call safe: it answers "empty for this
+    # config entry", while async_remove_device's cascade deletes every entity
+    # on the row whose own config entry is in the row's config_entries set. A
+    # row shared with a second RainPoint entry -- two accounts resolving the
+    # same home -- reads as empty here while still carrying that entry's
+    # entities, and the cascade would take them and their recorder history
+    # without them ever having been named on the card the user confirmed.
+    #
+    # async_update_device drops only this entry's link. The device registry
+    # removes the row itself when this entry was its last one, so the
+    # single-entry case is unchanged, and merely unlinks when another entry
+    # still owns it, which takes only the entities of entries that were
+    # dropped -- none, since this entry has none left.
+    try:
+        _device_registry.async_update_device(candidate_id, remove_config_entry_id=entry.entry_id)
+        _LOGGER.info("Released the emptied device row %s for sensor key %s", candidate_id, sensor_key)
+    except Exception as exc:
+        _LOGGER.debug("Failed to release the emptied device row %s: %s", candidate_id, exc)
+
+
+def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_key: str) -> int:
+    """Remove this session's rows for one sensor key, and drop the bookkeeping.
+
+    The only removal executor on this path, reached only from the fix flow's
+    confirm step, which is reached only after a human submits the form.
+
+    Scoped by two independent guards: the registry lookup is config-entry
+    scoped, so there is no whole-registry scan, and a row must additionally
+    carry a unique_id this session's adders recorded for this exact key, which
+    no foreign row can satisfy.
+
+    The sub-device's own device registry row goes too, but only once it carries
+    no entity for this config entry. Removing the entity rows alone would leave
+    an empty device card on the user's device page, which is a different
+    cosmetic defect rather than a fix.
+
+    Never raises: the entry store read, both registry lookups, each row
+    removal and each adder's bookkeeping drop are guarded independently,
+    because this runs inside a Repairs flow step.
+    """
+    try:
+        entry_store = hass.data[DOMAIN][entry.entry_id]
+    except Exception as exc:
+        _LOGGER.debug("Entry store unreadable; removing nothing for sensor key %s: %s", sensor_key, exc)
+        return 0
+
+    doomed, resolved = _resolve_doomed_rows(late_adders(entry_store), sensor_key)
+
+    if not doomed:
+        # No adder in this session emitted anything for this key, so there is
+        # nothing in scope and no bookkeeping to drop. Removing nothing is the
+        # correct answer rather than an error: the ledgers are this path's only
+        # authority on what it may take, and a card that outlived the session
+        # whose ledgers named its rows has no scope left.
+        #
+        # Logged at warning rather than returned silently, because Home
+        # Assistant deletes a fixable issue itself once its flow finishes: the
+        # user pressed a button that said it would remove leftover entities,
+        # the card disappeared, and nothing happened. That needs a breadcrumb
+        # in the log, and the surviving rows still need removing by hand.
+        _LOGGER.warning(
+            "Nothing in scope for sensor key %s; its leftover entity rows were not removed. "
+            "The card outlived the session that recorded them, so remove them from the entity registry by hand",
+            sensor_key,
+        )
+        return 0
+
+    registry, rows = _fetch_registry_rows(
+        er.async_get, er.async_entries_for_config_entry, hass, entry, "the orphaned entity sweep"
+    )
+    if registry is None:
+        return 0
+
+    removed = 0
+    # Ids whose registry row this sweep tried and failed to take. They are what
+    # decides whether the bookkeeping may be dropped below: a row that raised
+    # is still registered, still holds its unique_id, and releasing that id
+    # would let a returning key offer it a second time.
+    failed: set[tuple[str, str]] = set()
+    for row in rows:
+        entity_id = getattr(row, "entity_id", "") or ""
+        # Derived from the entity_id rather than read off a domain attribute,
+        # because that is how Home Assistant itself derives it and it holds for
+        # any row shape the registry hands back. A row with no dot yields the
+        # whole string, which matches no adder domain and is therefore skipped.
+        row_key = (entity_id.split(".", 1)[0], getattr(row, "unique_id", None))
+        if row_key not in doomed:
+            continue
+        try:
+            registry.async_remove(row.entity_id)
+            removed += 1
+        except Exception as exc:
+            failed.add(row_key)
+            _LOGGER.debug("Failed to remove orphaned entity %s: %s", getattr(row, "entity_id", None), exc)
+
+    _release_emptied_device_row(hass, entry, sensor_key)
+
+    # Ordering above is load bearing, in both directions. Moving this forget
+    # ahead of the device half would drop the ledger while the emptiness test
+    # still needs the entity ids it resolved from; moving the device removal
+    # ahead of the entity removals would make the emptiness test trivially
+    # false and take nothing at all.
+    #
+    # Forgotten at the same moment the rows go, and only then. It still runs
+    # when this sweep removed nothing, because a row that was already absent
+    # from the fetch leaves the bookkeeping as the only thing left to correct.
+    # An id whose removal was attempted and raised is held rather than
+    # released: that row is still registered and still holds its unique_id, and
+    # releasing it would let a returning device offer a live unique_id a second
+    # time, which Home Assistant rejects outright.
+    #
+    # Held per id rather than per key wherever the adder's own bookkeeping can
+    # express it, which is not uniform across the three. LateEntityAdder, which
+    # serves the valve and number platforms, is id-indexed on both halves, so a
+    # partial failure costs it only the ids it names and a returning key gets
+    # every other entity back without a reload. _LateSensorEntityAdder's two
+    # add-once marks are the sensor key itself, so it holds a key with any
+    # failed row whole; that is the coarser cost and the recoverable one, since
+    # a returning key gains nothing there until a reload while releasing a live
+    # id is a collision Home Assistant answers by dropping the entity.
+    #
+    # kept_ids is scoped by the adder's declared domain, which over-approximates
+    # only if two adders ever come to share one. That errs in the safe
+    # direction: the extra ids are held rather than released, and the ledger
+    # keeps only ids the key actually holds.
+    if failed:
+        _LOGGER.warning(
+            "Kept the bookkeeping for %d leftover row(s) under sensor key %s: they could not be removed and still "
+            "hold their unique ids, so the card is offered again and a retry can take them. If the device returns "
+            "first, reload the integration or it will come back with an incomplete entity set",
+            len(failed),
+            sensor_key,
+        )
+    # resolved rather than adders: see the note at its construction. An adder
+    # the resolve loop skipped kept every row it holds, so it keeps its
+    # bookkeeping too.
+    for adder in resolved:
+        try:
+            kept_ids = frozenset(unique_id for domain, unique_id in failed if domain == adder.domain)
+            adder.forget(sensor_key, kept_ids)
+        except Exception as exc:
+            _LOGGER.debug("Could not forget sensor key %s on a late adder: %s", sensor_key, exc)
+
+    # Carries the key and an integer count only, never a cloud-supplied
+    # string, matching the log discipline the coordinator's counting side uses.
+    _LOGGER.info("Removed %d leftover entity row(s) for sensor key %s", removed, sensor_key)
+    return removed
 
 
 def _hub_identity(identifier: str) -> tuple[str, str | None] | None:
@@ -1040,9 +1477,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # is the window in which no DeviceInfo has been written yet this session, so
     # a hub the version-boundary migration could not resolve is re-keyed before
     # any platform can create a second device row under the new identifier.
+    # The third wrapper belongs here rather than after the forward for the
+    # ordering reason above: the late adders register their listeners from
+    # inside that forward, so registering this one first is what puts the
+    # orphaned-entity sweep ahead of every adder on every later update, and it
+    # is also where each adder publishes itself for the sweep to read.
     _complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
     _remove_stale_generic_entities(hass, entry, coordinator)
     _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
+    _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
 
     # An options change (e.g. toggling push) reloads through the existing
     # unload->setup path, no bespoke start/stop code path needed.

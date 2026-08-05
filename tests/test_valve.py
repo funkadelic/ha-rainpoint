@@ -15,6 +15,14 @@ from custom_components.rainpoint.valve import (
 from tests.helpers import make_sensor_coordinator, make_valve_zone_status
 from tests.payload_samples import SAMPLE_HTV145_OPEN_PAYLOAD, SAMPLE_HTV245_ASCII_PAYLOAD
 
+ONE_ZONE_TLV_PAYLOAD = "11#17E1D70018DC0119D8001D20"
+"""The shared two-zone TLV frame with zone 2's state and duration entries removed.
+
+Lives here rather than in tests/helpers.py because only the ledger's
+append-across-polls timeline needs a valve that reports one zone now and two
+later; every other module drives off the captured frame unmodified.
+"""
+
 
 def _make_valve(zone_data=None, hub_online=True, model="HTV245FRF"):
     """Create a RainPointValveEntity with mock coordinator, bypassing __init__."""
@@ -906,6 +914,62 @@ class TestValveEntitiesAppearWithinTheSession:
         # Steady state must not offer the same zones a second time.
         await coordinator.async_refresh()
         assert [e._zone_num for e in captured] == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_a_zone_arriving_later_joins_the_first_zones_ledger_entry(self):
+        """The append rule, driven through a real coordinator timeline.
+
+        A per-zone platform emits for one key across several polls, so a
+        ledger that replaced rather than appended would leave the first zone's
+        row unrecorded and therefore unremovable, while every other test in
+        the suite still passed.
+        """
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.entity import late_adders
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 20,
+                "name": "Hub A",
+                "deviceName": "d",
+                "productKey": "pk",
+                "homeName": "H",
+                "subDevices": [{"addr": 1, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}],
+            }
+        ]
+        # The captured two-zone frame with zone 2's entries removed, so the
+        # first poll reports one zone and the second reports both.
+        one_zone = [{"mid": 20, "subDeviceStatus": [{"id": "D01", "value": ONE_ZONE_TLV_PAYLOAD, "time": 1785420002247}]}]
+        client.get_multiple_device_status.return_value = one_zone
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        offered = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: offered.extend(e._attr_unique_id for e in ents))
+
+        await coordinator.async_config_entry_first_refresh()
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        key = "10_20_1"
+        adder = late_adders(hass.data[DOMAIN]["e1"])[0]
+        assert adder.ledger.unique_ids_for(key) == frozenset({"rainpoint_10_20_1_zone1"})
+
+        client.get_multiple_device_status.return_value = make_valve_zone_status(zones_reported=True)
+        await coordinator.async_refresh()
+
+        assert adder.ledger.unique_ids_for(key) == frozenset({"rainpoint_10_20_1_zone1", "rainpoint_10_20_1_zone2"})
+        assert offered.count("rainpoint_10_20_1_zone1") == 1
 
 
 def _valve_hub_status(connected_value):

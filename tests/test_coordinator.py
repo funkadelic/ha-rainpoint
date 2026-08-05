@@ -106,6 +106,10 @@ def _make_coord(hids=None):
         _hub_connectivity_issues=MagicMock(),
         _last_poll_hub_keys=set(),
         _hub_absent_poll_counts={},
+        _last_poll_sensor_keys=set(),
+        _orphaned_key_poll_counts={},
+        _aged_out_sensor_keys=frozenset(),
+        _warned_empty_enumeration=set(),
         data={},
         hass=mock_hass,
         logger=MagicMock(),
@@ -2317,6 +2321,327 @@ class TestSilentIssueSurvivesPartialHubShrink:
             assert coord._hub_absent_poll_counts[(100, 200)] == 1
 
 
+def _orphan_series_hubs(*, hub_a_present=True, child_listed=True):
+    """The two-hub device list every orphan-freeze timeline drives.
+
+    Hub B carries no children on purpose: it exists only to keep the device
+    list non-empty when hub A goes missing, so that absence is a shrink rather
+    than the total outage the enclosing guard handles separately.
+    """
+    hubs = []
+    if hub_a_present:
+        hubs.append(
+            {
+                "mid": 200,
+                "name": "HubA",
+                "deviceName": "devA",
+                "productKey": "pk1",
+                "homeName": "Home",
+                "subDevices": ([{"addr": 1, "model": "HTV210B", "name": "Sub1", "softVer": "1.0"}] if child_listed else []),
+            }
+        )
+    hubs.append(
+        {
+            "mid": 300,
+            "name": "HubB",
+            "deviceName": "devB",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [],
+        }
+    )
+    return hubs
+
+
+def _point_at(client, hubs):
+    """Point the next poll at the given device list, with arrived-but-empty status."""
+    client.get_devices_by_hid.return_value = hubs
+    client.get_multiple_device_status.return_value = [{"mid": hub["mid"], "subDeviceStatus": []} for hub in hubs]
+
+
+def _build_orphan_series_coord():
+    """Return (coordinator, client) wired the way __init__.py wires it.
+
+    A real RainPointCoordinator, not a SimpleNamespace, so the interaction
+    between the hub-absence window and the orphan window is exercised through
+    the real _reconcile_repairs_surfaces ordering rather than a direct helper
+    call.
+    """
+    client = AsyncMock()
+    _point_at(client, _orphan_series_hubs())
+
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    entry.data = {CONF_HIDS: [100]}
+    entry.options = {}
+
+    hass = MagicMock()
+    hass.data = {}
+
+    return _coord_module.RainPointCoordinator(hass, client, entry), client
+
+
+class TestOrphanedKeyCounterFreeze:
+    """A key whose hub is inside its provisional absence window is neither
+    counted toward removal nor reset, and resumes at its stored count once the
+    hub returns or is released.
+
+    A missing hub is an outage, not evidence about any addr, so it can neither
+    confirm nor deny that a child has left. Without the freeze one transient
+    hub blip walks every child of that hub thirty polls closer to a deletion
+    offer, on evidence the poll did not contain.
+    """
+
+    KEY = "100_200_1"
+
+    @staticmethod
+    def _hub(hid=100, mid=200, addrs=(1,)):
+        """A hub record listing the given addrs as children."""
+        return {
+            "hid": hid,
+            "mid": mid,
+            "name": f"Hub{mid}",
+            "deviceName": f"dev{mid}",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [{"addr": addr, "model": "HTV210B", "name": f"Sub{addr}", "softVer": "1.0"} for addr in addrs],
+        }
+
+    @staticmethod
+    def _arrived_empty(mid):
+        """A status response that arrived and named nobody, for one hub."""
+        return {"mid": mid, "subDeviceStatus": []}
+
+    def _build(self, hubs):
+        """Return (coord, client) with a real issue manager and the given hubs present."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = hubs
+        client.get_multiple_device_status.return_value = [self._arrived_empty(hub["mid"]) for hub in hubs]
+        coord._silent_issues = RainPointSilentDeviceIssues(MagicMock())
+        return coord, client
+
+    def _point(self, client, hubs):
+        """Point the next poll at the given device list."""
+        client.get_devices_by_hid.return_value = hubs
+        client.get_multiple_device_status.return_value = [self._arrived_empty(hub["mid"]) for hub in hubs]
+
+    async def _drive_to_three(self, coord, client):
+        """Two polls with the child listed, then three with it dropped."""
+        hub_a = self._hub(mid=200, addrs=(1,))
+        hub_b = self._hub(mid=300, addrs=())
+        for _ in range(2):
+            await _run(coord)
+        assert coord._orphaned_key_poll_counts == {}
+
+        self._point(client, [self._hub(mid=200, addrs=()), hub_b])
+        for expected in (1, 2, 3):
+            await _run(coord)
+            assert coord._orphaned_key_poll_counts[self.KEY] == expected
+        assert coord._aged_out_sensor_keys == frozenset()
+        return hub_a, hub_b
+
+    @pytest.mark.asyncio
+    async def test_a_key_whose_hub_is_provisionally_missing_is_neither_counted_nor_reset(self):
+        """The core rule: three polls of hub outage leave the stored count at
+        exactly the value it had when the hub vanished, and add nothing to the
+        aged-out set."""
+        coord, client = self._build([self._hub(mid=200, addrs=(1,)), self._hub(mid=300, addrs=())])
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            _hub_a, hub_b = await self._drive_to_three(coord, client)
+
+            # Hub A leaves the device list entirely; hub B keeps it non-empty.
+            self._point(client, [hub_b])
+            for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS):
+                await _run(coord)
+                assert coord._orphaned_key_poll_counts[self.KEY] == 3
+                assert coord._aged_out_sensor_keys == frozenset()
+
+            # The key is still remembered, which is what makes the resume work.
+            assert self.KEY in coord._last_poll_sensor_keys
+
+    @pytest.mark.asyncio
+    async def test_the_counter_resumes_where_it_stopped_when_the_hub_returns(self):
+        """Hub A comes back still not listing the child: the freeze lifts and
+        the counter advances from 3 to 4 rather than restarting."""
+        coord, client = self._build([self._hub(mid=200, addrs=(1,)), self._hub(mid=300, addrs=())])
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            _hub_a, hub_b = await self._drive_to_three(coord, client)
+
+            self._point(client, [hub_b])
+            await _run(coord)
+            assert coord._orphaned_key_poll_counts[self.KEY] == 3
+
+            self._point(client, [self._hub(mid=200, addrs=()), hub_b])
+            await _run(coord)
+            assert coord._orphaned_key_poll_counts[self.KEY] == 4
+
+    @pytest.mark.asyncio
+    async def test_the_counter_resumes_where_it_stopped_when_the_hub_is_released(self):
+        """Hub A never comes back. The release rule drops it from the missing
+        set, so the freeze lifts with no carry-forward code and the counter
+        advances from 3 on the very poll that releases it."""
+        coord, client = self._build([self._hub(mid=200, addrs=(1,)), self._hub(mid=300, addrs=())])
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            _hub_a, hub_b = await self._drive_to_three(coord, client)
+
+            self._point(client, [hub_b])
+            for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS):
+                await _run(coord)
+            assert coord._orphaned_key_poll_counts[self.KEY] == 3
+            assert (100, 200) in coord._hub_absent_poll_counts
+
+            # The next absence exceeds the hub threshold and releases hub A.
+            await _run(coord)
+            assert (100, 200) not in coord._hub_absent_poll_counts
+            assert coord._orphaned_key_poll_counts[self.KEY] == 4
+
+            await _run(coord)
+            assert coord._orphaned_key_poll_counts[self.KEY] == 5
+
+    @pytest.mark.asyncio
+    async def test_a_key_returning_with_its_hub_drops_its_count_entirely(self):
+        """A key that reappears at any point resets to zero, regardless of how
+        high it had climbed or of what its hub's subDevices listed on the poll
+        it returned."""
+        coord, client = self._build([self._hub(mid=200, addrs=(1,)), self._hub(mid=300, addrs=())])
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            hub_a, hub_b = await self._drive_to_three(coord, client)
+
+            self._point(client, [hub_b])
+            await _run(coord)
+            assert coord._orphaned_key_poll_counts[self.KEY] == 3
+
+            self._point(client, [hub_a, hub_b])
+            await _run(coord)
+            assert self.KEY not in coord._orphaned_key_poll_counts
+            assert coord._aged_out_sensor_keys == frozenset()
+
+    @pytest.mark.asyncio
+    async def test_a_total_empty_device_list_advances_no_counter(self):
+        """An empty device list is a total outage: no counter advances and the
+        enumeration memory is unchanged, so a partial list arriving afterward
+        still computes the correct missing set."""
+        coord, client = self._build([self._hub(mid=200, addrs=(1,)), self._hub(mid=300, addrs=())])
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            _hub_a, hub_b = await self._drive_to_three(coord, client)
+            sensor_keys_before = set(coord._last_poll_sensor_keys)
+
+            client.get_devices_by_hid.return_value = []
+            await _run(coord)
+
+            assert coord._orphaned_key_poll_counts[self.KEY] == 3
+            assert coord._last_poll_sensor_keys == sensor_keys_before
+
+            self._point(client, [self._hub(mid=200, addrs=()), hub_b])
+            await _run(coord)
+            assert coord._orphaned_key_poll_counts[self.KEY] == 4
+
+    @pytest.mark.asyncio
+    async def test_an_aged_out_key_keeps_its_verdict_through_a_hub_outage(self):
+        """A key that already reached the threshold keeps its aged-out verdict
+        while its hub is missing. Withdrawing it there would clear the card on
+        the outage and re-raise it when the hub returned, which is the
+        clear-then-reraise cycle every outage guard in this file exists to
+        prevent, arriving from the other side."""
+        coord, client = self._build([self._hub(mid=200, addrs=(1,)), self._hub(mid=300, addrs=())])
+        hub_b = self._hub(mid=300, addrs=())
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await _run(coord)
+            self._point(client, [self._hub(mid=200, addrs=()), hub_b])
+            for _ in range(_coord_module.ORPHANED_KEY_DEBOUNCE_POLLS):
+                await _run(coord)
+            assert coord._aged_out_sensor_keys == frozenset({self.KEY})
+
+            self._point(client, [hub_b])
+            for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS):
+                await _run(coord)
+                assert coord._orphaned_key_poll_counts[self.KEY] == _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS
+                assert coord._aged_out_sensor_keys == frozenset({self.KEY})
+
+    @pytest.mark.asyncio
+    async def test_the_freeze_leaves_one_debug_breadcrumb_per_frozen_poll(self, caplog):
+        """A frozen window is visible in production logs without one line per
+        key per poll, and the line carries only integer counts."""
+        coord, client = self._build([self._hub(mid=200, addrs=(1,)), self._hub(mid=300, addrs=())])
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            _hub_a, hub_b = await self._drive_to_three(coord, client)
+
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.coordinator"):
+                self._point(client, [hub_b])
+                await _run(coord)
+
+        frozen_lines = [r for r in caplog.records if "orphan candidate" in r.message]
+        assert len(frozen_lines) == 1
+        assert frozen_lines[0].levelno == logging.DEBUG
+        assert "Sub1" not in frozen_lines[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_the_two_windows_run_in_series_for_a_child_of_a_departing_hub(self):
+        """Driven through a real coordinator construct then repeated refresh.
+
+        A child of a hub that leaves and never returns is protected by
+        HUB_ABSENT_DEBOUNCE_POLLS and then by ORPHANED_KEY_DEBOUNCE_POLLS, in
+        series, not by either window alone. Roughly 66 minutes at the default
+        scan interval, which is a stated and accepted cost rather than an
+        oversight.
+        """
+        coordinator, client = _build_orphan_series_coord()
+        key = "100_200_1"
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            assert coordinator._last_poll_sensor_keys == {key}
+            assert coordinator._orphaned_key_poll_counts == {}
+
+            # Hub A leaves the device list entirely and never returns.
+            _point_at(client, _orphan_series_hubs(hub_a_present=False))
+            for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+                assert coordinator._orphaned_key_poll_counts == {}
+                assert coordinator.aged_out_sensor_keys() == frozenset()
+
+            # The release poll is the first one that counts the child.
+            for expected in range(1, _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS + 1):
+                await coordinator.async_refresh()
+                assert coordinator._orphaned_key_poll_counts[key] == expected
+                if expected < _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS:
+                    assert coordinator.aged_out_sensor_keys() == frozenset()
+
+            assert coordinator.aged_out_sensor_keys() == frozenset({key})
+
+
 class TestSensorKeysForHubKeys:
     """Direct-call tests for _sensor_keys_for_hub_keys."""
 
@@ -2390,6 +2715,265 @@ class TestTrackMissingHubs:
 
         assert key not in coord._hub_absent_poll_counts
         assert provisional == set()
+
+
+_TRACK_ORPHANS = _coord_module.RainPointCoordinator._track_orphaned_keys
+
+
+class TestTrackOrphanedKeys:
+    """Direct-call tests for _track_orphaned_keys."""
+
+    KEY = "100_200_1"
+
+    @staticmethod
+    def _hub(hid=100, mid=200, addrs=()):
+        """A hub record listing the given addrs as children."""
+        return {
+            "hid": hid,
+            "mid": mid,
+            "name": f"Hub{mid}",
+            "deviceName": f"dev{mid}",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [{"addr": addr, "model": "HTV210B", "name": f"Sub{addr}", "softVer": "1.0"} for addr in addrs],
+        }
+
+    def test_the_boundary_is_the_thirtieth_consecutive_absence(self):
+        """Pinned in both directions, reading the constant rather than the
+        literal 30: one short of the threshold does not age out, and the
+        threshold itself does. The comparison is ">=", deliberately not the
+        "<=" its nearest neighbour _track_missing_hubs uses.
+        """
+        coord, _ = _make_coord()
+        coord._last_poll_sensor_keys = {self.KEY}
+        coord._orphaned_key_poll_counts = {self.KEY: _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS - 2}
+
+        aged_out = _TRACK_ORPHANS(coord, [self._hub()])
+
+        assert coord._orphaned_key_poll_counts[self.KEY] == _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS - 1
+        assert aged_out == frozenset()
+
+        aged_out = _TRACK_ORPHANS(coord, [self._hub()])
+
+        assert coord._orphaned_key_poll_counts[self.KEY] == _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS
+        assert aged_out == frozenset({self.KEY})
+
+    def test_a_key_that_reappears_resets_its_counter_to_zero(self):
+        """Mid-count reappearance drops the entry entirely rather than
+        decrementing it, so a later disappearance starts a fresh window."""
+        coord, _ = _make_coord()
+        coord._last_poll_sensor_keys = {self.KEY}
+        coord._orphaned_key_poll_counts = {self.KEY: 12}
+
+        aged_out = _TRACK_ORPHANS(coord, [self._hub(addrs=(1,))])
+
+        assert self.KEY not in coord._orphaned_key_poll_counts
+        assert aged_out == frozenset()
+
+        aged_out = _TRACK_ORPHANS(coord, [self._hub()])
+
+        assert coord._orphaned_key_poll_counts[self.KEY] == 1
+
+    def test_a_key_that_reappears_after_ageing_out_leaves_the_aged_out_set(self):
+        """A returning key is offered for removal no longer, however long it
+        had been gone."""
+        coord, _ = _make_coord()
+        coord._last_poll_sensor_keys = {self.KEY}
+        coord._orphaned_key_poll_counts = {self.KEY: _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS - 1}
+
+        assert _TRACK_ORPHANS(coord, [self._hub()]) == frozenset({self.KEY})
+
+        coord._aged_out_sensor_keys = frozenset({self.KEY})
+
+        assert _TRACK_ORPHANS(coord, [self._hub(addrs=(1,))]) == frozenset()
+        assert self.KEY not in coord._orphaned_key_poll_counts
+
+    def test_a_never_seen_key_is_never_counted(self):
+        """The input is the enumeration memory, so a key no poll ever listed
+        cannot be counted into existence by a hub that lists nothing."""
+        coord, _ = _make_coord()
+
+        aged_out = _TRACK_ORPHANS(coord, [self._hub()])
+
+        assert coord._orphaned_key_poll_counts == {}
+        assert aged_out == frozenset()
+        assert coord._last_poll_sensor_keys == set()
+
+    def test_the_wrapper_records_children_are_counted_not_frozen(self):
+        """The reproduction case. A Bluetooth wrapper record fails
+        is_hub_record, so _track_missing_hubs never remembers it and it can
+        never appear in the missing-hub set. Its children are therefore counted
+        immediately when it disappears, which is correct: a wrapper record
+        vanishing as a hub's mid changes is the event this surface exists for,
+        and freezing on it would make the surface unable to fire on its own
+        reproduction.
+        """
+        coord, _ = _make_coord()
+        wrapper = {
+            "hid": 100,
+            "mid": 346965,
+            "did": "",
+            "mac": "",
+            "productKey": "",
+            "model": "",
+            "name": "",
+            "subDevices": [{"addr": 1, "model": "HTV210B", "name": "BT Valve", "softVer": "1.0"}],
+        }
+        real_hub = self._hub(mid=200)
+        wrapper_key = "100_346965_1"
+
+        # Poll 1: both records present. The wrapper's child is remembered even
+        # though the wrapper itself is not remembered as a hub key.
+        missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [wrapper, real_hub])
+        _TRACK_ORPHANS(coord, [wrapper, real_hub], missing_hub_keys=missing_hub_keys)
+        assert coord._last_poll_hub_keys == {(100, 200)}
+        assert wrapper_key in coord._last_poll_sensor_keys
+
+        # Poll 2: the wrapper record is gone. No hub is missing, so nothing is
+        # frozen and its child starts counting on this very poll.
+        missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [real_hub])
+        _TRACK_ORPHANS(coord, [real_hub], missing_hub_keys=missing_hub_keys)
+
+        assert missing_hub_keys == frozenset()
+        assert coord._orphaned_key_poll_counts[wrapper_key] == 1
+
+    def test_the_age_out_breadcrumb_fires_once_per_transition(self, caplog):
+        """One INFO line at the moment a card can appear, not one per poll
+        thereafter, and it carries only the sensor key and integer counts."""
+        coord, _ = _make_coord()
+        coord._last_poll_sensor_keys = {self.KEY}
+        coord._orphaned_key_poll_counts = {self.KEY: _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS - 1}
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.coordinator"):
+            coord._aged_out_sensor_keys = _TRACK_ORPHANS(coord, [self._hub()])
+            coord._aged_out_sensor_keys = _TRACK_ORPHANS(coord, [self._hub()])
+
+        aged_lines = [r for r in caplog.records if "no longer listed" in r.message]
+        assert len(aged_lines) == 1
+        assert aged_lines[0].levelno == logging.INFO
+        assert self.KEY in aged_lines[0].getMessage()
+        assert "Sub1" not in aged_lines[0].getMessage()
+
+
+class TestOrphanedKeyCounterIsInertOnExistingSurfaces:
+    """The removal counter's input is the subDevices enumeration and nothing
+    else, so the not-reporting surface, the shrink guard and both push entry
+    points all behave exactly as they did before it existed."""
+
+    KEY = "100_200_1"
+
+    _hub = staticmethod(TestOrphanedKeyCounterFreeze._hub)
+    _arrived_empty = staticmethod(TestOrphanedKeyCounterFreeze._arrived_empty)
+
+    def _build(self, hubs):
+        """Return (coord, client) with a real issue manager and the given hubs present."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = hubs
+        client.get_multiple_device_status.return_value = [self._arrived_empty(hub["mid"]) for hub in hubs]
+        coord._silent_issues = RainPointSilentDeviceIssues(MagicMock())
+        return coord, client
+
+    @pytest.mark.asyncio
+    async def test_a_silent_but_still_listed_device_never_starts_a_removal_count(self):
+        """A device that is merely quiet stays listed in subDevices, so it
+        never leaves the enumeration and never starts a removal count, driven
+        past both thresholds rather than only past the silent one."""
+        coord, _client = self._build([self._hub(mid=200, addrs=(1,))])
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            for poll in range(1, _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS + 3):
+                await _run(coord)
+                assert coord._orphaned_key_poll_counts == {}
+                assert coord._aged_out_sensor_keys == frozenset()
+                if poll < _coord_module.SILENT_DEBOUNCE_POLLS:
+                    assert create.call_count == 0
+
+            # The silent card was raised on schedule and exactly once.
+            assert create.call_count == 1
+            assert coord._silent_poll_counts[self.KEY] >= _coord_module.SILENT_DEBOUNCE_POLLS
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_goes_silent_then_leaves_is_counted_from_the_poll_it_left(self):
+        """The two counters move independently: the removal count starts on the
+        poll the key left the enumeration, not on the poll it went quiet, and
+        the silent counter is pruned exactly as it was before."""
+        coord, client = self._build([self._hub(mid=200, addrs=(1,))])
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            for _ in range(_coord_module.SILENT_DEBOUNCE_POLLS + 2):
+                await _run(coord)
+            assert coord._silent_poll_counts[self.KEY] == _coord_module.SILENT_DEBOUNCE_POLLS + 2
+            assert coord._orphaned_key_poll_counts == {}
+
+            hub_without_child = self._hub(mid=200, addrs=())
+            client.get_devices_by_hid.return_value = [hub_without_child]
+            client.get_multiple_device_status.return_value = [self._arrived_empty(200)]
+            await _run(coord)
+
+            assert coord._orphaned_key_poll_counts[self.KEY] == 1
+            assert self.KEY not in coord._silent_poll_counts
+
+    def test_both_push_entry_points_leave_the_orphan_counter_untouched(self):
+        """No push path reads or writes any of the three structures this
+        counter owns; only the poll does."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+        coord.data["hub_connectivity"] = {}
+        coord._last_poll_sensor_keys = {self.KEY}
+        coord._orphaned_key_poll_counts = {self.KEY: 5}
+        coord._aged_out_sensor_keys = frozenset({"100_200_9"})
+        device_ts = int(datetime(2024, 6, 1, tzinfo=UTC).timestamp() * 1000)
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, device_ts)
+        _APPLY_HUB(coord, 200, False, device_ts)
+
+        assert coord._last_poll_sensor_keys == {self.KEY}
+        assert coord._orphaned_key_poll_counts == {self.KEY: 5}
+        assert coord._aged_out_sensor_keys == frozenset({"100_200_9"})
+
+    @pytest.mark.asyncio
+    async def test_the_existing_shrink_guard_timeline_produces_no_aged_out_key(self):
+        """The shrink guard's own timeline, re-driven with the aged-out set
+        asserted empty at every step: the new counter must be inert across a
+        sequence that guard already owns."""
+        hub_a = self._hub(hid=100, mid=200, addrs=(1,))
+        hub_b = self._hub(hid=100, mid=300, addrs=())
+        coord, client = self._build([hub_a, hub_b])
+        issue_id = silent_device_issue_id(100, 200, 1)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            for _ in range(3):
+                await _run(coord)
+                assert coord._aged_out_sensor_keys == frozenset()
+            assert create.call_count == 1
+
+            client.get_devices_by_hid.return_value = [hub_b]
+            client.get_multiple_device_status.return_value = [self._arrived_empty(300)]
+            await _run(coord)
+
+            assert delete.call_count == 0
+            assert issue_id in coord._silent_issues._active
+            assert coord._aged_out_sensor_keys == frozenset()
+
+            client.get_devices_by_hid.return_value = [hub_a, hub_b]
+            client.get_multiple_device_status.return_value = [
+                self._arrived_empty(200),
+                self._arrived_empty(300),
+            ]
+            await _run(coord)
+
+            assert create.call_count == 1
+            assert delete.call_count == 0
+            assert coord._aged_out_sensor_keys == frozenset()
 
 
 class TestHubConnectivitySurvivesDeviceListOutage:

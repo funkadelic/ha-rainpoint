@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,6 +15,7 @@ from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_HIDS,
     DOMAIN,
+    GENERIC_UNIQUE_ID_MARKER,
     MODEL_DISPLAY_HUB,
     MODEL_HCS005FRF,
     MODEL_HCS015ARF,
@@ -29,6 +31,7 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_405,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, RainPointCoordinator
+from custom_components.rainpoint.entity import late_adders, register_late_adder
 from custom_components.rainpoint.sensor import (
     DisplayHubReadingSensor,
     RainPointBatterySensor,
@@ -74,6 +77,7 @@ from custom_components.rainpoint.sensor import (
     RainPointUnknownSensor,
     RainPointZoneStateSensor,
     RainPointZoneWaterUsageSensor,
+    _LateSensorEntityAdder,
     _slugify,
     async_setup_entry,
 )
@@ -2296,3 +2300,247 @@ class TestLateSensorEntityAdder:
         assert (info["data"] or {}).get("type") == SILENT_DATA_TYPE
         assert (info["data"] or {}).get("type") != "unknown"
         assert generic_entities_module.build_generic_entities(coordinator, key, info, "100_200_1") == []
+
+
+class TestLateSensorEntityAdderLedger:
+    """What the sensor platform's adder emitted, indexed by the key that produced it.
+
+    The two add-once sets record which keys were served but not what was
+    handed to Home Assistant for them, so the removal path cannot name a
+    key's rows without this. Generic rows arrive through the same collect
+    call as the trusted ones, which is what makes the key govern rather than
+    the namespace.
+    """
+
+    # A real committed catalog variant the generic sensor gate admits, reused
+    # from tests/test_generic_entities.py rather than a monkeypatched entry,
+    # so the generic half of the ledger is proven against the same ground
+    # truth the generic platform is.
+    _GENERIC_MODEL = "HWG004WRF"
+    _GENERIC_MODEL_CODE = 34
+
+    @staticmethod
+    def _adder(generic_enabled=False):
+        """Return a bare adder over a coordinator stub with no sensors."""
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={})
+        return _LateSensorEntityAdder(coordinator, lambda ents: None, generic_enabled)
+
+    @classmethod
+    def _generic_entry(cls):
+        """An entry for a catalog-recognized model with no hand-written decoder."""
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=cls._GENERIC_MODEL,
+            sub_name="Outlet 1",
+            data={
+                "type": "unknown",
+                "model": cls._GENERIC_MODEL,
+                "raw_value": "10#00",
+                "generic": {"decoder": "generic-tlv", "fields": [], "field_names": []},
+            },
+        )
+        entry["model_code"] = cls._GENERIC_MODEL_CODE
+        return entry
+
+    def test_a_silent_then_model_emission_lands_under_one_key(self):
+        """The append rule on the one platform whose key can be served twice:
+        a device silent at setup and reporting later emits two disjoint entity
+        sets, and both sets' rows have to be removable together."""
+        adder = self._adder()
+        key = "100_200_1"
+
+        silent = adder.collect(key, TestLateSensorEntityAdder._silent_entry())
+        model = adder.collect(key, TestLateSensorEntityAdder._reporting_entry())
+
+        emitted = {e._attr_unique_id for e in silent + model}
+        assert len(emitted) > 1
+        assert adder.ledger.unique_ids_for(key) == frozenset(emitted)
+
+    def test_a_suppressed_emission_records_nothing_new(self):
+        """The gate runs first, so a repeat collect adds no ids to the entry."""
+        adder = self._adder()
+        key = "100_200_1"
+
+        adder.collect(key, TestLateSensorEntityAdder._reporting_entry())
+        first = adder.ledger.unique_ids_for(key)
+        assert adder.collect(key, TestLateSensorEntityAdder._reporting_entry()) == []
+
+        assert adder.ledger.unique_ids_for(key) == first
+
+    def test_a_key_whose_entities_carry_no_unique_id_stays_out_of_the_ledger(self):
+        """No unique_id means no registry row, so the key has nothing to remove."""
+        adder = self._adder()
+        adder.collect("100_200_1", TestLateSensorEntityAdder._reporting_entry())
+        for entity in list(adder.ledger.unique_ids_for("100_200_1")):
+            assert entity  # every real sensor entity carries one
+
+        bare = self._adder()
+        bare.ledger.record("empty", {}, [SimpleNamespace(_attr_unique_id=None)])
+
+        assert "empty" not in bare.ledger.keys()  # noqa: SIM118 -- a named accessor, not a mapping
+
+    def test_the_descriptor_names_the_device_after_its_key_is_gone(self):
+        """The card has to name a device whose key has left the poll entirely."""
+        adder = self._adder()
+
+        adder.collect("100_200_1", TestLateSensorEntityAdder._reporting_entry())
+
+        assert adder.ledger.descriptor_for("100_200_1")["sub_name"] == "Soil"
+
+    def test_generic_rows_land_in_the_same_entry_as_the_trusted_ones(self):
+        """The key governs, not the namespace: an aged-out key's generic rows
+        are offered for removal alongside its unsupported and raw-payload
+        rows, because all three came back from one collect call."""
+        adder = self._adder(generic_enabled=True)
+        key = "100_200_1"
+
+        emitted = adder.collect(key, self._generic_entry())
+        generic_ids = [e._attr_unique_id for e in emitted if GENERIC_UNIQUE_ID_MARKER in e._attr_unique_id]
+
+        assert generic_ids
+        recorded = adder.ledger.unique_ids_for(key)
+        assert recorded == {e._attr_unique_id for e in emitted}
+        assert set(generic_ids) <= recorded
+
+    def test_forget_releases_the_generic_rows_with_the_rest_of_the_key(self):
+        """The observable behind the key governing: an aged-out key's generic
+        rows are dropped and re-offered exactly once alongside its trusted
+        ones, without _remove_stale_generic_entities being involved at all."""
+        adder = self._adder(generic_enabled=True)
+        key = "100_200_1"
+        first = adder.collect(key, self._generic_entry())
+        generic_ids = {e._attr_unique_id for e in first if GENERIC_UNIQUE_ID_MARKER in e._attr_unique_id}
+        assert generic_ids
+
+        adder.forget(key)
+        assert adder.ledger.unique_ids_for(key) == frozenset()
+
+        second = adder.collect(key, self._generic_entry())
+        reoffered = [e._attr_unique_id for e in second if GENERIC_UNIQUE_ID_MARKER in e._attr_unique_id]
+
+        assert sorted(reoffered) == sorted(generic_ids)
+        assert len(reoffered) == len(set(reoffered))
+
+
+class TestLateSensorEntityAdderForget:
+    """Dropping one key's record, in lockstep with an actual removal of its rows."""
+
+    @staticmethod
+    def _adder():
+        """Return a bare adder over a coordinator stub with no sensors."""
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={})
+        return _LateSensorEntityAdder(coordinator, lambda ents: None, False)
+
+    def test_forget_clears_the_ledger_entry_and_both_add_once_sets(self):
+        """One call, both sets, unconditionally."""
+        adder = self._adder()
+        key = "100_200_1"
+        adder.collect(key, TestLateSensorEntityAdder._silent_entry())
+        adder.collect(key, TestLateSensorEntityAdder._reporting_entry())
+        assert key in adder._keys_with_silent_entity
+        assert key in adder._keys_with_model_entities
+
+        adder.forget(key)
+
+        assert adder.ledger.unique_ids_for(key) == frozenset()
+        assert adder.ledger.descriptor_for(key) == {}
+        assert key not in adder._keys_with_silent_entity
+        assert key not in adder._keys_with_model_entities
+
+    def test_a_key_that_returns_after_a_forget_gains_both_entity_sets_again(self):
+        """A half-forget would leave the other set permanently gating an
+        emission whose rows no longer exist, so the device could never regain
+        one of its two possible entity sets without a reload."""
+        adder = self._adder()
+        key = "100_200_1"
+        adder.collect(key, TestLateSensorEntityAdder._silent_entry())
+        adder.collect(key, TestLateSensorEntityAdder._reporting_entry())
+
+        adder.forget(key)
+
+        assert adder.collect(key, TestLateSensorEntityAdder._silent_entry()) != []
+        assert adder.collect(key, TestLateSensorEntityAdder._reporting_entry()) != []
+
+    def test_forgetting_an_unrecorded_key_is_a_no_op(self):
+        """The remover calls forget on every registered adder, including the
+        ones that never emitted anything for that key."""
+        adder = self._adder()
+        key = "100_200_1"
+        adder.collect(key, TestLateSensorEntityAdder._reporting_entry())
+
+        adder.forget("100_200_9")
+
+        assert adder.ledger.unique_ids_for(key) != frozenset()
+        assert key in adder._keys_with_model_entities
+
+    def test_a_key_with_any_failed_row_is_held_whole(self):
+        """This adder is the one that cannot express a partial forget.
+
+        Its two add-once marks are the sensor key itself, so clearing them
+        would re-offer every id under the key, including the one whose row is
+        still registered and still holds its unique_id. Holding the key whole
+        is the coarser cost and the recoverable one: a returning key gains
+        nothing here until a reload, where releasing a live id is a collision
+        Home Assistant answers by dropping the entity outright.
+        """
+        adder = self._adder()
+        key = "100_200_1"
+        recorded = {e._attr_unique_id for e in adder.collect(key, TestLateSensorEntityAdder._reporting_entry())}
+        assert len(recorded) > 1
+
+        adder.forget(key, frozenset({next(iter(recorded))}))
+
+        assert adder.ledger.unique_ids_for(key) == recorded
+        assert key in adder._keys_with_model_entities
+        assert adder.collect(key, TestLateSensorEntityAdder._reporting_entry()) == []
+
+    def test_a_failure_under_another_key_leaves_this_one_forgotten(self):
+        """The held set is intersected against the key's own ids, so a failure
+        recorded elsewhere in the same domain cannot gate an unrelated key."""
+        adder = self._adder()
+        key = "100_200_1"
+        adder.collect(key, TestLateSensorEntityAdder._reporting_entry())
+
+        adder.forget(key, frozenset({"rainpoint_100_200_9_battery"}))
+
+        assert adder.ledger.unique_ids_for(key) == frozenset()
+        assert key not in adder._keys_with_model_entities
+
+
+class TestSensorAdderRegistration:
+    """The sensor platform publishes its adder where the removal sweep reads."""
+
+    @staticmethod
+    def _hass_and_entry():
+        """A hass/entry pair whose entry store is a real dict, not a mock."""
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={}))
+        hass, entry = _make_hass(coordinator)
+        return hass, entry
+
+    @pytest.mark.asyncio
+    async def test_setup_registers_exactly_the_adder_it_built(self):
+        """The sweep reaches every platform's adder through one entry slot."""
+        hass, entry = self._hass_and_entry()
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        registered = late_adders(hass.data[DOMAIN][entry.entry_id])
+        assert len(registered) == 1
+        assert isinstance(registered[0], _LateSensorEntityAdder)
+
+    @pytest.mark.asyncio
+    async def test_a_second_platforms_registration_appends(self):
+        """Three platforms share one slot, and the sweep needs all three."""
+        hass, entry = self._hass_and_entry()
+        store = hass.data[DOMAIN][entry.entry_id]
+        register_late_adder(store, "an earlier platform")
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        registered = late_adders(store)
+        assert registered[0] == "an earlier platform"
+        assert isinstance(registered[1], _LateSensorEntityAdder)

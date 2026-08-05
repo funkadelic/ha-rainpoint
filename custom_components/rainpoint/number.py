@@ -23,7 +23,7 @@ from .const import (
 )
 from .coordinator import RainPointCoordinator
 from .device import build_sub_device_info
-from .entity import LateEntityAdder, sub_device_attributes
+from .entity import LateEntityAdder, register_late_adder, sub_device_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,7 +64,11 @@ async def async_setup_entry(
             built.extend(build_generic_duration_entities(coordinator, key, info, base_slug))
         return built
 
-    adder = LateEntityAdder(coordinator, async_add_entities, build)
+    # The literal the PLATFORMS list and every entity_id prefix already use.
+    adder = LateEntityAdder(coordinator, async_add_entities, build, "number")
+    # Published before anything is emitted, so the removal sweep can ask this
+    # adder what it created for a key that later vanishes.
+    register_late_adder(data, adder)
 
     entities: list = []
     for key, info in sensors_cfg.items():
@@ -79,7 +83,7 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(adder.async_on_coordinator_update))
 
 
-class _RainPointDurationNumberBase(CoordinatorEntity, NumberEntity, RestoreEntity):
+class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], NumberEntity, RestoreEntity):
     """Shared restore, value, attribute, and device-page behaviour for a duration entity.
 
     The two concrete classes below differ only in their constructors and class

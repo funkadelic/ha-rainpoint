@@ -124,6 +124,27 @@ HUB_DISCONNECT_DEBOUNCE_POLLS = SILENT_DEBOUNCE_POLLS
 # "<" (a raise fires once the count reaches the threshold).
 HUB_ABSENT_DEBOUNCE_POLLS = SILENT_DEBOUNCE_POLLS
 
+# Consecutive polls a sensor key must stay absent from the hub's subDevices
+# enumeration before its leftover entities can be offered for removal.
+#
+# Deliberately its own literal, and deliberately NOT aliased from or derived
+# from SILENT_DEBOUNCE_POLLS, HUB_DISCONNECT_DEBOUNCE_POLLS or
+# HUB_ABSENT_DEBOUNCE_POLLS the way those three are from each other. Those
+# three gate a Repairs card, which is cheap and reversible; this one gates
+# offering the destruction of entities and their recorder history, so reusing
+# a threshold tuned against the cheap cost model would import a cost model
+# that does not apply here. A later retune of the shared debounce must not
+# move this threshold with it, which a derived value or a multiple would do
+# silently.
+#
+# Reads at its use site the way HUB_DISCONNECT_DEBOUNCE_POLLS does, not the
+# way HUB_ABSENT_DEBOUNCE_POLLS does: the comparison is ">=", so a key ages
+# out on its 30th consecutive absence (about an hour at the 120s
+# DEFAULT_SCAN_INTERVAL). That is the raise-fires reading rather than the
+# stays-provisional reading, and it is the single most likely thing a later
+# reader will "correct" in the wrong direction.
+ORPHANED_KEY_DEBOUNCE_POLLS = 30
+
 # Hub-level cloud connectivity tri-state. Absent is never coerced to
 # disconnected: HUB_CONNECTIVITY_UNKNOWN covers three distinct causes -- older
 # firmware that omits the "connected" id, the Bluetooth wrapper record, and a
@@ -762,6 +783,31 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # push) ever writes this state.
         self._last_poll_hub_keys: set[tuple[Any, int]] = set()
         self._hub_absent_poll_counts: dict[tuple[Any, int], int] = {}
+        # Cross-poll sub-device-enumeration memory: every sensor key the last
+        # trusted poll's subDevices enumeration listed, plus every key still
+        # being counted, and how many consecutive polls each vanished key has
+        # been absent for. This is the sensor-key analogue of the
+        # _last_poll_hub_keys plus _hub_absent_poll_counts pair above -- one
+        # structure in two attributes -- and mirrors that shape on purpose
+        # rather than inventing a third one.
+        #
+        # Deliberately not merged with _silent_poll_counts. That one counts
+        # per-child silence observed in status responses; this one counts
+        # per-key absence from the device list enumeration, so a device that
+        # is merely quiet for a poll or two never starts a removal count.
+        #
+        # Living outside self.data carries the same instance-attribute-versus-
+        # self.data skew the hub enumeration memory above does, and it is just
+        # as weak for the same reason: only the poll ever writes this state,
+        # and no push path reads or writes it.
+        self._last_poll_sensor_keys: set[str] = set()
+        self._orphaned_key_poll_counts: dict[str, int] = {}
+        self._aged_out_sensor_keys: frozenset[str] = frozenset()
+        # The hub keys whose empty enumeration has already been warned about,
+        # so that warning fires on the edge rather than on every poll. Sized by
+        # the number of hubs in the account, and rebuilt whole on every poll
+        # that reaches the counting step.
+        self._warned_empty_enumeration: set[str] = set()
 
     def record_valve_command(self, sensor_key: str, zone_num: int) -> datetime:
         """Remember the latest successful valve command time for stale-poll protection."""
@@ -1132,6 +1178,19 @@ class RainPointCoordinator(DataUpdateCoordinator):
             missing_hub_keys: frozenset[tuple[Any, int]] = frozenset()
             if hubs:
                 missing_hub_keys = RainPointCoordinator._track_missing_hubs(self, hubs)
+                # Ordering requirement, not a convenience: the call above must
+                # run first, because its return value is what decides which
+                # keys the tracker below is allowed to count, and its release
+                # rule is what lifts the freeze.
+                #
+                # Inside this `if hubs:` block rather than the outer branch,
+                # for the same reason the enumeration memory is: an empty
+                # device list is a total outage and must freeze this counter
+                # entirely. Advancing it there would let one failed
+                # getDeviceByHid push every key in the account a step closer
+                # to being offered for deletion at once.
+                aged_out = RainPointCoordinator._track_orphaned_keys(self, hubs, missing_hub_keys=missing_hub_keys)
+                self._aged_out_sensor_keys = aged_out
 
             # Deliberately an independent inline hold, not a reuse of
             # _merge_push_hub_connectivity or
@@ -1649,6 +1708,195 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._silent_poll_counts = {
             key: count for key, count in self._silent_poll_counts.items() if key in live_keys or key in protected_keys
         }
+
+    def _track_orphaned_keys(
+        self, hubs: list[dict], *, missing_hub_keys: frozenset[tuple[Any, int]] = frozenset()
+    ) -> frozenset[str]:
+        """Count how long each vanished sensor key has been gone, and return the aged-out set.
+
+        "Gone" means absent from the hub's subDevices enumeration, never
+        absent from coordinator.data["sensors"]. The two differ and the
+        difference matters: a paired device the cloud returns no status for is
+        absent from that dict for SILENT_DEBOUNCE_POLLS polls before a silent
+        entry is built for it, so counting against it would start and abandon
+        a removal count on every device that briefly goes quiet, and would
+        entangle this window with the silent debounce for no benefit. This is
+        the cloud saying the hub no longer carries that addr, which is what a
+        re-key or an unpair actually is.
+
+        The returned set is opaque to this class beyond being sensor keys: the
+        coordinator counts, and the listener in the package __init__ decides
+        what, if anything, to offer for removal.
+
+        A key whose hub is inside its provisional absence window is skipped
+        entirely: not incremented, not reset, and not newly aged out. Its
+        stored count is left exactly as it is, so it resumes where it stopped.
+        The reason transfers verbatim from _prune_silent_state: a missing hub
+        is an outage, not evidence about any addr, so it can neither confirm
+        nor deny that a child has left, and no key may ever be offered for
+        removal on evidence a poll did not contain. Keeping a frozen key in
+        _last_poll_sensor_keys is what makes the resume work; dropping it
+        there would stop it being counted the moment its hub came back.
+
+        A key that already reached the threshold keeps its aged-out verdict
+        through the freeze. Withdrawing it would clear the card on the outage
+        and re-raise it once the hub returned, which is the clear-then-reraise
+        cycle every outage guard in this file exists to prevent, arriving from
+        the other side.
+
+        Nothing carries a released hub forward, and nothing needs to:
+        _track_missing_hubs drops a hub from _hub_absent_poll_counts and
+        _last_poll_hub_keys once its absences exceed
+        HUB_ABSENT_DEBOUNCE_POLLS, so it stops appearing in missing_hub_keys
+        and the freeze lifts by itself on that same poll. The total protection
+        for a child of a departing hub is HUB_ABSENT_DEBOUNCE_POLLS and
+        ORPHANED_KEY_DEBOUNCE_POLLS in series, not one window alone. Staying
+        frozen for as long as the hub is absent was rejected: an account that
+        genuinely loses a hub would keep every child's leftover entities
+        forever.
+
+        The Bluetooth wrapper record is never in missing_hub_keys, because
+        is_hub_record is False for it and _track_missing_hubs therefore never
+        remembers it, so its children are counted rather than frozen when it
+        disappears. That is correct rather than an oversight: a wrapper record
+        vanishing as a hub's mid changes is the observed case this whole
+        surface exists for, and freezing on it would make the surface unable
+        to fire on its own reproduction.
+
+        Every log line here carries only the sensor key and integer counts,
+        never a cloud-supplied name or model, following _track_missing_hubs'
+        discipline.
+        """
+        # The same comprehension _prune_silent_state builds, over the same
+        # enumeration. The Bluetooth wrapper record is deliberately not
+        # filtered out by is_hub_record: it carries real children, and
+        # _prune_silent_state does not filter it either.
+        live_keys = {_sensor_key(hub["hid"], hub["mid"], sd["addr"]) for hub in hubs for sd in hub.get("subDevices", [])}
+        missing = self._last_poll_sensor_keys - live_keys
+        # A missing hub is an outage, not evidence about any addr, so its
+        # children's counters neither advance nor reset while it is inside its
+        # provisional absence window.
+        frozen = _sensor_keys_for_hub_keys(missing, missing_hub_keys)
+        if frozen:
+            # One line per frozen poll rather than one per key per poll, so a
+            # frozen window is visible in production logs without drowning
+            # them. Carries integer counts only.
+            _LOGGER.debug(
+                "Freezing %d orphan candidate key(s) under %d provisionally missing hub(s); "
+                "neither counting nor resetting them this poll",
+                len(frozen),
+                len(missing_hub_keys),
+            )
+
+        # A hub that is present but enumerates nothing is trusted from the very
+        # first poll: it is in neither the missing nor the provisional hub set,
+        # so the freeze above does not reach it, and every child it stopped
+        # listing starts counting on that same poll. That shape is a genuine
+        # unpair-everything and an equally genuine partial-degradation response
+        # from getDeviceByHid, and the integration cannot tell the two apart.
+        # Logged rather than guarded, because the guard is a decision about
+        # whether an empty enumeration is ever authoritative and what it costs
+        # an account that really did unpair its last sub-device. Until that is
+        # settled, the case has to at least be visible before the cards appear,
+        # so the count is a warning naming the hub key and integer counts only.
+        #
+        # Gated on the transition rather than on the state, the same way the
+        # age-out breadcrumb below is. The state is permanent once it holds:
+        # missing only ever grows, and a hub that is present is never frozen,
+        # so a hub that stops enumerating its children keeps every one of those
+        # keys counted on every later poll. Warning on the state would put one
+        # line per hub in the log every 120 seconds for the life of the
+        # session, including long after the user confirmed the removal, since
+        # the fix flow never reaches coordinator state.
+        newly_empty: set[str] = set()
+        for hub in hubs:
+            if hub.get("subDevices"):
+                continue
+            hub_key = f"{hub['hid']}_{hub['mid']}"
+            counted = {key for key in missing - frozen if key.rpartition("_")[0] == hub_key}
+            if not counted:
+                continue
+            newly_empty.add(hub_key)
+            if hub_key in self._warned_empty_enumeration:
+                continue
+            _LOGGER.warning(
+                "Hub %s is listed but enumerates no sub-devices; counting %d of its previously listed "
+                "key(s) toward removal, which an outage on this endpoint is indistinguishable from",
+                hub_key,
+                len(counted),
+            )
+        # Rebuilt whole rather than added to, so a hub that lists children again
+        # re-arms: a second degradation is visible on its own edge instead of
+        # being swallowed by the first one's mark. A hub that vanishes from the
+        # list entirely drops out here too, which is the same re-arm reached
+        # from the other side.
+        self._warned_empty_enumeration = newly_empty
+
+        # A key that reappears at all restarts from zero.
+        for key in live_keys:
+            self._orphaned_key_poll_counts.pop(key, None)
+
+        # Read before the caller reassigns it, so the breadcrumb below fires
+        # once per age-out transition rather than on every later poll.
+        previously_aged_out = self._aged_out_sensor_keys
+        aged_out: set[str] = set()
+        for key in missing - frozen:
+            count = self._orphaned_key_poll_counts.get(key, 0) + 1
+            self._orphaned_key_poll_counts[key] = count
+            # ">=" here, not "<=": this threshold counts polls until the card
+            # can be offered, which is HUB_DISCONNECT_DEBOUNCE_POLLS' reading,
+            # not the stays-provisional reading HUB_ABSENT_DEBOUNCE_POLLS
+            # carries at its own use site above.
+            if count >= ORPHANED_KEY_DEBOUNCE_POLLS:
+                aged_out.add(key)
+                if key not in previously_aged_out:
+                    # The moment a card can appear, so it gets its own
+                    # breadcrumb. Carries the sensor key and integer counts
+                    # only -- never sub.get("name") or a model string.
+                    _LOGGER.info(
+                        "Sensor key %s no longer listed by its hub for %d consecutive polls; "
+                        "offering its leftover entities for removal",
+                        key,
+                        count,
+                    )
+
+        # A frozen key that had already reached the threshold keeps its
+        # verdict, read from its own stored count rather than from the caller's
+        # copy of the last returned set.
+        aged_out |= {key for key in frozen if self._orphaned_key_poll_counts.get(key, 0) >= ORPHANED_KEY_DEBOUNCE_POLLS}
+
+        # A key is remembered once it has been seen and stays remembered while
+        # it is being counted, so this holds one entry per sensor key that has
+        # vanished in this session -- the same session-scoped bound the late
+        # adders' add-once sets carry. It is deliberately not dropped on
+        # age-out: dropping it would stop the key being counted and the card
+        # would flap.
+        #
+        # Since missing is _last_poll_sensor_keys - live_keys, this assignment
+        # is old | live_keys and the set only ever grows. Nothing prunes it, and
+        # nothing prunes _orphaned_key_poll_counts either except a key
+        # reappearing, so a confirmed removal leaves the key here and keeps
+        # incrementing its count and reporting it aged out for the rest of the
+        # session. That is inert rather than correct: the fix flow's forget
+        # reaches the adders' ledgers and hass.data only, never coordinator
+        # state, and it is the ledger that _build_orphaned_entity_records gates
+        # on, so an emptied key yields no record and no card whatever this holds.
+        # Both structures are session bounded and both go on a reload.
+        self._last_poll_sensor_keys = live_keys | missing
+        return frozenset(aged_out)
+
+    def aged_out_sensor_keys(self) -> frozenset[str]:
+        """Return the sensor keys absent long enough to be offered for removal.
+
+        The whole of this class's side of the boundary. The coordinator counts
+        and publishes an opaque key set; it knows nothing about entity
+        registry rows, late adders or Repairs cards, and the listener that
+        owns those knows nothing about how the counting works.
+
+        Reflects the last poll that carried a device list. A poll with no hubs
+        at all is a total outage and leaves this value untouched.
+        """
+        return self._aged_out_sensor_keys
 
     def _sync_silent_device_issues(
         self,

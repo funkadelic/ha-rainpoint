@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +14,7 @@ from custom_components.rainpoint import repairs
 from custom_components.rainpoint.const import (
     DOMAIN,
     HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
+    ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
     PUSH_WATCHDOG_ISSUE_ID,
     PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS,
@@ -21,12 +23,17 @@ from custom_components.rainpoint.const import (
 )
 from custom_components.rainpoint.repairs import (
     HubConnectivityRecord,
+    OrphanedEntitiesRecord,
     RainPointHubConnectivityIssues,
+    RainPointOrphanedEntitiesRepairFlow,
+    RainPointOrphanedEntityIssues,
     RainPointPushWatchdog,
     RainPointSilentDeviceIssues,
     SilentDeviceRecord,
     _sanitize_placeholder,
+    async_create_fix_flow,
     hub_connectivity_issue_id,
+    orphaned_entities_issue_id,
     silent_device_issue_id,
 )
 
@@ -930,3 +937,482 @@ class TestHubConnectivityUnreachableIdsAreNotCleared:
 
         assert create.call_count == 1
         assert delete.call_count == 0
+
+
+def _make_orphan_record(
+    sensor_key="100_200_1",
+    entry_id="e1",
+    addr=1,
+    model="HTV245FRF",
+    sub_name="Front Valve",
+    hub_name="Hub A",
+    entity_count=2,
+    missed_polls=30,
+    orphaned=True,
+    hub_paired=True,
+):
+    """Build an OrphanedEntitiesRecord with sensible defaults for one key."""
+    return OrphanedEntitiesRecord(
+        entry_id=entry_id,
+        sensor_key=sensor_key,
+        addr=addr,
+        model=model,
+        sub_name=sub_name,
+        hub_name=hub_name,
+        entity_count=entity_count,
+        missed_polls=missed_polls,
+        orphaned=orphaned,
+        hub_paired=hub_paired,
+    )
+
+
+class TestOrphanedEntitiesIssueId:
+    """The issue id doubles as the per-key dedup key, so its shape is a contract."""
+
+    def test_id_shape(self):
+        """Pinned because the id drives dedup across every update."""
+        assert orphaned_entities_issue_id("100_200_1", "e1") == f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_e1_100_200_1"
+
+    def test_two_config_entries_sharing_a_key_get_two_distinct_ids(self):
+        """A sensor key is {hid}_{mid}_{addr}, so two config entries resolving
+        the same home produce the same key for the same sub-device.
+
+        An unscoped id would make both entries dedup against one card and,
+        worse, make either entry's unload withdraw a card the other raised and
+        never consented to. This manager is the only one that withdraws its own
+        cards, which is why neither sibling id needs the entry."""
+        assert orphaned_entities_issue_id("100_200_1", "e1") != orphaned_entities_issue_id("100_200_1", "e2")
+
+    def test_two_distinct_keys_give_two_distinct_ids(self):
+        """One card per key means two keys must never converge on one card."""
+        assert orphaned_entities_issue_id("100_200_1", "e1") != orphaned_entities_issue_id("100_200_2", "e1")
+
+    def test_a_longer_addr_does_not_collide_with_a_shorter_one(self):
+        """The case a prefix match would confuse, and the reason the flow reads
+        the key from the issue data rather than parsing it back out of the id."""
+        assert orphaned_entities_issue_id("100_200_1", "e1") != orphaned_entities_issue_id("100_200_11", "e1")
+
+
+class TestRainPointOrphanedEntityIssues:
+    """Raise-once / dedupe / clear-on-return, re-keyed per sensor key."""
+
+    def test_an_orphaned_record_raises_one_fixable_issue(self, issue_mocks):
+        """The integration's only fixable card: everything about it is pinned."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record()])
+
+        create.assert_called_once()
+        _hass, domain, issue_id = create.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == orphaned_entities_issue_id("100_200_1", "e1")
+        kwargs = create.call_args.kwargs
+        assert kwargs["is_fixable"] is True
+        assert kwargs["severity"] == repairs.ir.IssueSeverity.WARNING
+        assert kwargs["translation_key"] == ORPHANED_ENTITIES_ISSUE_ID_PREFIX
+        assert kwargs["data"] == {"entry_id": "e1", "sensor_key": "100_200_1"}
+        assert "is_persistent" not in kwargs
+        placeholders = kwargs["translation_placeholders"]
+        assert placeholders["sub_name"] == "Front Valve"
+        assert placeholders["model"] == "HTV245FRF"
+        assert placeholders["address"] == "1"
+        assert placeholders["hub_name"] == "Hub A"
+        assert placeholders["entity_count"] == "2"
+        assert placeholders["missed_polls"] == "30"
+
+    def test_a_repeat_sync_does_not_raise_a_second_card(self, issue_mocks):
+        """A key stays aged out for as long as it stays gone, and every update
+        reconciles, so an undeduped raise would be one card per poll."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        record = _make_orphan_record()
+
+        manager.async_sync([record])
+        manager.async_sync([record])
+
+        create.assert_called_once()
+
+    def test_a_key_that_comes_back_clears_its_own_card(self, issue_mocks):
+        """The transient case is handled without a human ever seeing it."""
+        create, delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record()])
+        create.assert_called_once()
+
+        manager.async_sync([_make_orphan_record(orphaned=False)])
+
+        delete.assert_called_once()
+        _hass, domain, issue_id = delete.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == orphaned_entities_issue_id("100_200_1", "e1")
+
+    def test_a_non_orphaned_record_clears_even_an_id_this_instance_never_raised(self, issue_mocks):
+        """A fresh manager after a reload has no memory of what a prior session
+        raised, so guarding the delete on the active set would strand it."""
+        _create, delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(orphaned=False)])
+
+        delete.assert_called_once()
+
+    def test_an_id_no_record_mentions_is_cleared_as_a_removal(self, issue_mocks, caplog):
+        """Once a confirmed fix empties the ledger entry, the key produces no
+        record at all; the card must go, and must not claim the device came
+        back when it did not."""
+        _create, delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        manager.async_sync([_make_orphan_record()])
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([])
+
+        delete.assert_called_once()
+        messages = [r.getMessage() for r in caplog.records]
+        assert [m for m in messages if "No leftover entities remain to offer" in m]
+        assert not [m for m in messages if "lists this device again" in m]
+
+    def test_a_returning_key_logs_the_recovery_line_instead(self, issue_mocks, caplog):
+        """The pair to the test above: the two clears are different events and
+        one message cannot honestly describe both."""
+        _create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        manager.async_sync([_make_orphan_record()])
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_orphan_record(orphaned=False)])
+
+        assert [r.getMessage() for r in caplog.records if "lists this device again" in r.getMessage()]
+
+    def test_a_failed_raise_is_retried_rather_than_suppressed_forever(self, issue_mocks, caplog):
+        """Marking active before the registry accepted would let one transient
+        error silence this key for the rest of the session."""
+        create, _delete = issue_mocks
+        create.side_effect = RuntimeError("registry down")
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_orphan_record()])
+            manager.async_sync([_make_orphan_record()])
+
+        assert create.call_count == 2
+        assert [r.getMessage() for r in caplog.records if "Failed to create the orphaned entities" in r.getMessage()]
+
+    @staticmethod
+    def _registry_holding(*issue_ids):
+        """Return an issue registry stand-in holding exactly these ids."""
+        held = {(DOMAIN, issue_id): object() for issue_id in issue_ids}
+        return SimpleNamespace(async_get_issue=lambda domain, issue_id: held.get((domain, issue_id)))
+
+    def test_a_card_the_registry_still_holds_is_not_raised_twice(self, issue_mocks):
+        """The ordinary dedup, reconciled rather than assumed. A key stays aged
+        out for as long as it stays gone and every update reconciles, so the
+        card the registry still holds must not be raised a second time."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        issue_id = orphaned_entities_issue_id("100_200_1", "e1")
+
+        with patch.object(repairs.ir, "async_get", return_value=self._registry_holding(issue_id)):
+            manager.async_sync([_make_orphan_record()])
+            manager.async_sync([_make_orphan_record()])
+
+        create.assert_called_once()
+
+    def test_a_card_home_assistant_deleted_after_a_no_op_confirm_is_raised_again(self, issue_mocks):
+        """The hole the reconcile exists to close, and the one place this card
+        differs from the two non-fixable ones.
+
+        Home Assistant's repairs flow manager deletes a fixable issue itself on
+        any non-abort flow result, so a confirm that removed nothing leaves the
+        card gone from the UI while the active set still holds its id. Deduping
+        on that set alone would suppress every later raise and leave the user
+        with leftover entities and no surface left to act on."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        issue_id = orphaned_entities_issue_id("100_200_1", "e1")
+
+        with patch.object(repairs.ir, "async_get", return_value=self._registry_holding(issue_id)):
+            manager.async_sync([_make_orphan_record()])
+        create.assert_called_once()
+
+        # The submit: Home Assistant deleted the card, the key never left the
+        # ledger, and the very next sweep still finds it orphaned.
+        with patch.object(repairs.ir, "async_get", return_value=self._registry_holding()):
+            manager.async_sync([_make_orphan_record()])
+
+        assert create.call_count == 2
+
+    def test_an_unreadable_issue_registry_leaves_the_dedup_in_force(self, issue_mocks, caplog):
+        """A failed read establishes nothing, and the safe direction for a card
+        whose only outcome is a deletion offer is to keep the dedup: a
+        suppressed re-raise costs one poll interval, a wrong re-raise stacks a
+        second card over a live one."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        with (
+            patch.object(repairs.ir, "async_get", side_effect=RuntimeError("registry down")),
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"),
+        ):
+            manager.async_sync([_make_orphan_record()])
+            manager.async_sync([_make_orphan_record()])
+
+        create.assert_called_once()
+        assert [r.getMessage() for r in caplog.records if "Could not reconcile the orphaned entities issue" in r.getMessage()]
+
+    def test_unload_withdraws_every_card_this_instance_raised(self, issue_mocks, caplog):
+        """A card raised before a reload survives it, because the issue
+        registry is not per config entry. Every structure that could clear it
+        afterwards is rebuilt empty, and a key that has left the hub's
+        enumeration can never be mentioned by a fresh record, so the stale-set
+        sweep has nothing to sweep and the card is stuck for good."""
+        _create, delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        manager.async_sync([_make_orphan_record(), _make_orphan_record(sensor_key="100_200_2")])
+        delete.reset_mock()
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_clear_all()
+
+        assert sorted(call.args[2] for call in delete.call_args_list) == [
+            orphaned_entities_issue_id("100_200_1", "e1"),
+            orphaned_entities_issue_id("100_200_2", "e1"),
+        ]
+        assert manager._active == set()
+        messages = [r.getMessage() for r in caplog.records]
+        # Withdrawn, not resolved: nothing about either device changed.
+        withdrawn = [r for r in caplog.records if "withdrawing the orphaned entities repair issue" in r.getMessage()]
+        assert len(withdrawn) == 2
+        assert not [m for m in messages if "lists this device again" in m]
+        assert not [m for m in messages if "No leftover entities remain" in m]
+        # Warning, unlike the other two clear reasons, and the level is the
+        # assertion rather than incidental. A recovery and a removal both end
+        # with nothing left to offer; a withdrawal ends with the rows still
+        # registered and no surface left to offer them through, so it is the
+        # only one of the three that leaves the user with work to do. The line
+        # has to say so.
+        assert {r.levelno for r in withdrawn} == {logging.WARNING}
+        assert all("remove them from the entity registry by hand" in r.getMessage() for r in withdrawn)
+
+    def test_unload_is_a_no_op_when_no_card_is_active(self, issue_mocks):
+        """The ordinary unload, which is every unload on a healthy account."""
+        _create, delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_clear_all()
+
+        delete.assert_not_called()
+
+    def test_a_failed_clear_is_swallowed_and_logged(self, issue_mocks, caplog):
+        """A registry error on the way out must not raise into a listener."""
+        _create, delete = issue_mocks
+        delete.side_effect = RuntimeError("registry down")
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_orphan_record(orphaned=False)])
+
+        assert [r.getMessage() for r in caplog.records if "Failed to delete the orphaned entities" in r.getMessage()]
+
+    def test_a_bluetooth_device_names_no_hub_at_all(self, issue_mocks):
+        """A Bluetooth wrapper record carries an empty hub name, which the
+        sanitizer would render as "unknown" -- lost state, when the truth is
+        that there is no hub. The literal matches the not-reporting card, whose
+        own hub line has drawn this distinction since it shipped. Observed on
+        hardware: the leftover card for a Bluetooth-paired HTV210B read
+        "Hub: unknown", its least useful line."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(hub_name="", hub_paired=False)])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "none"
+
+    def test_a_hub_paired_device_still_names_its_hub(self, issue_mocks):
+        """The companion direction, so the branch above cannot be satisfied by
+        answering "none" for every device."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(hub_name="Hub A", hub_paired=True)])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "Hub A"
+
+    def test_every_cloud_supplied_placeholder_is_sanitized(self, issue_mocks):
+        """Both the card and its confirm dialog render as Markdown, and all
+        four of these arrive from the RainPoint payload unvalidated."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync(
+            [
+                _make_orphan_record(
+                    sub_name="[Click](http://evil.example)\nsecond line",
+                    model="<img src=x>www.evil.example",
+                    hub_name="a: b/c@d",
+                    addr="**1**",
+                )
+            ]
+        )
+
+        placeholders = create.call_args.kwargs["translation_placeholders"]
+        for name in ("sub_name", "model", "hub_name", "address"):
+            value = placeholders[name]
+            assert not set(value) & set("`<>[]()|\\*_#:/@")
+            assert "\n" not in value
+            assert "www." not in value
+
+
+class _FakeIssue:
+    """An issue registry entry carrying only what the confirm dialog reads."""
+
+    def __init__(self, translation_placeholders):
+        """Hold the placeholders the raised card supplied."""
+        self.translation_placeholders = translation_placeholders
+
+
+def _flow_hass(remover=None, *, with_entry=True, with_remover=True):
+    """Build a hass stand-in whose entry store holds (or lacks) a remover."""
+    entry_store = {}
+    if with_remover:
+        entry_store["orphan_entity_remover"] = remover
+    data = {DOMAIN: {"e1": entry_store}} if with_entry else {}
+    return SimpleNamespace(data=data)
+
+
+def _make_flow(hass, sensor_key="100_200_1", entry_id="e1"):
+    """Construct the flow the way async_create_fix_flow does, then bind hass."""
+    flow = RainPointOrphanedEntitiesRepairFlow({"entry_id": entry_id, "sensor_key": sensor_key})
+    flow.hass = hass
+    return flow
+
+
+class TestRainPointOrphanedEntitiesRepairFlow:
+    """The confirmation dialog, which is the only path to a removal."""
+
+    @pytest.mark.asyncio
+    async def test_create_fix_flow_returns_this_flow(self):
+        """The repairs platform hook, and the integration's first."""
+        flow = await async_create_fix_flow(MagicMock(), "some_id", {"entry_id": "e1", "sensor_key": "100_200_1"})
+        assert isinstance(flow, RainPointOrphanedEntitiesRepairFlow)
+
+    @pytest.mark.asyncio
+    async def test_a_flow_built_with_no_data_still_works(self):
+        """Home Assistant types the issue data as optional, so None must not
+        raise on the way into a dialog the user has already opened."""
+        flow = await async_create_fix_flow(MagicMock(), "some_id", None)
+        flow.hass = _flow_hass()
+        assert (await flow.async_step_confirm({}))["type"] == "create_entry"
+
+    @pytest.mark.asyncio
+    async def test_opening_the_card_shows_a_form_and_removes_nothing(self):
+        """The irreversible step is always a submit, never an open."""
+        calls = []
+        flow = _make_flow(_flow_hass(calls.append))
+
+        step = await flow.async_step_init()
+
+        assert step["type"] == "form"
+        assert step["step_id"] == "confirm"
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_submitting_calls_the_remover_once_with_the_key_from_the_data(self):
+        """The key comes from the issue data, never from parsing the issue id."""
+        calls = []
+        flow = _make_flow(_flow_hass(calls.append))
+
+        result = await flow.async_step_confirm({})
+
+        assert calls == ["100_200_1"]
+        assert result["type"] == "create_entry"
+
+    @pytest.mark.asyncio
+    async def test_the_flow_never_deletes_the_issue_itself(self, issue_mocks):
+        """Home Assistant's flow manager already deletes the issue on a
+        non-abort result, so deleting here would be a double delete."""
+        _create, delete = issue_mocks
+        flow = _make_flow(_flow_hass(lambda key: 2))
+
+        await flow.async_step_init()
+        await flow.async_step_confirm({})
+
+        delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_torn_down_entry_store_leaves_the_step_returning_normally(self, caplog):
+        """A flow submitted after its config entry unloaded finds nothing."""
+        flow = _make_flow(_flow_hass(with_entry=False))
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
+            result = await flow.async_step_confirm({})
+
+        assert result["type"] == "create_entry"
+        assert [r.getMessage() for r in caplog.records if "No orphaned entity remover" in r.getMessage()]
+
+    @pytest.mark.asyncio
+    async def test_a_missing_remover_leaves_the_step_returning_normally(self):
+        """The entry store exists but nothing published a remover into it."""
+        flow = _make_flow(_flow_hass(with_remover=False))
+        assert (await flow.async_step_confirm({}))["type"] == "create_entry"
+
+    @pytest.mark.asyncio
+    async def test_a_remover_that_raises_does_not_break_the_dialog(self, caplog):
+        """An exception here surfaces to the user as a broken repair dialog."""
+
+        def _boom(key):
+            """Fail the way a torn-down registry would."""
+            raise RuntimeError("registry down")
+
+        flow = _make_flow(_flow_hass(_boom))
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
+            result = await flow.async_step_confirm({})
+
+        assert result["type"] == "create_entry"
+        assert [r.getMessage() for r in caplog.records if "failed" in r.getMessage()]
+
+    @pytest.mark.asyncio
+    async def test_the_dialog_reuses_the_raised_card_s_own_placeholders(self):
+        """Building a second dict would let the card and the dialog drift, and
+        would add a second place a value could reach copy unsanitized."""
+        supplied = {"sub_name": "Front Valve", "entity_count": "2"}
+        registry = MagicMock()
+        registry.async_get_issue.return_value = _FakeIssue(supplied)
+        flow = _make_flow(_flow_hass(lambda key: 0))
+
+        with patch.object(repairs.ir, "async_get", return_value=registry):
+            step = await flow.async_step_init()
+
+        assert step["description_placeholders"] == supplied
+        registry.async_get_issue.assert_called_once_with(DOMAIN, orphaned_entities_issue_id("100_200_1", "e1"))
+
+    @pytest.mark.asyncio
+    async def test_an_absent_issue_yields_no_placeholders(self):
+        """A card already dismissed elsewhere leaves the dialog unadorned
+        rather than raising out of a flow step."""
+        registry = MagicMock()
+        registry.async_get_issue.return_value = None
+        flow = _make_flow(_flow_hass(lambda key: 0))
+
+        with patch.object(repairs.ir, "async_get", return_value=registry):
+            step = await flow.async_step_init()
+
+        assert step["description_placeholders"] is None
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_registry_yields_no_placeholders(self, caplog):
+        """Same outcome by the other route, because a raising flow step is the
+        one thing a confirmation dialog must never do."""
+        flow = _make_flow(_flow_hass(lambda key: 0))
+
+        with (
+            patch.object(repairs.ir, "async_get", side_effect=RuntimeError("no registry")),
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"),
+        ):
+            step = await flow.async_step_init()
+
+        assert step["description_placeholders"] is None
+        assert [r.getMessage() for r in caplog.records if "issue placeholders" in r.getMessage()]

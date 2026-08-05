@@ -5,7 +5,18 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from custom_components.rainpoint.entity import LateEntityAdder, RainPointSubDeviceEntity, sub_device_attributes
+import pytest
+
+from custom_components.rainpoint.entity import (
+    LATE_ADDER_STORE_KEY,
+    EmittedEntityLedger,
+    LateEntityAdder,
+    RainPointSubDeviceEntity,
+    late_adders,
+    register_late_adder,
+    sub_device_attributes,
+)
+from tests.helpers import make_coordinator_data, make_sensor_entry
 
 
 def _coordinator(entry):
@@ -276,7 +287,7 @@ class TestLateEntityAdder:
         """Wire an adder over a coordinator stub, returning it with the sink."""
         coordinator = SimpleNamespace(data={"sensors": sensors})
         added = []
-        adder = LateEntityAdder(coordinator, added.extend, build)
+        adder = LateEntityAdder(coordinator, added.extend, build, "valve")
         return coordinator, adder, added
 
     def test_collect_returns_entities_once_and_never_again(self):
@@ -333,8 +344,318 @@ class TestLateEntityAdder:
         """A refresh that failed leaves data None; the listener still runs."""
         coordinator = SimpleNamespace(data=None)
         added = []
-        adder = LateEntityAdder(coordinator, added.extend, lambda k, i: [_FakeEntity(k)])
+        adder = LateEntityAdder(coordinator, added.extend, lambda k, i: [_FakeEntity(k)], "valve")
 
         adder.async_on_coordinator_update()
 
         assert added == []
+
+
+class TestEmittedEntityLedger:
+    """What an adder emitted, indexed by the key that produced it."""
+
+    def test_a_key_gaining_entities_across_polls_ends_with_all_of_them(self):
+        """The append rule: a per-zone platform emits for one key over several
+        polls, so replacing rather than appending would leave the first zone's
+        row unreachable and therefore unremovable."""
+        zones = ["z1"]
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity(z) for z in zones], "valve")
+
+        adder.collect("k", {})
+        zones.append("z2")
+        adder.collect("k", {})
+
+        assert adder.ledger.unique_ids_for("k") == frozenset({"z1", "z2"})
+
+    def test_only_what_was_handed_to_home_assistant_is_recorded(self):
+        """An entity suppressed as already emitted was recorded on the poll
+        that did emit it, so recording the builder's full output again would
+        be indistinguishable until the builder stopped being deterministic."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
+
+        adder.collect("k", {})
+        adder.collect("k", {})
+
+        assert adder.ledger.unique_ids_for("k") == frozenset({"z1"})
+
+    def test_an_entity_with_no_unique_id_leaves_the_key_invisible(self):
+        """No unique_id means no registry row, so the key is out of scope for
+        removal entirely rather than recorded with nothing to remove."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity(None)], "valve")
+
+        adder.collect("k", {})
+
+        assert adder.ledger.unique_ids_for("k") == frozenset()
+        assert "k" not in adder.ledger.keys()  # noqa: SIM118 -- a named accessor, not a mapping
+
+    def test_the_descriptor_carries_the_last_listing_seen(self):
+        """The card has to name a device whose key has left the poll entirely,
+        so the descriptor is what survives it."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
+
+        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "Old", "hub_name": "Hub A", "hub_paired": True})
+        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "New", "hub_name": "Hub A", "hub_paired": True})
+
+        assert adder.ledger.descriptor_for("k") == {
+            "addr": 1,
+            "model": "HTV245FRF",
+            "sub_name": "New",
+            "hub_name": "Hub A",
+            "hub_paired": True,
+        }
+
+    def test_the_descriptor_carries_the_hub_pairing_verdict(self):
+        """The card names no hub for a Bluetooth-paired device, so the verdict
+        has to survive the key leaving the poll alongside the names it
+        qualifies. A sensor entry that predates the stamp yields None, which
+        the record builder reads as the hub-paired default rather than as
+        evidence of a Bluetooth pairing."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        # One unique_id per key: a shared id would be suppressed by the
+        # add-once gate on the second key, and record writes no descriptor for
+        # a key it holds no ids for.
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity(f"{k}_z1")], "valve")
+
+        adder.collect("bt", {"addr": 1, "model": "HTV210B", "sub_name": "BT", "hub_name": "", "hub_paired": False})
+        adder.collect("old", {"addr": 2, "model": "HTV210B", "sub_name": "Old", "hub_name": "Hub A"})
+
+        assert adder.ledger.descriptor_for("bt")["hub_paired"] is False
+        assert adder.ledger.descriptor_for("old")["hub_paired"] is None
+
+    def test_an_unknown_key_has_no_descriptor(self):
+        """Reading a key nothing was recorded for must not raise."""
+        assert EmittedEntityLedger().descriptor_for("nope") == {}
+
+    def test_a_key_this_adder_builds_nothing_for_is_not_described(self):
+        """collect runs for every sensor key in the account on every update,
+        including the ones a given platform builds no entity for. Describing
+        those would leave one entry per key on every adder that forget can
+        never reach, since it only runs for keys with recorded unique_ids."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [], "valve")
+
+        adder.collect("k", {"addr": 1, "model": "HCS026FRF", "sub_name": "Soil", "hub_name": "Hub A"})
+
+        assert adder.ledger.descriptor_for("k") == {}
+        assert adder.ledger._descriptors == {}
+
+    def test_forget_drops_the_key_from_both_structures_at_once(self):
+        """The lockstep half: the ids only stop being remembered when the rows
+        they name have actually been removed, and then in both places."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
+        adder.collect("k", {})
+
+        adder.forget("k")
+
+        assert adder.ledger.unique_ids_for("k") == frozenset()
+        assert adder.ledger.descriptor_for("k") == {}
+        assert "z1" not in adder._emitted
+
+    def test_forgetting_a_key_lets_a_later_reappearance_emit_again(self):
+        """Without this, a removed key that returns gains no entities until a
+        reload, which would be a new silent failure mode of its own."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
+        adder.collect("k", {})
+
+        adder.forget("k")
+
+        assert [e._attr_unique_id for e in adder.collect("k", {})] == ["z1"]
+
+    def test_forgetting_an_unrecorded_key_is_a_no_op(self):
+        """The remover calls forget on every adder, including ones that never
+        emitted for that key."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
+        adder.collect("k", {})
+
+        adder.forget("other")
+
+        assert adder.ledger.unique_ids_for("k") == frozenset({"z1"})
+
+    def test_a_held_id_keeps_its_key_described_while_the_rest_are_released(self):
+        """The partial forget, which this adder can express because both halves
+        of its bookkeeping are indexed by id.
+
+        The held id names a row that is still registered, so releasing it would
+        let a returning key offer a live unique_id a second time. The key keeps
+        its descriptor alongside it, because a record still has to be buildable
+        for it or the card could never be offered again for a retry.
+        """
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1"), _FakeEntity("z2")], "valve")
+        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "Front", "hub_name": "Hub A"})
+
+        adder.forget("k", frozenset({"z1"}))
+
+        assert adder.ledger.unique_ids_for("k") == frozenset({"z1"})
+        assert adder.ledger.descriptor_for("k")["sub_name"] == "Front"
+        assert adder._emitted == {"z1"}
+
+    def test_holding_an_id_this_key_never_held_still_drops_the_key(self):
+        """The held set is intersected against the key's own ids, so a caller
+        that over-approximates cannot resurrect an id from nowhere or gate a
+        key whose rows all went."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
+        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "Front", "hub_name": "Hub A"})
+
+        adder.forget("k", frozenset({"elsewhere"}))
+
+        assert adder.ledger.unique_ids_for("k") == frozenset()
+        assert adder.ledger.descriptor_for("k") == {}
+        assert adder._emitted == set()
+
+
+class TestLateAdderStore:
+    """The slot the removal sweep reaches the platforms' adders through."""
+
+    def test_registering_appends_rather_than_replaces(self):
+        """Three platforms publish into one entry store, and the sweep needs
+        all of them, not the last one."""
+        store: dict = {}
+        register_late_adder(store, "first")
+        register_late_adder(store, "second")
+
+        assert store[LATE_ADDER_STORE_KEY] == ["first", "second"]
+        assert late_adders(store) == ["first", "second"]
+
+    def test_an_entry_store_with_no_adders_reads_as_none(self):
+        """A config entry whose platforms have not set up yet is ordinary."""
+        assert late_adders({}) == []
+
+    def test_an_unreadable_entry_store_degrades_instead_of_raising(self):
+        """Called from a coordinator listener and from a Repairs flow step,
+        where raising breaks something much larger than this read."""
+        assert late_adders(object()) == []
+
+
+class _AddEntitiesSpy:
+    """Every unique_id ever handed to Home Assistant, call by call.
+
+    Accumulating rather than remembering the last call is the point: the
+    property under test is about the whole session, and asserting on the last
+    call alone would pass against an adder that offered the same id twice.
+    """
+
+    def __init__(self):
+        """Start with no calls recorded."""
+        self.calls: list[list] = []
+
+    def __call__(self, entities, **kwargs):
+        """Record one async_add_entities call's unique_ids."""
+        self.calls.append([getattr(e, "_attr_unique_id", None) for e in entities])
+
+    @property
+    def all_ids(self) -> list:
+        """Return every unique_id across every call, in order."""
+        return [unique_id for call in self.calls for unique_id in call]
+
+    def count(self, unique_id) -> int:
+        """Return how many times one unique_id was offered in total."""
+        return self.all_ids.count(unique_id)
+
+
+def _valve_entry():
+    """A reporting valve hub entry, the per-zone platform shape."""
+    from custom_components.rainpoint.const import MODEL_VALVE_245
+
+    return make_sensor_entry(
+        hid=100,
+        mid=200,
+        addr=1,
+        model=MODEL_VALVE_245,
+        sub_name="Valve Hub",
+        data={"type": "valve_hub", "zones": {1: {"open": False, "duration_seconds": 0}}},
+    )
+
+
+def _moisture_entry():
+    """A reporting moisture entry, the per-key platform shape."""
+    from custom_components.rainpoint.const import MODEL_MOISTURE_SIMPLE
+
+    return make_sensor_entry(
+        hid=100,
+        mid=200,
+        addr=1,
+        model=MODEL_MOISTURE_SIMPLE,
+        sub_name="Soil",
+        data={"type": "moisture_simple", "moisture_percent": 42, "rssi_dbm": -70, "battery_percent": 80},
+    )
+
+
+async def _setup_platform_adder(module_name, entry_builder):
+    """Run one platform's real async_setup_entry and return (adder, spy, key).
+
+    The adder is fetched back out of the entry store rather than rebuilt, so
+    the build closure under test is the platform's genuine one and the store
+    wiring is exercised at the same time.
+    """
+    import importlib
+
+    from custom_components.rainpoint.const import DOMAIN
+
+    module = importlib.import_module(f"custom_components.rainpoint.{module_name}")
+    key = "100_200_1"
+    coordinator = MagicMock()
+    coordinator.data = make_coordinator_data(sensors={key: entry_builder()})
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.options = {}
+    hass.data = {DOMAIN: {"e1": {"coordinator": coordinator}}}
+
+    spy = _AddEntitiesSpy()
+    await module.async_setup_entry(hass, entry, spy)
+
+    adder = late_adders(hass.data[DOMAIN]["e1"])[0]
+    return adder, spy, key
+
+
+class TestNoUniqueIdIsEverOfferedTwice:
+    """The whole emit, gate, forget, re-emit cycle, on all three platforms' adders.
+
+    Forgetting a key is coupled to an actual removal of its rows, so the
+    add-once guarantee has to survive a repeat collect before the forget and
+    has to release exactly once after it. Asserted with an accumulating spy
+    rather than on the last call, because an adder that offered an id twice
+    would still show a correct last call.
+    """
+
+    @pytest.mark.parametrize(
+        ("module_name", "entry_builder"),
+        [
+            ("valve", _valve_entry),
+            ("number", _valve_entry),
+            ("sensor", _moisture_entry),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_the_full_cycle_offers_each_id_once_per_genuine_emission(self, module_name, entry_builder):
+        """Emit, gate, forget, re-emit: two emissions, never two offers of one."""
+        adder, spy, key = await _setup_platform_adder(module_name, entry_builder)
+
+        recorded = adder.ledger.unique_ids_for(key)
+        assert recorded, "the platform emitted nothing, so the cycle proves nothing"
+        assert all(spy.count(unique_id) == 1 for unique_id in recorded)
+
+        # The gate still holds: a repeat while the ledger holds the ids offers
+        # nothing, which is the half of the guarantee that must not regress.
+        adder.async_on_coordinator_update()
+        assert all(spy.count(unique_id) == 1 for unique_id in recorded)
+
+        adder.forget(key)
+        assert adder.ledger.unique_ids_for(key) == frozenset()
+
+        adder.async_on_coordinator_update()
+        assert all(spy.count(unique_id) == 2 for unique_id in recorded)
+        assert adder.ledger.unique_ids_for(key) == recorded
+
+        # No single call ever carried a duplicate, on any leg of the cycle.
+        for call in spy.calls:
+            assert len(call) == len(set(call))

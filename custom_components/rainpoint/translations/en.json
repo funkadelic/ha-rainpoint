@@ -15,6 +15,17 @@
     "hub_disconnected": {
       "title": "A hub is not reachable from the RainPoint service",
       "description": "RainPoint has reported **{hub_name}** ({model}) as offline for at least the last {missed_polls} checks, which run a couple of minutes apart.\n\nThis usually means the hub is unplugged, has lost its network connection, or your home network itself is down.\n\nReadings from devices paired to this hub keep showing their last known values while it is offline: RainPoint keeps serving the last reading it received rather than reporting nothing, so a reading that looks current may not be. Valve controls for those devices are also unavailable while the hub is offline, since a command cannot reach hardware the cloud cannot talk to.\n\nThis notice clears on its own after the hub reconnects, and its devices catch up at the same time. With push updates enabled it clears within seconds; otherwise it waits for the next scheduled check, so allow up to two minutes. For the live signal, check the hub's own **Cloud Connection** entity, which carries the current state and its history."
+    },
+    "orphaned_device_entities": {
+      "title": "A device's entities are left over from an older listing",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Remove the leftover entities",
+            "description": "RainPoint has stopped listing this device on its hub, and has not listed it across the last {missed_polls} checks, which run a couple of minutes apart.\n\n- **Device:** {sub_name}\n- **Model:** {model}\n- **Address:** {address}\n- **Hub:** {hub_name}\n- **Entities left over:** {entity_count}\n\nThose entities can no longer update, and nothing will make them available again.\n\nThis usually means the device was unpaired, or that RainPoint moved it to a different parent record on its side. If it moved, a fresh set of entities for the same hardware already exists alongside these leftover ones, so you may be seeing each reading twice.\n\nSelect **Submit** to remove the leftover entities, along with the history recorded against them. That cannot be undone."
+          }
+        }
+      }
     }
   },
   "config": {
