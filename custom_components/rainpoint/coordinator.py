@@ -408,6 +408,73 @@ def is_hub_record(hub: dict) -> bool:
     return bool(hub.get("did") or hub.get("mac") or hub.get("productKey") or hub.get("model"))
 
 
+def _is_usable_sub_device(sub: object) -> bool:
+    """Return True when a subDevices entry carries enough shape to index.
+
+    The list is cloud-supplied and nothing guarantees its shape. An entry
+    with no addr carries no identity to key on, so it is dropped rather than
+    trusted.
+
+    The addr value itself is checked only for the two properties every
+    consumer needs, and no further: it must be hashable, because it is used
+    directly as a dict key and an unhashable one would raise TypeError out
+    of the same walk this function exists to keep alive, and it must not be
+    None, because no sid resolves to None and such a record would otherwise
+    be enumerated under a key that can never report, earning a
+    not-reporting card for a device that does not exist.
+
+    Any other hashable value is tolerated rather than supported, and the
+    difference matters. It builds a usable sensor key, because _sensor_key
+    composes an f-string and does not care about the type, but the status
+    join in _decode_hub_subdevices looks a reading up in a dict keyed by
+    _resolve_addr_from_sid's return value, which is always an int. A string
+    addr would therefore miss its own reading and read as silent while that
+    reading sat in the same response. That mismatch predates this guard and
+    is deliberately left alone: narrowing to int here would reject data on a
+    case nobody has observed.
+    """
+    if not isinstance(sub, dict):
+        return False
+    addr = sub.get("addr")
+    if addr is None:
+        return False
+    try:
+        hash(addr)
+    except TypeError:
+        return False
+    return True
+
+
+def _is_usable_status_entry(entry: object) -> bool:
+    """Return True when a subDeviceStatus entry carries a string id.
+
+    The list is cloud-supplied and nothing guarantees its shape. A non-dict
+    entry is dropped for that reason; a non-string id is dropped too, because
+    _resolve_addr_from_sid calls .startswith on it and would otherwise raise
+    out of the same walk.
+    """
+    return isinstance(entry, dict) and isinstance(entry.get("id"), str)
+
+
+def _sub_devices_by_addr(hub: dict) -> dict[Any, dict]:
+    """Return this hub's subDevices indexed by addr, dropping unusable entries.
+
+    The single definition every walk over a hub's subDevices shares, poll path
+    and push path alike, so those walks cannot disagree about which records
+    exist: a record the decode walk skips is skipped identically by the
+    orphan-key walk, the silent-state prune, the absent-hub issue walk and the
+    push path's own lookup. The key type is deliberately not narrowed to int:
+    _is_usable_sub_device enforces only that addr is present, since any
+    hashable already works end to end today through _sensor_key's f-string,
+    and narrowing here would reject data that currently works. Built from
+    `hub.get("subDevices") or []` rather
+    than a `.get` default so a subDevices key present with a None value is
+    tolerated too, matching _find_hub_status_entries' handling of
+    subDeviceStatus.
+    """
+    return {sub["addr"]: sub for sub in hub.get("subDevices") or [] if _is_usable_sub_device(sub)}
+
+
 def _find_hub_status_entries(status: dict) -> tuple[dict | None, dict | None]:
     """Return the hub-scoped (connected, state) entries from one status response.
 
@@ -808,6 +875,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # the number of hubs in the account, and rebuilt whole on every poll
         # that reaches the counting step.
         self._warned_empty_enumeration: set[str] = set()
+        # The hub keys already warned about an unusable cloud record this
+        # session, so that warning fires once per degradation edge rather
+        # than once per poll. Sized by the number of hubs in the account,
+        # and a hub is dropped from it on its first clean poll so a later
+        # degradation gets its own line.
+        self._warned_malformed_records: set[str] = set()
 
     def record_valve_command(self, sensor_key: str, zone_num: int) -> datetime:
         """Remember the latest successful valve command time for stale-poll protection."""
@@ -847,7 +920,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Dropping push with unresolvable sid=%s for mid=%s value=%s", sid, mid, raw_value)
             return
 
-        sub = {sd["addr"]: sd for sd in hub.get("subDevices", [])}.get(addr)
+        # The same shared shape helper the poll path uses, and for a reason
+        # this method did not previously have: before the poll learned to
+        # skip an unusable record, one could never reach self.data at all
+        # because the poll raised first, so every consumer of self.data
+        # inherited that guarantee for free. The poll is tolerant now, so an
+        # unusable record does reach here, and indexing it raw would move the
+        # crash from the poll onto paho's callback thread.
+        sub = _sub_devices_by_addr(hub).get(addr)
         if sub is None:
             _LOGGER.debug("Dropping push for unknown addr=%s (mid=%s sid=%s) value=%s", addr, mid, sid, raw_value)
             return
@@ -1038,7 +1118,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
         mid_status = dict(status.get(mid, STATUS_ABSENT))
         sub_status = list(mid_status.get("subDeviceStatus", []))
         for index, existing in enumerate(sub_status):
-            if existing.get("id") == sid:
+            # Skipped rather than indexed, for the same reason apply_push_update
+            # now uses the shared helper: this list is the cloud's own
+            # subDeviceStatus as the poll stored it, and the poll no longer
+            # raises on an unusable entry, so one can be sitting here. A
+            # non-dict entry can never be the entry being replaced anyway.
+            if not _is_usable_status_entry(existing):
+                continue
+            if existing["id"] == sid:
                 sub_status[index] = status_entry
                 break
         else:
@@ -1506,6 +1593,43 @@ class RainPointCoordinator(DataUpdateCoordinator):
         preserved["zones"] = zones
         return preserved
 
+    def _warn_on_malformed_records(self, hub: dict, status: dict) -> None:
+        """Warn once per hub per degradation edge when a cloud record is unusable.
+
+        Counts the subDevices entries _is_usable_sub_device rejects and the
+        subDeviceStatus entries _is_usable_status_entry rejects. A hub with
+        neither kind is dropped from _warned_malformed_records (if present)
+        and nothing is logged: that is the clean poll that re-arms the next
+        degradation. A hub already in the set stays quiet, so the WARNING
+        fires exactly once per degradation edge rather than once per poll.
+
+        The consequence outlives the log line, and this method changes
+        nothing about it: a skipped record carries no addr, so it is
+        invisible to _prune_silent_state and _track_orphaned_keys, and any
+        previously listed key for it counts toward removal whether or not
+        this warning ever fires.
+
+        Carries only the hub key and integer counts, following the
+        discipline above _track_missing_hubs' warning: never a record's
+        contents, a name, a model or any other cloud-supplied string.
+        """
+        malformed_devices = sum(1 for sd in hub.get("subDevices") or [] if not _is_usable_sub_device(sd))
+        malformed_status = sum(1 for entry in status.get("subDeviceStatus") or [] if not _is_usable_status_entry(entry))
+        hub_key = f"{hub['hid']}_{hub['mid']}"
+        if malformed_devices == 0 and malformed_status == 0:
+            self._warned_malformed_records.discard(hub_key)
+            return
+        if hub_key in self._warned_malformed_records:
+            return
+        self._warned_malformed_records.add(hub_key)
+        _LOGGER.warning(
+            "Hub %s reported %d unusable sub-device record(s) and %d unusable status record(s); "
+            "skipping them, which leaves any previously listed key of theirs counting toward removal",
+            hub_key,
+            malformed_devices,
+            malformed_status,
+        )
+
     def _decode_hub_subdevices(self, hub: dict, status: dict) -> dict[str, dict]:
         """Walk this hub's own sub-device list and return a {sensor_key: sensor_entry} dict.
 
@@ -1524,20 +1648,38 @@ class RainPointCoordinator(DataUpdateCoordinator):
         mid = hub["mid"]
         _LOGGER.debug(debug_with_version("Processing hub mid=%s with status"), mid)
 
+        # Before the absent-status return below, not after: an absent status
+        # contributes no sensors, but the hub's subDevices list is still
+        # walked by _track_orphaned_keys in the same poll, so a record
+        # skipped there still carries the removal consequence and must still
+        # be reported. The absent sentinel carries an empty subDeviceStatus,
+        # so the status-side count is naturally zero on that path.
+        RainPointCoordinator._warn_on_malformed_records(self, hub, status)
+
         if isinstance(status, _AbsentStatus):
             _LOGGER.debug(debug_with_version("Status absent for mid=%s; contributing nothing"), mid)
             return {}
 
         status_by_addr: dict[int, dict] = {}
-        for sid, s in {s["id"]: s for s in status.get("subDeviceStatus", [])}.items():
-            addr = _resolve_addr_from_sid(sid)
+        for entry in status.get("subDeviceStatus") or []:
+            if not _is_usable_status_entry(entry):
+                continue
+            addr = _resolve_addr_from_sid(entry["id"])
             if addr is None:
                 continue
-            status_by_addr[addr] = s
+            # Dropping the intermediate id-keyed dict changes nothing: both
+            # the old two-step lookup and this single pass resolve on addr in
+            # list order, so whichever entry appears last for a given addr
+            # wins either way. _resolve_addr_from_sid is emphatically not
+            # injective, and nothing here needs it to be: it is int(sid[1:]),
+            # so "D1" and "D01" both resolve to addr 1. The old intermediate
+            # dict deduplicated on exact sid string equality, which never
+            # prevented that collision either.
+            status_by_addr[addr] = entry
         _LOGGER.debug(debug_with_version("Parsed status_by_addr for mid=%s: %s keys"), mid, len(status_by_addr))
 
         # Map addr -> subDevice, the primary loop (promoted from sub_status).
-        addr_map = {sd["addr"]: sd for sd in hub.get("subDevices", [])}
+        addr_map = _sub_devices_by_addr(hub)
 
         decoded_sensors: dict[str, dict] = {}
         for addr, sub in addr_map.items():
@@ -1702,8 +1844,17 @@ class RainPointCoordinator(DataUpdateCoordinator):
         _build_silent_subdevice, reached from _decode_hub_subdevices, which a
         missing hub never enters. This function is the reset half, which is
         what the protected set below closes.
+
+        A subDevices entry the shared shape helper skips is absent from
+        live_keys, so a previously known key for it is dropped here exactly
+        as if the addr had genuinely left the hub's enumeration. That is
+        deliberate and unavoidable at record granularity: a record carrying
+        no addr carries no identity, so there is no sensor key available to
+        freeze. The exposure is bounded by the standing rule that no entity
+        is ever removed without a human submitting the Repairs form, and it
+        is made non-silent by _warn_on_malformed_records' breadcrumb.
         """
-        live_keys = {_sensor_key(hub["hid"], hub["mid"], sd["addr"]) for hub in hubs for sd in hub.get("subDevices", [])}
+        live_keys = {_sensor_key(hub["hid"], hub["mid"], addr) for hub in hubs for addr in _sub_devices_by_addr(hub)}
         protected_keys = _sensor_keys_for_hub_keys(self._silent_poll_counts, missing_hub_keys)
         self._silent_poll_counts = {
             key: count for key, count in self._silent_poll_counts.items() if key in live_keys or key in protected_keys
@@ -1766,12 +1917,25 @@ class RainPointCoordinator(DataUpdateCoordinator):
         Every log line here carries only the sensor key and integer counts,
         never a cloud-supplied name or model, following _track_missing_hubs'
         discipline.
+
+        A subDevices entry the shared shape helper skips is absent from
+        live_keys, so a previously known key for it counts as missing here
+        and advances toward ORPHANED_KEY_DEBOUNCE_POLLS on every poll it
+        stays unusable, exactly as if the addr had genuinely left the hub's
+        enumeration. That is deliberate and unavoidable at record
+        granularity: a record carrying no addr carries no identity to freeze
+        on, and freezing at hub granularity instead was considered and
+        declined as beyond this method's scope. The exposure is bounded on
+        both sides: this method's own consecutive-poll window, and the
+        standing rule that no entity is ever removed without a human
+        submitting the Repairs form. _warn_on_malformed_records' breadcrumb
+        is what keeps that window from being silent.
         """
-        # The same comprehension _prune_silent_state builds, over the same
+        # The same helper call _prune_silent_state makes, over the same
         # enumeration. The Bluetooth wrapper record is deliberately not
         # filtered out by is_hub_record: it carries real children, and
         # _prune_silent_state does not filter it either.
-        live_keys = {_sensor_key(hub["hid"], hub["mid"], sd["addr"]) for hub in hubs for sd in hub.get("subDevices", [])}
+        live_keys = {_sensor_key(hub["hid"], hub["mid"], addr) for hub in hubs for addr in _sub_devices_by_addr(hub)}
         missing = self._last_poll_sensor_keys - live_keys
         # A missing hub is an outage, not evidence about any addr, so its
         # children's counters neither advance nor reset while it is inside its
@@ -1933,7 +2097,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         to raise from here either.
         """
         unreachable_ids = {
-            silent_device_issue_id(hub["hid"], hub["mid"], sd["addr"]) for hub in absent_hubs for sd in hub.get("subDevices", [])
+            silent_device_issue_id(hub["hid"], hub["mid"], addr) for hub in absent_hubs for addr in _sub_devices_by_addr(hub)
         }
         protected_keys = _sensor_keys_for_hub_keys(self._silent_poll_counts, missing_hub_keys)
         for protected_key in protected_keys:

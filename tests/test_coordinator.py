@@ -110,6 +110,7 @@ def _make_coord(hids=None):
         _orphaned_key_poll_counts={},
         _aged_out_sensor_keys=frozenset(),
         _warned_empty_enumeration=set(),
+        _warned_malformed_records=set(),
         data={},
         hass=mock_hass,
         logger=MagicMock(),
@@ -4513,6 +4514,46 @@ class TestApplyPushUpdate:
         assert coord._silent_poll_counts.get("100_200_1") == 2, reason
         coord._silent_issues.async_clear.assert_not_called()
 
+    def test_a_push_survives_a_hub_carrying_an_unusable_sub_device_record(self):
+        """The push path must tolerate what the poll now stores.
+
+        Before the poll learned to skip an unusable record it raised on one,
+        so self.data could never hold it and every consumer inherited that
+        guarantee for free. The poll is tolerant now, so the record does
+        reach coordinator.data["hubs"], and a raw index here would raise
+        KeyError on paho's callback thread rather than in the poll. Reverting
+        _sub_devices_by_addr at that call site fails this test.
+        """
+        hub = _push_hub(addr=1)
+        hub["subDevices"].append({"model": MODEL_VALVE_245, "name": "NoAddr", "softVer": "1.0"})
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        assert coord.data["sensors"]["100_200_1"]["data"] is not None
+        coord.async_update_listeners.assert_called_once()
+
+    def test_a_push_survives_a_status_list_carrying_a_non_dict_entry(self):
+        """The merge target is the cloud's own subDeviceStatus as the poll
+        stored it, and the poll no longer raises on a non-dict entry, so one
+        can be sitting in the list this merge iterates. Calling .get on it
+        would raise AttributeError; the entry is skipped instead, and the
+        push still lands.
+        """
+        hub = _push_hub(addr=1)
+        coord = _seed_push_coord(
+            hub,
+            sensors={"100_200_1": {"data": None}},
+            status={200: {"subDeviceStatus": ["not-a-dict", {"id": "D1", "value": "old", "time": 1}]}},
+        )
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        sub_status = coord.data["status"][200]["subDeviceStatus"]
+        assert sub_status[0] == "not-a-dict"
+        assert sub_status[1]["value"] == SAMPLE_HTV245_TLV_PAYLOAD
+        assert coord.data["sensors"]["100_200_1"]["data"] is not None
+
 
 class TestChangedAtDatetime:
     """_changed_at_datetime: the ordering primitive both connectivity guards
@@ -5420,3 +5461,383 @@ class TestIsHubRecord:
     def test_first_hub_record_returns_none_for_empty_list(self):
         """No hubs collected yet resolves to None."""
         assert _coord_module.first_hub_record([]) is None
+
+
+class TestMalformedCloudRecordsAreSkipped:
+    """A malformed cloud record is skipped rather than raising KeyError out of
+    the whole poll.
+
+    Covers the decode walk in _decode_hub_subdevices, the two debounce walks
+    reached from the same poll (_prune_silent_state, _track_orphaned_keys),
+    the WARNING breadcrumb gate, and the healthy-poll control.
+    """
+
+    @staticmethod
+    def _hub_two_children(mid=200, *, extra_sub_device=None):
+        """One good child at addr 1, plus an optional second entry."""
+        sub_devices = [{"addr": 1, "model": MODEL_MOISTURE_SIMPLE, "name": "Sensor1", "softVer": "1.0"}]
+        if extra_sub_device is not None:
+            sub_devices.append(extra_sub_device)
+        return {
+            "mid": mid,
+            "name": f"Hub{mid}",
+            "deviceName": f"dev{mid}",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": sub_devices,
+        }
+
+    @staticmethod
+    def _hub_single_child(mid=200, *, malformed=False):
+        """A hub whose only child is at addr 1, or has no addr when malformed."""
+        child = {"model": MODEL_MOISTURE_SIMPLE, "name": "Sensor1", "softVer": "1.0"}
+        if not malformed:
+            child["addr"] = 1
+        return {
+            "mid": mid,
+            "name": f"Hub{mid}",
+            "deviceName": f"dev{mid}",
+            "productKey": "pk1",
+            "homeName": "Home",
+            "subDevices": [child],
+        }
+
+    @staticmethod
+    def _status_single(mid=200):
+        """A status response naming only the good D1 reading."""
+        return [{"mid": mid, "subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD, "time": 1700000000000}]}]
+
+    @staticmethod
+    def _status_arrived_empty(mid=200):
+        """A status response that arrived and named nobody."""
+        return [{"mid": mid, "subDeviceStatus": []}]
+
+    @staticmethod
+    def _build_real_coord(hid=100):
+        """A real RainPointCoordinator wired the way __init__.py wires it."""
+        client = AsyncMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [hid]}
+        entry.options = {}
+
+        hass = MagicMock()
+        hass.data = {}
+
+        return _coord_module.RainPointCoordinator(hass, client, entry), client
+
+    @staticmethod
+    def _point(client, hub, status):
+        """Point the next poll at a single hub and its status response."""
+        client.get_devices_by_hid.return_value = [hub]
+        client.get_multiple_device_status.return_value = status
+
+    # -- Task 1: the decode walk tolerates a malformed record ---------------
+
+    @pytest.mark.asyncio
+    async def test_a_sub_device_entry_missing_addr_is_skipped_others_decode(self):
+        """Hub A carries one entry with no addr alongside a good one; hub B is
+        healthy. Both good children decode; the malformed entry contributes
+        no key."""
+        coord, client = _make_coord()
+        bad_entry = {"model": MODEL_MOISTURE_SIMPLE, "name": "Bad", "softVer": "1.0"}
+        hub_a = self._hub_two_children(mid=200, extra_sub_device=bad_entry)
+        hub_b = self._hub_two_children(mid=300)
+        client.get_devices_by_hid.return_value = [hub_a, hub_b]
+        client.get_multiple_device_status.return_value = self._status_single(200) + self._status_single(300)
+
+        result = await _run(coord)
+
+        assert set(result["sensors"]) == {"100_200_1", "100_300_1"}
+
+    @pytest.mark.parametrize("bad_entry", ["not-a-dict", 123, None], ids=["string", "int", "none"])
+    @pytest.mark.asyncio
+    async def test_a_non_dict_sub_device_entry_is_skipped_others_decode(self, bad_entry):
+        """A subDevices entry that is not a dict at all is skipped the same way."""
+        coord, client = _make_coord()
+        hub_a = self._hub_two_children(mid=200, extra_sub_device=bad_entry)
+        hub_b = self._hub_two_children(mid=300)
+        client.get_devices_by_hid.return_value = [hub_a, hub_b]
+        client.get_multiple_device_status.return_value = self._status_single(200) + self._status_single(300)
+
+        result = await _run(coord)
+
+        assert set(result["sensors"]) == {"100_200_1", "100_300_1"}
+
+    @pytest.mark.parametrize("bad_addr", [[], {}, set()], ids=["list", "dict", "set"])
+    @pytest.mark.asyncio
+    async def test_a_sub_device_whose_addr_is_unhashable_is_skipped_others_decode(self, bad_addr):
+        """An addr that is present but cannot be a dict key is as unusable as
+        a missing one. Indexing it raises TypeError rather than KeyError, and
+        TypeError costs the whole poll exactly the same way, so presence
+        alone is not the property this walk needs."""
+        coord, client = _make_coord()
+        bad_entry = {"addr": bad_addr, "model": MODEL_MOISTURE_SIMPLE, "name": "Bad", "softVer": "1.0"}
+        hub_a = self._hub_two_children(mid=200, extra_sub_device=bad_entry)
+        hub_b = self._hub_two_children(mid=300)
+        client.get_devices_by_hid.return_value = [hub_a, hub_b]
+        client.get_multiple_device_status.return_value = self._status_single(200) + self._status_single(300)
+
+        result = await _run(coord)
+
+        assert set(result["sensors"]) == {"100_200_1", "100_300_1"}
+
+    @pytest.mark.asyncio
+    async def test_a_sub_device_whose_addr_is_none_earns_no_phantom_key(self):
+        """A None addr is hashable, so it would survive a hashability check
+        and be enumerated under a key no sid can ever resolve to. That key
+        would report nothing forever and collect a not-reporting card for a
+        device that does not exist, so the record is skipped instead."""
+        coord, client = _make_coord()
+        bad_entry = {"addr": None, "model": MODEL_MOISTURE_SIMPLE, "name": "Bad", "softVer": "1.0"}
+        hub = self._hub_two_children(mid=200, extra_sub_device=bad_entry)
+        client.get_devices_by_hid.return_value = [hub]
+        client.get_multiple_device_status.return_value = self._status_single(200)
+
+        result = await _run(coord)
+
+        assert set(result["sensors"]) == {"100_200_1"}
+        assert "100_200_None" not in result["sensors"]
+
+    @pytest.mark.asyncio
+    async def test_malformed_status_entries_are_skipped_the_good_reading_still_decodes(self):
+        """A status response with one entry missing id, one with a non-string
+        id, and one non-dict entry, alongside a good D1 reading: the good
+        reading still decodes."""
+        coord, client = _make_coord()
+        hub = self._hub_single_child(mid=200, malformed=False)
+        client.get_devices_by_hid.return_value = [hub]
+        client.get_multiple_device_status.return_value = [
+            {
+                "mid": 200,
+                "subDeviceStatus": [
+                    {"value": "no-id-here"},
+                    {"id": 5, "value": "non-string-id"},
+                    "not-a-dict",
+                    {"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD, "time": 1700000000000},
+                ],
+            }
+        ]
+
+        result = await _run(coord)
+
+        sensor = result["sensors"]["100_200_1"]
+        assert sensor["data"]["type"] == "moisture_simple"
+
+    @pytest.mark.asyncio
+    async def test_a_hub_degrading_between_two_polls_raises_nothing_and_keeps_decoding(self):
+        """Driven through a real coordinator: well-formed on poll 1, a
+        malformed extra entry on poll 2. No exception, and the good child
+        keeps decoding."""
+        coordinator, client = self._build_real_coord()
+        self._point(client, self._hub_two_children(), self._status_single(200))
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_refresh()
+            assert "100_200_1" in coordinator.data["sensors"]
+
+            bad_entry = {"model": MODEL_MOISTURE_SIMPLE, "name": "Bad", "softVer": "1.0"}
+            self._point(client, self._hub_two_children(extra_sub_device=bad_entry), self._status_single(200))
+            await coordinator.async_refresh()
+
+        assert set(coordinator.data["sensors"]) == {"100_200_1"}
+
+    @pytest.mark.asyncio
+    async def test_a_wholly_healthy_poll_is_unaffected_by_this_change(self):
+        """Control: a wholly healthy poll produces exactly the sensors it
+        produced before this change."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub()]
+        client.get_multiple_device_status.return_value = _make_status()
+
+        result = await _run(coord)
+
+        assert set(result["sensors"]) == {"100_200_1"}
+        assert result["sensors"]["100_200_1"]["data"]["type"] == "moisture_simple"
+
+    # -- Task 2: the WARNING gate --------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_gate_fires_exactly_one_warning_at_the_degradation_edge(self, caplog):
+        """A hub whose device list first carries an unusable record logs
+        exactly one WARNING at that poll."""
+        coordinator, client = self._build_real_coord()
+        self._point(client, self._hub_two_children(), self._status_single(200))
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_refresh()
+
+            bad_entry = {"model": "x", "name": "y", "softVer": "1.0"}
+            self._point(client, self._hub_two_children(extra_sub_device=bad_entry), self._status_single(200))
+            with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.coordinator"):
+                await coordinator.async_refresh()
+
+        warnings = [r for r in caplog.records if "unusable" in r.getMessage()]
+        assert len(warnings) == 1
+        assert "100_200" in warnings[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_gate_stays_quiet_across_further_degraded_polls_while_the_skip_continues(self, caplog):
+        """Several more polls with the same malformed shape log nothing
+        further, while the skip itself keeps happening on every one of
+        them."""
+        coordinator, client = self._build_real_coord()
+        self._point(client, self._hub_two_children(), self._status_single(200))
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_refresh()
+
+            bad_entry = {"model": "x", "name": "y", "softVer": "1.0"}
+            self._point(client, self._hub_two_children(extra_sub_device=bad_entry), self._status_single(200))
+            with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.coordinator"):
+                for _ in range(4):
+                    await coordinator.async_refresh()
+                    # The skip really is still happening: only the good key
+                    # is ever present, never a key for the malformed extra.
+                    assert set(coordinator.data["sensors"]) == {"100_200_1"}
+
+        warnings = [r for r in caplog.records if "unusable" in r.getMessage()]
+        assert len(warnings) == 1
+
+    @pytest.mark.asyncio
+    async def test_gate_re_arms_after_a_clean_poll(self, caplog):
+        """A clean poll for that hub followed by a second degradation logs a
+        second line."""
+        coordinator, client = self._build_real_coord()
+        bad_entry = {"model": "x", "name": "y", "softVer": "1.0"}
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            self._point(client, self._hub_two_children(extra_sub_device=bad_entry), self._status_single(200))
+            with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.coordinator"):
+                await coordinator.async_refresh()
+
+                self._point(client, self._hub_two_children(), self._status_single(200))
+                await coordinator.async_refresh()
+
+                self._point(client, self._hub_two_children(extra_sub_device=bad_entry), self._status_single(200))
+                await coordinator.async_refresh()
+
+        warnings = [r for r in caplog.records if "unusable" in r.getMessage()]
+        assert len(warnings) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_wholly_healthy_poll_logs_no_gate_line(self, caplog):
+        """A wholly healthy poll logs no unusable-record line at all."""
+        coordinator, client = self._build_real_coord()
+        self._point(client, self._hub_two_children(), self._status_single(200))
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+            caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.coordinator"),
+        ):
+            await coordinator.async_refresh()
+
+        assert [r for r in caplog.records if "unusable" in r.getMessage()] == []
+
+    @pytest.mark.asyncio
+    async def test_gate_line_carries_only_the_hub_key_and_integer_counts(self, caplog):
+        """The line names the hub key and two counts, and no cloud-supplied
+        name or model string."""
+        coordinator, client = self._build_real_coord()
+        self._point(client, self._hub_two_children(), self._status_single(200))
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_refresh()
+
+            bad_entry = {"model": "CanaryModel", "name": "CanarySensor", "softVer": "1.0"}
+            self._point(client, self._hub_two_children(extra_sub_device=bad_entry), self._status_single(200))
+            with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.coordinator"):
+                await coordinator.async_refresh()
+
+        warnings = [r for r in caplog.records if "unusable" in r.getMessage()]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "100_200" in message
+        assert "1 unusable sub-device record(s)" in message
+        assert "0 unusable status record(s)" in message
+        assert "CanaryModel" not in message
+        assert "CanarySensor" not in message
+
+    @pytest.mark.asyncio
+    async def test_a_hub_whose_status_is_absent_still_gets_warned_for_a_malformed_device_list(self, caplog):
+        """A hub whose status could not be obtained this poll still has its
+        device list walked by _track_orphaned_keys in the same poll, so a
+        malformed record there is still reported."""
+        coordinator, client = self._build_real_coord()
+        bad_entry = {"model": "x", "name": "y", "softVer": "1.0"}
+        hub = self._hub_two_children(extra_sub_device=bad_entry)
+        client.get_devices_by_hid.return_value = [hub]
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
+        client.get_device_status.side_effect = aiohttp.ClientError("boom")
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+            caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.coordinator"),
+        ):
+            await coordinator.async_refresh()
+
+        warnings = [r for r in caplog.records if "unusable" in r.getMessage()]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "100_200" in message
+        assert "0 unusable status record(s)" in message
+
+    # -- Task 3: the debounce consequence is pinned --------------------------
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_turns_malformed_advances_the_orphan_counter_and_ages_out(self):
+        """A key listed on poll 1 whose record turns malformed from poll 2
+        onward advances _orphaned_key_poll_counts by one per poll and
+        appears in aged_out_sensor_keys() once it reaches
+        ORPHANED_KEY_DEBOUNCE_POLLS."""
+        coordinator, client = self._build_real_coord()
+        key = "100_200_1"
+        self._point(client, self._hub_single_child(malformed=False), self._status_arrived_empty(200))
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_refresh()
+            assert coordinator._orphaned_key_poll_counts == {}
+
+            self._point(client, self._hub_single_child(malformed=True), self._status_arrived_empty(200))
+            for expected in range(1, _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS + 1):
+                await coordinator.async_refresh()
+                assert coordinator._orphaned_key_poll_counts[key] == expected
+                if expected < _coord_module.ORPHANED_KEY_DEBOUNCE_POLLS:
+                    assert key not in coordinator.aged_out_sensor_keys()
+
+            assert key in coordinator.aged_out_sensor_keys()
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_turns_malformed_drops_its_live_silent_counter(self):
+        """A key with a live silent counter whose record turns malformed is
+        dropped from _silent_poll_counts by _prune_silent_state."""
+        coordinator, client = self._build_real_coord()
+        key = "100_200_1"
+        self._point(client, self._hub_single_child(malformed=False), self._status_arrived_empty(200))
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue"),
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_refresh()
+            assert coordinator._silent_poll_counts.get(key) == 1
+
+            self._point(client, self._hub_single_child(malformed=True), self._status_arrived_empty(200))
+            await coordinator.async_refresh()
+
+        assert key not in coordinator._silent_poll_counts
