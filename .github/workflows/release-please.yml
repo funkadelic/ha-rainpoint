@@ -51,3 +51,40 @@ jobs:
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
         run: |
           gh release upload "$TAG_NAME" rainpoint.zip
+
+      - name: Sync the release body from the changelog
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          # The body release-please publishes comes from its own generated
+          # notes, not from the file, so a section hand-written onto the
+          # release PR's CHANGELOG.md never reaches the release page. Copying
+          # the file's own section over it makes CHANGELOG.md the one place
+          # that text is ever written.
+          #
+          # Matched with index() rather than a regex because the heading
+          # carries literal brackets, and stopping at the next "## [" is what
+          # keeps this to a single version's section. This runs on the
+          # checkout above, which is the release PR's merge commit, so the
+          # hand-written section is already present in the file.
+          awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { found = 1; next }
+            found && index($0, "## [") == 1 { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+
+          # A section that is missing or blank would otherwise replace a
+          # correct generated body with nothing, which is worse than doing
+          # nothing at all. The release, its tag and its asset are all
+          # published and intact by this point, so only the notes would be
+          # stale; this fails the run to make that visible rather than
+          # passing quietly.
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::No CHANGELOG.md section found for ${VERSION}; release body left as generated."
+            exit 1
+          fi
+
+          gh release edit "$TAG_NAME" --notes-file release-notes.md
