@@ -587,6 +587,10 @@ def _build_orphaned_entity_records(entry_store: dict, entry_id: str, aged_out: f
             entity_count=len(ids),
             missed_polls=ORPHANED_KEY_DEBOUNCE_POLLS,
             orphaned=key in aged_out,
+            # Absent from a descriptor written before this key was stamped, and
+            # a missing verdict is not evidence of a Bluetooth pairing, so the
+            # default is the hub-paired reading the card already gave.
+            hub_paired=bool(descriptors[key].get("hub_paired", True)),
         )
         for key, ids in unique_ids.items()
     ]

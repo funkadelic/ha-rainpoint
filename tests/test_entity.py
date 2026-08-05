@@ -397,15 +397,34 @@ class TestEmittedEntityLedger:
         coordinator = SimpleNamespace(data={"sensors": {}})
         adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity("z1")], "valve")
 
-        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "Old", "hub_name": "Hub A"})
-        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "New", "hub_name": "Hub A"})
+        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "Old", "hub_name": "Hub A", "hub_paired": True})
+        adder.collect("k", {"addr": 1, "model": "HTV245FRF", "sub_name": "New", "hub_name": "Hub A", "hub_paired": True})
 
         assert adder.ledger.descriptor_for("k") == {
             "addr": 1,
             "model": "HTV245FRF",
             "sub_name": "New",
             "hub_name": "Hub A",
+            "hub_paired": True,
         }
+
+    def test_the_descriptor_carries_the_hub_pairing_verdict(self):
+        """The card names no hub for a Bluetooth-paired device, so the verdict
+        has to survive the key leaving the poll alongside the names it
+        qualifies. A sensor entry that predates the stamp yields None, which
+        the record builder reads as the hub-paired default rather than as
+        evidence of a Bluetooth pairing."""
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        # One unique_id per key: a shared id would be suppressed by the
+        # add-once gate on the second key, and record writes no descriptor for
+        # a key it holds no ids for.
+        adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_FakeEntity(f"{k}_z1")], "valve")
+
+        adder.collect("bt", {"addr": 1, "model": "HTV210B", "sub_name": "BT", "hub_name": "", "hub_paired": False})
+        adder.collect("old", {"addr": 2, "model": "HTV210B", "sub_name": "Old", "hub_name": "Hub A"})
+
+        assert adder.ledger.descriptor_for("bt")["hub_paired"] is False
+        assert adder.ledger.descriptor_for("old")["hub_paired"] is None
 
     def test_an_unknown_key_has_no_descriptor(self):
         """Reading a key nothing was recorded for must not raise."""

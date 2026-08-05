@@ -91,6 +91,12 @@ class EmittedEntityLedger:
             "model": info.get("model"),
             "sub_name": info.get("sub_name"),
             "hub_name": info.get("hub_name"),
+            # Carried for the card's hub line alone, which reads "none" rather
+            # than a sanitized hub name for a device that never had a hub. The
+            # not-reporting card has made that distinction since it shipped;
+            # this is the same field it reads, from the coordinator entry that
+            # already stamps it.
+            "hub_paired": info.get("hub_paired"),
         }
 
     def unique_ids_for(self, key: str) -> frozenset[str]:

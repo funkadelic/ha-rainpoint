@@ -949,6 +949,7 @@ def _make_orphan_record(
     entity_count=2,
     missed_polls=30,
     orphaned=True,
+    hub_paired=True,
 ):
     """Build an OrphanedEntitiesRecord with sensible defaults for one key."""
     return OrphanedEntitiesRecord(
@@ -961,6 +962,7 @@ def _make_orphan_record(
         entity_count=entity_count,
         missed_polls=missed_polls,
         orphaned=orphaned,
+        hub_paired=hub_paired,
     )
 
 
@@ -1213,6 +1215,30 @@ class TestRainPointOrphanedEntityIssues:
             manager.async_sync([_make_orphan_record(orphaned=False)])
 
         assert [r.getMessage() for r in caplog.records if "Failed to delete the orphaned entities" in r.getMessage()]
+
+    def test_a_bluetooth_device_names_no_hub_at_all(self, issue_mocks):
+        """A Bluetooth wrapper record carries an empty hub name, which the
+        sanitizer would render as "unknown" -- lost state, when the truth is
+        that there is no hub. The literal matches the not-reporting card, whose
+        own hub line has drawn this distinction since it shipped. Observed on
+        hardware: the leftover card for a Bluetooth-paired HTV210B read
+        "Hub: unknown", its least useful line."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(hub_name="", hub_paired=False)])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "none"
+
+    def test_a_hub_paired_device_still_names_its_hub(self, issue_mocks):
+        """The companion direction, so the branch above cannot be satisfied by
+        answering "none" for every device."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(hub_name="Hub A", hub_paired=True)])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "Hub A"
 
     def test_every_cloud_supplied_placeholder_is_sanitized(self, issue_mocks):
         """Both the card and its confirm dialog render as Markdown, and all

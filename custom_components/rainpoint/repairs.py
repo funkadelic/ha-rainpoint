@@ -460,6 +460,11 @@ class OrphanedEntitiesRecord:
     entity_count: int
     missed_polls: int
     orphaned: bool
+    # Defaults to True so the record stays constructible from the eight fields
+    # that describe the leftover rows themselves; only the card's hub line
+    # reads it. False is the Bluetooth wrapper record's child, which never had
+    # a hub for the card to name.
+    hub_paired: bool = True
 
 
 def orphaned_entities_issue_id(sensor_key: str, entry_id: str) -> str:
@@ -621,7 +626,15 @@ class RainPointOrphanedEntityIssues:
                     "sub_name": _sanitize_placeholder(record.sub_name),
                     "model": _sanitize_placeholder(record.model),
                     "address": _sanitize_placeholder(record.addr),
-                    "hub_name": _sanitize_placeholder(record.hub_name),
+                    # The literal "none" for a device that never had a hub,
+                    # exactly as the not-reporting card does and for the same
+                    # reason: the sanitizer's "unknown" fallback reads as lost
+                    # state, when the truth is that there is no hub to name. A
+                    # Bluetooth wrapper record carries an empty name, so
+                    # without this the card's least useful line is the one
+                    # naming a hub the device was never on. The literal is
+                    # ours, not the cloud's, so it needs no sanitizing.
+                    "hub_name": _sanitize_placeholder(record.hub_name) if record.hub_paired else "none",
                     "entity_count": str(record.entity_count),
                     "missed_polls": str(record.missed_polls),
                 },
