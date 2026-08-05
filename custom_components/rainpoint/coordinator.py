@@ -421,10 +421,17 @@ def _is_usable_sub_device(sub: object) -> bool:
     of the same walk this function exists to keep alive, and it must not be
     None, because no sid resolves to None and such a record would otherwise
     be enumerated under a key that can never report, earning a
-    not-reporting card for a device that does not exist. Any other hashable
-    value passes, since one already works end to end today through
-    _sensor_key's f-string, and narrowing further would reject data that
-    currently works.
+    not-reporting card for a device that does not exist.
+
+    Any other hashable value is tolerated rather than supported, and the
+    difference matters. It builds a usable sensor key, because _sensor_key
+    composes an f-string and does not care about the type, but the status
+    join in _decode_hub_subdevices looks a reading up in a dict keyed by
+    _resolve_addr_from_sid's return value, which is always an int. A string
+    addr would therefore miss its own reading and read as silent while that
+    reading sat in the same response. That mismatch predates this guard and
+    is deliberately left alone: narrowing to int here would reject data on a
+    case nobody has observed.
     """
     if not isinstance(sub, dict):
         return False
