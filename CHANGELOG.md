@@ -5,6 +5,13 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.13.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.12.1...v1.13.0) (2026-08-05)
 
 
+### What's new
+
+- **Two hubs in one home no longer collide.** Each hub is now identified by your home together with the hub itself, rather than by the home alone. If you have more than one hub, the second hub's sensors, controls and device page now appear properly instead of being dropped. Existing installations are updated automatically the first time this version starts, and each hub keeps its name, its area and its recorded history.
+- **Heads up if you ever roll back.** That update to how hubs are stored happens once, on first start, and it is one way. If you later go back to 1.12.x or earlier, the integration will not load at all: Home Assistant reports a migration error and the RainPoint entry stays unavailable until you return to this version or later. Nothing is lost by coming back, but it is worth knowing before you downgrade to chase an unrelated problem.
+- **Entities left behind after RainPoint re-lists a device can now be removed.** RainPoint occasionally moves a device to a different parent record on its side, which changes the identity this integration builds its entity IDs from. A fresh set of entities then appears for the same physical device while the old set stays behind, permanently unavailable, so every reading looks like it exists twice. Once a device has been missing from about an hour of checks, a notice appears under **Settings → Repairs** offering to remove the leftover entities. Nothing is removed unless you confirm it, and confirming also deletes the history recorded against those entities, which cannot be undone. If you would rather keep the history, leave the notice alone and the entities stay where they are.
+
+
 ### Added
 
 * key hub identity on the home id and the hub mid ([#143](https://github.com/funkadelic/ha-rainpoint/issues/143)) ([2072505](https://github.com/funkadelic/ha-rainpoint/commit/20725052fc542287a65fcc93114b9e27599ef78a))
