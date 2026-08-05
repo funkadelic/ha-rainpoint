@@ -2,6 +2,23 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.13.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.13.0...v1.13.1) (2026-08-05)
+
+
+### What's new
+
+- **A bad reading from RainPoint no longer holds up everything else.** Every couple of minutes the integration asks RainPoint for the latest from your devices. If anything in that answer came back garbled, it used to throw the whole answer away, so every device sat on its old reading until the next check. Now only the garbled part is skipped and the rest arrives as normal. This has not been seen happening to anyone, so treat it as insurance rather than a fix for something you have run into. If it ever does happen, it is noted in the log.
+
+
+### Fixed
+
+* skip malformed cloud records instead of failing the whole poll ([#147](https://github.com/funkadelic/ha-rainpoint/issues/147)) ([d828093](https://github.com/funkadelic/ha-rainpoint/commit/d8280933e7eed29c0e80d285c2970d21de2b198e))
+
+
+### Other Changes
+
+* publish the changelog's own section as the release body ([#149](https://github.com/funkadelic/ha-rainpoint/issues/149)) ([4566b68](https://github.com/funkadelic/ha-rainpoint/commit/4566b68a218e5f77e606936f8f508cee0f64a083))
+
 ## [1.13.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.12.1...v1.13.0) (2026-08-05)
 
 
