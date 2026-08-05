@@ -430,13 +430,18 @@ def _is_usable_status_entry(entry: object) -> bool:
     return isinstance(entry, dict) and isinstance(entry.get("id"), str)
 
 
-def _sub_devices_by_addr(hub: dict) -> dict[int, dict]:
+def _sub_devices_by_addr(hub: dict) -> dict[Any, dict]:
     """Return this hub's subDevices indexed by addr, dropping unusable entries.
 
-    The single definition every poll-path walk shares, so those walks cannot
-    disagree about which records exist: a record the decode walk skips is
-    skipped identically by the orphan-key walk, the silent-state prune, and
-    the absent-hub issue walk. Built from `hub.get("subDevices") or []` rather
+    The single definition every walk over a hub's subDevices shares, poll path
+    and push path alike, so those walks cannot disagree about which records
+    exist: a record the decode walk skips is skipped identically by the
+    orphan-key walk, the silent-state prune, the absent-hub issue walk and the
+    push path's own lookup. The key type is deliberately not narrowed to int:
+    _is_usable_sub_device enforces only that addr is present, since any
+    hashable already works end to end today through _sensor_key's f-string,
+    and narrowing here would reject data that currently works. Built from
+    `hub.get("subDevices") or []` rather
     than a `.get` default so a subDevices key present with a None value is
     tolerated too, matching _find_hub_status_entries' handling of
     subDeviceStatus.
@@ -889,7 +894,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Dropping push with unresolvable sid=%s for mid=%s value=%s", sid, mid, raw_value)
             return
 
-        sub = {sd["addr"]: sd for sd in hub.get("subDevices", [])}.get(addr)
+        # The same shared shape helper the poll path uses, and for a reason
+        # this method did not previously have: before the poll learned to
+        # skip an unusable record, one could never reach self.data at all
+        # because the poll raised first, so every consumer of self.data
+        # inherited that guarantee for free. The poll is tolerant now, so an
+        # unusable record does reach here, and indexing it raw would move the
+        # crash from the poll onto paho's callback thread.
+        sub = _sub_devices_by_addr(hub).get(addr)
         if sub is None:
             _LOGGER.debug("Dropping push for unknown addr=%s (mid=%s sid=%s) value=%s", addr, mid, sid, raw_value)
             return
@@ -1080,7 +1092,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
         mid_status = dict(status.get(mid, STATUS_ABSENT))
         sub_status = list(mid_status.get("subDeviceStatus", []))
         for index, existing in enumerate(sub_status):
-            if existing.get("id") == sid:
+            # Skipped rather than indexed, for the same reason apply_push_update
+            # now uses the shared helper: this list is the cloud's own
+            # subDeviceStatus as the poll stored it, and the poll no longer
+            # raises on an unusable entry, so one can be sitting here. A
+            # non-dict entry can never be the entry being replaced anyway.
+            if not _is_usable_status_entry(existing):
+                continue
+            if existing["id"] == sid:
                 sub_status[index] = status_entry
                 break
         else:
@@ -1622,10 +1641,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
             addr = _resolve_addr_from_sid(entry["id"])
             if addr is None:
                 continue
-            # Dropping the intermediate id-keyed dict changes nothing:
-            # _resolve_addr_from_sid is injective on the D prefix, so two
-            # distinct sids can never collapse onto one addr and the
-            # last-wins behaviour is identical.
+            # Dropping the intermediate id-keyed dict changes nothing: both
+            # the old two-step lookup and this single pass resolve on addr in
+            # list order, so whichever entry appears last for a given addr
+            # wins either way. _resolve_addr_from_sid is emphatically not
+            # injective, and nothing here needs it to be: it is int(sid[1:]),
+            # so "D1" and "D01" both resolve to addr 1. The old intermediate
+            # dict deduplicated on exact sid string equality, which never
+            # prevented that collision either.
             status_by_addr[addr] = entry
         _LOGGER.debug(debug_with_version("Parsed status_by_addr for mid=%s: %s keys"), mid, len(status_by_addr))
 

@@ -4514,6 +4514,46 @@ class TestApplyPushUpdate:
         assert coord._silent_poll_counts.get("100_200_1") == 2, reason
         coord._silent_issues.async_clear.assert_not_called()
 
+    def test_a_push_survives_a_hub_carrying_an_unusable_sub_device_record(self):
+        """The push path must tolerate what the poll now stores.
+
+        Before the poll learned to skip an unusable record it raised on one,
+        so self.data could never hold it and every consumer inherited that
+        guarantee for free. The poll is tolerant now, so the record does
+        reach coordinator.data["hubs"], and a raw index here would raise
+        KeyError on paho's callback thread rather than in the poll. Reverting
+        _sub_devices_by_addr at that call site fails this test.
+        """
+        hub = _push_hub(addr=1)
+        hub["subDevices"].append({"model": MODEL_VALVE_245, "name": "NoAddr", "softVer": "1.0"})
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        assert coord.data["sensors"]["100_200_1"]["data"] is not None
+        coord.async_update_listeners.assert_called_once()
+
+    def test_a_push_survives_a_status_list_carrying_a_non_dict_entry(self):
+        """The merge target is the cloud's own subDeviceStatus as the poll
+        stored it, and the poll no longer raises on a non-dict entry, so one
+        can be sitting in the list this merge iterates. Calling .get on it
+        would raise AttributeError; the entry is skipped instead, and the
+        push still lands.
+        """
+        hub = _push_hub(addr=1)
+        coord = _seed_push_coord(
+            hub,
+            sensors={"100_200_1": {"data": None}},
+            status={200: {"subDeviceStatus": ["not-a-dict", {"id": "D1", "value": "old", "time": 1}]}},
+        )
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        sub_status = coord.data["status"][200]["subDeviceStatus"]
+        assert sub_status[0] == "not-a-dict"
+        assert sub_status[1]["value"] == SAMPLE_HTV245_TLV_PAYLOAD
+        assert coord.data["sensors"]["100_200_1"]["data"] is not None
+
 
 class TestChangedAtDatetime:
     """_changed_at_datetime: the ordering primitive both connectivity guards
@@ -5433,7 +5473,7 @@ class TestMalformedCloudRecordsAreSkipped:
     """
 
     @staticmethod
-    def _hub_two_children(hid=100, mid=200, *, extra_sub_device=None):
+    def _hub_two_children(mid=200, *, extra_sub_device=None):
         """One good child at addr 1, plus an optional second entry."""
         sub_devices = [{"addr": 1, "model": MODEL_MOISTURE_SIMPLE, "name": "Sensor1", "softVer": "1.0"}]
         if extra_sub_device is not None:
@@ -5448,7 +5488,7 @@ class TestMalformedCloudRecordsAreSkipped:
         }
 
     @staticmethod
-    def _hub_single_child(hid=100, mid=200, *, malformed=False):
+    def _hub_single_child(mid=200, *, malformed=False):
         """A hub whose only child is at addr 1, or has no addr when malformed."""
         child = {"model": MODEL_MOISTURE_SIMPLE, "name": "Sensor1", "softVer": "1.0"}
         if not malformed:
