@@ -2,6 +2,21 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.13.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.12.1...v1.13.0) (2026-08-05)
+
+
+### Added
+
+* key hub identity on the home id and the hub mid ([#143](https://github.com/funkadelic/ha-rainpoint/issues/143)) ([2072505](https://github.com/funkadelic/ha-rainpoint/commit/20725052fc542287a65fcc93114b9e27599ef78a))
+* offer leftover entities for removal when a device leaves its hub ([#146](https://github.com/funkadelic/ha-rainpoint/issues/146)) ([5ee1ef9](https://github.com/funkadelic/ha-rainpoint/commit/5ee1ef99b34af11bbfc0ed232cb55b4adfb4d137))
+
+
+### Other Changes
+
+* bump home-assistant/actions/hassfest ([#145](https://github.com/funkadelic/ha-rainpoint/issues/145)) ([b690a56](https://github.com/funkadelic/ha-rainpoint/commit/b690a563a4d2aaf8c9d0c07f52738980e992489d))
+* characterize registry behaviour behind the hub identity re-key ([#141](https://github.com/funkadelic/ha-rainpoint/issues/141)) ([3b87b6f](https://github.com/funkadelic/ha-rainpoint/commit/3b87b6fccdf7b88a87dba65c6c9f6cabe8b48532))
+* pre-commit autoupdate ([#144](https://github.com/funkadelic/ha-rainpoint/issues/144)) ([e27d7d0](https://github.com/funkadelic/ha-rainpoint/commit/e27d7d02b0903e6cb8cda9711076983612b6b99c))
+
 ## [1.12.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.12.0...v1.12.1) (2026-08-02)
 
 
