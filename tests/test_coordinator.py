@@ -5564,6 +5564,41 @@ class TestMalformedCloudRecordsAreSkipped:
 
         assert set(result["sensors"]) == {"100_200_1", "100_300_1"}
 
+    @pytest.mark.parametrize("bad_addr", [[], {}, set()], ids=["list", "dict", "set"])
+    @pytest.mark.asyncio
+    async def test_a_sub_device_whose_addr_is_unhashable_is_skipped_others_decode(self, bad_addr):
+        """An addr that is present but cannot be a dict key is as unusable as
+        a missing one. Indexing it raises TypeError rather than KeyError, and
+        TypeError costs the whole poll exactly the same way, so presence
+        alone is not the property this walk needs."""
+        coord, client = _make_coord()
+        bad_entry = {"addr": bad_addr, "model": MODEL_MOISTURE_SIMPLE, "name": "Bad", "softVer": "1.0"}
+        hub_a = self._hub_two_children(mid=200, extra_sub_device=bad_entry)
+        hub_b = self._hub_two_children(mid=300)
+        client.get_devices_by_hid.return_value = [hub_a, hub_b]
+        client.get_multiple_device_status.return_value = self._status_single(200) + self._status_single(300)
+
+        result = await _run(coord)
+
+        assert set(result["sensors"]) == {"100_200_1", "100_300_1"}
+
+    @pytest.mark.asyncio
+    async def test_a_sub_device_whose_addr_is_none_earns_no_phantom_key(self):
+        """A None addr is hashable, so it would survive a hashability check
+        and be enumerated under a key no sid can ever resolve to. That key
+        would report nothing forever and collect a not-reporting card for a
+        device that does not exist, so the record is skipped instead."""
+        coord, client = _make_coord()
+        bad_entry = {"addr": None, "model": MODEL_MOISTURE_SIMPLE, "name": "Bad", "softVer": "1.0"}
+        hub = self._hub_two_children(mid=200, extra_sub_device=bad_entry)
+        client.get_devices_by_hid.return_value = [hub]
+        client.get_multiple_device_status.return_value = self._status_single(200)
+
+        result = await _run(coord)
+
+        assert set(result["sensors"]) == {"100_200_1"}
+        assert "100_200_None" not in result["sensors"]
+
     @pytest.mark.asyncio
     async def test_malformed_status_entries_are_skipped_the_good_reading_still_decodes(self):
         """A status response with one entry missing id, one with a non-string

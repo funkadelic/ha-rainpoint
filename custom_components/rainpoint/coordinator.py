@@ -413,10 +413,29 @@ def _is_usable_sub_device(sub: object) -> bool:
 
     The list is cloud-supplied and nothing guarantees its shape. An entry
     with no addr carries no identity to key on, so it is dropped rather than
-    trusted; no check is made on the addr value itself, since any hashable
-    already works end to end today.
+    trusted.
+
+    The addr value itself is checked only for the two properties every
+    consumer needs, and no further: it must be hashable, because it is used
+    directly as a dict key and an unhashable one would raise TypeError out
+    of the same walk this function exists to keep alive, and it must not be
+    None, because no sid resolves to None and such a record would otherwise
+    be enumerated under a key that can never report, earning a
+    not-reporting card for a device that does not exist. Any other hashable
+    value passes, since one already works end to end today through
+    _sensor_key's f-string, and narrowing further would reject data that
+    currently works.
     """
-    return isinstance(sub, dict) and "addr" in sub
+    if not isinstance(sub, dict):
+        return False
+    addr = sub.get("addr")
+    if addr is None:
+        return False
+    try:
+        hash(addr)
+    except TypeError:
+        return False
+    return True
 
 
 def _is_usable_status_entry(entry: object) -> bool:
