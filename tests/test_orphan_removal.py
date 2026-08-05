@@ -572,8 +572,14 @@ class _BrokenAdder:
         """Fail the way a half-constructed adder would."""
         raise RuntimeError("no ledger")
 
-    def forget(self, key):
-        """Fail on the forget half too."""
+    def forget(self, key, kept_ids=frozenset()):
+        """Fail on the forget half too.
+
+        Carries the production signature deliberately: a double that took the
+        key alone would raise TypeError on a call the sweep really makes, and
+        the per-adder guard would swallow that as if it were this adder's own
+        declared failure.
+        """
         raise RuntimeError("cannot forget")
 
 
@@ -592,16 +598,23 @@ class _UnresolvableAdder:
         """Hold one recorded id and a log of the forgets that reached it."""
         self.ledger = EmittedEntityLedger()
         self.ledger.record(SENSOR_KEY, {}, [_ledger_entity(ZONE_2_UNIQUE_ID)])
-        self.forgotten: list[str] = []
+        self.forgotten: list[tuple[str, frozenset]] = []
 
     @property
     def domain(self):
         """Fail the way a half-constructed adder would."""
         raise RuntimeError("no domain")
 
-    def forget(self, key):
-        """Record that the sweep released this adder's bookkeeping."""
-        self.forgotten.append(key)
+    def forget(self, key, kept_ids=frozenset()):
+        """Record that the sweep released this adder's bookkeeping.
+
+        Records the pair rather than the key alone, and takes kept_ids at the
+        production signature, because this double's whole job is an assertion
+        that the sweep never calls it. Taking the key alone would make that
+        call raise TypeError into the per-adder guard, leaving the log empty
+        and the assertion green for the wrong reason.
+        """
+        self.forgotten.append((key, kept_ids))
 
 
 class _UnforgettableAdder:
@@ -617,8 +630,8 @@ class _UnforgettableAdder:
         self.ledger.record(SENSOR_KEY, {}, [_ledger_entity(ZONE_2_UNIQUE_ID)])
         self.domain = "valve"
 
-    def forget(self, key):
-        """Fail the way a half-torn-down adder would."""
+    def forget(self, key, kept_ids=frozenset()):
+        """Fail the way a half-torn-down adder would, at the real signature."""
         raise RuntimeError("cannot forget")
 
 

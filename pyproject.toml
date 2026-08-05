@@ -49,3 +49,7 @@ known-first-party = ["custom_components.rainpoint"]
 [tool.pyright]
 include = ["custom_components", "scripts"]
 exclude = ["**/__pycache__"]
+# Pinned rather than inherited from whichever interpreter the editor happens to
+# select, so diagnostics match ruff's target-version and CI's Python across
+# every contributor's setup.
+pythonVersion = "3.13"
