@@ -526,7 +526,7 @@ class RainPointClient:
             "port": port,
             "mode": mode,
             "duration": duration,
-            # The vendor app sends this field on every controlWorkMode call
+            # The RainPoint app sends this field on every controlWorkMode call
             # (empty for an RF valve) and the server accepts its absence, so
             # this is an alignment change rather than a fix. The hub broadcast
             # one-shot needs param expressible on this same method, so it is
