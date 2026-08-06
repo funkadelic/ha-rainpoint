@@ -6,13 +6,23 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_145, MODEL_VALVE_245, MODEL_VALVE_345
-from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+from custom_components.rainpoint.api import _encode_dp_duration_param
+from custom_components.rainpoint.const import DOMAIN, MODEL_HTV210B, MODEL_VALVE_145, MODEL_VALVE_245, MODEL_VALVE_345
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS
 from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
+    RainPointDpValveEntity,
     RainPointValveEntity,
 )
-from tests.helpers import make_sensor_coordinator, make_valve_zone_status
+from tests.helpers import (
+    htv210b_hub_devices,
+    htv210b_silent_status,
+    htv210b_status,
+    make_mock_session_client,
+    make_sensor_coordinator,
+    make_valve_zone_status,
+    mock_json_response,
+)
 from tests.payload_samples import SAMPLE_HTV145_OPEN_PAYLOAD, SAMPLE_HTV245_ASCII_PAYLOAD
 
 ONE_ZONE_TLV_PAYLOAD = "11#17E1D70018DC0119D8001D20"
@@ -1090,3 +1100,473 @@ class TestValveAvailabilityPushedReconnect:
 
         assert valve.available is True
         assert valve.extra_state_attributes["hub_connected"] is True
+
+
+async def _build_dp_valve_tracer_timeline():
+    """Construct -> first refresh -> platform setup for a hub-paired HTV210B.
+
+    Returns (coordinator, client, entities), entities sorted by zone number.
+    Mirrors _build_valve_availability_timeline's shape for the DP endpoint's
+    own fixture rather than reusing it, since this one needs a different
+    model and a different subDevices shape (modelCode carried).
+    """
+    from custom_components.rainpoint.const import CONF_HIDS
+    from custom_components.rainpoint.coordinator import RainPointCoordinator
+    from custom_components.rainpoint.valve import async_setup_entry
+
+    client = AsyncMock()
+    client.get_devices_by_hid.return_value = htv210b_hub_devices()
+    client.get_multiple_device_status.return_value = htv210b_status()
+
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.data = {CONF_HIDS: [10]}
+    entry.options = {}
+    hass = MagicMock()
+    hass.data = {DOMAIN: {"e1": {}}}
+
+    coordinator = RainPointCoordinator(hass, client, entry)
+    hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+    await coordinator.async_config_entry_first_refresh()
+
+    captured = []
+    async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+    await async_setup_entry(hass, entry, async_add_entities)
+
+    captured.sort(key=lambda e: e._zone_num)
+    return coordinator, client, captured
+
+
+def _bind_real_dp_control(client, response_body):
+    """Point client.control_work_mode_dp at a real client method reading response_body.
+
+    Returns the real client so a test can assert on the exact JSON body its
+    session.post received -- the far end of the stack, not a mocked call.
+    """
+    real_client = make_mock_session_client()
+    real_client.ensure_logged_in = AsyncMock()
+    real_client._session.post = MagicMock(return_value=mock_json_response(response_body))
+    client.control_work_mode_dp = real_client.control_work_mode_dp
+    return real_client
+
+
+class TestDpValveTracer:
+    """End to end: open one HTV210B zone through controlWorkModeDP and decode
+    the response's own state blob.
+
+    Covers the open path only. TestDpValveCloseAndCodeFour covers close and the
+    code-4 response, and TestDpApplyResponseStateBranches covers
+    _apply_response_state's guard clauses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_setup_builds_dp_entities_for_both_zones(self):
+        """A hub-paired HTV210B produces RainPointDpValveEntity for zones 1 and 2."""
+        _coordinator, _client, entities = await _build_dp_valve_tracer_timeline()
+
+        assert [e._zone_num for e in entities] == [1, 2]
+        assert all(isinstance(e, RainPointDpValveEntity) for e in entities)
+
+    @pytest.mark.asyncio
+    async def test_open_posts_captured_body_and_applies_response_state(self):
+        """Opening zone 1 posts the captured controlWorkModeDP body and the
+        response is decoded straight into that entity's read-back state."""
+        _coordinator, client, entities = await _build_dp_valve_tracer_timeline()
+        zone1 = entities[0]
+
+        real_client = _bind_real_dp_control(client, {"code": 0, "data": {"state": "1,D821AF3C000000B7D1230B1A"}})
+
+        await zone1.async_open_valve(duration=60)
+
+        real_client._session.post.assert_called_once()
+        call = real_client._session.post.call_args
+        url = call.args[0]
+        body = call.kwargs["json"]
+
+        assert url.endswith("/app/device/controlWorkModeDP")
+        assert set(body.keys()) == {"mid", "productKey", "deviceName", "mode", "addr", "port", "param", "dpCode"}
+        assert body["mode"] == 1
+        assert body["port"] == 1
+        assert body["dpCode"] == 1
+        assert body["param"] == "3C000000"
+        assert "duration" not in body
+
+        assert zone1.is_closed is False
+        attrs = zone1.extra_state_attributes
+        assert attrs["duration_seconds"] == 60
+        assert attrs["state_raw"] == 0x21
+        assert attrs["event_time"] == "2026-08-05T18:15:17"
+
+    @pytest.mark.asyncio
+    async def test_open_merges_zone_and_leaves_the_rest_of_the_poll_intact(self):
+        """The merge preserves battery/rssi/hub_online and zone 2's poll-derived entry."""
+        coordinator, client, entities = await _build_dp_valve_tracer_timeline()
+        zone1 = entities[0]
+        key = "10_20_1"
+        before = coordinator.data["sensors"][key]["data"]
+        assert before["battery_flag"] is not None
+        assert before["rssi_dbm"] is not None
+        zone2_before = before["zones"][2]
+
+        _bind_real_dp_control(client, {"code": 0, "data": {"state": "1,D821AF3C000000B7D1230B1A"}})
+
+        await zone1.async_open_valve(duration=60)
+
+        after = coordinator.data["sensors"][key]["data"]
+        assert after["battery_flag"] == before["battery_flag"]
+        assert after["rssi_dbm"] == before["rssi_dbm"]
+        assert after["hub_online"] == before["hub_online"]
+        assert after["zones"][2] == zone2_before
+        assert after["zones"][1]["open"] is True
+
+
+class TestSilentUnitGuardRealTimeline:
+    """The explicit silent-type guard in valve.py's build(), proven through the
+    real coordinator-then-setup-then-refresh sequence rather than an injected
+    coordinator.data snapshot.
+
+    A Bluetooth-only HTV210B carries model == HTV210B on its silent entry, so
+    the model-set check in build() alone would admit it; the silent type is
+    what actually discriminates. These tests drive the real timeline so the
+    silence genuinely develops (SILENT_DEBOUNCE_POLLS consecutive
+    arrived-but-silent polls) before asserting the guard, and the
+    silent-then-reporting / reporting-then-silent halves prove the guard
+    blocks creation only, never removal.
+    """
+
+    @staticmethod
+    async def _build_silent_timeline():
+        """Construct -> first refresh -> platform setup for an HTV210B that
+        never reports. Returns (coordinator, client, hass, entry, captured)."""
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = htv210b_hub_devices()
+        client.get_multiple_device_status.return_value = htv210b_silent_status()
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        return coordinator, client, hass, entry, captured
+
+    @staticmethod
+    async def _build_reporting_timeline():
+        """Construct -> first refresh -> platform setup for an HTV210B that
+        reports normally from the start. Returns (coordinator, client, hass, entry, captured)."""
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = htv210b_hub_devices()
+        client.get_multiple_device_status.return_value = htv210b_status()
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        return coordinator, client, hass, entry, captured
+
+    @pytest.mark.asyncio
+    async def test_a_silent_from_the_start_htv210b_never_offers_a_valve_entity(self):
+        """No valve entity across the whole silence timeline, even once the
+        debounce elapses and the entry's model alone would have admitted it."""
+        coordinator, _client, _hass, _entry, captured = await self._build_silent_timeline()
+        key = "10_20_1"
+        assert captured == []
+
+        # Every refresh short of the debounce: the key has no trace at all yet.
+        for _ in range(SILENT_DEBOUNCE_POLLS - 2):
+            await coordinator.async_refresh()
+            assert key not in coordinator.data["sensors"]
+            assert captured == []
+
+        # The debounce elapses: a silent entry appears, proving the model-set
+        # gate alone would have admitted it, and still no entity is offered.
+        await coordinator.async_refresh()
+        entry = coordinator.data["sensors"][key]
+        assert entry["data"]["type"] == SILENT_DATA_TYPE
+        assert entry["model"] == MODEL_HTV210B
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_a_silent_htv210b_that_starts_reporting_gains_its_valve_entities(self):
+        """The late adder promotes the entry the moment it stops being silent,
+        through the same coordinator listener, with no reload and no second
+        async_setup_entry call."""
+        coordinator, client, _hass, _entry, captured = await self._build_silent_timeline()
+        for _ in range(SILENT_DEBOUNCE_POLLS - 1):
+            await coordinator.async_refresh()
+        key = "10_20_1"
+        assert coordinator.data["sensors"][key]["data"]["type"] == SILENT_DATA_TYPE
+        assert captured == []
+
+        client.get_multiple_device_status.return_value = htv210b_status()
+        await coordinator.async_refresh()
+
+        assert [e._zone_num for e in captured] == [1, 2]
+        assert all(isinstance(e, RainPointDpValveEntity) for e in captured)
+
+    @pytest.mark.asyncio
+    async def test_a_reporting_htv210b_that_goes_silent_keeps_its_valve_entities(self):
+        """The guard blocks creation only: entities already offered are never
+        withdrawn once the same device later goes silent."""
+        from custom_components.rainpoint.entity import late_adders
+
+        coordinator, client, hass, entry, captured = await self._build_reporting_timeline()
+        assert [e._zone_num for e in captured] == [1, 2]
+        offered_before = list(captured)
+
+        client.get_multiple_device_status.return_value = htv210b_silent_status()
+        for _ in range(SILENT_DEBOUNCE_POLLS):
+            await coordinator.async_refresh()
+
+        key = "10_20_1"
+        assert coordinator.data["sensors"][key]["data"]["type"] == SILENT_DATA_TYPE
+        assert captured == offered_before
+
+        adder = late_adders(hass.data[DOMAIN][entry.entry_id])[0]
+        assert adder.ledger.unique_ids_for(key) == frozenset({"rainpoint_10_20_1_zone1", "rainpoint_10_20_1_zone2"})
+
+
+class TestDpValveCloseAndCodeFour:
+    """Close, and the code-4 already-in-state response, on the DP entity."""
+
+    @pytest.mark.asyncio
+    async def test_close_posts_zeroed_param_and_applies_response(self):
+        """A close posts mode 0 and param 00000000 with no duration key, and
+        the closed response blob is applied to the entity's read-back state."""
+        _coordinator, client, entities = await _build_dp_valve_tracer_timeline()
+        zone1 = entities[0]
+
+        real_client = _bind_real_dp_control(client, {"code": 0, "data": {"state": "0,D800AF00000000B700000000"}})
+
+        await zone1.async_close_valve()
+
+        body = real_client._session.post.call_args.kwargs["json"]
+        assert body["mode"] == 0
+        assert body["param"] == "00000000"
+        assert "duration" not in body
+        assert zone1.is_closed is True
+
+    @pytest.mark.asyncio
+    async def test_code_4_response_still_records_command_and_applies_state(self):
+        """Code 4 (already in the requested state) completes the command exactly
+        as code 0 does: the staleness guard is armed and the blob is applied."""
+        coordinator, client, entities = await _build_dp_valve_tracer_timeline()
+        zone1 = entities[0]
+
+        _bind_real_dp_control(client, {"code": 4, "data": {"state": "1,D821AF3C000000B7D1230B1A"}})
+
+        await zone1.async_open_valve(duration=60)
+
+        assert ("10_20_1", 1) in coordinator._last_valve_command_at
+        assert zone1.is_closed is False
+        assert zone1.extra_state_attributes["duration_seconds"] == 60
+
+
+def _make_dp_valve(zone_data=None, hub_online=True):
+    """Create a RainPointDpValveEntity with a mock coordinator, bypassing __init__.
+
+    A lighter-weight sibling of _make_valve for the DP subclass's own
+    _apply_response_state guard-clause branches, which do not need the full
+    real-coordinator timeline the tracer tests above drive.
+    """
+    sensor_key = "100_200_1"
+    sensor_info = {
+        "hid": 100,
+        "mid": 200,
+        "addr": 1,
+        "sub_name": "BT Valve",
+        "model": MODEL_HTV210B,
+        "device_name": "dev1",
+        "product_key": "pk1",
+        "firmware_version": "1.0",
+    }
+    decoded = {
+        "hub_online": hub_online,
+        "battery_flag": 1,
+        "rssi_dbm": -70,
+        "zones": {
+            1: zone_data
+            if zone_data is not None
+            else {"open": True, "duration_seconds": 60, "state_raw": 0x21, "event_time": None}
+        },
+    }
+    mock_coordinator = make_sensor_coordinator(
+        model=MODEL_HTV210B,
+        data=decoded,
+        sub_name="BT Valve",
+        firmware_version="1.0",
+        extra_sensor_info={"device_name": "dev1", "product_key": "pk1"},
+    )
+
+    valve = RainPointDpValveEntity.__new__(RainPointDpValveEntity)
+    valve.coordinator = mock_coordinator
+    valve._sensor_key = sensor_key
+    valve._sensor_info = sensor_info
+    valve._zone_num = 1
+    valve.hass = MagicMock()
+    valve._attr_unique_id = "rainpoint_100_200_1_zone1"
+    valve._attr_name = "BT Valve Zone 1"
+    return valve
+
+
+class TestDpApplyResponseStateBranches:
+    """Cover RainPointDpValveEntity._apply_response_state's guard clauses."""
+
+    def test_apply_response_state_none_skips(self):
+        """A None response is a no-op, matching the RF parent's shape."""
+        valve = _make_dp_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+
+        valve._apply_response_state(None)
+
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_apply_response_state_empty_skips(self):
+        """An empty-string response is a no-op."""
+        valve = _make_dp_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+
+        valve._apply_response_state("")
+
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_apply_response_state_decoder_returns_none_skips(self, monkeypatch):
+        """A malformed blob the decoder rejects short-circuits before the merge."""
+        from custom_components.rainpoint import valve as valve_mod
+
+        valve = _make_dp_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+        monkeypatch.setattr(valve_mod, "decode_htv210b_dp_state", lambda raw: None)
+
+        valve._apply_response_state("garbage")
+
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_apply_response_state_key_missing_in_sensors(self):
+        """If the sensor_key is not in coordinator.data['sensors'], return without update."""
+        valve = _make_dp_valve()
+        valve._sensor_key = "not_in_data"
+        valve.coordinator.async_set_updated_data = MagicMock()
+
+        valve._apply_response_state("1,D821AF3C000000B7D1230B1A")
+
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+
+class TestEncodeDpDurationParam:
+    """The pure seconds-to-param hex encoder."""
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [
+            (60, "3C000000"),
+            (120, "78000000"),
+            (0, "00000000"),
+            (600, "58020000"),
+            (3600, "100E0000"),
+        ],
+    )
+    def test_known_values(self, seconds, expected):
+        """Established encoding checkpoints from the capture."""
+        assert _encode_dp_duration_param(seconds) == expected
+
+    def test_repeated_calls_return_identical_string(self):
+        """The encoder holds no state, so an interleaved call cannot disturb a repeat.
+
+        Both halves assert against the expected literal rather than against
+        each other. Comparing one call to another would pass just as happily if
+        the encoder returned the same wrong answer twice, and the interleaved
+        call is what actually distinguishes a stateless encoder from one whose
+        output depends on what it was asked last.
+        """
+        expected = "58020000"
+
+        assert _encode_dp_duration_param(600) == expected
+        _encode_dp_duration_param(120)
+        assert _encode_dp_duration_param(600) == expected
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [
+            (-1, "00000000"),
+            (-86400, "00000000"),
+            (0xFFFFFFFF, "FFFFFFFF"),
+            (0x100000000, "FFFFFFFF"),
+            (2**40, "FFFFFFFF"),
+        ],
+    )
+    def test_out_of_range_clamps_rather_than_raising(self, seconds, expected):
+        """Out-of-range durations clamp to the 4-byte range instead of raising.
+
+        This is the boundary the encoder's own docstring promises, and the
+        reason it promises it: ``int.to_bytes`` raises OverflowError outside
+        four unsigned bytes, and an exception on this path would reach the user
+        as a valve command that failed with no indication that the duration was
+        the problem. Clamping keeps the command well formed.
+        """
+        assert _encode_dp_duration_param(seconds) == expected
+
+    def test_every_output_is_eight_hex_characters(self):
+        """The wire format is fixed width, so no input may shorten or lengthen it.
+
+        A short string here would silently shift every field the server reads
+        after it.
+        """
+        for seconds in (-1, 0, 1, 59, 60, 3600, 86400, 0xFFFFFFFF, 0x100000000):
+            encoded = _encode_dp_duration_param(seconds)
+            assert len(encoded) == 8
+            assert encoded == encoded.upper()
+            int(encoded, 16)
+
+    def test_boolean_is_accepted_as_its_integer_value(self):
+        """bool is an int subclass, so it encodes rather than raising.
+
+        Pinned because the coercion is silent: this records what the encoder
+        does today rather than endorsing a caller that passes one.
+        """
+        assert _encode_dp_duration_param(True) == _encode_dp_duration_param(1)
+
+
+class TestDpClassDispatch:
+    """build() discriminates by catalog identity rather than replacing the RF
+    class for every VALVE_MODELS member."""
+
+    @pytest.mark.asyncio
+    async def test_non_bluetooth_model_still_builds_rf_entity(self):
+        """A VALVE_MODELS member with no CTL_BT_WATER identity (MODEL_VALVE_245)
+        still builds the plain RF entity, not the DP subclass."""
+        _coordinator, _client, valve = await _build_valve_availability_timeline()
+
+        assert isinstance(valve, RainPointValveEntity)
+        assert not isinstance(valve, RainPointDpValveEntity)

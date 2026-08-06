@@ -90,9 +90,35 @@ DEFAULT_CONTROL_DURATION_SECONDS = 600  # 10 minutes
 # Bluetooth off, so a cloud path exists, but it is not this endpoint. The
 # models declaring this identity (HTV102B, HTV107B, HTV124LT, HTV210B,
 # HTV224B) carry no CTL_WATER datapoint at all, so admitting the identity
-# would build a valve entity whose every command fails. Producing no entity
-# stays the honest answer until a capture of the app's traffic identifies
-# the endpoint and payload it actually uses.
+# would build a valve entity whose every command fails.
+#
+# A 2026-08-05 traffic capture identified the endpoint and payload the app
+# actually uses: a distinct path, controlWorkModeDP, plus three fields the
+# plain call never sends (productKey, deviceName, dpCode), no duration
+# field, and the run duration carried as a little-endian hex string
+# instead. The condition this comment used to name is met, and the
+# decision still goes the same way.
+#
+# HTV210B is the one device with a verified call against that endpoint, and
+# it already carries a hand-written decoder, so is_hand_written_model keeps
+# it out of this generic path structurally, regardless of this allowlist.
+# Readmitting the identity buys the verified device nothing. What it would
+# cost: the other four models declaring this identity, HTV102B, HTV107B,
+# HTV124LT and HTV224B, are unowned and undecoded. Readmitting the identity
+# would hand each of them a control entity commanding over an endpoint
+# verified on exactly one unit, and would need a second write path in this
+# module plus a disclosure-copy update for the failure mode where a
+# command reaches the cloud and nothing moves, which the current copy does
+# not cover.
+#
+# The exclusion is load-bearing, not inert: every variant in the committed
+# catalog declaring this identity also declares STA_WKSTATE, the run-state
+# datapoint this module reads to decide eligibility, so the control gate
+# would pass for all five of them if the identity were readmitted. Removing
+# this exclusion would immediately build five entities, not zero.
+#
+# Reverses if someone acquires one of the other four and verifies the
+# endpoint on that hardware.
 CONTROL_IDENTITY_ALLOWLIST = frozenset({"CTL_WATER", "CTL_SOCK"})
 VALVE_CONTROL_IDENTITIES = frozenset({"CTL_WATER"})
 SWITCH_CONTROL_IDENTITIES = frozenset({"CTL_SOCK"})

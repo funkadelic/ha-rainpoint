@@ -39,6 +39,12 @@ _USER_AGENT = "okhttp/4.9.3"
 # means "re-authenticate", not "credentials are wrong".
 _NOT_TOKEN_CODE = 1001
 
+# The datapoint code controlWorkModeDP carries for a Bluetooth-backed valve
+# command. Every committed catalog variant declaring the CTL_BT_WATER control
+# identity declares it at this code, so the literal the client sends is
+# pinned by the catalog rather than assumed.
+_DP_CODE_CTL_BT_WATER = 1
+
 
 class RainPointApiError(Exception):
     pass
@@ -520,6 +526,12 @@ class RainPointClient:
             "port": port,
             "mode": mode,
             "duration": duration,
+            # The RainPoint app sends this field on every controlWorkMode call
+            # (empty for an RF valve) and the server accepts its absence, so
+            # this is an alignment change rather than a fix. The hub broadcast
+            # one-shot needs param expressible on this same method, so it is
+            # added here rather than introduced blind later.
+            "param": "",
         }
         _LOGGER.debug("API call: control_work_mode URL=%s payload=%s", url, payload)
         request_token = self._token
@@ -553,4 +565,94 @@ class RainPointClient:
             )
         else:
             _LOGGER.debug("controlWorkMode: API returned code=0 but no 'data' key; optimistic update skipped")
+        return None
+
+    async def control_work_mode_dp(
+        self,
+        mid: int,
+        addr: int,
+        device_name: str,
+        product_key: str,
+        port: int,
+        mode: int,
+        param: str,
+    ) -> str | None:
+        """Open or close a Bluetooth-backed valve zone over the datapoint control endpoint.
+
+        Args:
+            mid: Hub device ID.
+            addr: Sub-device address.
+            device_name: Hub deviceName (MAC-based identifier).
+            product_key: Hub productKey.
+            port: Zone/port number (1-based).
+            mode: 1 = open, 0 = close.
+            param: The pre-encoded 4-byte little-endian hex duration string this
+                endpoint reads in place of a ``duration`` field. Callers build it
+                with ``_encode_dp_duration_param``; this method sends no
+                ``duration`` key at all.
+
+        Returns:
+            The value of ``data["data"]`` if it is a string, or
+            ``data["data"]["state"]`` if ``data["data"]`` is a dict. Returns None
+            if neither condition produces a value (including when the dict
+            response omits the "state" key). Callers should treat None as "no
+            optimistic update available" rather than an error. Also returns
+            normally (without raising) when the API returns code 4 (device
+            already in the requested state); callers cannot distinguish this
+            from a code-0 success based on the return value alone.
+        """
+        await self.ensure_logged_in()
+        url = f"{self._base_url}/app/device/controlWorkModeDP"
+        payload = {
+            "mid": mid,
+            "productKey": product_key,
+            "deviceName": device_name,
+            "mode": mode,
+            "addr": addr,
+            "port": port,
+            "param": param,
+            "dpCode": _DP_CODE_CTL_BT_WATER,
+        }
+        # Deliberately does not log the payload or response dict the way
+        # control_work_mode's debug lines do: this body carries deviceName
+        # (the hub MAC) and productKey, both scrubbed by name in the capture
+        # record. Only integers and the caller's own encoded string are
+        # logged, per the house rule that a cloud-record log line never
+        # carries cloud-supplied free text.
+        _LOGGER.debug(
+            "API call: control_work_mode_dp URL=%s mode=%s port=%s param=%s",
+            url,
+            mode,
+            port,
+            param,
+        )
+        request_token = self._token
+        async with self._session.post(url, headers=self._auth_headers(), json=payload) as resp:
+            if resp.status != 200:
+                raise RainPointApiError(f"controlWorkModeDP HTTP {resp.status}")
+            data = await resp.json()
+
+        code = data.get("code")
+        if code == 4:
+            # Code 4 = device already in requested state or transitioning, not fatal
+            _LOGGER.info("controlWorkModeDP: device already in requested state (code 4, idempotent): code=%s", code)
+        elif code != 0:
+            self._maybe_invalidate_token(code, request_token)
+            _LOGGER.debug("controlWorkModeDP failed response: code=%s", code)
+            raise RainPointApiError(f"controlWorkModeDP failed: code {code}")
+        resp_data = data.get("data")
+        if isinstance(resp_data, dict):
+            state = resp_data.get("state")
+            if state is None:
+                _LOGGER.warning("controlWorkModeDP: 'data' dict has no 'state' key")
+            return state
+        if isinstance(resp_data, str):
+            return resp_data
+        if resp_data is not None:
+            _LOGGER.warning(
+                "controlWorkModeDP: unexpected 'data' type %s",
+                type(resp_data).__name__,
+            )
+        else:
+            _LOGGER.debug("controlWorkModeDP: API returned code=0 but no 'data' key; optimistic update skipped")
         return None

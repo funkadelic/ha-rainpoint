@@ -3,7 +3,18 @@
 ``make_sensor_coordinator`` is the shared coordinator builder used by the entity
 test modules (sensor, valve, number, diagnostic_sensors) so they do not each
 rehydrate the canonical ``{"hubs", "status", "sensors"}`` shape inline.
+
+``make_mock_session_client`` and ``mock_json_response`` are the client-level
+counterparts: a real ``RainPointClient`` wired to a mocked aiohttp session, for
+tests that need to assert on the exact JSON body a real client method builds
+rather than on a mocked call.
 """
+
+from unittest.mock import AsyncMock, MagicMock
+
+from custom_components.rainpoint.api import RainPointClient
+from custom_components.rainpoint.const import MODEL_HTV210B
+from tests.payload_samples import SAMPLE_HTV210B_TLV_PAYLOAD
 
 _SENTINEL = object()
 
@@ -137,6 +148,42 @@ other's test class to borrow it.
 """
 
 
+def make_mock_session_client() -> RainPointClient:
+    """Create a real RainPointClient with a mocked aiohttp session.
+
+    Constructor args: area_code, email, password, session. ``_token`` is set
+    directly so ``_auth_headers()`` does not raise. Moved here from
+    ``tests/api/test_client.py``'s module-level ``_make_client`` so a test in
+    any module can assert on the exact JSON body a real client method builds,
+    not just on a mocked call.
+    """
+    mock_session = MagicMock()
+    client = RainPointClient(
+        area_code="1",
+        email="test@example.com",
+        password="testpass",
+        session=mock_session,
+    )
+    client._token = "fake-token-for-test"
+    return client
+
+
+def mock_json_response(json_data: dict, status: int = 200) -> AsyncMock:
+    """Create a mock aiohttp response context manager returning json_data.
+
+    Moved here from ``tests/api/test_client.py``'s module-level
+    ``_mock_response`` for the same reason as ``make_mock_session_client``.
+    """
+    mock_resp = AsyncMock()
+    mock_resp.status = status
+    mock_resp.json = AsyncMock(return_value=json_data)
+    # aiohttp uses async context manager for session.post()
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+    return mock_cm
+
+
 def make_valve_zone_status(mid=20, sid="D01", zones_reported=True, time_ms=1785420002247):
     """Return a multipleDeviceStatus list for one valve hub child.
 
@@ -145,3 +192,34 @@ def make_valve_zone_status(mid=20, sid="D01", zones_reported=True, time_ms=17854
     """
     value = VALVE_ZONES_TLV_PAYLOAD if zones_reported else ""
     return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": value, "time": time_ms}]}]
+
+
+def htv210b_hub_devices(mid=20, addr=1):
+    """A getDeviceByHid hub record carrying one hub-paired HTV210B sub-device."""
+    return [
+        {
+            "mid": mid,
+            "name": "Hub A",
+            "deviceName": "hub-mac",
+            "productKey": "hub-pk",
+            "homeName": "H",
+            "subDevices": [{"addr": addr, "name": "BT Valve", "model": MODEL_HTV210B, "modelCode": 41, "softVer": "1.0"}],
+        }
+    ]
+
+
+def htv210b_status(mid=20, sid="D01"):
+    """A multipleDeviceStatus reading for the HTV210B, both zones idle."""
+    return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": SAMPLE_HTV210B_TLV_PAYLOAD, "time": 1785420002247}]}]
+
+
+def htv210b_silent_status(mid=20):
+    """A multipleDeviceStatus poll that carries no entry for the HTV210B.
+
+    The silent form must return no status entry for the sub-device at all,
+    rather than an empty or malformed one: a malformed entry exercises the
+    record-tolerance path instead of the silence path this helper feeds. The
+    hub itself is still enumerated, matching a real cloud outage where a
+    sub-device stops answering while its hub keeps polling fine.
+    """
+    return [{"mid": mid, "subDeviceStatus": []}]

@@ -70,6 +70,17 @@ class DataUpdateCoordinator:
         """Perform the first refresh of a config entry setup."""
         await self.async_refresh()
 
+    def async_set_updated_data(self, data) -> None:
+        """Push data outside the poll cycle and notify listeners, as the real
+        (synchronous, despite the name) coordinator method does.
+
+        Used by a command response's optimistic-update path (valve.py). No
+        _schedule_refresh reset here: nothing in this stub schedules a
+        refresh to begin with.
+        """
+        self.data = data
+        self.async_update_listeners()
+
 
 class UpdateFailed(Exception):
     """Real UpdateFailed exception stub for tests."""

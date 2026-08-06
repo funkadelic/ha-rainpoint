@@ -217,6 +217,21 @@ def _extract_report_time(b: bytes, *, dp_id_prefixed: bool = False) -> tuple[str
     return None if iso is None else (iso, raw)
 
 
+def _encode_dp_duration_param(seconds: int) -> str:
+    """Encode a duration in seconds as the ``param`` string ``controlWorkModeDP`` reads.
+
+    The endpoint carries the run duration as an unsigned 4-byte little-endian
+    hex string with no separator and no prefix, in place of a ``duration``
+    field: 60 becomes ``"3C000000"``. Clamped rather than raised on an
+    out-of-range input -- a negative value clamps to 0 and anything past the
+    4-byte ceiling clamps to ``"FFFFFFFF"`` -- because a caller-side
+    ``OverflowError`` here would surface to the user as a failed valve command
+    with no diagnostic.
+    """
+    clamped = max(0, min(int(seconds), 0xFFFFFFFF))
+    return clamped.to_bytes(4, "little").hex().upper()
+
+
 def _le16(b: bytes, offset: int) -> int:
     """Extract little-endian 16-bit integer from bytes at offset."""
     return int.from_bytes(b[offset : offset + 2], "little")
