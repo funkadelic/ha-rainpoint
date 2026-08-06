@@ -218,11 +218,16 @@ def _make_htv210b_entities(coordinator, key, info, base_slug):
     """Battery, signal, and per-zone state for the HTV210B Bluetooth valve.
 
     Hub-paired, this valve reports the same status-frame family as the HTV213
-    group, but it gets no valve or number entities yet: its cloud control path
-    is unproven, so the open/closed reading surfaces as a read-only sensor
-    instead of a valve that could not honestly offer open/close. No per-zone
-    water-usage entities either; the device has no flow meter, and its usage
-    records read zero on every capture.
+    group, and now also gets valve and duration entities, commanded over the
+    datapoint endpoint. The zone-state sensor built here stays anyway: its
+    unique IDs are already persisted in users' entity registries, automations
+    and dashboard cards may reference them, and this integration removes
+    nothing outside the Repairs orphaned-entity flow with a user confirming
+    the removal. A code deletion here would strand those rows rather than
+    remove them. This leaves the model as the only one carrying both a
+    zone-state sensor and a valve entity, which is an accepted outcome. No
+    per-zone water-usage entities either; the device has no flow meter, and
+    its usage records read zero on every capture.
 
     Zones come from the decoded payload rather than the model name, mirroring
     the HTV213 factory, so only zones the frame reports grow entities.
