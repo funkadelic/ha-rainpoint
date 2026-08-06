@@ -1527,6 +1527,47 @@ class TestEncodeDpDurationParam:
         """The encoder is pure: no caller-visible state between calls."""
         assert _encode_dp_duration_param(600) == _encode_dp_duration_param(600)
 
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [
+            (-1, "00000000"),
+            (-86400, "00000000"),
+            (0xFFFFFFFF, "FFFFFFFF"),
+            (0x100000000, "FFFFFFFF"),
+            (2**40, "FFFFFFFF"),
+        ],
+    )
+    def test_out_of_range_clamps_rather_than_raising(self, seconds, expected):
+        """Out-of-range durations clamp to the 4-byte range instead of raising.
+
+        This is the boundary the encoder's own docstring promises, and the
+        reason it promises it: ``int.to_bytes`` raises OverflowError outside
+        four unsigned bytes, and an exception on this path would reach the user
+        as a valve command that failed with no indication that the duration was
+        the problem. Clamping keeps the command well formed.
+        """
+        assert _encode_dp_duration_param(seconds) == expected
+
+    def test_every_output_is_eight_hex_characters(self):
+        """The wire format is fixed width, so no input may shorten or lengthen it.
+
+        A short string here would silently shift every field the server reads
+        after it.
+        """
+        for seconds in (-1, 0, 1, 59, 60, 3600, 86400, 0xFFFFFFFF, 0x100000000):
+            encoded = _encode_dp_duration_param(seconds)
+            assert len(encoded) == 8
+            assert encoded == encoded.upper()
+            int(encoded, 16)
+
+    def test_boolean_is_accepted_as_its_integer_value(self):
+        """bool is an int subclass, so it encodes rather than raising.
+
+        Pinned because the coercion is silent: this records what the encoder
+        does today rather than endorsing a caller that passes one.
+        """
+        assert _encode_dp_duration_param(True) == _encode_dp_duration_param(1)
+
 
 class TestDpClassDispatch:
     """build() discriminates by catalog identity rather than replacing the RF

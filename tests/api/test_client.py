@@ -296,22 +296,77 @@ class TestControlWorkModeDp:
             )
 
     @pytest.mark.asyncio
-    async def test_code_1004_invalidates_token_then_raises(self):
-        """A token-rejection code invalidates the request's own token, then raises."""
+    async def test_non_token_error_code_raises_and_leaves_the_token_alone(self):
+        """A non-zero code that is not the token-rejection code raises without expiring the token.
+
+        Pairs with the NOT_TOKEN case below. Only the token-rejection code may
+        force a re-login, so an unrelated server error must leave both the
+        cached token and its expiry untouched: expiring on any error would make
+        every transient failure cost a round trip to re-authenticate.
+        """
         client = self._make_client()
         client.ensure_logged_in = AsyncMock()
-        client._session.post = MagicMock(return_value=self._mock_response({"code": 1004, "msg": "token error"}))
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 1004, "msg": "some other error"}))
         request_token = client._token
+        expires_at = client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
 
         with pytest.raises(RainPointApiError, match="controlWorkModeDP failed: code 1004"):
             await client.control_work_mode_dp(
                 mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
             )
 
-        # _maybe_invalidate_token only expires the local token for code 1001
-        # (NOT_TOKEN); it is not the code the DP endpoint returned here, so
-        # the token is left exactly as it was captured before the request.
         assert client._token == request_token
+        assert client._token_expires_at == expires_at
+
+    @pytest.mark.asyncio
+    async def test_not_token_code_expires_the_token_then_raises(self):
+        """The token-rejection code expires the request's own token, keeps it, then raises.
+
+        The kept-but-expired shape is deliberate and is what makes this endpoint
+        match the RF path: clearing the token outright would make the next login
+        look like a first login, skipping the rotation listeners that persist the
+        new token and refresh the push credentials.
+        """
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+        request_token = client._token
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        with pytest.raises(RainPointApiError, match="controlWorkModeDP failed: code 1001"):
+            await client.control_work_mode_dp(
+                mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
+            )
+
+        assert client._token_expires_at is None
+        assert client._token == request_token
+
+    @pytest.mark.asyncio
+    async def test_not_token_code_for_a_superseded_token_leaves_the_current_one(self):
+        """A late token rejection for an already-replaced token must not expire the fresh one.
+
+        Under concurrent requests a slow rejection can arrive after another call
+        has already re-authenticated. Expiring on it would throw away a token
+        the server never rejected, and each such rejection would expire the
+        replacement in turn.
+        """
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        expires_at = client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        def _replace_token_mid_flight(*_args, **_kwargs):
+            client._token = "a-freshly-rotated-token"
+            return self._mock_response({"code": 1001, "msg": "NOT_TOKEN"})
+
+        client._session.post = MagicMock(side_effect=_replace_token_mid_flight)
+
+        with pytest.raises(RainPointApiError, match="controlWorkModeDP failed: code 1001"):
+            await client.control_work_mode_dp(
+                mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
+            )
+
+        assert client._token == "a-freshly-rotated-token"
+        assert client._token_expires_at == expires_at
 
     @pytest.mark.asyncio
     async def test_http_error_raises(self):
