@@ -196,6 +196,187 @@ class TestControlWorkModeCode4:
         )
         assert result == "11#AABBCC"
 
+    @pytest.mark.asyncio
+    async def test_control_work_mode_body_carries_empty_param(self):
+        """The RF path now sends param alongside duration, matching observed app traffic."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": "11#state"}))
+
+        await client.control_work_mode(
+            mid=1,
+            addr=1,
+            device_name="X",
+            product_key="pk",
+            port=1,
+            mode=1,
+            duration=60,
+        )
+
+        body = client._session.post.call_args.kwargs["json"]
+        assert body["param"] == ""
+        assert body["duration"] == 60
+
+
+class TestControlWorkModeDp:
+    """controlWorkModeDP's full verdict matrix, mirroring TestControlWorkModeCode4's shape."""
+
+    def _make_client(self) -> RainPointClient:
+        """Make client helper."""
+        return _make_client()
+
+    def _mock_response(self, json_data: dict, status: int = 200) -> AsyncMock:
+        """Mock response helper."""
+        return _mock_response(json_data, status)
+
+    @pytest.mark.asyncio
+    async def test_close_posts_zeroed_param_with_no_duration_key(self):
+        """A close (mode=0) posts param '00000000' and no duration key at all."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        json_body = {"code": 0, "data": {"state": "0,D800AF00000000B700000000"}}
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        await client.control_work_mode_dp(
+            mid=1,
+            addr=3,
+            device_name="MAC-x",
+            product_key="pk",
+            port=1,
+            mode=0,
+            param="00000000",
+        )
+
+        body = client._session.post.call_args.kwargs["json"]
+        assert body["mode"] == 0
+        assert body["param"] == "00000000"
+        assert "duration" not in body
+
+    @pytest.mark.asyncio
+    async def test_code_0_dict_state_returns_state(self):
+        """A code-0 response whose data is a dict returns data['state']."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(
+            return_value=self._mock_response({"code": 0, "data": {"state": "1,D821AF3C000000B7D1230B1A"}})
+        )
+
+        result = await client.control_work_mode_dp(
+            mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
+        )
+
+        assert result == "1,D821AF3C000000B7D1230B1A"
+
+    @pytest.mark.asyncio
+    async def test_code_4_with_state_returns_normally(self):
+        """Code 4 (already in requested state) returns the state blob without raising."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(
+            return_value=self._mock_response({"code": 4, "data": {"state": "0,D800AF00000000B700000000"}})
+        )
+
+        result = await client.control_work_mode_dp(
+            mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=0, param="00000000"
+        )
+
+        assert result == "0,D800AF00000000B700000000"
+
+    @pytest.mark.asyncio
+    async def test_other_error_code_raises(self):
+        """A non-zero, non-4 code raises RainPointApiError with a controlWorkModeDP prefix."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 3, "msg": "wrong endpoint"}))
+
+        with pytest.raises(RainPointApiError, match="controlWorkModeDP failed: code 3"):
+            await client.control_work_mode_dp(
+                mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
+            )
+
+    @pytest.mark.asyncio
+    async def test_code_1004_invalidates_token_then_raises(self):
+        """A token-rejection code invalidates the request's own token, then raises."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 1004, "msg": "token error"}))
+        request_token = client._token
+
+        with pytest.raises(RainPointApiError, match="controlWorkModeDP failed: code 1004"):
+            await client.control_work_mode_dp(
+                mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
+            )
+
+        # _maybe_invalidate_token only expires the local token for code 1001
+        # (NOT_TOKEN); it is not the code the DP endpoint returned here, so
+        # the token is left exactly as it was captured before the request.
+        assert client._token == request_token
+
+    @pytest.mark.asyncio
+    async def test_http_error_raises(self):
+        """A non-200 HTTP status raises RainPointApiError with a controlWorkModeDP HTTP prefix."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({}, status=500))
+
+        with pytest.raises(RainPointApiError, match="controlWorkModeDP HTTP 500"):
+            await client.control_work_mode_dp(
+                mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
+            )
+
+    @pytest.mark.asyncio
+    async def test_dict_without_state_key_warns_and_returns_none(self):
+        """A code-0 dict response missing 'state' warns and returns None."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": {"other": "x"}}))
+
+        result = await client.control_work_mode_dp(
+            mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_unexpected_data_type_warns_and_returns_none(self):
+        """A code-0 response whose data is neither dict nor str warns and returns None."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": 12345}))
+
+        result = await client.control_work_mode_dp(
+            mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_string_data_returned_directly(self):
+        """A plain string 'data' is returned as-is, without the dict-shape branch."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": "1,D800AF00000000B700000000"}))
+
+        result = await client.control_work_mode_dp(
+            mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=0, param="00000000"
+        )
+
+        assert result == "1,D800AF00000000B700000000"
+
+    @pytest.mark.asyncio
+    async def test_no_data_key_returns_none(self):
+        """A code-0 response with no 'data' key at all returns None without warning."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0}))
+
+        result = await client.control_work_mode_dp(
+            mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
+        )
+
+        assert result is None
+
 
 class TestLogin:
     """Tests for the _login method including MD5 hashing and token storage."""

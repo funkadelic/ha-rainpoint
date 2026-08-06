@@ -526,6 +526,12 @@ class RainPointClient:
             "port": port,
             "mode": mode,
             "duration": duration,
+            # The vendor app sends this field on every controlWorkMode call
+            # (empty for an RF valve) and the server accepts its absence, so
+            # this is an alignment change rather than a fix. The hub broadcast
+            # one-shot needs param expressible on this same method, so it is
+            # added here rather than introduced blind later.
+            "param": "",
         }
         _LOGGER.debug("API call: control_work_mode URL=%s payload=%s", url, payload)
         request_token = self._token

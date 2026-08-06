@@ -1231,6 +1231,133 @@ class TestDpValveTracer:
         assert after["zones"][1]["open"] is True
 
 
+class TestDpValveCloseAndCodeFour:
+    """Close, and the code-4 already-in-state response, on the DP entity."""
+
+    @pytest.mark.asyncio
+    async def test_close_posts_zeroed_param_and_applies_response(self):
+        """A close posts mode 0 and param 00000000 with no duration key, and
+        the closed response blob is applied to the entity's read-back state."""
+        _coordinator, client, entities = await _build_dp_valve_tracer_timeline()
+        zone1 = entities[0]
+
+        real_client = _bind_real_dp_control(client, {"code": 0, "data": {"state": "0,D800AF00000000B700000000"}})
+
+        await zone1.async_close_valve()
+
+        body = real_client._session.post.call_args.kwargs["json"]
+        assert body["mode"] == 0
+        assert body["param"] == "00000000"
+        assert "duration" not in body
+        assert zone1.is_closed is True
+
+    @pytest.mark.asyncio
+    async def test_code_4_response_still_records_command_and_applies_state(self):
+        """Code 4 (already in the requested state) completes the command exactly
+        as code 0 does: the staleness guard is armed and the blob is applied."""
+        coordinator, client, entities = await _build_dp_valve_tracer_timeline()
+        zone1 = entities[0]
+
+        _bind_real_dp_control(client, {"code": 4, "data": {"state": "1,D821AF3C000000B7D1230B1A"}})
+
+        await zone1.async_open_valve(duration=60)
+
+        assert ("10_20_1", 1) in coordinator._last_valve_command_at
+        assert zone1.is_closed is False
+        assert zone1.extra_state_attributes["duration_seconds"] == 60
+
+
+def _make_dp_valve(zone_data=None, hub_online=True):
+    """Create a RainPointDpValveEntity with a mock coordinator, bypassing __init__.
+
+    A lighter-weight sibling of _make_valve for the DP subclass's own
+    _apply_response_state guard-clause branches, which do not need the full
+    real-coordinator timeline the tracer tests above drive.
+    """
+    sensor_key = "100_200_1"
+    sensor_info = {
+        "hid": 100,
+        "mid": 200,
+        "addr": 1,
+        "sub_name": "BT Valve",
+        "model": MODEL_HTV210B,
+        "device_name": "dev1",
+        "product_key": "pk1",
+        "firmware_version": "1.0",
+    }
+    decoded = {
+        "hub_online": hub_online,
+        "battery_flag": 1,
+        "rssi_dbm": -70,
+        "zones": {
+            1: zone_data
+            if zone_data is not None
+            else {"open": True, "duration_seconds": 60, "state_raw": 0x21, "event_time": None}
+        },
+    }
+    mock_coordinator = make_sensor_coordinator(
+        model=MODEL_HTV210B,
+        data=decoded,
+        sub_name="BT Valve",
+        firmware_version="1.0",
+        extra_sensor_info={"device_name": "dev1", "product_key": "pk1"},
+    )
+
+    valve = RainPointDpValveEntity.__new__(RainPointDpValveEntity)
+    valve.coordinator = mock_coordinator
+    valve._sensor_key = sensor_key
+    valve._sensor_info = sensor_info
+    valve._zone_num = 1
+    valve.hass = MagicMock()
+    valve._attr_unique_id = "rainpoint_100_200_1_zone1"
+    valve._attr_name = "BT Valve Zone 1"
+    return valve
+
+
+class TestDpApplyResponseStateBranches:
+    """Cover RainPointDpValveEntity._apply_response_state's guard clauses."""
+
+    def test_apply_response_state_none_skips(self):
+        """A None response is a no-op, matching the RF parent's shape."""
+        valve = _make_dp_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+
+        valve._apply_response_state(None)
+
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_apply_response_state_empty_skips(self):
+        """An empty-string response is a no-op."""
+        valve = _make_dp_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+
+        valve._apply_response_state("")
+
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_apply_response_state_decoder_returns_none_skips(self, monkeypatch):
+        """A malformed blob the decoder rejects short-circuits before the merge."""
+        from custom_components.rainpoint import valve as valve_mod
+
+        valve = _make_dp_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+        monkeypatch.setattr(valve_mod, "decode_htv210b_dp_state", lambda raw: None)
+
+        valve._apply_response_state("garbage")
+
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_apply_response_state_key_missing_in_sensors(self):
+        """If the sensor_key is not in coordinator.data['sensors'], return without update."""
+        valve = _make_dp_valve()
+        valve._sensor_key = "not_in_data"
+        valve.coordinator.async_set_updated_data = MagicMock()
+
+        valve._apply_response_state("1,D821AF3C000000B7D1230B1A")
+
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+
 class TestEncodeDpDurationParam:
     """The pure seconds-to-param hex encoder."""
 

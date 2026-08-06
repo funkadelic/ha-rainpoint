@@ -395,6 +395,35 @@ class RainPointDpValveEntity(RainPointValveEntity):
         self._record_successful_command()
         self._apply_response_state(response_state)
 
+    async def async_close_valve(self, **kwargs: Any) -> None:
+        mid = self._sensor_info["mid"]
+        addr = self._sensor_info["addr"]
+        device_name = self._sensor_info.get("device_name") or ""
+        product_key = self._sensor_info.get("product_key") or ""
+        # Called through the encoder rather than hardcoded, so the open and
+        # close paths cannot drift from each other's zero-duration encoding.
+        param = _encode_dp_duration_param(0)
+
+        _LOGGER.debug(
+            "Closing DP valve mid=%s addr=%s zone=%s",
+            mid,
+            addr,
+            self._zone_num,
+        )
+
+        client = self.coordinator._client
+        response_state = await client.control_work_mode_dp(
+            mid=mid,
+            addr=addr,
+            device_name=device_name,
+            product_key=product_key,
+            port=self._zone_num,
+            mode=0,
+            param=param,
+        )
+        self._record_successful_command()
+        self._apply_response_state(response_state)
+
     def _apply_response_state(self, raw_state: str | None) -> None:
         """Decode the DP response blob and merge it into this zone only.
 
