@@ -1524,8 +1524,19 @@ class TestEncodeDpDurationParam:
         assert _encode_dp_duration_param(seconds) == expected
 
     def test_repeated_calls_return_identical_string(self):
-        """The encoder is pure: no caller-visible state between calls."""
-        assert _encode_dp_duration_param(600) == _encode_dp_duration_param(600)
+        """The encoder holds no state, so an interleaved call cannot disturb a repeat.
+
+        Both halves assert against the expected literal rather than against
+        each other. Comparing one call to another would pass just as happily if
+        the encoder returned the same wrong answer twice, and the interleaved
+        call is what actually distinguishes a stateless encoder from one whose
+        output depends on what it was asked last.
+        """
+        expected = "58020000"
+
+        assert _encode_dp_duration_param(600) == expected
+        _encode_dp_duration_param(120)
+        assert _encode_dp_duration_param(600) == expected
 
     @pytest.mark.parametrize(
         ("seconds", "expected"),
