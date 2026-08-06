@@ -917,11 +917,11 @@ class TestCoordinatorUpdate:
 
 
 class TestHtv210bStalenessGuardCoverage:
-    """DPCTL-06's downstream consequence: admitting MODEL_HTV210B to
-    VALVE_MODELS enrols it in the command-versus-poll staleness guard with no
-    coordinator source change. _preserve_recent_valve_command_state gates
-    purely on model not in VALVE_MODELS, so this is confirmed by test rather
-    than by reading, mirroring the RF-model tests above.
+    """Admitting MODEL_HTV210B to VALVE_MODELS enrols it in the
+    command-versus-poll staleness guard with no coordinator source change.
+    _preserve_recent_valve_command_state gates purely on model not in
+    VALVE_MODELS, so this is confirmed by test rather than by reading,
+    mirroring the RF-model tests above.
     """
 
     # Zone 1 running, zone 2 idle: state 0x21, a 120s duration, and an event
