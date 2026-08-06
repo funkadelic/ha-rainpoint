@@ -1189,14 +1189,24 @@ class TestRenewalDelayFormula:
         client = self._client()
         assert client._renewal_base_delay(expire_at=1050.0, now=1000.0) == mqtt_module._RENEWAL_MIN_INTERVAL_SECONDS
 
-    def test_renewal_delay_seconds_applies_jitter_within_band(self):
+    def test_renewal_delay_seconds_clips_positive_jitter_to_safe_deadline(self):
+        # Base delay (510) equals the safe deadline (510) at this lifetime, so any
+        # positive-signed jitter draw overshoots and must clip to exactly 510.0.
         client = self._client()
-        samples = {client._renewal_delay_seconds(1570.0, 1000.0) for _ in range(10)}
+        with patch.object(mqtt_module.random, "choice", return_value=1.0):
+            samples = {client._renewal_delay_seconds(1570.0, 1000.0) for _ in range(10)}
+
+        assert samples == {510.0}
+
+    def test_renewal_delay_seconds_applies_jitter_within_band(self):
+        # Negative-signed draws are the only ones that vary, since positive draws
+        # all clip to the same safe-deadline value above.
+        client = self._client()
+        with patch.object(mqtt_module.random, "choice", return_value=-1.0):
+            samples = {client._renewal_delay_seconds(1570.0, 1000.0) for _ in range(10)}
 
         assert len(samples) > 1
-        # Upper bound is now the safe deadline (510), not 510*1.3: positive jitter
-        # is clipped so renewal never lands after expiry.
-        assert all(510.0 * 0.7 <= delay <= 510.0 for delay in samples)
+        assert all(510.0 * 0.7 <= delay < 510.0 for delay in samples)
 
     def test_renewal_delay_never_exceeds_safe_deadline_under_max_jitter(self):
         """A short-lived credential must renew before expiry even when jitter and
