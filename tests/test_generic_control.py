@@ -334,19 +334,22 @@ class TestEvaluateControlGateRealCatalog:
         assert checked == 29
 
     def test_bluetooth_backed_valves_are_never_admitted(self):
-        """CTL_BT_WATER models must produce no control entity while the only command
-        path is control_work_mode.
+        """CTL_BT_WATER models must produce no control entity through this factory.
 
-        The exclusion is proven, not suspected: a 2026-07-29 hardware trial
+        The exclusion is proven, not suspected. A 2026-07-29 hardware trial
         (scripts/trial_control_work_mode.py) showed a hub-paired HTV210B rejects
         control_work_mode with response code 3 for both open and close, in the same
         session where the identical call shape was accepted by an HTV245FRF on the
-        same hub. Every model in the committed catalog whose sole control identity is
-        CTL_BT_WATER declares no CTL_WATER datapoint, so admitting it would build a
-        valve whose every command fails while never reporting a state change -- the
-        user would read it as slow hardware rather than an uncommanded one. This pins
-        the exclusion until a capture of the RainPoint app's traffic identifies the
-        endpoint and payload it actually uses.
+        same hub. A 2026-08-05 traffic capture then identified the endpoint and
+        payload the RainPoint app actually uses for these models, and the decision
+        still goes the same way: the one device with a verified call, HTV210B,
+        already has a hand-written decoder, so is_hand_written_model keeps it out of
+        this generic path regardless of this gate, and the other four models
+        declaring the identity are unowned and undecoded. Every variant in the
+        committed catalog declaring CTL_BT_WATER also declares STA_WKSTATE, so this
+        gate would pass for all five of them if the identity were readmitted; the
+        exclusion is load-bearing, not inert. This pins the exclusion until someone
+        acquires one of the other four and verifies the endpoint on that hardware.
         """
         bt_variants = [
             (model, code)
