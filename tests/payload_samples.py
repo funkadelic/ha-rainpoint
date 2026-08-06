@@ -262,6 +262,15 @@ SAMPLE_HTV210B_TLV_PAYLOAD = (
     "5AF0000000026AF00000000299F000000002A9F0000000038FF0D00000000FEFF0F1527FB19"
 )
 
+# Captured controlWorkModeDP response "state" blobs, 2026-08-05 session (see
+# .planning/todos/pending/2026-07-26-ble-valve-control-dp-endpoint.md). Each is
+# the comma form decode_htv210b_dp_state reads: a leading mode digit, then the
+# same self-describing record stream the poll-path TLV frame carries, but with
+# no dp_id prefix and describing exactly one zone.
+SAMPLE_HTV210B_DP_OPEN_60S_STATE = "1,D821AF3C000000B7D1230B1A"
+SAMPLE_HTV210B_DP_OPEN_120S_STATE = "1,D821AF78000000B7D1230B1A"
+SAMPLE_HTV210B_DP_CLOSE_STATE = "0,D800AF00000000B700000000"
+
 # Verbatim pipe-delimited hub-level connectivity frames from the 2026-07-31 UAT
 # on v1.12.0b1, both delivered on thing/service/property/set. Section 1
 # decomposes as the "#P" prefix, a 12-digit YYMMDDHHMMSS stamp in UTC, "0000",

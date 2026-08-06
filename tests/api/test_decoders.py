@@ -8,6 +8,7 @@ from custom_components.rainpoint.api import (
     decode_hcs005frf,
     decode_htv145frf,
     decode_htv210b,
+    decode_htv210b_dp_state,
     decode_htv213frf_valve,
     decode_hws019wrf_v2,
     decode_moisture_full,
@@ -33,6 +34,9 @@ from tests.payload_samples import (
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
+    SAMPLE_HTV210B_DP_CLOSE_STATE,
+    SAMPLE_HTV210B_DP_OPEN_60S_STATE,
+    SAMPLE_HTV210B_DP_OPEN_120S_STATE,
     SAMPLE_HTV210B_TLV_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_FULL_IDLE_PAYLOAD,
@@ -1572,3 +1576,71 @@ class TestDecodeHtv210b:
         """
         result = decode_htv210b("11#19D8001AD8001D201E2022B71132FB19")
         assert result["zones"][2]["event_time"] == "2026-07-29T19:08:17"
+
+
+class TestDecodeHtv210bDpState:
+    """decode_htv210b_dp_state against the captured controlWorkModeDP response
+    blobs, field by field rather than as a whole-dict comparison against a
+    constant built by the same code path.
+    """
+
+    def test_60_second_open_decodes_every_field(self):
+        """The captured 60-second open blob: open, the commanded seconds, the
+        raw work-state byte, and the packed end-of-run stamp."""
+        result = decode_htv210b_dp_state(SAMPLE_HTV210B_DP_OPEN_60S_STATE)
+        assert result["open"] is True
+        assert result["duration_seconds"] == 60
+        assert result["state_raw"] == 0x21
+        assert result["event_time"] == "2026-08-05T18:15:17"
+
+    def test_120_second_open_decodes_the_longer_duration(self):
+        """The second commanded duration confirmed on hardware in the same session."""
+        result = decode_htv210b_dp_state(SAMPLE_HTV210B_DP_OPEN_120S_STATE)
+        assert result["duration_seconds"] == 120
+
+    def test_close_decodes_to_closed_with_zeroed_fields(self):
+        """A close zeroes both the duration and the time word."""
+        result = decode_htv210b_dp_state(SAMPLE_HTV210B_DP_CLOSE_STATE)
+        assert result["open"] is False
+        assert result["state_raw"] == 0x00
+        assert result["duration_seconds"] == 0
+        assert result["event_time"] is None
+
+    def test_used_latch_bit_stored_undecomposed(self):
+        """state_raw is the raw work-state byte: bit 0 (open) and bit 5 (the
+        used latch) are both set in the 60-second open sample, and the
+        decoder returns the byte as-is rather than pre-splitting it."""
+        state_raw = decode_htv210b_dp_state(SAMPLE_HTV210B_DP_OPEN_60S_STATE)["state_raw"]
+        assert state_raw & 0x01  # bit 0: open
+        assert state_raw & 0x20  # bit 5: used latch
+        assert state_raw == 0x21
+
+    def test_missing_comma_returns_none(self):
+        """A blob with no ',' separator at all is not the DP comma form."""
+        assert decode_htv210b_dp_state("D821AF3C000000B7D1230B1A") is None
+
+    def test_odd_length_hex_body_returns_none(self):
+        """A truncated hex body cannot be read as bytes."""
+        assert decode_htv210b_dp_state("1,D821AF3C00000") is None
+
+    def test_empty_hex_body_returns_none(self):
+        """A comma with nothing after it carries no record to walk."""
+        assert decode_htv210b_dp_state("1,") is None
+
+    def test_body_with_no_work_state_record_returns_none(self):
+        """A body that never mentions the work-state field cannot describe a zone."""
+        assert decode_htv210b_dp_state("1,AF3C000000") is None
+
+    def test_missing_duration_and_event_records_default_to_zero_and_none(self):
+        """A body carrying only the work-state record still decodes: duration
+        defaults to 0 and event_time stays None rather than raising."""
+        result = decode_htv210b_dp_state("1,D821")
+        assert result["open"] is True
+        assert result["duration_seconds"] == 0
+        assert result["event_time"] is None
+
+    def test_the_framed_poll_payload_is_not_the_dp_response(self):
+        """This decoder is not decode_htv210b: feeding it the poll's 11# frame
+        must not accidentally succeed, since it carries no leading-digit comma
+        form at all."""
+        assert decode_htv210b_dp_state(SAMPLE_HTV210B_TLV_PAYLOAD) is None
