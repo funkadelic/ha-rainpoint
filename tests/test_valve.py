@@ -8,7 +8,7 @@ import pytest
 
 from custom_components.rainpoint.api import _encode_dp_duration_param
 from custom_components.rainpoint.const import DOMAIN, MODEL_HTV210B, MODEL_VALVE_145, MODEL_VALVE_245, MODEL_VALVE_345
-from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS
 from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
     RainPointDpValveEntity,
@@ -1113,6 +1113,18 @@ def _htv210b_status(mid=20, sid="D01"):
     return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": SAMPLE_HTV210B_TLV_PAYLOAD, "time": 1785420002247}]}]
 
 
+def _htv210b_silent_status(mid=20):
+    """A multipleDeviceStatus poll that carries no entry for the HTV210B.
+
+    The silent form must return no status entry for the sub-device at all,
+    rather than an empty or malformed one: a malformed entry exercises the
+    record-tolerance path instead of the silence path this helper feeds. The
+    hub itself is still enumerated, matching a real cloud outage where a
+    sub-device stops answering while its hub keeps polling fine.
+    """
+    return [{"mid": mid, "subDeviceStatus": []}]
+
+
 async def _build_dp_valve_tracer_timeline():
     """Construct -> first refresh -> platform setup for a hub-paired HTV210B.
 
@@ -1229,6 +1241,142 @@ class TestDpValveTracer:
         assert after["hub_online"] == before["hub_online"]
         assert after["zones"][2] == zone2_before
         assert after["zones"][1]["open"] is True
+
+
+class TestSilentUnitGuardRealTimeline:
+    """The explicit silent-type guard in valve.py's build(), proven through the
+    real coordinator-then-setup-then-refresh sequence rather than an injected
+    coordinator.data snapshot.
+
+    A Bluetooth-only HTV210B carries model == HTV210B on its silent entry, so
+    the model-set check in build() alone would admit it; the silent type is
+    what actually discriminates. These tests drive the real timeline so the
+    silence genuinely develops (SILENT_DEBOUNCE_POLLS consecutive
+    arrived-but-silent polls) before asserting the guard, and the
+    silent-then-reporting / reporting-then-silent halves prove the guard
+    blocks creation only, never removal.
+    """
+
+    @staticmethod
+    async def _build_silent_timeline():
+        """Construct -> first refresh -> platform setup for an HTV210B that
+        never reports. Returns (coordinator, client, hass, entry, captured)."""
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = _htv210b_hub_devices()
+        client.get_multiple_device_status.return_value = _htv210b_silent_status()
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        return coordinator, client, hass, entry, captured
+
+    @staticmethod
+    async def _build_reporting_timeline():
+        """Construct -> first refresh -> platform setup for an HTV210B that
+        reports normally from the start. Returns (coordinator, client, hass, entry, captured)."""
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = _htv210b_hub_devices()
+        client.get_multiple_device_status.return_value = _htv210b_status()
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        return coordinator, client, hass, entry, captured
+
+    @pytest.mark.asyncio
+    async def test_a_silent_from_the_start_htv210b_never_offers_a_valve_entity(self):
+        """No valve entity across the whole silence timeline, even once the
+        debounce elapses and the entry's model alone would have admitted it."""
+        coordinator, _client, _hass, _entry, captured = await self._build_silent_timeline()
+        key = "10_20_1"
+        assert captured == []
+
+        # Every refresh short of the debounce: the key has no trace at all yet.
+        for _ in range(SILENT_DEBOUNCE_POLLS - 2):
+            await coordinator.async_refresh()
+            assert key not in coordinator.data["sensors"]
+            assert captured == []
+
+        # The debounce elapses: a silent entry appears, proving the model-set
+        # gate alone would have admitted it, and still no entity is offered.
+        await coordinator.async_refresh()
+        entry = coordinator.data["sensors"][key]
+        assert entry["data"]["type"] == SILENT_DATA_TYPE
+        assert entry["model"] == MODEL_HTV210B
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_a_silent_htv210b_that_starts_reporting_gains_its_valve_entities(self):
+        """The late adder promotes the entry the moment it stops being silent,
+        through the same coordinator listener, with no reload and no second
+        async_setup_entry call."""
+        coordinator, client, _hass, _entry, captured = await self._build_silent_timeline()
+        for _ in range(SILENT_DEBOUNCE_POLLS - 1):
+            await coordinator.async_refresh()
+        key = "10_20_1"
+        assert coordinator.data["sensors"][key]["data"]["type"] == SILENT_DATA_TYPE
+        assert captured == []
+
+        client.get_multiple_device_status.return_value = _htv210b_status()
+        await coordinator.async_refresh()
+
+        assert [e._zone_num for e in captured] == [1, 2]
+        assert all(isinstance(e, RainPointDpValveEntity) for e in captured)
+
+    @pytest.mark.asyncio
+    async def test_a_reporting_htv210b_that_goes_silent_keeps_its_valve_entities(self):
+        """The guard blocks creation only: entities already offered are never
+        withdrawn once the same device later goes silent."""
+        from custom_components.rainpoint.entity import late_adders
+
+        coordinator, client, hass, entry, captured = await self._build_reporting_timeline()
+        assert [e._zone_num for e in captured] == [1, 2]
+        offered_before = list(captured)
+
+        client.get_multiple_device_status.return_value = _htv210b_silent_status()
+        for _ in range(SILENT_DEBOUNCE_POLLS):
+            await coordinator.async_refresh()
+
+        key = "10_20_1"
+        assert coordinator.data["sensors"][key]["data"]["type"] == SILENT_DATA_TYPE
+        assert captured == offered_before
+
+        adder = late_adders(hass.data[DOMAIN][entry.entry_id])[0]
+        assert adder.ledger.unique_ids_for(key) == frozenset({"rainpoint_10_20_1_zone1", "rainpoint_10_20_1_zone2"})
 
 
 class TestDpValveCloseAndCodeFour:
