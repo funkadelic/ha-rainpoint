@@ -54,7 +54,7 @@ async def async_setup_entry(
         """
         built: list = []
         if info.get("model") in VALVE_MODELS:
-            data = info.get("data") or {}
+            decoded = info.get("data") or {}
             # A Bluetooth-only unit is enumerated by the cloud and reaches the
             # sensors dict as a debounced silent entry whose model field is
             # filled from the sub-device record, so the model-set check above
@@ -63,8 +63,8 @@ async def async_setup_entry(
             # control. The absence of a zones key would also block creation
             # today, but this guard states the invariant rather than resting
             # on that data shape.
-            if data.get("type") != SILENT_DATA_TYPE:
-                zones: dict = data.get("zones", {})
+            if decoded.get("type") != SILENT_DATA_TYPE:
+                zones: dict = decoded.get("zones", {})
                 for zone_num in sorted(zones.keys()):
                     built.append(RainPointZoneDurationNumber(coordinator, key, info, zone_num))
                     _LOGGER.debug("Creating duration number entity: key=%s zone=%s", key, zone_num)
