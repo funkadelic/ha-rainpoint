@@ -18,8 +18,14 @@ from custom_components.rainpoint.number import (
     RainPointZoneDurationNumber,
     build_generic_duration_entities,
 )
-from tests.helpers import make_coordinator_data, make_sensor_coordinator, make_sensor_entry
-from tests.payload_samples import SAMPLE_HTV210B_TLV_PAYLOAD
+from tests.helpers import (
+    htv210b_hub_devices,
+    htv210b_silent_status,
+    htv210b_status,
+    make_coordinator_data,
+    make_sensor_coordinator,
+    make_sensor_entry,
+)
 
 # Real, non-hand-written catalog variants reused from tests/test_generic_control.py's
 # own fixtures, so the companion duration builder is proven against the same
@@ -812,35 +818,6 @@ class TestNumberAdderRegistration:
         assert isinstance(registered[1], LateEntityAdder)
 
 
-def _htv210b_hub_devices(mid=20, addr=1):
-    """A getDeviceByHid hub record carrying one hub-paired HTV210B sub-device."""
-    return [
-        {
-            "mid": mid,
-            "name": "Hub A",
-            "deviceName": "hub-mac",
-            "productKey": "hub-pk",
-            "homeName": "H",
-            "subDevices": [{"addr": addr, "name": "BT Valve", "model": MODEL_HTV210B, "modelCode": 41, "softVer": "1.0"}],
-        }
-    ]
-
-
-def _htv210b_status(mid=20, sid="D01"):
-    """A multipleDeviceStatus reading for the HTV210B, both zones idle."""
-    return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": SAMPLE_HTV210B_TLV_PAYLOAD, "time": 1785420002247}]}]
-
-
-def _htv210b_silent_status(mid=20):
-    """A multipleDeviceStatus poll that carries no entry for the HTV210B.
-
-    The silent form must return no status entry for the sub-device at all,
-    rather than an empty or malformed one: a malformed entry exercises the
-    record-tolerance path instead of the silence path this helper feeds.
-    """
-    return [{"mid": mid, "subDeviceStatus": []}]
-
-
 class TestSilentUnitGuardRealTimeline:
     """The explicit silent-type guard in number.py's build(), proven through
     the real coordinator-then-setup-then-refresh sequence rather than an
@@ -857,8 +834,8 @@ class TestSilentUnitGuardRealTimeline:
         from custom_components.rainpoint.number import async_setup_entry
 
         client = AsyncMock()
-        client.get_devices_by_hid.return_value = _htv210b_hub_devices()
-        client.get_multiple_device_status.return_value = _htv210b_silent_status()
+        client.get_devices_by_hid.return_value = htv210b_hub_devices()
+        client.get_multiple_device_status.return_value = htv210b_silent_status()
 
         entry = MagicMock()
         entry.entry_id = "e1"
@@ -911,8 +888,8 @@ class TestSilentUnitGuardRealTimeline:
         from custom_components.rainpoint.valve import async_setup_entry as valve_setup_entry
 
         client = AsyncMock()
-        client.get_devices_by_hid.return_value = _htv210b_hub_devices()
-        client.get_multiple_device_status.return_value = _htv210b_silent_status()
+        client.get_devices_by_hid.return_value = htv210b_hub_devices()
+        client.get_multiple_device_status.return_value = htv210b_silent_status()
 
         entry = MagicMock()
         entry.entry_id = "e1"
@@ -936,7 +913,7 @@ class TestSilentUnitGuardRealTimeline:
         assert valve_captured == []
         assert number_captured == []
 
-        client.get_multiple_device_status.return_value = _htv210b_status()
+        client.get_multiple_device_status.return_value = htv210b_status()
         await coordinator.async_refresh()
 
         assert [e._zone_num for e in valve_captured] == [1, 2]

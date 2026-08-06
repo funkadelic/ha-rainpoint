@@ -13,6 +13,8 @@ rather than on a mocked call.
 from unittest.mock import AsyncMock, MagicMock
 
 from custom_components.rainpoint.api import RainPointClient
+from custom_components.rainpoint.const import MODEL_HTV210B
+from tests.payload_samples import SAMPLE_HTV210B_TLV_PAYLOAD
 
 _SENTINEL = object()
 
@@ -190,3 +192,34 @@ def make_valve_zone_status(mid=20, sid="D01", zones_reported=True, time_ms=17854
     """
     value = VALVE_ZONES_TLV_PAYLOAD if zones_reported else ""
     return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": value, "time": time_ms}]}]
+
+
+def htv210b_hub_devices(mid=20, addr=1):
+    """A getDeviceByHid hub record carrying one hub-paired HTV210B sub-device."""
+    return [
+        {
+            "mid": mid,
+            "name": "Hub A",
+            "deviceName": "hub-mac",
+            "productKey": "hub-pk",
+            "homeName": "H",
+            "subDevices": [{"addr": addr, "name": "BT Valve", "model": MODEL_HTV210B, "modelCode": 41, "softVer": "1.0"}],
+        }
+    ]
+
+
+def htv210b_status(mid=20, sid="D01"):
+    """A multipleDeviceStatus reading for the HTV210B, both zones idle."""
+    return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": SAMPLE_HTV210B_TLV_PAYLOAD, "time": 1785420002247}]}]
+
+
+def htv210b_silent_status(mid=20):
+    """A multipleDeviceStatus poll that carries no entry for the HTV210B.
+
+    The silent form must return no status entry for the sub-device at all,
+    rather than an empty or malformed one: a malformed entry exercises the
+    record-tolerance path instead of the silence path this helper feeds. The
+    hub itself is still enumerated, matching a real cloud outage where a
+    sub-device stops answering while its hub keeps polling fine.
+    """
+    return [{"mid": mid, "subDeviceStatus": []}]

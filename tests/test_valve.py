@@ -14,8 +14,16 @@ from custom_components.rainpoint.valve import (
     RainPointDpValveEntity,
     RainPointValveEntity,
 )
-from tests.helpers import make_mock_session_client, make_sensor_coordinator, make_valve_zone_status, mock_json_response
-from tests.payload_samples import SAMPLE_HTV145_OPEN_PAYLOAD, SAMPLE_HTV210B_TLV_PAYLOAD, SAMPLE_HTV245_ASCII_PAYLOAD
+from tests.helpers import (
+    htv210b_hub_devices,
+    htv210b_silent_status,
+    htv210b_status,
+    make_mock_session_client,
+    make_sensor_coordinator,
+    make_valve_zone_status,
+    mock_json_response,
+)
+from tests.payload_samples import SAMPLE_HTV145_OPEN_PAYLOAD, SAMPLE_HTV245_ASCII_PAYLOAD
 
 ONE_ZONE_TLV_PAYLOAD = "11#17E1D70018DC0119D8001D20"
 """The shared two-zone TLV frame with zone 2's state and duration entries removed.
@@ -1094,37 +1102,6 @@ class TestValveAvailabilityPushedReconnect:
         assert valve.extra_state_attributes["hub_connected"] is True
 
 
-def _htv210b_hub_devices(mid=20, addr=1):
-    """A getDeviceByHid hub record carrying one hub-paired HTV210B sub-device."""
-    return [
-        {
-            "mid": mid,
-            "name": "Hub A",
-            "deviceName": "hub-mac",
-            "productKey": "hub-pk",
-            "homeName": "H",
-            "subDevices": [{"addr": addr, "name": "BT Valve", "model": MODEL_HTV210B, "modelCode": 41, "softVer": "1.0"}],
-        }
-    ]
-
-
-def _htv210b_status(mid=20, sid="D01"):
-    """A multipleDeviceStatus reading for the HTV210B, both zones idle."""
-    return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": SAMPLE_HTV210B_TLV_PAYLOAD, "time": 1785420002247}]}]
-
-
-def _htv210b_silent_status(mid=20):
-    """A multipleDeviceStatus poll that carries no entry for the HTV210B.
-
-    The silent form must return no status entry for the sub-device at all,
-    rather than an empty or malformed one: a malformed entry exercises the
-    record-tolerance path instead of the silence path this helper feeds. The
-    hub itself is still enumerated, matching a real cloud outage where a
-    sub-device stops answering while its hub keeps polling fine.
-    """
-    return [{"mid": mid, "subDeviceStatus": []}]
-
-
 async def _build_dp_valve_tracer_timeline():
     """Construct -> first refresh -> platform setup for a hub-paired HTV210B.
 
@@ -1138,8 +1115,8 @@ async def _build_dp_valve_tracer_timeline():
     from custom_components.rainpoint.valve import async_setup_entry
 
     client = AsyncMock()
-    client.get_devices_by_hid.return_value = _htv210b_hub_devices()
-    client.get_multiple_device_status.return_value = _htv210b_status()
+    client.get_devices_by_hid.return_value = htv210b_hub_devices()
+    client.get_multiple_device_status.return_value = htv210b_status()
 
     entry = MagicMock()
     entry.entry_id = "e1"
@@ -1178,8 +1155,9 @@ class TestDpValveTracer:
     """End to end: open one HTV210B zone through controlWorkModeDP and decode
     the response's own state blob.
 
-    Task 1's tracer slice. Task 2 adds close, code 4 and the RF param field;
-    task 3 adds the decoder and identity-predicate matrices.
+    Covers the open path only. TestDpValveCloseAndCodeFour covers close and the
+    code-4 response, and TestDpApplyResponseStateBranches covers
+    _apply_response_state's guard clauses.
     """
 
     @pytest.mark.asyncio
@@ -1266,8 +1244,8 @@ class TestSilentUnitGuardRealTimeline:
         from custom_components.rainpoint.valve import async_setup_entry
 
         client = AsyncMock()
-        client.get_devices_by_hid.return_value = _htv210b_hub_devices()
-        client.get_multiple_device_status.return_value = _htv210b_silent_status()
+        client.get_devices_by_hid.return_value = htv210b_hub_devices()
+        client.get_multiple_device_status.return_value = htv210b_silent_status()
 
         entry = MagicMock()
         entry.entry_id = "e1"
@@ -1296,8 +1274,8 @@ class TestSilentUnitGuardRealTimeline:
         from custom_components.rainpoint.valve import async_setup_entry
 
         client = AsyncMock()
-        client.get_devices_by_hid.return_value = _htv210b_hub_devices()
-        client.get_multiple_device_status.return_value = _htv210b_status()
+        client.get_devices_by_hid.return_value = htv210b_hub_devices()
+        client.get_multiple_device_status.return_value = htv210b_status()
 
         entry = MagicMock()
         entry.entry_id = "e1"
@@ -1351,7 +1329,7 @@ class TestSilentUnitGuardRealTimeline:
         assert coordinator.data["sensors"][key]["data"]["type"] == SILENT_DATA_TYPE
         assert captured == []
 
-        client.get_multiple_device_status.return_value = _htv210b_status()
+        client.get_multiple_device_status.return_value = htv210b_status()
         await coordinator.async_refresh()
 
         assert [e._zone_num for e in captured] == [1, 2]
@@ -1367,7 +1345,7 @@ class TestSilentUnitGuardRealTimeline:
         assert [e._zone_num for e in captured] == [1, 2]
         offered_before = list(captured)
 
-        client.get_multiple_device_status.return_value = _htv210b_silent_status()
+        client.get_multiple_device_status.return_value = htv210b_silent_status()
         for _ in range(SILENT_DEBOUNCE_POLLS):
             await coordinator.async_refresh()
 
