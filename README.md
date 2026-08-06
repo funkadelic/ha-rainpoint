@@ -34,7 +34,7 @@ While it is hub-paired, its zones open and close from Home Assistant like any ot
 
 If you ran an earlier release, the read-only zone state sensors it created stay where they are, so each zone now has both a state sensor and a valve control. Nothing is deleted for you, because automations and dashboard cards may already point at those sensors. If you would rather see only the valve, disable the zone state sensors from the device page.
 
-Every model listed above has a decoder written against a real payload. A model that is absent is not necessarily unusable: the opt-in generic sensors described under [Configuration](#configuration) can often surface readings for it from the product catalog, clearly labeled unverified.
+Every model listed above has a decoder written against a real payload. A model that is absent is not necessarily unusable: the [opt-in generic entities](#unverified-generic-entities-opt-in) can often surface readings for it from the product catalog, clearly labeled unverified.
 
 All devices communicate via the RainPoint cloud backend. There is no local LAN protocol.
 
@@ -138,7 +138,7 @@ RainPoint sometimes moves a device to a different parent record on its side, whi
 
 Home Assistant raises a **Settings → Repairs** card, "A device's entities are left over from an older listing", once the old listing has been absent from thirty consecutive checks, roughly an hour at the default two-minute polling interval. The window is deliberately long, and it pauses entirely while the device's hub is itself missing from your account listing, so a cloud-side blip cannot strand a healthy device's entities.
 
-Nothing is removed automatically. That card's **Submit** button is the only thing in this integration that deletes an entity, and it deletes the history recorded against those entities along with them, which cannot be undone. If you would rather keep the history, leave the card alone: the leftover entities stay where they are, unavailable but intact. The leftover device page is released at the same time as the entities, once it carries nothing else.
+Nothing is removed automatically. That card's **Submit** button is the only thing that deletes an entity you did not opt into, and it deletes the history recorded against those entities along with them, which cannot be undone. (The one other deletion path is switching off an option you turned on yourself, under [unverified generic entities](#unverified-generic-entities-opt-in), which clears the entities that option created.) If you would rather keep the history, leave the card alone: the leftover entities stay where they are, unavailable but intact. The leftover device page is released at the same time as the entities, once it carries nothing else.
 
 One thing to know before deferring it: the card is withdrawn when the integration reloads or Home Assistant restarts, and it is not raised again, because the old listing is gone from your account and nothing is left to notice its entities. Removing them after that means removing them by hand under **Settings → Devices & services → Entities**.
 
@@ -167,6 +167,27 @@ Enabling push adds two hub-level diagnostic entities: **`<hub> Push Connected`**
 Push is off by default for now while it proves out; you can turn it on at any time. If the connection ever drops, Home Assistant reconnects on its own, and the usual 120-second polling keeps your devices up to date in the meantime. In testing it ran alongside the RainPoint phone app without knocking either one offline.
 
 Turning push on doesn't change the [one-session-per-account note above](#use-a-dedicated-home-assistant-account-recommended): it's the sign-in used for setup that can bump your phone out of the app (and vice versa), whether or not push is enabled.
+
+---
+
+## Unverified generic entities (opt-in)
+
+For a device this integration has no tested decoder for, it can fall back to RainPoint's own product catalog and offer provisional entities from it. There are two separate switches, both off by default, and neither affects a device from the [supported list](#supported-devices): those always use their tested decoder.
+
+- **Enable unverified generic sensors** adds provisional readings. They are named with a trailing `(unverified)`, and they are deliberately kept out of long-term statistics, so an unverified number never lands in your energy or history graphs as though it were trustworthy.
+- **Enable unverified generic device control** adds controls that open and close real hardware, water valves included. The zone mapping comes from the catalog rather than a tested per-model decoder, so a wrong mapping can run the wrong zone or leave water running. Turn this on only if you are willing to watch what happens the first time.
+
+Both are conservative about what they create. Generic sensors appear for a device only when every reading it reports has a definition the integration recognises, so many devices produce none at all. A generic control never guesses: it shows only state it has read back from the device, never the state you just commanded.
+
+### Enabling or disabling generic entities
+
+1. Go to **Settings → Devices & Services → RainPoint Cloud → Configure**.
+2. Check **Enable unverified generic sensors**, **Enable unverified generic device control**, or both.
+3. Save. The change applies automatically, so you never have to reload or re-add the integration by hand.
+
+The form tells you how many devices on your account each option would currently affect, so you can see whether turning it on would produce anything at all before you commit to it. Unchecking an option on the same screen turns it back off, and the entities it created are removed rather than left behind unavailable, along with their recorded history.
+
+If a generic reading turns out to be right (or wrong) for your device, that is worth [reporting](#my-device-isnt-listed): it is what turns a catalog guess into a tested decoder.
 
 ---
 
