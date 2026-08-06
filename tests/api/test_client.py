@@ -254,6 +254,39 @@ class TestControlWorkModeDp:
         assert "duration" not in body
 
     @pytest.mark.asyncio
+    async def test_debug_log_carries_neither_device_name_nor_product_key(self, caplog):
+        """No log line this endpoint emits repeats the hub MAC or the productKey.
+
+        Both are scrubbed by name in the capture record, and this method logs
+        named fields rather than the payload dict for exactly that reason. A
+        refactor that copied control_work_mode's payload=%s line would put the
+        hub MAC back into logs, so the property is pinned here rather than
+        left to the comment.
+        """
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        json_body = {"code": 0, "data": {"state": "1,D821AF3C000000B7D1230B1A"}}
+        client._session.post = MagicMock(return_value=self._mock_response(json_body))
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.client"):
+            await client.control_work_mode_dp(
+                mid=1,
+                addr=3,
+                device_name="AA:BB:CC:DD:EE:FF",
+                product_key="a1SecretProductKey",
+                port=1,
+                mode=1,
+                param="3C000000",
+            )
+
+        emitted = caplog.text
+        assert "AA:BB:CC:DD:EE:FF" not in emitted
+        assert "a1SecretProductKey" not in emitted
+        # The call did happen, so the assertions above are not passing on an
+        # empty log.
+        assert "control_work_mode_dp" in emitted
+
+    @pytest.mark.asyncio
     async def test_code_0_dict_state_returns_state(self):
         """A code-0 response whose data is a dict returns data['state']."""
         client = self._make_client()
