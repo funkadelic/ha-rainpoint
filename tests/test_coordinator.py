@@ -43,6 +43,7 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_CO2,
     MODEL_DISPLAY_HUB,
     MODEL_FLOWMETER,
+    MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
     MODEL_RAIN,
@@ -913,6 +914,105 @@ class TestCoordinatorUpdate:
 
         assert recorded.tzinfo is UTC
         assert instance._last_valve_command_at[("100_200_1", 1)] is recorded
+
+
+class TestHtv210bStalenessGuardCoverage:
+    """DPCTL-06's downstream consequence: admitting MODEL_HTV210B to
+    VALVE_MODELS enrols it in the command-versus-poll staleness guard with no
+    coordinator source change. _preserve_recent_valve_command_state gates
+    purely on model not in VALVE_MODELS, so this is confirmed by test rather
+    than by reading, mirroring the RF-model tests above.
+    """
+
+    # Zone 1 running, zone 2 idle: state 0x21, a 120s duration, and an event
+    # time exactly two minutes after the run started. Every field value is
+    # taken from tests/api/test_decoders.py's TestDecodeHtv210b.RUNNING_PAYLOAD,
+    # itself pinned against a timed two-minute run on real hardware.
+    RUNNING_PAYLOAD = "11#18DC0117E1B40119D8211AD80021B71132FB1922B70000000025AF7800000026AF00000000FEFF0F1527FB19"
+
+    @pytest.mark.asyncio
+    async def test_stale_poll_preserves_the_commanded_zone_and_takes_the_fresh_sibling(self):
+        """A poll older than a just-recorded command for zone 1 keeps zone 1's
+        previously stored state; zone 2, never commanded, takes the fresh
+        poll's value. The command is recorded through record_valve_command,
+        the same entry point the DP valve entity's _record_successful_command
+        calls, rather than by writing _last_valve_command_at directly."""
+        coord, client = _make_coord()
+        zone1_current = {"open": False, "duration_seconds": 0, "state_raw": 0}
+        zone2_current = {"open": True, "duration_seconds": 999, "state_raw": 77}
+        coord.data = {
+            "sensors": {
+                "100_200_1": {
+                    "data": {"zones": {1: zone1_current, 2: zone2_current}},
+                }
+            }
+        }
+        _coord_module.RainPointCoordinator.record_valve_command(coord, "100_200_1", 1)
+
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_HTV210B)]
+        client.get_multiple_device_status.return_value = _make_status(
+            value=self.RUNNING_PAYLOAD,
+            time_ms=int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000),
+        )
+
+        result = await _run(coord)
+
+        zones = result["sensors"]["100_200_1"]["data"]["zones"]
+        assert zones[1] == zone1_current
+        assert zones[2]["open"] is False
+        assert zones[2]["duration_seconds"] == 0
+        assert zones[2]["state_raw"] == 0
+
+    @pytest.mark.asyncio
+    async def test_newer_poll_applies_normally_for_the_dp_commanded_model(self):
+        """A poll newer than the recorded command is accepted, so the guard is
+        a staleness window and not a permanent freeze."""
+        coord, client = _make_coord()
+        coord.data = {
+            "sensors": {
+                "100_200_1": {
+                    "data": {"zones": {1: {"open": False, "duration_seconds": 0, "state_raw": 0}, 2: {}}},
+                }
+            }
+        }
+        coord._last_valve_command_at = {("100_200_1", 1): datetime(2024, 1, 1, tzinfo=UTC)}
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_HTV210B)]
+        client.get_multiple_device_status.return_value = _make_status(
+            value=self.RUNNING_PAYLOAD,
+            time_ms=int(datetime(2024, 1, 2, tzinfo=UTC).timestamp() * 1000),
+        )
+
+        result = await _run(coord)
+
+        zone1 = result["sensors"]["100_200_1"]["data"]["zones"][1]
+        assert zone1["open"] is True
+        assert zone1["duration_seconds"] == 120
+        assert zone1["state_raw"] == 0x21
+
+    def test_guard_is_a_noop_for_a_decode_with_no_zones_dict(self):
+        """The silent entry's own decode shape (task 1's build-gate guard)
+        carries no zones dict at all, so the staleness guard and the
+        silent-unit guard can never interact."""
+        coord, _ = _make_coord()
+        silent_decoded = {
+            "type": SILENT_DATA_TYPE,
+            "model": MODEL_HTV210B,
+            "silent_state": "stopped_reporting",
+            "last_seen": None,
+            "missed_polls": 3,
+        }
+        coord.data = {"sensors": {"100_200_1": {"data": {"zones": {1: {"open": True}}}}}}
+        coord._last_valve_command_at = {("100_200_1", 1): datetime(2024, 1, 2, tzinfo=UTC)}
+
+        result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
+            coord,
+            "100_200_1",
+            MODEL_HTV210B,
+            silent_decoded,
+            {"time": int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000)},
+        )
+
+        assert result is silent_decoded
 
 
 class TestCoordinatorEdgeBranches:
