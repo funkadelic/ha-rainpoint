@@ -652,6 +652,61 @@ def decode_htv210b(raw: str) -> dict:
         }
 
 
+def decode_htv210b_dp_state(raw: str) -> dict | None:
+    """Decode the comma-form ``state`` blob ``controlWorkModeDP`` returns.
+
+    The response carries a leading mode digit, a comma, then the same
+    self-describing record stream ``decode_htv210b`` walks -- but with no
+    per-record dp_id, since the response describes exactly one zone rather
+    than the whole hub. ``_parse_entries`` is therefore called with
+    ``dp_id_prefixed=False`` here, not True as in the poll-path decoder.
+
+    Returns a single zone dict with exactly the four keys
+    ``_extract_htv210b_zones`` produces (``open``, ``duration_seconds``,
+    ``state_raw``, ``event_time``): no ``type``, ``rssi_dbm``,
+    ``battery_flag``, ``zones`` wrapper, or port field, because the blob does
+    not carry those and does not say which zone it describes -- the
+    commanded port comes from the caller. Returns None on any malformed
+    input (no comma, an odd-length or empty hex body, or a body with no
+    work-state record) so a caller's existing falsy bail-out covers it,
+    rather than raising or returning a partial dict.
+    """
+    try:
+        if not raw or "," not in raw:
+            raise ValueError("DP state blob missing ',' separator")
+        _, hex_body = raw.split(",", 1)
+        hex_body = hex_body.strip()
+        if not hex_body or len(hex_body) % 2 != 0:
+            raise ValueError(f"DP state hex body is empty or odd-length: {len(hex_body)} chars")
+        b = bytes.fromhex(hex_body)
+        records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
+
+        state_bytes = records.get(_HTV210B_FIELD_WKSTATE)
+        if state_bytes is None or len(state_bytes) != 1:
+            raise ValueError("DP state blob has no work-state record")
+        state_val = state_bytes[0]
+
+        duration_seconds = 0
+        dur_bytes = records.get(_HTV210B_FIELD_DURATION)
+        if dur_bytes is not None and len(dur_bytes) in _HTV210B_DURATION_WIDTHS:
+            duration_seconds = int.from_bytes(dur_bytes, "little")
+
+        event_time = None
+        ev_bytes = records.get(_HTV210B_FIELD_EVTIME)
+        if ev_bytes is not None and len(ev_bytes) == 4:
+            event_time = _decode_packed_timestamp(int.from_bytes(ev_bytes, "little"))
+
+        return {
+            "open": bool(state_val & 0x01),
+            "duration_seconds": duration_seconds,
+            "state_raw": state_val,
+            "event_time": event_time,
+        }
+    except Exception:
+        _LOGGER.exception("HTV210B DP state decoder error for a %d-character blob", len(raw) if raw else 0)
+        return None
+
+
 def _scan_htv145_markers(b: bytes) -> dict[int, int]:
     """Scan the HTV145FRF [type_byte][value...] stream into {type_byte: value_int}.
 

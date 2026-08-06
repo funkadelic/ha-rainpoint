@@ -6,14 +6,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.rainpoint.const import DOMAIN, MODEL_VALVE_145, MODEL_VALVE_245, MODEL_VALVE_345
+from custom_components.rainpoint.api import _encode_dp_duration_param
+from custom_components.rainpoint.const import DOMAIN, MODEL_HTV210B, MODEL_VALVE_145, MODEL_VALVE_245, MODEL_VALVE_345
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
+    RainPointDpValveEntity,
     RainPointValveEntity,
 )
-from tests.helpers import make_sensor_coordinator, make_valve_zone_status
-from tests.payload_samples import SAMPLE_HTV145_OPEN_PAYLOAD, SAMPLE_HTV245_ASCII_PAYLOAD
+from tests.helpers import make_mock_session_client, make_sensor_coordinator, make_valve_zone_status, mock_json_response
+from tests.payload_samples import SAMPLE_HTV145_OPEN_PAYLOAD, SAMPLE_HTV210B_TLV_PAYLOAD, SAMPLE_HTV245_ASCII_PAYLOAD
 
 ONE_ZONE_TLV_PAYLOAD = "11#17E1D70018DC0119D8001D20"
 """The shared two-zone TLV frame with zone 2's state and duration entries removed.
@@ -1090,3 +1092,176 @@ class TestValveAvailabilityPushedReconnect:
 
         assert valve.available is True
         assert valve.extra_state_attributes["hub_connected"] is True
+
+
+def _htv210b_hub_devices(mid=20, addr=1):
+    """A getDeviceByHid hub record carrying one hub-paired HTV210B sub-device."""
+    return [
+        {
+            "mid": mid,
+            "name": "Hub A",
+            "deviceName": "hub-mac",
+            "productKey": "hub-pk",
+            "homeName": "H",
+            "subDevices": [{"addr": addr, "name": "BT Valve", "model": MODEL_HTV210B, "modelCode": 41, "softVer": "1.0"}],
+        }
+    ]
+
+
+def _htv210b_status(mid=20, sid="D01"):
+    """A multipleDeviceStatus reading for the HTV210B, both zones idle."""
+    return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": SAMPLE_HTV210B_TLV_PAYLOAD, "time": 1785420002247}]}]
+
+
+async def _build_dp_valve_tracer_timeline():
+    """Construct -> first refresh -> platform setup for a hub-paired HTV210B.
+
+    Returns (coordinator, client, entities), entities sorted by zone number.
+    Mirrors _build_valve_availability_timeline's shape for the DP endpoint's
+    own fixture rather than reusing it, since this one needs a different
+    model and a different subDevices shape (modelCode carried).
+    """
+    from custom_components.rainpoint.const import CONF_HIDS
+    from custom_components.rainpoint.coordinator import RainPointCoordinator
+    from custom_components.rainpoint.valve import async_setup_entry
+
+    client = AsyncMock()
+    client.get_devices_by_hid.return_value = _htv210b_hub_devices()
+    client.get_multiple_device_status.return_value = _htv210b_status()
+
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.data = {CONF_HIDS: [10]}
+    entry.options = {}
+    hass = MagicMock()
+    hass.data = {DOMAIN: {"e1": {}}}
+
+    coordinator = RainPointCoordinator(hass, client, entry)
+    hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+    await coordinator.async_config_entry_first_refresh()
+
+    captured = []
+    async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+    await async_setup_entry(hass, entry, async_add_entities)
+
+    captured.sort(key=lambda e: e._zone_num)
+    return coordinator, client, captured
+
+
+def _bind_real_dp_control(client, response_body):
+    """Point client.control_work_mode_dp at a real client method reading response_body.
+
+    Returns the real client so a test can assert on the exact JSON body its
+    session.post received -- the far end of the stack, not a mocked call.
+    """
+    real_client = make_mock_session_client()
+    real_client.ensure_logged_in = AsyncMock()
+    real_client._session.post = MagicMock(return_value=mock_json_response(response_body))
+    client.control_work_mode_dp = real_client.control_work_mode_dp
+    return real_client
+
+
+class TestDpValveTracer:
+    """End to end: open one HTV210B zone through controlWorkModeDP and decode
+    the response's own state blob.
+
+    Task 1's tracer slice. Task 2 adds close, code 4 and the RF param field;
+    task 3 adds the decoder and identity-predicate matrices.
+    """
+
+    @pytest.mark.asyncio
+    async def test_setup_builds_dp_entities_for_both_zones(self):
+        """A hub-paired HTV210B produces RainPointDpValveEntity for zones 1 and 2."""
+        _coordinator, _client, entities = await _build_dp_valve_tracer_timeline()
+
+        assert [e._zone_num for e in entities] == [1, 2]
+        assert all(isinstance(e, RainPointDpValveEntity) for e in entities)
+
+    @pytest.mark.asyncio
+    async def test_open_posts_captured_body_and_applies_response_state(self):
+        """Opening zone 1 posts the captured controlWorkModeDP body and the
+        response is decoded straight into that entity's read-back state."""
+        _coordinator, client, entities = await _build_dp_valve_tracer_timeline()
+        zone1 = entities[0]
+
+        real_client = _bind_real_dp_control(client, {"code": 0, "data": {"state": "1,D821AF3C000000B7D1230B1A"}})
+
+        await zone1.async_open_valve(duration=60)
+
+        real_client._session.post.assert_called_once()
+        call = real_client._session.post.call_args
+        url = call.args[0]
+        body = call.kwargs["json"]
+
+        assert url.endswith("/app/device/controlWorkModeDP")
+        assert set(body.keys()) == {"mid", "productKey", "deviceName", "mode", "addr", "port", "param", "dpCode"}
+        assert body["mode"] == 1
+        assert body["port"] == 1
+        assert body["dpCode"] == 1
+        assert body["param"] == "3C000000"
+        assert "duration" not in body
+
+        assert zone1.is_closed is False
+        attrs = zone1.extra_state_attributes
+        assert attrs["duration_seconds"] == 60
+        assert attrs["state_raw"] == 0x21
+        assert attrs["event_time"] == "2026-08-05T18:15:17"
+
+    @pytest.mark.asyncio
+    async def test_open_merges_zone_and_leaves_the_rest_of_the_poll_intact(self):
+        """The merge preserves battery/rssi/hub_online and zone 2's poll-derived entry."""
+        coordinator, client, entities = await _build_dp_valve_tracer_timeline()
+        zone1 = entities[0]
+        key = "10_20_1"
+        before = coordinator.data["sensors"][key]["data"]
+        assert before["battery_flag"] is not None
+        assert before["rssi_dbm"] is not None
+        zone2_before = before["zones"][2]
+
+        _bind_real_dp_control(client, {"code": 0, "data": {"state": "1,D821AF3C000000B7D1230B1A"}})
+
+        await zone1.async_open_valve(duration=60)
+
+        after = coordinator.data["sensors"][key]["data"]
+        assert after["battery_flag"] == before["battery_flag"]
+        assert after["rssi_dbm"] == before["rssi_dbm"]
+        assert after["hub_online"] == before["hub_online"]
+        assert after["zones"][2] == zone2_before
+        assert after["zones"][1]["open"] is True
+
+
+class TestEncodeDpDurationParam:
+    """The pure seconds-to-param hex encoder."""
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [
+            (60, "3C000000"),
+            (120, "78000000"),
+            (0, "00000000"),
+            (600, "58020000"),
+            (3600, "100E0000"),
+        ],
+    )
+    def test_known_values(self, seconds, expected):
+        """Established encoding checkpoints from the capture."""
+        assert _encode_dp_duration_param(seconds) == expected
+
+    def test_repeated_calls_return_identical_string(self):
+        """The encoder is pure: no caller-visible state between calls."""
+        assert _encode_dp_duration_param(600) == _encode_dp_duration_param(600)
+
+
+class TestDpClassDispatch:
+    """build() discriminates by catalog identity rather than replacing the RF
+    class for every VALVE_MODELS member."""
+
+    @pytest.mark.asyncio
+    async def test_non_bluetooth_model_still_builds_rf_entity(self):
+        """A VALVE_MODELS member with no CTL_BT_WATER identity (MODEL_VALVE_245)
+        still builds the plain RF entity, not the DP subclass."""
+        _coordinator, _client, valve = await _build_valve_availability_timeline()
+
+        assert isinstance(valve, RainPointValveEntity)
+        assert not isinstance(valve, RainPointDpValveEntity)

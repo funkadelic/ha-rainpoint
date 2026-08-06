@@ -13,7 +13,14 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import decode_htv145frf, decode_htv213frf_valve, decode_valve_hub
+from .api import (
+    _encode_dp_duration_param,
+    decode_htv145frf,
+    decode_htv210b_dp_state,
+    decode_htv213frf_valve,
+    decode_valve_hub,
+    has_bluetooth_control_identity,
+)
 from .const import (
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
@@ -60,12 +67,28 @@ async def async_setup_entry(
         built: list = []
         if info.get("model") in VALVE_MODELS:
             zones: dict = (info.get("data") or {}).get("zones", {})
+            # Endpoint selection is a function of the committed catalog's
+            # datapoint identity, never the model itself: a variant declaring
+            # the Bluetooth-backed control identity commands through
+            # RainPointDpValveEntity, every other admitted model through the
+            # RF RainPointValveEntity.
+            entity_cls = (
+                RainPointDpValveEntity
+                if has_bluetooth_control_identity(info.get("model"), info.get("model_code"))
+                else RainPointValveEntity
+            )
             # One entity per zone that reported in the payload. Zones absent
             # from the payload are not created, which avoids phantom entities
             # when a device reports fewer zones than its model name implies.
             for zone_num in sorted(zones.keys()):
-                built.append(RainPointValveEntity(coordinator, key, info, zone_num))
-                _LOGGER.debug("Creating valve entity: key=%s zone=%s model=%s", key, zone_num, info.get("model"))
+                built.append(entity_cls(coordinator, key, info, zone_num))
+                _LOGGER.debug(
+                    "Creating valve entity: key=%s zone=%s model=%s class=%s",
+                    key,
+                    zone_num,
+                    info.get("model"),
+                    entity_cls.__name__,
+                )
 
         if generic_enabled:
             # Deferred import: generic_control reaches sensor.py's
@@ -322,3 +345,81 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
         )
         self._record_successful_command()
         self._apply_response_state(response_state)
+
+
+class RainPointDpValveEntity(RainPointValveEntity):
+    """A valve zone commanded through the datapoint control endpoint.
+
+    A Bluetooth-backed model such as the HTV210B commands through
+    ``controlWorkModeDP`` rather than ``controlWorkMode``: a different URL, a
+    request shape that carries the run duration as a little-endian hex
+    ``param`` instead of a ``duration`` field, and a response blob that
+    describes exactly one zone rather than the whole hub. Kept as a subclass
+    rather than a branch inside the parent's command methods so the two
+    framings can never leak into each other, mirroring how
+    ``generic_control.py`` keeps its own write path separate rather than
+    branching an existing one.
+
+    ``__init__``, the unique_id shape, ``is_closed``,
+    ``extra_state_attributes``, availability, and
+    ``_get_configured_duration_seconds`` are all inherited unchanged, so the
+    companion duration number entity keeps resolving this zone.
+    """
+
+    async def async_open_valve(self, **kwargs: Any) -> None:
+        duration = int(kwargs["duration"]) if "duration" in kwargs else self._get_configured_duration_seconds()
+        mid = self._sensor_info["mid"]
+        addr = self._sensor_info["addr"]
+        device_name = self._sensor_info.get("device_name") or ""
+        product_key = self._sensor_info.get("product_key") or ""
+        param = _encode_dp_duration_param(duration)
+
+        _LOGGER.debug(
+            "Opening DP valve mid=%s addr=%s zone=%s duration=%ss",
+            mid,
+            addr,
+            self._zone_num,
+            duration,
+        )
+
+        client = self.coordinator._client
+        response_state = await client.control_work_mode_dp(
+            mid=mid,
+            addr=addr,
+            device_name=device_name,
+            product_key=product_key,
+            port=self._zone_num,
+            mode=1,
+            param=param,
+        )
+        self._record_successful_command()
+        self._apply_response_state(response_state)
+
+    def _apply_response_state(self, raw_state: str | None) -> None:
+        """Decode the DP response blob and merge it into this zone only.
+
+        Unlike the parent's wholesale replace, the DP response describes only
+        the commanded zone: no battery, no signal, and -- on a portNumber-2
+        device such as the HTV210B -- no sibling zone. Replacing
+        ``entry["data"]`` wholesale would blank all three on every command,
+        so this copies the existing decoded data and overwrites only
+        ``zones[self._zone_num]``.
+        """
+        if not raw_state:
+            return
+        decoded_zone = decode_htv210b_dp_state(raw_state)
+        if not decoded_zone:
+            return
+        current = dict(self.coordinator.data)
+        sensors = dict(current.get("sensors", {}))
+        if self._sensor_key not in sensors:
+            return
+        entry = dict(sensors[self._sensor_key])
+        decoded_data = dict(entry.get("data") or {})
+        zones = dict(decoded_data.get("zones") or {})
+        zones[self._zone_num] = decoded_zone
+        decoded_data["zones"] = zones
+        entry["data"] = decoded_data
+        sensors[self._sensor_key] = entry
+        current["sensors"] = sensors
+        self.coordinator.async_set_updated_data(current)

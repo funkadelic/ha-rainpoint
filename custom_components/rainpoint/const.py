@@ -265,6 +265,12 @@ MODEL_VALVE_345 = MODEL_HTV345FRF
 MODEL_VALVE_405 = MODEL_HTV405FRF
 MODEL_VALVE_HUB = MODEL_HTV0540FRF
 
+# Membership here enrols a model in three things at once: valve.py and
+# number.py build its entities, and coordinator.py's
+# _preserve_recent_valve_command_state protects its command-versus-poll
+# staleness guard. Which write endpoint a zone commands through is a separate
+# question, decided by the catalog datapoint identity in api/trust.py, not by
+# this set.
 VALVE_MODELS = {
     MODEL_VALVE_HUB,
     MODEL_VALVE_113,
@@ -273,6 +279,7 @@ VALVE_MODELS = {
     MODEL_VALVE_245,
     MODEL_VALVE_345,
     MODEL_VALVE_405,
+    MODEL_HTV210B,
 }
 
 # Every model with a hand-written, fixture-validated decoder (mirrors the

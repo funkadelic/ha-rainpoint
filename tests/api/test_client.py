@@ -13,6 +13,7 @@ import pytest
 import custom_components.rainpoint.api.product_catalog as product_catalog
 from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointThrottledError
 from custom_components.rainpoint.api.client import _USER_AGENT, _redact_secret
+from tests.helpers import make_mock_session_client, mock_json_response
 
 # scripts/ is not a package (it's a standalone maintainer-tool directory, not
 # shipped inside custom_components/), so it is loaded here via importlib
@@ -25,32 +26,13 @@ trim_catalog = refresh_product_catalog.trim_catalog
 
 
 def _make_client() -> RainPointClient:
-    """Create a RainPointClient with a mock session.
-
-    Constructor args: area_code, email, password, session.
-    We set _token directly so _auth_headers() does not raise.
-    """
-    mock_session = MagicMock()
-    client = RainPointClient(
-        area_code="1",
-        email="test@example.com",
-        password="testpass",
-        session=mock_session,
-    )
-    client._token = "fake-token-for-test"
-    return client
+    """Delegate to tests.helpers.make_mock_session_client (the one implementation)."""
+    return make_mock_session_client()
 
 
 def _mock_response(json_data: dict, status: int = 200) -> AsyncMock:
-    """Create a mock aiohttp response context manager."""
-    mock_resp = AsyncMock()
-    mock_resp.status = status
-    mock_resp.json = AsyncMock(return_value=json_data)
-    # aiohttp uses async context manager for session.post()
-    mock_cm = AsyncMock()
-    mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
-    mock_cm.__aexit__ = AsyncMock(return_value=False)
-    return mock_cm
+    """Delegate to tests.helpers.mock_json_response (the one implementation)."""
+    return mock_json_response(json_data, status)
 
 
 class TestControlWorkModeCode4:

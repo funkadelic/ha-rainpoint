@@ -3,7 +3,16 @@
 ``make_sensor_coordinator`` is the shared coordinator builder used by the entity
 test modules (sensor, valve, number, diagnostic_sensors) so they do not each
 rehydrate the canonical ``{"hubs", "status", "sensors"}`` shape inline.
+
+``make_mock_session_client`` and ``mock_json_response`` are the client-level
+counterparts: a real ``RainPointClient`` wired to a mocked aiohttp session, for
+tests that need to assert on the exact JSON body a real client method builds
+rather than on a mocked call.
 """
+
+from unittest.mock import AsyncMock, MagicMock
+
+from custom_components.rainpoint.api import RainPointClient
 
 _SENTINEL = object()
 
@@ -135,6 +144,42 @@ platform's late-add path (test_valve.py) and the sub-device parenting timeline
 (test_device.py). Neither should own it, and neither should reach into the
 other's test class to borrow it.
 """
+
+
+def make_mock_session_client() -> RainPointClient:
+    """Create a real RainPointClient with a mocked aiohttp session.
+
+    Constructor args: area_code, email, password, session. ``_token`` is set
+    directly so ``_auth_headers()`` does not raise. Moved here from
+    ``tests/api/test_client.py``'s module-level ``_make_client`` so a test in
+    any module can assert on the exact JSON body a real client method builds,
+    not just on a mocked call.
+    """
+    mock_session = MagicMock()
+    client = RainPointClient(
+        area_code="1",
+        email="test@example.com",
+        password="testpass",
+        session=mock_session,
+    )
+    client._token = "fake-token-for-test"
+    return client
+
+
+def mock_json_response(json_data: dict, status: int = 200) -> AsyncMock:
+    """Create a mock aiohttp response context manager returning json_data.
+
+    Moved here from ``tests/api/test_client.py``'s module-level
+    ``_mock_response`` for the same reason as ``make_mock_session_client``.
+    """
+    mock_resp = AsyncMock()
+    mock_resp.status = status
+    mock_resp.json = AsyncMock(return_value=json_data)
+    # aiohttp uses async context manager for session.post()
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+    return mock_cm
 
 
 def make_valve_zone_status(mid=20, sid="D01", zones_reported=True, time_ms=1785420002247):
