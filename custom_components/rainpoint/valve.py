@@ -48,6 +48,53 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_DURATION_SECONDS = 600  # 10 minutes
 
 
+def _build_trusted_valve_entities(coordinator: RainPointCoordinator, key: str, info: dict) -> list:
+    """Return the hand-written-decoder valve entities one sensor key supports.
+
+    Split out of the setup closure so the trusted path's own guards do not
+    nest inside it; the opt-in generic branch stays there, since it reads the
+    closure's options flag.
+    """
+    if info.get("model") not in VALVE_MODELS:
+        return []
+    data = info.get("data") or {}
+    # A Bluetooth-only unit is enumerated by the cloud and reaches the
+    # sensors dict as a debounced silent entry whose model field is filled
+    # from the sub-device record, so the model-set check above alone would
+    # admit it. The silent type is the discriminator: a device the
+    # integration cannot currently reach is never offered a control. The
+    # absence of a zones key would also block creation today, but this guard
+    # states the invariant rather than resting on that data shape.
+    if data.get("type") == SILENT_DATA_TYPE:
+        return []
+
+    # Endpoint selection is a function of the committed catalog's datapoint
+    # identity, never the model itself: a variant declaring the
+    # Bluetooth-backed control identity commands through
+    # RainPointDpValveEntity, every other admitted model through the RF
+    # RainPointValveEntity.
+    entity_cls = (
+        RainPointDpValveEntity
+        if has_bluetooth_control_identity(info.get("model"), info.get("model_code"))
+        else RainPointValveEntity
+    )
+
+    built: list = []
+    # One entity per zone that reported in the payload. Zones absent from the
+    # payload are not created, which avoids phantom entities when a device
+    # reports fewer zones than its model name implies.
+    for zone_num in sorted((data.get("zones") or {}).keys()):
+        built.append(entity_cls(coordinator, key, info, zone_num))
+        _LOGGER.debug(
+            "Creating valve entity: key=%s zone=%s model=%s class=%s",
+            key,
+            zone_num,
+            info.get("model"),
+            entity_cls.__name__,
+        )
+    return built
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -69,41 +116,7 @@ async def async_setup_entry(
         branch extends this with RainPointGenericValve instances, which are
         ValveEntity subclasses but not RainPointValveEntity subclasses.
         """
-        built: list = []
-        if info.get("model") in VALVE_MODELS:
-            data = info.get("data") or {}
-            # A Bluetooth-only unit is enumerated by the cloud and reaches the
-            # sensors dict as a debounced silent entry whose model field is
-            # filled from the sub-device record, so the model-set check above
-            # alone would admit it. The silent type is the discriminator: a
-            # device the integration cannot currently reach is never offered a
-            # control. The absence of a zones key would also block creation
-            # today, but this guard states the invariant rather than resting
-            # on that data shape.
-            if data.get("type") != SILENT_DATA_TYPE:
-                zones: dict = data.get("zones", {})
-                # Endpoint selection is a function of the committed catalog's
-                # datapoint identity, never the model itself: a variant declaring
-                # the Bluetooth-backed control identity commands through
-                # RainPointDpValveEntity, every other admitted model through the
-                # RF RainPointValveEntity.
-                entity_cls = (
-                    RainPointDpValveEntity
-                    if has_bluetooth_control_identity(info.get("model"), info.get("model_code"))
-                    else RainPointValveEntity
-                )
-                # One entity per zone that reported in the payload. Zones absent
-                # from the payload are not created, which avoids phantom entities
-                # when a device reports fewer zones than its model name implies.
-                for zone_num in sorted(zones.keys()):
-                    built.append(entity_cls(coordinator, key, info, zone_num))
-                    _LOGGER.debug(
-                        "Creating valve entity: key=%s zone=%s model=%s class=%s",
-                        key,
-                        zone_num,
-                        info.get("model"),
-                        entity_cls.__name__,
-                    )
+        built: list = _build_trusted_valve_entities(coordinator, key, info)
 
         if generic_enabled:
             # Deferred import: generic_control reaches sensor.py's
