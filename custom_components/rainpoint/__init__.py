@@ -1492,7 +1492,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     push_hub_identity_unresolved = False
-    if entry.options.get(CONF_PUSH_ENABLED, False):
+    # An entry that has stored a value keeps it: dict.get returns the stored
+    # value, so a deliberate opt-out survives with no migration. An entry that
+    # has never submitted the options form -- every entry that has never opened
+    # Configure, upgrading installs included -- now gets push.
+    if entry.options.get(CONF_PUSH_ENABLED, True):
         hub_device_name, hub_product_key, hub_mid, hub_hid = _resolve_hub_identity(coordinator)
         if hub_device_name and hub_product_key:
             mqtt_client = RainPointMqttClient(
