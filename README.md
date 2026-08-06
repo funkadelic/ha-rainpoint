@@ -32,6 +32,8 @@ The **HTV210B** only reports to the cloud while paired through a hub. Used over 
 
 While it is hub-paired, its zones open and close from Home Assistant like any other valve, with a run duration per zone. This valve needs a different command path from the wifi valves, which is why it was read-only in earlier releases.
 
+If you ran an earlier release, the read-only zone state sensors it created stay where they are, so each zone now has both a state sensor and a valve control. Nothing is deleted for you, because automations and dashboard cards may already point at those sensors. If you would rather see only the valve, disable the zone state sensors from the device page.
+
 Every model listed above has a decoder written against a real payload. A model that is absent is not necessarily unusable: the opt-in generic sensors described under [Configuration](#configuration) can often surface readings for it from the product catalog, clearly labeled unverified.
 
 All devices communicate via the RainPoint cloud backend. There is no local LAN protocol.
