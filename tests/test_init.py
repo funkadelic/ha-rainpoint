@@ -738,7 +738,7 @@ class TestPushHubIdentityIssue:
 
     @pytest.mark.asyncio
     async def test_the_existing_warning_line_is_still_emitted_alongside_the_card(self, caplog):
-        """The card is additive to the log line, not a replacement (D-03)."""
+        """The card is additive to the log line, not a replacement."""
         hass = _make_hass()
         entry = _make_entry()
         entry.options = {CONF_PUSH_ENABLED: True}

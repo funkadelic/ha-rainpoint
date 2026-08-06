@@ -253,8 +253,8 @@ class TestPushHubIdentityIssueCopy:
     """The push-hub-identity card's copy is proven placeholder-free, not parity-matched.
 
     Its three siblings above prove a placeholder set matches between the copy
-    and the code. This card carries none by design (D-06: the message names no
-    specific missing field), so the executable claim here is the opposite one:
+    and the code. This card carries none by design: the message names no
+    specific missing field, so the executable claim here is the opposite one:
     that there is nothing to match, on both the copy side and the code side.
     """
 
@@ -281,14 +281,13 @@ class TestPushHubIdentityIssueCopy:
         assert "translation_placeholders" not in create.call_args.kwargs
 
     def test_the_copy_names_no_cloud_record_key(self):
-        """D-06: the card describes the outcome, never which cloud field was missing.
+        """The card describes the outcome, never which cloud field was missing.
 
         The card is Markdown-rendered, so a message naming a specific cloud
         field would be the first surface in this integration to put vendor
         vocabulary in front of a user who cannot act on the distinction. Kept
-        to the two key names _resolve_hub_identity reads plus this comment
-        naming D-06 as the source, rather than a general-purpose secret
-        scanner.
+        to the two key names _resolve_hub_identity reads, rather than a
+        general-purpose secret scanner.
         """
         entry = _push_hub_identity_entry()
         body = (entry["title"] + entry["description"]).lower()
@@ -296,7 +295,7 @@ class TestPushHubIdentityIssueCopy:
         assert "productkey" not in body
 
     def test_the_copy_closes_with_the_same_remedy_bullets_as_push_channel_down(self):
-        """D-05: the same two remedy bullets push_channel_down uses, derived
+        """The same two remedy bullets push_channel_down uses, derived
         from the file rather than hard-coded so the two cards stay in step if
         either is reworded later."""
         sibling = _load_en_translations()["issues"]["push_channel_down"]
