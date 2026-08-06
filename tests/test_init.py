@@ -8,6 +8,7 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.helpers import issue_registry as ir
 
 from custom_components.rainpoint import (
     DOMAIN,
@@ -26,6 +27,7 @@ from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_PUSH_ENABLED,
     MODEL_HCS026FRF,
+    PUSH_HUB_IDENTITY_ISSUE_ID,
 )
 from tests.helpers import make_silent_wrapper_hub_record
 
@@ -432,6 +434,46 @@ class TestAsyncSetupEntry:
 
         assert result is True
         assert "watchdog" not in hass.data[DOMAIN][entry.entry_id]
+
+
+class TestPushHubIdentityIssue:
+    """The push-hub-identity Repairs card, driven through real async_setup_entry runs."""
+
+    @pytest.mark.asyncio
+    async def test_no_hub_record_raises_the_push_identity_issue(self):
+        """No hub record at all is one of the two conditions the card covers."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": []}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint.repairs.ir.async_create_issue") as create,
+            patch("custom_components.rainpoint.repairs.ir.async_delete_issue") as delete,
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        create.assert_called_once()
+        assert create.call_args.args[0] is hass
+        assert create.call_args.args[1] == DOMAIN
+        assert create.call_args.args[2] == PUSH_HUB_IDENTITY_ISSUE_ID
+        assert create.call_args.kwargs["is_fixable"] is False
+        assert create.call_args.kwargs["severity"] == ir.IssueSeverity.WARNING
+        assert create.call_args.kwargs["translation_key"] == PUSH_HUB_IDENTITY_ISSUE_ID
+        delete.assert_not_called()
 
 
 class TestAsyncUnloadEntry:
