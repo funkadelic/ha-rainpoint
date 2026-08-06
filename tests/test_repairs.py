@@ -15,6 +15,7 @@ from custom_components.rainpoint.const import (
     DOMAIN,
     HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
     ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
+    PUSH_HUB_IDENTITY_ISSUE_ID,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
     PUSH_WATCHDOG_ISSUE_ID,
     PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS,
@@ -34,6 +35,7 @@ from custom_components.rainpoint.repairs import (
     async_create_fix_flow,
     hub_connectivity_issue_id,
     orphaned_entities_issue_id,
+    push_hub_identity_issue_id,
     silent_device_issue_id,
 )
 
@@ -991,6 +993,20 @@ class TestOrphanedEntitiesIssueId:
         """The case a prefix match would confuse, and the reason the flow reads
         the key from the issue data rather than parsing it back out of the id."""
         assert orphaned_entities_issue_id("100_200_1", "e1") != orphaned_entities_issue_id("100_200_11", "e1")
+
+
+class TestPushHubIdentityIssueId:
+    """The issue id is entry-scoped so two config entries never clobber or clear one another's card."""
+
+    def test_id_shape(self):
+        """Pinned because the id is the registry-facing dedup/clear key."""
+        assert push_hub_identity_issue_id("e1") == f"{PUSH_HUB_IDENTITY_ISSUE_ID}_e1"
+
+    def test_two_config_entries_get_two_distinct_ids(self):
+        """An unscoped id would let one entry's resolving setup silently clear
+        another entry's still-unresolved card, or strand a card with no code
+        path left to clear it if the entry that raised it were removed."""
+        assert push_hub_identity_issue_id("e1") != push_hub_identity_issue_id("e2")
 
 
 class TestRainPointOrphanedEntityIssues:

@@ -276,7 +276,7 @@ class TestPushHubIdentityIssueCopy:
         assert in_copy == set()
 
         with patch.object(repairs.ir, "async_create_issue") as create:
-            async_sync_push_hub_identity_issue(MagicMock(), unresolved=True)
+            async_sync_push_hub_identity_issue(MagicMock(), "some_entry_id", unresolved=True)
         create.assert_called_once()
         assert "translation_placeholders" not in create.call_args.kwargs
 

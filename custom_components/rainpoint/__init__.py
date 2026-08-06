@@ -1534,8 +1534,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # when this setup pass could not resolve a usable hub identity, and clears
     # it on a resolving pass or when push is off. One evaluation site, so it
     # is called exactly once per async_setup_entry call regardless of which
-    # branch above ran.
-    async_sync_push_hub_identity_issue(hass, unresolved=push_hub_identity_unresolved)
+    # branch above ran. Scoped to this entry's id so a second RainPoint entry
+    # can never raise, clear or clobber this entry's card.
+    async_sync_push_hub_identity_issue(hass, entry.entry_id, unresolved=push_hub_identity_unresolved)
+    # Withdraw this entry's card on unload -- the issue registry is not per
+    # config entry, so a card raised before removal would otherwise survive
+    # it with no code path left to clear it. Never raises: this runs on the
+    # unload path, and async_sync_push_hub_identity_issue already wraps its
+    # own registry call in a try/except that logs at DEBUG on failure.
+    entry.async_on_unload(lambda: async_sync_push_hub_identity_issue(hass, entry.entry_id, unresolved=False))
 
     # Set up services
     await async_setup_services(hass)

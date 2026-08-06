@@ -48,9 +48,11 @@ Two independent lifecycles live here:
   ongoing timer and no debounce, evaluated exactly once at setup rather than
   on a poll or a scan interval. It is raised when push is enabled but
   ``_resolve_hub_identity`` cannot yield a usable hub identity to connect to,
-  and cleared when it can, or when push is off. Unlike its siblings it is a
-  plain module-level function rather than a class, because there is no
-  per-instance state to hold between calls.
+  and cleared when it can, when push is off, or when the entry unloads.
+  Unlike its siblings it is a plain module-level function rather than a
+  class, because there is no per-instance state to hold between calls; the
+  per-entry scoping that would otherwise need instance state instead lives in
+  ``push_hub_identity_issue_id``, mirroring ``orphaned_entities_issue_id``.
 """
 
 from __future__ import annotations
@@ -196,38 +198,58 @@ class RainPointPushWatchdog:
         _LOGGER.warning("RainPoint push channel has been down past the threshold; raising repair issue")
 
 
+def push_hub_identity_issue_id(entry_id: str) -> str:
+    """Return this entry's push-hub-identity issue id; the string is itself the dedup key.
+
+    Scoped by entry_id for the same reason ``orphaned_entities_issue_id`` is:
+    this integration supports more than one config entry (two accounts
+    resolving the same home, or two independent homes each with push
+    enabled). An unscoped id would let one entry's resolving setup silently
+    clear another entry's still-unresolved card, or misattribute which
+    entry's hub actually has the problem, and would leave a card with no
+    code path left to clear it if the only entry with push enabled were
+    removed while the card was active. ``translation_key`` stays the fixed
+    ``PUSH_HUB_IDENTITY_ISSUE_ID`` regardless of entry, exactly as
+    ``orphaned_entities_issue_id`` keeps its translation key fixed at
+    ``ORPHANED_ENTITIES_ISSUE_ID_PREFIX`` -- only the registry-facing id
+    needs to vary per entry, not the copy it renders.
+    """
+    return f"{PUSH_HUB_IDENTITY_ISSUE_ID}_{entry_id}"
+
+
 @callback
-def async_sync_push_hub_identity_issue(hass: HomeAssistant, *, unresolved: bool) -> None:
-    """Raise or clear the push-hub-identity Repairs card for one setup pass.
+def async_sync_push_hub_identity_issue(hass: HomeAssistant, entry_id: str, *, unresolved: bool) -> None:
+    """Raise or clear this entry's push-hub-identity Repairs card for one setup pass.
 
     Evaluated exactly once per ``async_setup_entry`` call, with no timer and
     no periodic re-check: recovery only happens through whatever already
-    triggers a reload (options change, restart, manual reload). It carries no
-    ``translation_placeholders`` deliberately, so no cloud-supplied hub name,
-    model or identity value can reach the rendered card; the copy describes
-    the outcome rather than which field was missing. The registry write is
-    wrapped in one ``try`` covering both branches, because a Repairs failure
-    must never fail config entry setup, and deleting an unknown issue id is
-    already a no-op, so the clear branch runs unconditionally rather than
-    gating on a remembered active flag (mirrors
-    ``RainPointSilentDeviceIssues._clear_issue``'s reasoning). Like
-    ``PUSH_WATCHDOG_ISSUE_ID``, the issue id is not config-entry scoped: two
-    RainPoint entries on one Home Assistant share this card, and the second
-    entry's setup can clear a card the first raised. That is an accepted,
-    pre-existing limitation, not new to this function.
+    triggers a reload (options change, restart, manual reload) or through
+    this entry unloading, which the caller wires to this same function with
+    ``unresolved=False``. It carries no ``translation_placeholders``
+    deliberately, so no cloud-supplied hub name, model or identity value can
+    reach the rendered card; the copy describes the outcome rather than
+    which field was missing. The registry write is wrapped in one ``try``
+    covering both branches, because a Repairs failure must never fail config
+    entry setup or block unload, and deleting an unknown issue id is already
+    a no-op, so the clear branch runs unconditionally rather than gating on
+    a remembered active flag (mirrors
+    ``RainPointSilentDeviceIssues._clear_issue``'s reasoning). The issue id
+    is scoped to ``entry_id`` via ``push_hub_identity_issue_id``, so two
+    RainPoint entries never clobber or clear one another's card.
     """
+    issue_id = push_hub_identity_issue_id(entry_id)
     try:
         if unresolved:
             ir.async_create_issue(
                 hass,
                 DOMAIN,
-                PUSH_HUB_IDENTITY_ISSUE_ID,
+                issue_id,
                 is_fixable=False,
                 severity=ir.IssueSeverity.WARNING,
                 translation_key=PUSH_HUB_IDENTITY_ISSUE_ID,
             )
         else:
-            ir.async_delete_issue(hass, DOMAIN, PUSH_HUB_IDENTITY_ISSUE_ID)
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
     except Exception as issue_exc:
         _LOGGER.debug(
             "Failed to sync the push-hub-identity repair issue (unresolved=%s): %s",
