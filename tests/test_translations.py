@@ -301,3 +301,35 @@ class TestPushHubIdentityIssueCopy:
         sibling = _load_en_translations()["issues"]["push_channel_down"]
         entry = _push_hub_identity_entry()
         assert entry["description"].split("\n")[-2:] == sibling["description"].split("\n")[-2:]
+
+
+class TestOptionsFormPushDefaultCopy:
+    """Pins the options form's copy to the post-flip claim so it cannot regress.
+
+    The pre-flip claim -- push off until turned on -- must never come back
+    through a copy edit, on either the shared step description or the
+    push_enabled field itself. The two generic toggles keep their own
+    off-by-default claim, which moved here from the step description.
+    """
+
+    def _init_step(self) -> dict:
+        return _load_en_translations()["options"]["step"]["init"]
+
+    def test_push_enabled_copy_states_on_by_default(self):
+        """The push_enabled data_description states push is on by default."""
+        step = self._init_step()
+        assert "on by default" in step["data_description"]["push_enabled"]
+
+    def test_neither_description_nor_push_copy_claims_off_by_default(self):
+        """The pre-flip claim cannot come back through the shared description
+        or the push_enabled body."""
+        step = self._init_step()
+        assert "off by default" not in step["description"]
+        assert "off by default" not in step["data_description"]["push_enabled"]
+
+    def test_both_generic_toggles_still_claim_off_by_default(self):
+        """The statement the step description used to make for the generic
+        toggles must not simply disappear; it moved into their own bodies."""
+        step = self._init_step()
+        assert "off by default" in step["data_description"]["generic_entities_enabled"]
+        assert "off by default" in step["data_description"]["generic_control_enabled"]

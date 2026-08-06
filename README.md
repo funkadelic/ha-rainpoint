@@ -112,7 +112,7 @@ For each device the coordinator discovers, the integration creates:
 - **Valve entities**: one per irrigation zone, for the valve models listed in the table above, including the HTV210B while it is hub-paired. A device the integration cannot currently reach gets no valve entity, as described under [Supported devices](#supported-devices).
 - **Number entities**: one per zone for configuring zone run duration (1 to 60 minutes), on those same valve models. The duration applies to the next run: changing it while a zone is already open does not shorten or extend the run in progress.
 - **Hub diagnostic sensors**: RSSI, battery, firmware version, last-updated timestamp.
-- **Hub Cloud Connection**: one binary sensor per hub, on when RainPoint's cloud currently reports that hub as reachable. It exists whether or not [push](#real-time-push-updates-opt-in) is enabled.
+- **Hub Cloud Connection**: one binary sensor per hub, on when RainPoint's cloud currently reports that hub as reachable. It exists whether or not [push](#real-time-push-updates) is enabled.
 
 All entities are grouped under their parent hub device in the Home Assistant device registry.
 
@@ -120,7 +120,7 @@ All entities are grouped under their parent hub device in the Home Assistant dev
 
 ## When a hub goes offline
 
-Each hub's **Cloud Connection** entity reflects whether RainPoint's cloud currently reports that hub as reachable, refreshed on every poll (every two minutes by default). With [push](#real-time-push-updates-opt-in) enabled, RainPoint also announces a hub going offline or coming back as it happens, and the entity follows within a second or so instead of waiting for the next poll. The poll keeps running either way, so nothing depends on push being on.
+Each hub's **Cloud Connection** entity reflects whether RainPoint's cloud currently reports that hub as reachable, refreshed on every poll (every two minutes by default). With [push](#real-time-push-updates) enabled, RainPoint also announces a hub going offline or coming back as it happens, and the entity follows within a second or so instead of waiting for the next poll. The poll keeps running either way, so nothing depends on push being on.
 
 If a hub stays unreachable for three checks in a row, roughly four to six minutes at the default two-minute polling interval, Home Assistant also raises a **Settings → Repairs** notice naming the hub, so a brief blip doesn't flap a card on and off. Valve controls for devices on that hub become unavailable as soon as the hub is reported offline, which is within a single check, or near-immediately with push enabled, since a command cannot reach hardware the cloud itself cannot reach.
 
@@ -144,16 +144,16 @@ One thing to know before deferring it: the card is withdrawn when the integratio
 
 ---
 
-## Real-time push updates (opt-in)
+## Real-time push updates
 
-In addition to the 120-second polling that always runs, the integration can optionally surface device state changes in near real time over an MQTT push connection. Push is additive, opt-in, and off by default, and polling keeps running as the fallback no matter what, so nothing breaks if you leave push off or the connection drops.
+In addition to the 120-second polling that always runs, the integration surfaces device state changes in near real time over an MQTT push connection. Push is additive and on by default: polling keeps running as the fallback no matter what, so nothing breaks whether push is on, off, or the connection drops. Turning it off is a supported choice, not a workaround.
 
 Push carries two kinds of update: new readings from individual devices, and a hub going offline or coming back. The second is what makes [a hub outage](#when-a-hub-goes-offline) visible almost immediately rather than up to two minutes later. Note this speeds up the Cloud Connection entity and the recovery side, not the Repairs notice itself: that notice still waits for three consecutive checks before it appears, deliberately, so a brief blip doesn't flap a card on and off.
 
 ### Enabling or disabling push
 
 1. Go to **Settings → Devices & Services → RainPoint Cloud → Configure**.
-2. In the **RainPoint Push Channel** form, check **Enable push updates** (unchecked by default).
+2. In the **RainPoint Options** form, **Enable push updates** is already checked. Uncheck it to turn push off.
 3. Save. The change applies automatically (the integration reloads itself), so you never have to reload or re-add it by hand.
 
 To turn push back off, revisit the same **Configure** screen and uncheck **Enable push updates**.
@@ -166,7 +166,7 @@ A separate case is push never starting in the first place: if push is enabled bu
 
 ### Notes on push
 
-Push is off by default for now while it proves out; you can turn it on at any time. If the connection ever drops, Home Assistant reconnects on its own, and the usual 120-second polling keeps your devices up to date in the meantime. In testing it ran alongside the RainPoint phone app without knocking either one offline.
+Push is on by default; if you would rather poll, switch it off on the Configure screen. If the connection ever drops, Home Assistant reconnects on its own, and the usual 120-second polling keeps your devices up to date in the meantime. In testing it ran alongside the RainPoint phone app without knocking either one offline.
 
 Turning push on doesn't change the [one-session-per-account note above](#use-a-dedicated-home-assistant-account-recommended): it's the sign-in used for setup that can bump your phone out of the app (and vice versa), whether or not push is enabled.
 
