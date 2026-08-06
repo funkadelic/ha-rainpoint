@@ -21,7 +21,7 @@ from .const import (
     UNIQUE_ID_PREFIX,
     VALVE_MODELS,
 )
-from .coordinator import RainPointCoordinator
+from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .device import build_sub_device_info
 from .entity import LateEntityAdder, register_late_adder, sub_device_attributes
 
@@ -54,10 +54,20 @@ async def async_setup_entry(
         """
         built: list = []
         if info.get("model") in VALVE_MODELS:
-            zones: dict = (info.get("data") or {}).get("zones", {})
-            for zone_num in sorted(zones.keys()):
-                built.append(RainPointZoneDurationNumber(coordinator, key, info, zone_num))
-                _LOGGER.debug("Creating duration number entity: key=%s zone=%s", key, zone_num)
+            data = info.get("data") or {}
+            # A Bluetooth-only unit is enumerated by the cloud and reaches the
+            # sensors dict as a debounced silent entry whose model field is
+            # filled from the sub-device record, so the model-set check above
+            # alone would admit it. The silent type is the discriminator: a
+            # device the integration cannot currently reach is never offered a
+            # control. The absence of a zones key would also block creation
+            # today, but this guard states the invariant rather than resting
+            # on that data shape.
+            if data.get("type") != SILENT_DATA_TYPE:
+                zones: dict = data.get("zones", {})
+                for zone_num in sorted(zones.keys()):
+                    built.append(RainPointZoneDurationNumber(coordinator, key, info, zone_num))
+                    _LOGGER.debug("Creating duration number entity: key=%s zone=%s", key, zone_num)
 
         if generic_enabled:
             base_slug = f"{info.get('hid', '')}_{info.get('mid', '')}_{info.get('addr', '')}"

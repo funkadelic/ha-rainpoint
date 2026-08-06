@@ -32,7 +32,12 @@ from .const import (
     MODEL_VALVE_405,
     VALVE_MODELS,
 )
-from .coordinator import RainPointCoordinator, hub_connected_flag, hub_connectivity_record
+from .coordinator import (
+    SILENT_DATA_TYPE,
+    RainPointCoordinator,
+    hub_connected_flag,
+    hub_connectivity_record,
+)
 from .device import build_sub_device_info
 from .entity import LateEntityAdder, register_late_adder, sub_device_attributes
 
@@ -66,29 +71,39 @@ async def async_setup_entry(
         """
         built: list = []
         if info.get("model") in VALVE_MODELS:
-            zones: dict = (info.get("data") or {}).get("zones", {})
-            # Endpoint selection is a function of the committed catalog's
-            # datapoint identity, never the model itself: a variant declaring
-            # the Bluetooth-backed control identity commands through
-            # RainPointDpValveEntity, every other admitted model through the
-            # RF RainPointValveEntity.
-            entity_cls = (
-                RainPointDpValveEntity
-                if has_bluetooth_control_identity(info.get("model"), info.get("model_code"))
-                else RainPointValveEntity
-            )
-            # One entity per zone that reported in the payload. Zones absent
-            # from the payload are not created, which avoids phantom entities
-            # when a device reports fewer zones than its model name implies.
-            for zone_num in sorted(zones.keys()):
-                built.append(entity_cls(coordinator, key, info, zone_num))
-                _LOGGER.debug(
-                    "Creating valve entity: key=%s zone=%s model=%s class=%s",
-                    key,
-                    zone_num,
-                    info.get("model"),
-                    entity_cls.__name__,
+            data = info.get("data") or {}
+            # A Bluetooth-only unit is enumerated by the cloud and reaches the
+            # sensors dict as a debounced silent entry whose model field is
+            # filled from the sub-device record, so the model-set check above
+            # alone would admit it. The silent type is the discriminator: a
+            # device the integration cannot currently reach is never offered a
+            # control. The absence of a zones key would also block creation
+            # today, but this guard states the invariant rather than resting
+            # on that data shape.
+            if data.get("type") != SILENT_DATA_TYPE:
+                zones: dict = data.get("zones", {})
+                # Endpoint selection is a function of the committed catalog's
+                # datapoint identity, never the model itself: a variant declaring
+                # the Bluetooth-backed control identity commands through
+                # RainPointDpValveEntity, every other admitted model through the
+                # RF RainPointValveEntity.
+                entity_cls = (
+                    RainPointDpValveEntity
+                    if has_bluetooth_control_identity(info.get("model"), info.get("model_code"))
+                    else RainPointValveEntity
                 )
+                # One entity per zone that reported in the payload. Zones absent
+                # from the payload are not created, which avoids phantom entities
+                # when a device reports fewer zones than its model name implies.
+                for zone_num in sorted(zones.keys()):
+                    built.append(entity_cls(coordinator, key, info, zone_num))
+                    _LOGGER.debug(
+                        "Creating valve entity: key=%s zone=%s model=%s class=%s",
+                        key,
+                        zone_num,
+                        info.get("model"),
+                        entity_cls.__name__,
+                    )
 
         if generic_enabled:
             # Deferred import: generic_control reaches sensor.py's
