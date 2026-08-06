@@ -990,9 +990,9 @@ class TestHtv210bStalenessGuardCoverage:
         assert zone1["state_raw"] == 0x21
 
     def test_guard_is_a_noop_for_a_decode_with_no_zones_dict(self):
-        """The silent entry's own decode shape (task 1's build-gate guard)
-        carries no zones dict at all, so the staleness guard and the
-        silent-unit guard can never interact."""
+        """The silent entry's own decode shape carries no zones dict at all, so
+        _preserve_recent_valve_command_state and the SILENT_DATA_TYPE guard in
+        _build_trusted_valve_entities can never interact."""
         coord, _ = _make_coord()
         silent_decoded = {
             "type": SILENT_DATA_TYPE,

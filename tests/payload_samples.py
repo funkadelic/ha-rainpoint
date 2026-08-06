@@ -262,9 +262,8 @@ SAMPLE_HTV210B_TLV_PAYLOAD = (
     "5AF0000000026AF00000000299F000000002A9F0000000038FF0D00000000FEFF0F1527FB19"
 )
 
-# Captured controlWorkModeDP response "state" blobs, 2026-08-05 session (see
-# .planning/todos/pending/2026-07-26-ble-valve-control-dp-endpoint.md). Each is
-# the comma form decode_htv210b_dp_state reads: a leading mode digit, then the
+# Captured controlWorkModeDP response "state" blobs, 2026-08-05 session. Each
+# is the comma form decode_htv210b_dp_state reads: a leading mode digit, then the
 # same self-describing record stream the poll-path TLV frame carries, but with
 # no dp_id prefix and describing exactly one zone.
 SAMPLE_HTV210B_DP_OPEN_60S_STATE = "1,D821AF3C000000B7D1230B1A"
