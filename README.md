@@ -24,11 +24,13 @@ This integration supports RainPoint Smart+ device families, including:
 | Pool sensors | HCS0528ARF, HCS015ARF, HCS015ARF+ | Pool temperature, ambient |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
 | Flow meters | HCS008FRF | Flow reading |
-| Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state |
+| Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration |
 
 The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B** Bluetooth valve are the maintainer's own hardware and are the models tested against real devices. Other models are supported opportunistically from captured payloads.
 
-The **HTV210B** only reports to the cloud while paired through a hub; used over Bluetooth alone, RainPoint still lists it under the hub but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. Its zone sensors are read-only when it is reporting: opening and closing from the app works over the cloud, but the exact command the integration would need to send is still being verified, so no valve entity is created rather than one that might accept a command the hardware never acts on.
+The **HTV210B** only reports to the cloud while paired through a hub. Used over Bluetooth alone, RainPoint still lists it under the hub, but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. No valve entity is created for it in that state either, so a control that provably cannot reach the hardware is never offered.
+
+While it is hub-paired, its zones open and close from Home Assistant like any other valve, with a run duration per zone. This valve needs a different command path from the wifi valves, which is why it was read-only in earlier releases.
 
 Every model listed above has a decoder written against a real payload. A model that is absent is not necessarily unusable: the opt-in generic sensors described under [Configuration](#configuration) can often surface readings for it from the product catalog, clearly labeled unverified.
 
@@ -105,8 +107,8 @@ You can still reach every device and zone the original account can. Invited memb
 For each device the coordinator discovers, the integration creates:
 
 - **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API. A device that returns no readings at all gets a single **Not Reporting** diagnostic entity instead, and no Raw Payload sensor, because there is no payload to show.
-- **Valve entities**: one per irrigation zone, for the valve hub models listed in the table above. The HTV210B is not one of them: its zone state is read-only, as described under [Supported devices](#supported-devices).
-- **Number entities**: one per zone for configuring zone run duration (1 to 60 minutes), on those same valve hub models.
+- **Valve entities**: one per irrigation zone, for the valve models listed in the table above, including the HTV210B while it is hub-paired. A device the integration cannot currently reach gets no valve entity, as described under [Supported devices](#supported-devices).
+- **Number entities**: one per zone for configuring zone run duration (1 to 60 minutes), on those same valve models. The duration applies to the next run: changing it while a zone is already open does not shorten or extend the run in progress.
 - **Hub diagnostic sensors**: RSSI, battery, firmware version, last-updated timestamp.
 - **Hub Cloud Connection**: one binary sensor per hub, on when RainPoint's cloud currently reports that hub as reachable. It exists whether or not [push](#real-time-push-updates-opt-in) is enabled.
 
