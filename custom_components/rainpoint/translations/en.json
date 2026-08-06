@@ -4,6 +4,10 @@
       "title": "Real-time push updates are not being received",
       "description": "The real-time push connection to RainPoint has been down for a while, so changes from your devices may be delayed.\n\nYour devices keep updating regardless: polling every couple of minutes is still running as a fallback.\n\nIf this keeps happening, try one of:\n\n- Reload the integration.\n- Turn push updates off and back on in the integration's options."
     },
+    "push_hub_identity_unresolved": {
+      "title": "Push updates could not start",
+      "description": "Push updates are turned on, but the integration could not find a usable hub to connect to, so real-time updates are not arriving.\n\nYour devices keep updating regardless: polling every couple of minutes is still running as a fallback.\n\nThis check only runs when the integration reloads (options change, restart, or a manual reload), so a fix will not clear this notice on its own until then.\n\nIf this keeps happening, try one of:\n\n- Reload the integration.\n- Turn push updates off and back on in the integration's options."
+    },
     "generic_control_command_failed": {
       "title": "A generic control command failed",
       "description": "RainPoint rejected a control command sent through generic control.\n\n- **Model:** {model}\n- **Error:** {error}\n\nGeneric control uses an unverified mapping from RainPoint's product catalog rather than a tested per-model decoder, so this device's behavior is not fully proven.\n\nAs far as this integration can tell, the device's state was not changed by the failed command.\n\nIf this keeps happening, you can turn generic control off in the integration's options."

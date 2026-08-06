@@ -8,6 +8,7 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.helpers import issue_registry as ir
 
 from custom_components.rainpoint import (
     DOMAIN,
@@ -26,7 +27,9 @@ from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_PUSH_ENABLED,
     MODEL_HCS026FRF,
+    PUSH_HUB_IDENTITY_ISSUE_ID,
 )
+from custom_components.rainpoint.repairs import push_hub_identity_issue_id
 from tests.helpers import make_silent_wrapper_hub_record
 
 
@@ -432,6 +435,371 @@ class TestAsyncSetupEntry:
 
         assert result is True
         assert "watchdog" not in hass.data[DOMAIN][entry.entry_id]
+
+
+class TestPushHubIdentityIssue:
+    """The push-hub-identity Repairs card, driven through real async_setup_entry runs."""
+
+    @pytest.mark.asyncio
+    async def test_no_hub_record_raises_the_push_identity_issue(self):
+        """No hub record at all is one of the two conditions the card covers."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": []}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint.repairs.ir.async_create_issue") as create,
+            patch("custom_components.rainpoint.repairs.ir.async_delete_issue") as delete,
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        create.assert_called_once()
+        assert create.call_args.args[0] is hass
+        assert create.call_args.args[1] == DOMAIN
+        assert create.call_args.args[2] == push_hub_identity_issue_id(entry.entry_id)
+        assert create.call_args.kwargs["is_fixable"] is False
+        assert create.call_args.kwargs["severity"] == ir.IssueSeverity.WARNING
+        assert create.call_args.kwargs["translation_key"] == PUSH_HUB_IDENTITY_ISSUE_ID
+        delete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hub_missing_device_name_raises_the_push_identity_issue(self):
+        """A hub record present but missing deviceName falls through the same else branch."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint.repairs.ir.async_create_issue") as create,
+            patch("custom_components.rainpoint.repairs.ir.async_delete_issue") as delete,
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        create.assert_called_once()
+        assert create.call_args.args[2] == push_hub_identity_issue_id(entry.entry_id)
+        delete.assert_not_called()
+        assert "mqtt_client" not in hass.data[DOMAIN][entry.entry_id]
+
+    @pytest.mark.asyncio
+    async def test_hub_missing_product_key_raises_the_push_identity_issue(self):
+        """A hub record present but missing productKey falls through the same else branch."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint.repairs.ir.async_create_issue") as create,
+            patch("custom_components.rainpoint.repairs.ir.async_delete_issue") as delete,
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        create.assert_called_once()
+        assert create.call_args.args[2] == push_hub_identity_issue_id(entry.entry_id)
+        delete.assert_not_called()
+        assert "mqtt_client" not in hass.data[DOMAIN][entry.entry_id]
+
+    @pytest.mark.asyncio
+    async def test_hub_empty_device_name_raises_the_push_identity_issue(self):
+        """A present-but-falsy deviceName takes the same else branch as a missing key.
+
+        `_resolve_hub_identity`'s guard is `if hub_device_name and hub_product_key`,
+        a truthiness test rather than a None check, so an empty string must fall
+        through identically to an absent key. Untested until now, a future
+        refactor to `is not None` would silently break this case with nothing to
+        catch it.
+        """
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint.repairs.ir.async_create_issue") as create,
+            patch("custom_components.rainpoint.repairs.ir.async_delete_issue") as delete,
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        create.assert_called_once()
+        assert create.call_args.args[2] == push_hub_identity_issue_id(entry.entry_id)
+        delete.assert_not_called()
+        assert "mqtt_client" not in hass.data[DOMAIN][entry.entry_id]
+
+    @pytest.mark.asyncio
+    async def test_hub_empty_product_key_raises_the_push_identity_issue(self):
+        """A present-but-falsy productKey takes the same else branch as a missing key.
+
+        Mirrors test_hub_empty_device_name_raises_the_push_identity_issue for
+        the other half of the truthiness guard.
+        """
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": ""}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint.repairs.ir.async_create_issue") as create,
+            patch("custom_components.rainpoint.repairs.ir.async_delete_issue") as delete,
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        create.assert_called_once()
+        assert create.call_args.args[2] == push_hub_identity_issue_id(entry.entry_id)
+        delete.assert_not_called()
+        assert "mqtt_client" not in hass.data[DOMAIN][entry.entry_id]
+
+    @pytest.mark.asyncio
+    async def test_resolved_hub_identity_clears_the_push_identity_issue(self):
+        """A resolving setup pass explicitly clears any card a prior pass may have raised."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        mock_mqtt_client = MagicMock()
+        mock_mqtt_client.async_start = AsyncMock()
+        mock_mqtt_client.async_disconnect = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch(
+                "custom_components.rainpoint.RainPointMqttClient",
+                return_value=mock_mqtt_client,
+            ),
+            patch("custom_components.rainpoint.repairs.RainPointPushWatchdog"),
+            patch("custom_components.rainpoint.repairs.ir.async_create_issue") as create,
+            patch("custom_components.rainpoint.repairs.ir.async_delete_issue") as delete,
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        delete.assert_called_once()
+        assert delete.call_args.args == (hass, DOMAIN, push_hub_identity_issue_id(entry.entry_id))
+        create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_push_disabled_clears_the_push_identity_issue(self):
+        """Turning push off must clear a card raised while push was on.
+
+        Without this, a card raised while push was on becomes unclearable the
+        moment the user turns push off -- and turning push off is one of the
+        two remedies the card itself offers.
+        """
+        hass = _make_hass()
+        entry = _make_entry()
+        # entry.options == {} => push_enabled defaults to False
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint.repairs.ir.async_create_issue") as create,
+            patch("custom_components.rainpoint.repairs.ir.async_delete_issue") as delete,
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        delete.assert_called_once()
+        assert delete.call_args.args == (hass, DOMAIN, push_hub_identity_issue_id(entry.entry_id))
+        create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_entry_unload_withdraws_this_entrys_push_identity_card(self):
+        """Unloading the entry clears this entry's card, entry-scoped.
+
+        The issue registry is not per config entry, so a card raised before
+        removal would otherwise survive it with nothing left to clear it. The
+        clear is registered via entry.async_on_unload, the same mechanism
+        every other teardown in this function uses, and it targets this
+        entry's own scoped id so a second RainPoint entry's card is
+        untouched.
+        """
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": []}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint.repairs.ir.async_create_issue"),
+            patch("custom_components.rainpoint.repairs.ir.async_delete_issue") as delete,
+        ):
+            await async_setup_entry(hass, entry)
+
+            # The unload-clear is the last entry.async_on_unload registration
+            # in async_setup_entry, so this is it, not a coincidental last
+            # call. Invoked inside the same patch scope so the callback's own
+            # ir.async_delete_issue call still lands on this mock.
+            unload_callback = entry.async_on_unload.call_args.args[0]
+            delete.reset_mock()
+
+            unload_callback()
+
+            delete.assert_called_once_with(hass, DOMAIN, push_hub_identity_issue_id(entry.entry_id))
+
+    @pytest.mark.asyncio
+    async def test_the_existing_warning_line_is_still_emitted_alongside_the_card(self, caplog):
+        """The card is additive to the log line, not a replacement."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": []}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            caplog.at_level("WARNING"),
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint.repairs.ir.async_create_issue") as create,
+            patch("custom_components.rainpoint.repairs.ir.async_delete_issue"),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        create.assert_called_once()
+        assert "Push enabled but no hub was found; skipping MQTT connect" in caplog.text
+        assert any(
+            record.levelname == "WARNING" and "Push enabled but no hub was found" in record.message for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_issue_registry_never_fails_setup(self):
+        """A registry write failure must never fail config entry setup."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": []}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch(
+                "custom_components.rainpoint.repairs.ir.async_create_issue",
+                side_effect=RuntimeError("registry unavailable"),
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        assert hass.data[DOMAIN][entry.entry_id]["coordinator"] is mock_coordinator
 
 
 class TestAsyncUnloadEntry:

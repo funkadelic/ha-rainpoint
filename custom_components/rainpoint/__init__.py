@@ -28,7 +28,7 @@ from .const import (
 )
 from .coordinator import ORPHANED_KEY_DEBOUNCE_POLLS, first_hub_record, is_hub_record
 from .entity import late_adders
-from .repairs import OrphanedEntitiesRecord, RainPointOrphanedEntityIssues
+from .repairs import OrphanedEntitiesRecord, RainPointOrphanedEntityIssues, async_sync_push_hub_identity_issue
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1491,6 +1491,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # unload->setup path, no bespoke start/stop code path needed.
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
+    push_hub_identity_unresolved = False
     if entry.options.get(CONF_PUSH_ENABLED, False):
         hub_device_name, hub_product_key, hub_mid, hub_hid = _resolve_hub_identity(coordinator)
         if hub_device_name and hub_product_key:
@@ -1527,6 +1528,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.async_create_background_task(mqtt_client.async_start(), name="rainpoint_mqtt_start")
         else:
             _LOGGER.warning("Push enabled but no hub was found; skipping MQTT connect")
+            push_hub_identity_unresolved = True
+
+    # Additive to the WARNING above, not a replacement: raises a Repairs card
+    # when this setup pass could not resolve a usable hub identity, and clears
+    # it on a resolving pass or when push is off. One evaluation site, so it
+    # is called exactly once per async_setup_entry call regardless of which
+    # branch above ran. Scoped to this entry's id so a second RainPoint entry
+    # can never raise, clear or clobber this entry's card.
+    async_sync_push_hub_identity_issue(hass, entry.entry_id, unresolved=push_hub_identity_unresolved)
+    # Withdraw this entry's card on unload -- the issue registry is not per
+    # config entry, so a card raised before removal would otherwise survive
+    # it with no code path left to clear it. Never raises: this runs on the
+    # unload path, and async_sync_push_hub_identity_issue already wraps its
+    # own registry call in a try/except that logs at DEBUG on failure.
+    entry.async_on_unload(lambda: async_sync_push_hub_identity_issue(hass, entry.entry_id, unresolved=False))
 
     # Set up services
     await async_setup_services(hass)

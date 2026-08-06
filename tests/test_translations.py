@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import custom_components.rainpoint as rainpoint_pkg
 from custom_components.rainpoint import repairs
+from custom_components.rainpoint.const import PUSH_HUB_IDENTITY_ISSUE_ID
 from custom_components.rainpoint.repairs import (
     HubConnectivityRecord,
     OrphanedEntitiesRecord,
@@ -22,6 +23,7 @@ from custom_components.rainpoint.repairs import (
     RainPointOrphanedEntityIssues,
     RainPointSilentDeviceIssues,
     SilentDeviceRecord,
+    async_sync_push_hub_identity_issue,
 )
 
 _PLACEHOLDER_RE = re.compile(r"{(\w+)}")
@@ -55,6 +57,11 @@ def _hub_disconnected_entry() -> dict:
 def _orphaned_entities_entry() -> dict:
     """The issues entry whose copy RainPointOrphanedEntityIssues renders into."""
     return _load_en_translations()["issues"]["orphaned_device_entities"]
+
+
+def _push_hub_identity_entry() -> dict:
+    """The issues entry whose copy async_sync_push_hub_identity_issue renders into."""
+    return _load_en_translations()["issues"]["push_hub_identity_unresolved"]
 
 
 class TestIssueCopyStructure:
@@ -240,3 +247,57 @@ class TestOrphanedEntitiesIssuePlaceholderParity:
         assert "}" not in rendered
         assert confirm["title"].format(**supplied)
         assert entry["title"].format(**supplied)
+
+
+class TestPushHubIdentityIssueCopy:
+    """The push-hub-identity card's copy is proven placeholder-free, not parity-matched.
+
+    Its three siblings above prove a placeholder set matches between the copy
+    and the code. This card carries none by design: the message names no
+    specific missing field, so the executable claim here is the opposite one:
+    that there is nothing to match, on both the copy side and the code side.
+    """
+
+    def test_the_issue_id_constant_has_an_issues_entry(self):
+        """The constant's value doubles as the issue id, the translation_key
+        and the en.json key. A mismatch on any of the three ships a blank card."""
+        data = _load_en_translations()
+        assert PUSH_HUB_IDENTITY_ISSUE_ID in data["issues"]
+
+    def test_the_copy_carries_no_placeholders_and_the_code_supplies_none(self):
+        """Both halves of the contract in one test.
+
+        Asserting only the copy half would pass while the code passed a dict
+        the card silently drops; asserting only the code half would pass while
+        the copy carried a brace nothing ever fills.
+        """
+        entry = _push_hub_identity_entry()
+        in_copy = _placeholders_in(entry["title"]) | _placeholders_in(entry["description"])
+        assert in_copy == set()
+
+        with patch.object(repairs.ir, "async_create_issue") as create:
+            async_sync_push_hub_identity_issue(MagicMock(), "some_entry_id", unresolved=True)
+        create.assert_called_once()
+        assert "translation_placeholders" not in create.call_args.kwargs
+
+    def test_the_copy_names_no_cloud_record_key(self):
+        """The card describes the outcome, never which cloud field was missing.
+
+        The card is Markdown-rendered, so a message naming a specific cloud
+        field would be the first surface in this integration to put vendor
+        vocabulary in front of a user who cannot act on the distinction. Kept
+        to the two key names _resolve_hub_identity reads, rather than a
+        general-purpose secret scanner.
+        """
+        entry = _push_hub_identity_entry()
+        body = (entry["title"] + entry["description"]).lower()
+        assert "devicename" not in body
+        assert "productkey" not in body
+
+    def test_the_copy_closes_with_the_same_remedy_bullets_as_push_channel_down(self):
+        """The same two remedy bullets push_channel_down uses, derived
+        from the file rather than hard-coded so the two cards stay in step if
+        either is reworded later."""
+        sibling = _load_en_translations()["issues"]["push_channel_down"]
+        entry = _push_hub_identity_entry()
+        assert entry["description"].split("\n")[-2:] == sibling["description"].split("\n")[-2:]
