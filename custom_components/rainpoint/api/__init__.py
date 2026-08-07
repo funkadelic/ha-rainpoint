@@ -46,8 +46,10 @@ from .utils import (
     _le16,
     _parse_hub_broadcast_flag,
     _parse_rainpoint_payload,
+    _parse_sub_power_mode,
     _parse_tlv_payload,
     _splice_hub_broadcast_param,
+    _splice_sub_power_mode,
 )
 from .validators import (
     _battery_flag_to_percent,
@@ -77,8 +79,10 @@ __all__ = [
     "_le16",
     "_parse_hub_broadcast_flag",
     "_parse_rainpoint_payload",
+    "_parse_sub_power_mode",
     "_parse_tlv_payload",
     "_splice_hub_broadcast_param",
+    "_splice_sub_power_mode",
     "_validate_payload",
     "_validate_tag",
     # Decoders

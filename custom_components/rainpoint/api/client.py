@@ -515,6 +515,43 @@ class RainPointClient:
             raise RainPointApiError(f"main/update failed: code {code}")
         return True
 
+    async def update_sub_param(self, mid, sid, param: str) -> bool:
+        """Write a sub-device's `param` blob back to the cloud, addressed by `sid`.
+
+        `param` is the comma-separated key=value string the poll reads off the
+        sub-device record, spliced by the caller (never rebuilt here) so only
+        the key it understands changes, mirroring `update_main_param`'s
+        contract for the sibling hub blob. `mid` and `sid` reach the request
+        body unchanged, without coercion: the capture that confirmed this
+        endpoint showed the app sending `mid` as a string and `sid` as an int,
+        while the sibling `main/update` endpoint accepts the integer `mid`
+        this integration already sends elsewhere -- inventing a conversion
+        either way would be an untested assumption. Code 0 is the only
+        success verdict; there is no code-4 idempotent branch, matching
+        `update_main_param` -- code 4 has never been observed on this
+        endpoint either, and inventing the branch would ship an untested
+        success path.
+        """
+        await self.ensure_logged_in()
+        url = f"{self._base_url}/app/device/sub/update"
+        payload = {"mid": mid, "sid": sid, "param": param}
+        request_token = self._token
+        async with self._session.post(url, headers=self._auth_headers(), json=payload) as resp:
+            if resp.status != 200:
+                raise RainPointApiError(f"sub/update HTTP {resp.status}")
+            data = await resp.json()
+
+        code = data.get("code")
+        # `param` is a cloud-supplied string being echoed back to the cloud,
+        # exactly the free text the house logging rule keeps out of log
+        # lines; only the mid, sid and code are logged, matching
+        # update_main_param's and control_work_mode_dp's redaction.
+        _LOGGER.debug("API call: update_sub_param mid=%s sid=%s code=%s", mid, sid, code)
+        if code != 0:
+            self._maybe_invalidate_token(code, request_token)
+            raise RainPointApiError(f"sub/update failed: code {code}")
+        return True
+
     async def control_work_mode(
         self,
         mid: int,
