@@ -5,6 +5,20 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.14.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.13.1...v1.14.0) (2026-08-07)
 
 
+### What's new
+
+**Expanded HTV210B support**
+
+- The HTV210B can now be opened and closed from Home Assistant when it is paired through a RainPoint hub. A HTV210B paired over Bluetooth alone cannot be controlled.
+- Your existing zone sensors for that valve stay exactly where they are, and you gain per-zone on/off and run duration control. You can now set the transmission power as well: Power Saving, Standard, or Enhance.
+
+**Also in this release**
+
+- **The hub's Automatic Broadcast Time switch actually works now.** It has been on the hub's device page for a while, but it showed a fixed state and flipping it did nothing. It now reads the real setting from RainPoint and changes it there, matching the switch in the app. Next to it is a new **Broadcast Time Now** button that sends the same one-off time broadcast the app's button sends.
+- **Push updates are now on for everyone.** Readings arrive as RainPoint sends them rather than waiting for the next scheduled check, which could be a couple of minutes away. Regular checking carries on underneath as a fallback, so nothing breaks if push drops. If you had already turned it on, nothing changes. If you deliberately turned it off, that choice is kept. And if push cannot start, a notice now appears under **Settings → Repairs** instead of the failure only going to the log, so an install can no longer sit quietly without it.
+- **A few devices should stop looking wired up but blank.** Some models describe their readings in a format the general-purpose reader did not recognise, and rather than saying so it simply returned nothing, which looked identical to a device with nothing to report. It now reads that format. This only affects the opt-in unverified entities, so it changes nothing unless you have turned those on.
+
+
 ### Added
 
 * add hub broadcast toggle and one-shot button entities ([#156](https://github.com/funkadelic/ha-rainpoint/issues/156)) ([8bd67ec](https://github.com/funkadelic/ha-rainpoint/commit/8bd67ec4aab435f2827d32f1e83d1bc54e3fd13c))
