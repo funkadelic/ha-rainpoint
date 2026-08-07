@@ -1,14 +1,28 @@
 """Tests for the model-agnostic diagnostic decoder (decode_generic)."""
 
+import hashlib
+import logging
+from pathlib import Path
+
 import custom_components.rainpoint.api.generic_decoder as generic_decoder_module
-from custom_components.rainpoint.api import decode_generic
+import custom_components.rainpoint.api.utils as api_utils_module
+from custom_components.rainpoint.api import decode_generic, is_ascii_declined
 from tests.payload_samples import (
     CATALOG_ANCHOR_MODEL,
+    HWS019WRF_V2_PAYLOAD,
+    MOISTURE_FULL_ASCII_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
+    SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
     SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
 )
+
+# custom_components/rainpoint/api/decoders.py is the trusted reference this
+# phase reads and must never edit. Pinned by whole-file digest rather than a
+# per-function comparison, computed against the file as it stood at the
+# start of this phase's work.
+_DECODERS_PY_PRE_PHASE_SHA256 = "fb4115b5fab5c1378795668d836dc69083d52ef1ad6d1e38184fd864a726ab4a"
 
 
 class TestDecodeGenericTLV:
@@ -75,6 +89,30 @@ class TestDecodeGenericRobustness:
 
     def test_non_hex_body(self):
         assert "error" in decode_generic("11#ZZZZ")
+
+    def test_non_string_raw_is_tolerated(self):
+        """A malformed cloud record can hand this a non-string value despite the
+        type hint; the ASCII-detection check ahead of the hex path must not
+        raise out of the function on that shape either."""
+        result = decode_generic(None)  # type: ignore[arg-type]
+        assert result["decoder"] == "generic-tlv"
+        assert "error" in result
+
+    def test_non_string_raw_is_not_logged_verbatim(self, caplog):
+        """A list-shaped raw reaches the same except block via a different
+        exception (AttributeError on .split rather than a TypeError on 'in'),
+        and its contents must not appear in the diagnostic log line -- only
+        the type name may, since raw is untrusted cloud-supplied data."""
+        caplog.set_level(logging.DEBUG)
+
+        result = decode_generic(["marker-should-not-be-logged", ";"])  # type: ignore[arg-type]
+
+        assert "error" in result
+        rainpoint_records = [r for r in caplog.records if r.name.startswith("custom_components.rainpoint")]
+        assert len(rainpoint_records) == 1
+        message = rainpoint_records[0].getMessage()
+        assert "marker-should-not-be-logged" not in message
+        assert "list" in message
 
 
 class TestDecodeGenericFraming:
@@ -442,3 +480,155 @@ class TestDecodeGenericCatalogAnnotation:
         assert "error" not in result
         for field in result["fields"]:
             assert "catalog" not in field
+
+
+class TestDecodeGenericAscii:
+    """The comma-and-semicolon ASCII framing: header rssi read, body declined."""
+
+    def test_yields_one_header_derived_rssi_field(self):
+        """The HTV245 ASCII sample decodes to exactly one STA_RSSI field at -84."""
+        fields = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)["fields"]
+
+        assert len(fields) == 1
+        assert fields[0]["name"] == "STA_RSSI"
+        assert fields[0]["value"] == -84
+
+    def test_synthetic_entry_has_null_provenance_keys(self):
+        """index, dp_id and raw are all None: there is no byte-stream position behind a header-derived value."""
+        field = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)["fields"][0]
+
+        assert field["index"] is None
+        assert field["dp_id"] is None
+        assert field["raw"] is None
+
+    def test_result_shape(self):
+        """field_names, dp_id_prefixed and the ascii_framed marker all match the documented ASCII result shape."""
+        result = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)
+
+        assert result["field_names"] == ["STA_RSSI"]
+        assert result["dp_id_prefixed"] is False
+        assert result["ascii_framed"] is True
+
+    def test_error_names_the_real_condition(self):
+        """The error names the ASCII framing and never claims 'empty' or 'hex'."""
+        error = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)["error"]
+
+        assert isinstance(error, str)
+        assert "ASCII" in error
+        assert "empty" not in error.lower()
+        assert "hex" not in error.lower()
+
+    def test_is_ascii_declined_true_for_ascii_result(self):
+        """is_ascii_declined reads the marker back off a real ASCII decode."""
+        assert is_ascii_declined(decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)) is True
+
+    def test_is_ascii_declined_false_for_hex_result(self):
+        """A hex decode never carries the marker."""
+        assert is_ascii_declined(decode_generic("11#1FD801")) is False
+
+    def test_is_ascii_declined_fails_closed_on_none_and_empty_dict(self):
+        """A caller that has not run a decode yet gets False, not a raise."""
+        assert is_ascii_declined(None) is False
+        assert is_ascii_declined({}) is False
+
+    def test_no_catalog_annotation_even_with_model(self):
+        """The ASCII branch returns before the catalog block; model is inert here."""
+        result = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD, model="HTV245FRF", model_code="303")
+
+        assert "catalog" not in result["fields"][0]
+
+    def test_moisture_full_sample_yields_its_header_rssi(self):
+        """The second committed family (HCS021FRF) reads the same way: header rssi, decline."""
+        result = decode_generic(MOISTURE_FULL_ASCII_PAYLOAD)
+
+        assert len(result["fields"]) == 1
+        assert result["fields"][0]["name"] == "STA_RSSI"
+        assert result["fields"][0]["value"] == -73
+        assert is_ascii_declined(result) is True
+
+    def test_hws019wrf_v2_non_negative_rssi_yields_no_field_and_no_log(self, caplog):
+        """The third committed family carries a real rssi=0 sample.
+
+        Both hand-written ASCII decoders emit an _LOGGER.warning on exactly
+        this condition, which would spam every poll for an affected device on
+        the generic path. Pinned at DEBUG so the assertion covers every level,
+        not only WARNING.
+        """
+        caplog.set_level(logging.DEBUG)
+
+        result = decode_generic(HWS019WRF_V2_PAYLOAD)
+
+        assert result["fields"] == []
+        assert result["field_names"] == []
+        assert result["ascii_framed"] is True
+        assert "ASCII" in result["error"]
+        rainpoint_records = [r for r in caplog.records if r.name.startswith("custom_components.rainpoint")]
+        assert rainpoint_records == []
+
+    def test_truncated_header_declines_without_raising(self):
+        """A header with fewer than three comma parts still declines cleanly."""
+        result = decode_generic("1,-84;body")
+
+        assert "error" in result
+        assert result["fields"] == []
+        assert result["ascii_framed"] is True
+
+    def test_non_integer_rssi_token_declines_without_raising(self):
+        """A non-integer rssi token still declines cleanly."""
+        result = decode_generic("1,x,1;body")
+
+        assert "error" in result
+        assert result["fields"] == []
+        assert result["ascii_framed"] is True
+
+    def test_non_ascii_body_still_routes_to_the_ascii_branch(self):
+        """Routing reads only the pre-semicolon header, never the body's content."""
+        result = decode_generic("1,-84,1;" + "éèê")
+
+        assert result["ascii_framed"] is True
+        assert result["fields"][0]["value"] == -84
+
+    def test_hex_payload_with_ascii_tail_is_unaffected(self):
+        """Asserted positively: a hex-with-tail payload decodes exactly as before."""
+        result = decode_generic("10#AABBCC,1,2")
+
+        assert "ascii_framed" not in result
+        assert is_ascii_declined(result) is False
+        assert result == {
+            "decoder": "generic-tlv",
+            "dp_id_prefixed": False,
+            "fields": [{"name": "STA_ENERGY", "index": 18, "dp_id": 0, "raw": "bbcc", "value": 52411}],
+            "field_names": ["STA_ENERGY"],
+        }
+
+    def test_empty_hex_body_error_wording_is_untouched(self):
+        """The hex branch's own error message is not touched by this phase."""
+        assert decode_generic("11#")["error"] == "empty or odd-length hex body"
+
+
+class TestAsciiFramingNonRegression:
+    """Source-level pins: the trusted decoders and the no-ordering-table rule."""
+
+    def test_decoders_py_is_byte_identical_to_the_phase_base(self):
+        """api/decoders.py is read for reference and never edited.
+
+        Pinned by whole-file digest rather than relying on `git diff` alone,
+        so a regression is caught by the test suite itself.
+        """
+        source = Path(generic_decoder_module.__file__).parent / "decoders.py"
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+
+        assert digest == _DECODERS_PY_PRE_PHASE_SHA256
+
+    def test_no_per_family_body_position_table_exists(self):
+        """No ordering machinery ships, not even a declared-empty table.
+
+        Checked as an absence over the two edited modules' own namespaces,
+        not a repo-wide grep, so the explanatory comment elsewhere describing
+        why no table exists cannot trip its own gate.
+        """
+        forbidden_fragments = ("BODY_ORDER", "FIELD_ORDER", "POSITION_TABLE", "ZONE_ORDER", "ORDERING_TABLE")
+
+        for module in (generic_decoder_module, api_utils_module):
+            offenders = [name for name in vars(module) if any(fragment in name.upper() for fragment in forbidden_fragments)]
+            assert offenders == [], f"{module.__name__} defines: {offenders}"

@@ -10,6 +10,12 @@ from custom_components.rainpoint.api import (
     _parse_rainpoint_payload,
     _parse_tlv_payload,
 )
+from custom_components.rainpoint.api.utils import _is_ascii_payload, _parse_ascii_rssi, _split_prefix
+from tests.payload_samples import (
+    HWS019WRF_V2_PAYLOAD,
+    MOISTURE_FULL_ASCII_PAYLOAD,
+    SAMPLE_HTV245_ASCII_PAYLOAD,
+)
 
 
 class TestParseRainpointPayload:
@@ -250,3 +256,80 @@ class TestExtractReportTime:
         """
         b = bytes.fromhex("E1C400FF0F00000000")
         assert _extract_report_time(b) is None
+
+
+class TestIsAsciiPayload:
+    """Tests for _is_ascii_payload, the ASCII/hex discrimination predicate."""
+
+    def test_htv245_sample_is_ascii(self):
+        """The committed HTV245 ASCII sample is recognised."""
+        assert _is_ascii_payload(SAMPLE_HTV245_ASCII_PAYLOAD) is True
+
+    def test_moisture_full_sample_is_ascii(self):
+        """The committed HCS021FRF ASCII sample is recognised."""
+        assert _is_ascii_payload(MOISTURE_FULL_ASCII_PAYLOAD) is True
+
+    def test_hws019wrf_v2_sample_is_ascii(self):
+        """The committed HWS019WRF-V2 ASCII sample is recognised."""
+        assert _is_ascii_payload(HWS019WRF_V2_PAYLOAD) is True
+
+    def test_11_hash_prefix_is_not_ascii(self):
+        """A '#' prefix routes to the hex path before the ASCII test is reached."""
+        assert _is_ascii_payload("11#1FD801") is False
+
+    def test_10_hash_prefix_with_ascii_tail_is_not_ascii(self):
+        """A hex payload carrying a comma tail still routes to hex, not ASCII."""
+        assert _is_ascii_payload("10#AABBCC,1,2") is False
+
+    def test_no_semicolon_no_hash_is_not_ascii(self):
+        """A bare hex-looking string with neither marker is not ASCII-shaped."""
+        assert _is_ascii_payload("AABBCC") is False
+
+
+class TestParseAsciiRssi:
+    """Tests for _parse_ascii_rssi, the header rssi reader."""
+
+    def test_negative_rssi_from_htv245_sample(self):
+        """The committed HTV245 sample's header rssi parses to -84."""
+        assert _parse_ascii_rssi(SAMPLE_HTV245_ASCII_PAYLOAD) == -84
+
+    def test_negative_rssi_from_moisture_full_sample(self):
+        """The committed HCS021FRF sample's header rssi parses to -73."""
+        assert _parse_ascii_rssi(MOISTURE_FULL_ASCII_PAYLOAD) == -73
+
+    def test_non_negative_rssi_returns_none(self):
+        """A non-negative header rssi (HWS019WRF_V2's real 0) yields None, not 0."""
+        assert _parse_ascii_rssi(HWS019WRF_V2_PAYLOAD) is None
+
+    def test_truncated_header_returns_none(self):
+        """A header with fewer than three comma parts yields None, no raise."""
+        assert _parse_ascii_rssi("1,-84;body") is None
+
+    def test_non_integer_rssi_token_returns_none(self):
+        """A non-integer rssi token yields None, no raise."""
+        assert _parse_ascii_rssi("1,x,1;body") is None
+
+
+class TestSplitPrefixCommaTruncation:
+    """Characterization tests for _split_prefix's existing tail-truncation behaviour.
+
+    This behaviour must survive unchanged; these pin it behaviourally as
+    well as by the source-identity check in tests/api/test_generic_decoder.py.
+    """
+
+    def test_hex_body_with_no_comma_tail_is_returned_whole(self):
+        """A hex body with no ASCII tail passes through unchanged (uppercased)."""
+        assert _split_prefix("10#aabbcc") == ("AABBCC", False)
+
+    def test_hex_body_with_ascii_tail_truncates_at_first_comma(self):
+        """The comma-separated ASCII tail is dropped, keeping only the hex block."""
+        assert _split_prefix("10#AABBCC,1,2") == ("AABBCC", False)
+
+    def test_11_prefix_marks_dp_id_prefixed(self):
+        """An 11# prefix sets dp_id_prefixed True; 10# leaves it False."""
+        assert _split_prefix("11#AABB")[1] is True
+        assert _split_prefix("10#AABB")[1] is False
+
+    def test_no_hash_prefix_returns_raw_body_uppercased(self):
+        """A payload with no '#' is returned as-is (uppercased, comma-truncated)."""
+        assert _split_prefix("aabb") == ("AABB", False)
