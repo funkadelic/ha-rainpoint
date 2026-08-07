@@ -450,7 +450,17 @@ class TestAsyncSetupEntry:
         mock_coordinator.async_config_entry_first_refresh = AsyncMock()
         mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
         hass.config_entries.async_forward_entry_setups = AsyncMock()
-        hass.async_create_background_task = MagicMock()
+
+        created_tasks = []
+
+        def _create_background_task(coro, name=None):
+            """Schedule the coroutine like the real HA helper would, so the mocked
+            async_start is actually consumed rather than left un-awaited."""
+            task = asyncio.ensure_future(coro)
+            created_tasks.append(task)
+            return task
+
+        hass.async_create_background_task = MagicMock(side_effect=_create_background_task)
 
         mock_mqtt_client = MagicMock()
         mock_mqtt_client.async_start = AsyncMock()
@@ -479,6 +489,11 @@ class TestAsyncSetupEntry:
         assert hass.data[DOMAIN][entry.entry_id]["mqtt_client"] is mock_mqtt_client
         assert hass.data[DOMAIN][entry.entry_id]["watchdog"] is mock_watchdog
         hass.async_create_background_task.assert_called_once()
+
+        for task in created_tasks:
+            with contextlib.suppress(Exception):
+                await task
+        assert mock_mqtt_client.async_start.await_count == 1
 
 
 class TestPushHubIdentityIssue:

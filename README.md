@@ -158,7 +158,7 @@ Push carries two kinds of update: new readings from individual devices, and a hu
 2. In the **RainPoint Options** form, **Enable push updates** is already checked. Uncheck it to turn push off.
 3. Save. The change applies automatically (the integration reloads itself), so you never have to reload or re-add it by hand.
 
-To turn push back off, revisit the same **Configure** screen and uncheck **Enable push updates**.
+To turn push back on, revisit the same **Configure** screen and check **Enable push updates**.
 
 ### Telling whether push is working
 
