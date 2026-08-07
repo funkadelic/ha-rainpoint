@@ -165,10 +165,10 @@ class TestAsyncSetupEntry:
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_push_disabled_no_mqtt_client(self):
-        """With push disabled (default), no mqtt_client is stored and no background task runs."""
+        """With push explicitly disabled, no mqtt_client is stored and no background task runs."""
         hass = _make_hass()
         entry = _make_entry()
-        # entry.options == {} => push_enabled defaults to False
+        entry.options = {CONF_PUSH_ENABLED: False}
 
         mock_client = MagicMock()
         mock_client.restore_tokens = MagicMock()
@@ -415,7 +415,8 @@ class TestAsyncSetupEntry:
     async def test_async_setup_entry_push_disabled_no_watchdog(self):
         """With push disabled, no watchdog is constructed or stored."""
         hass = _make_hass()
-        entry = _make_entry()  # options == {} => push disabled
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: False}
 
         mock_client = MagicMock()
         mock_client.restore_tokens = MagicMock()
@@ -435,6 +436,64 @@ class TestAsyncSetupEntry:
 
         assert result is True
         assert "watchdog" not in hass.data[DOMAIN][entry.entry_id]
+
+    @pytest.mark.asyncio
+    async def test_absent_push_option_defaults_to_push_enabled(self):
+        """An entry that has never stored push_enabled starts push at setup."""
+        hass = _make_hass()
+        entry = _make_entry()
+        # entry.options == {} => push_enabled has never been stored
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        created_tasks = []
+
+        def _create_background_task(coro, name=None):
+            """Schedule the coroutine like the real HA helper would, so the mocked
+            async_start is actually consumed rather than left un-awaited."""
+            task = asyncio.ensure_future(coro)
+            created_tasks.append(task)
+            return task
+
+        hass.async_create_background_task = MagicMock(side_effect=_create_background_task)
+
+        mock_mqtt_client = MagicMock()
+        mock_mqtt_client.async_start = AsyncMock()
+        mock_mqtt_client.async_disconnect = AsyncMock()
+
+        mock_watchdog = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch(
+                "custom_components.rainpoint.RainPointMqttClient",
+                return_value=mock_mqtt_client,
+            ),
+            patch(
+                "custom_components.rainpoint.repairs.RainPointPushWatchdog",
+                return_value=mock_watchdog,
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        assert hass.data[DOMAIN][entry.entry_id]["mqtt_client"] is mock_mqtt_client
+        assert hass.data[DOMAIN][entry.entry_id]["watchdog"] is mock_watchdog
+        hass.async_create_background_task.assert_called_once()
+
+        for task in created_tasks:
+            with contextlib.suppress(Exception):
+                await task
+        assert mock_mqtt_client.async_start.await_count == 1
 
 
 class TestPushHubIdentityIssue:
@@ -665,7 +724,7 @@ class TestPushHubIdentityIssue:
         """
         hass = _make_hass()
         entry = _make_entry()
-        # entry.options == {} => push_enabled defaults to False
+        entry.options = {CONF_PUSH_ENABLED: False}
 
         mock_client = MagicMock()
         mock_client.restore_tokens = MagicMock()

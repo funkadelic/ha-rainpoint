@@ -83,16 +83,16 @@
     "step": {
       "init": {
         "title": "RainPoint Options",
-        "description": "All three options are off by default. Polling is always retained as a fallback.",
+        "description": "Polling is always retained as a fallback.",
         "data": {
           "push_enabled": "Enable push updates",
           "generic_entities_enabled": "Enable unverified generic sensors",
           "generic_control_enabled": "Enable unverified generic device control (moves hardware)"
         },
         "data_description": {
-          "push_enabled": "Receive real-time updates from the RainPoint cloud instead of waiting for the next poll. Polling is always retained as a fallback.",
-          "generic_entities_enabled": "Adds provisional sensors for devices this integration does not support yet. These readings are derived from RainPoint's product catalog rather than a tested per-model decoder, so they may be wrong. They are always labeled unverified in their names and should not be relied on for automations.\n\nGeneric sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices.",
-          "generic_control_enabled": "Adds controls that open and close real hardware -- including water valves -- for devices this integration does not support yet. The zone mapping comes from RainPoint's product catalog rather than a tested per-model decoder, so a wrong mapping can run the wrong zone or leave water running.\n\nNothing is assumed about the outcome of a command: a control entity only ever shows state read back from the device, never a guess. On this account that currently applies to {generic_control_eligible} of {generic_control_unsupported} unsupported devices."
+          "push_enabled": "Receive real-time updates from the RainPoint cloud instead of waiting for the next poll. Polling is always retained as a fallback. Push is on by default; uncheck this to turn it off.",
+          "generic_entities_enabled": "Adds provisional sensors for devices this integration does not support yet. These readings are derived from RainPoint's product catalog rather than a tested per-model decoder, so they may be wrong. They are always labeled unverified in their names and should not be relied on for automations.\n\nGeneric sensors are only created for a device once every reading it reports has a verified definition, so many devices produce none at all. On this account that currently applies to {generic_eligible} of {generic_unsupported} unsupported devices. This option is off by default.",
+          "generic_control_enabled": "Adds controls that open and close real hardware -- including water valves -- for devices this integration does not support yet. The zone mapping comes from RainPoint's product catalog rather than a tested per-model decoder, so a wrong mapping can run the wrong zone or leave water running.\n\nNothing is assumed about the outcome of a command: a control entity only ever shows state read back from the device, never a guess. On this account that currently applies to {generic_control_eligible} of {generic_control_unsupported} unsupported devices. This option is off by default."
         }
       }
     }

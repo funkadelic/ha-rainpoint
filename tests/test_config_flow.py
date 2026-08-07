@@ -621,10 +621,26 @@ class TestOptionsFlowInitStep:
         assert marker.default() is True
 
     @pytest.mark.asyncio
-    async def test_no_input_shows_form_defaulting_false_when_unset(self):
-        """Form defaults to False when entry.options has no push_enabled key yet."""
+    async def test_no_input_shows_form_defaulting_true_when_unset(self):
+        """Form pre-checks push when entry.options has never stored the key."""
         flow = _make_options_flow(current_push_enabled=False)
         flow.config_entry.options = {}
+
+        await flow.async_step_init(None)
+
+        call_kwargs = flow.async_show_form.call_args.kwargs
+        schema = call_kwargs["data_schema"]
+        (marker,) = [k for k in schema.schema if k == CONF_PUSH_ENABLED]
+        assert marker.default() is True
+
+    @pytest.mark.asyncio
+    async def test_stored_false_still_defaults_the_form_off(self):
+        """A stored opt-out is what the form shows the user back.
+
+        That is the whole reason no migration is written when push flips on
+        by default: an entry holding an explicit false keeps it.
+        """
+        flow = _make_options_flow(current_push_enabled=False)
 
         await flow.async_step_init(None)
 

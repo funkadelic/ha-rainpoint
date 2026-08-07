@@ -316,7 +316,7 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
             {
                 vol.Required(
                     CONF_PUSH_ENABLED,
-                    default=self.config_entry.options.get(CONF_PUSH_ENABLED, False),
+                    default=self.config_entry.options.get(CONF_PUSH_ENABLED, True),
                 ): bool,
                 vol.Required(
                     CONF_GENERIC_ENTITIES_ENABLED,
