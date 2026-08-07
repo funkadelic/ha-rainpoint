@@ -12,6 +12,7 @@ from custom_components.rainpoint.const import (
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
     PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
 )
+from custom_components.rainpoint.coordinator import HUB_CONNECTED
 from custom_components.rainpoint.hub_entities import (
     RainPointHubBroadcastButton,
     RainPointHubBroadcastSwitch,
@@ -584,6 +585,20 @@ class TestRainPointHubBroadcastSwitch:
         assert switch.is_on is False
         switch.async_write_ha_state.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_a_raised_write_leaves_no_optimistic_state(self):
+        """A client error propagates and is_on still reflects the unchanged poll value."""
+        switch = self._make(param="0|1||", mid=1001)
+        switch.coordinator._client = MagicMock()
+        switch.coordinator._client.update_main_param = AsyncMock(side_effect=RainPointApiError("main/update failed: code 5"))
+
+        with pytest.raises(RainPointApiError):
+            await switch.async_turn_off()
+
+        assert switch._optimistic is None
+        assert switch.is_on is True
+        switch.async_write_ha_state.assert_not_called()
+
     def test_unique_id_contains_broadcast(self):
         """unique_id contains 'broadcast' and equals the pre-change source's literal shape."""
         switch = self._make()
@@ -1031,6 +1046,10 @@ class TestHubBroadcastSwitchRealTimeline:
         # must not be mistaken for the poll that is supposed to confirm or
         # contradict the command.
         coordinator.apply_hub_push_update(236547, True, 1717200000000)
+        # Proves the push was applied rather than dropped by one of
+        # apply_hub_push_update's guards, which would make the two
+        # assertions below pass vacuously.
+        assert coordinator.data["hub_connectivity"][236547]["state"] == HUB_CONNECTED
         assert switch.is_on is True
         assert switch._optimistic is True
 

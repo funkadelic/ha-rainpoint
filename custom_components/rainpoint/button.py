@@ -27,13 +27,13 @@ async def async_setup_entry(
     hubs_cfg = coordinator.data.get("hubs", [])
     # Rejecting a non-list outright (rather than switch.py's dict-tolerant
     # fallback) matches select.py, the closest existing hub-record-walk
-    # platform: the strict form is the right one for new surface, and
-    # matching an existing file exactly means the reader has one shape to
-    # learn rather than two.
+    # platform. A non-dict list member is skipped rather than crashing
+    # setup on hub.get(): is_hub_record already rejects it below, so
+    # filtering here just moves that rejection earlier.
     if not isinstance(hubs_cfg, list):
         _LOGGER.error("Expected hubs to be a list, got %s; skipping button entity setup", type(hubs_cfg).__name__)
         return
-    hubs_dict = {str(hub.get("mid", i)): hub for i, hub in enumerate(hubs_cfg)}
+    hubs_dict = {str(hub.get("mid", i)): hub for i, hub in enumerate(hubs_cfg) if isinstance(hub, dict)}
 
     for _hub_key, hub_info in hubs_dict.items():
         if not is_hub_record(hub_info):

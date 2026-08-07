@@ -573,7 +573,15 @@ class RainPointClient:
         # what the app sends for a hub-addressed (addr=0) call.
         if duration is not None:
             payload["duration"] = duration
-        _LOGGER.debug("API call: control_work_mode URL=%s payload=%s", url, payload)
+        _LOGGER.debug(
+            "API call: control_work_mode URL=%s mid=%s addr=%s port=%s mode=%s duration=%s",
+            url,
+            mid,
+            addr,
+            port,
+            mode,
+            duration,
+        )
         request_token = self._token
         async with self._session.post(url, headers=self._auth_headers(), json=payload) as resp:
             if resp.status != 200:
