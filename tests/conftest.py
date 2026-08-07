@@ -111,6 +111,7 @@ _HA_STUBS = [
     "homeassistant.helpers.selector",
     "homeassistant.helpers.entity",
     "homeassistant.components",
+    "homeassistant.components.diagnostics",
     "homeassistant.components.persistent_notification",
     "homeassistant.components.select",
     "homeassistant.components.valve",
@@ -151,6 +152,43 @@ for _stub_name in _HA_STUBS:
     if len(_parts) > 1:
         _parent_mod = sys.modules[".".join(_parts[:-1])]
         setattr(_parent_mod, _parts[-1], sys.modules[_stub_name])
+
+# homeassistant.components.diagnostics.async_redact_data is a real function in
+# Home Assistant, not a class or a constant, and diagnostics.py calls it on the
+# structure it returns. A MagicMock attribute would make every diagnostics test
+# assert against a mock's return value rather than against a payload, so this
+# mirrors the real helper's semantics (HA 2026.2.3,
+# components/diagnostics/util.py): recurse through mappings and lists, leave
+# None and empty strings alone, replace a matched key's value with the marker.
+#
+# What this does NOT do is stand in as evidence that the real redactor works.
+# The diagnostics tests are written to assert the shape handed to it and the
+# key set it is given, which are this repo's to get right; the recursion itself
+# is Home Assistant's.
+_REDACTED_MARKER = "**REDACTED**"
+
+
+def _stub_async_redact_data(data, to_redact):
+    """Mirror homeassistant.components.diagnostics.util.async_redact_data."""
+    if not isinstance(data, (dict, list)):
+        return data
+    if isinstance(data, list):
+        return [_stub_async_redact_data(item, to_redact) for item in data]
+    redacted = {**data}
+    for key, value in redacted.items():
+        if value is None or (isinstance(value, str) and not value):
+            continue
+        if key in to_redact:
+            redacted[key] = _REDACTED_MARKER
+        elif isinstance(value, dict):
+            redacted[key] = _stub_async_redact_data(value, to_redact)
+        elif isinstance(value, list):
+            redacted[key] = [_stub_async_redact_data(item, to_redact) for item in value]
+    return redacted
+
+
+sys.modules["homeassistant.components.diagnostics"].async_redact_data = _stub_async_redact_data
+sys.modules["homeassistant.components.diagnostics"].REDACTED = _REDACTED_MARKER
 
 # Register the real update_coordinator stub (must come after the loop so that
 # the parent "homeassistant.helpers" stub is already in sys.modules). Bind it

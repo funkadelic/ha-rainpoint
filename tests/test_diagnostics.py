@@ -1,0 +1,473 @@
+"""Tests for the diagnostics platform (diagnostics.py).
+
+Two properties are worth separating, because they fail in different ways.
+
+The *shape* property is that a value reaches the dump only by being named in an
+allow-list, so a field the vendor adds tomorrow contributes its name and not its
+contents. That is what `TestAllowList` and `TestUnlistedKeys` pin, and they read
+the builders directly rather than the redacted payload, because a redactor
+cannot be the thing that saves an unreviewed field.
+
+The *disclosure* property is that no credential and no account identity survives
+into the finished payload. `TestNothingSensitiveSurvives` walks the whole
+returned structure for literal values rather than checking named keys, so a
+value that reaches the dump through a key nobody anticipated still fails the
+test.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import pytest
+
+from custom_components.rainpoint.const import DOMAIN, VERSION
+from custom_components.rainpoint.diagnostics import (
+    TO_REDACT,
+    _select_allowed,
+    async_get_config_entry_diagnostics,
+    async_get_device_diagnostics,
+)
+
+REDACTED = "**REDACTED**"
+
+# Values chosen to be findable: every one is a literal that must not appear
+# anywhere in a finished dump, and each is distinctive enough that a substring
+# walk cannot match it by accident.
+SECRET_PASSWORD = "correct-horse-battery-staple"
+SECRET_TOKEN = "tok_ABCDEFGHIJKLMNOP"
+ACCOUNT_EMAIL = "someone@example.invalid"
+HUB_MAC = "A8:46:74:BB:91:F0"
+PRODUCT_KEY = "a3QrDxYPTM2"
+IOT_ID = "jDQNeV92iFixCU42PDtUk0k0d4"
+HOME_NAME = "Richmond"
+
+
+def _hub_record(hid=182509, mid=236547, extra=None):
+    """Return a top-level hub record shaped like a real getDeviceByHid entry."""
+    record = {
+        "hid": hid,
+        "mid": mid,
+        "brand": "RainPoint",
+        "name": "Hub",
+        "model": "HWG023WBRF-V2",
+        "modelCode": "34",
+        "softVer": "1.2.3",
+        "hardwareVersion": "1.0",
+        "mac": HUB_MAC,
+        "deviceName": "MAC-A84674BB91F0",
+        "productKey": PRODUCT_KEY,
+        "iotId": IOT_ID,
+        "homeName": HOME_NAME,
+        "param": "0|1||",
+        "state": "1,-52",
+        "subDevices": [
+            {
+                "addr": 1,
+                "mid": mid,
+                "sid": 341550,
+                "model": "HTV245FRF",
+                "name": "Valve",
+                "mac": "A4:C1:38:FF:88:E7",
+                "softVer": "2.0.1",
+                "param": "5=02,11=58020a001e000000000000000000",
+            }
+        ],
+    }
+    if extra:
+        record.update(extra)
+    return record
+
+
+def _sensor_entry(hid=182509, mid=236547, addr=1):
+    """Return a coordinator sensors entry carrying a decoded payload."""
+    return {
+        "hid": hid,
+        "mid": mid,
+        "addr": addr,
+        "home_name": HOME_NAME,
+        "hub_name": "Hub",
+        "sub_name": "Valve",
+        "model": "HTV245FRF",
+        "model_code": "303",
+        "firmware_version": "2.0.1",
+        "device_name": "MAC-A84674BB91F0",
+        "product_key": PRODUCT_KEY,
+        "hub_paired": True,
+        "raw_status": {"id": "D01", "value": "11#0100...", "time": 1785420002247},
+        "data": {"type": "valve", "zones": {1: {"open": True, "duration_seconds": 120}}},
+    }
+
+
+def _make_hass(coordinator=None, mqtt_client=None, entry_id="entry-1"):
+    """Return (hass, entry) wired the way async_setup_entry leaves them."""
+    entry = MagicMock()
+    entry.entry_id = entry_id
+    entry.data = {
+        "email": ACCOUNT_EMAIL,
+        "password": SECRET_PASSWORD,
+        "token": SECRET_TOKEN,
+        "refresh_token": SECRET_TOKEN + "-r",
+        "area_code": "1",
+        "hids": [182509],
+    }
+    entry.options = {"push_enabled": True, "generic_entities_enabled": False}
+
+    store = {}
+    if coordinator is not None:
+        store["coordinator"] = coordinator
+    if mqtt_client is not None:
+        store["mqtt_client"] = mqtt_client
+
+    hass = MagicMock()
+    hass.data = {DOMAIN: {entry_id: store}}
+    return hass, entry
+
+
+def _make_coordinator(hubs=None, sensors=None, connectivity=None):
+    """Return a coordinator stand-in holding one poll's data."""
+    coordinator = MagicMock()
+    coordinator.data = {
+        "hubs": hubs if hubs is not None else [_hub_record()],
+        "sensors": sensors if sensors is not None else {"182509_236547_1": _sensor_entry()},
+        "status": {},
+        "hub_connectivity": connectivity if connectivity is not None else {236547: {"state": "connected", "changed_at": None}},
+    }
+    coordinator.last_update_success = True
+    coordinator.update_interval = None
+    return coordinator
+
+
+def _walk_values(payload):
+    """Yield every scalar value reachable in a nested dict/list structure."""
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            yield key
+            yield from _walk_values(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            yield from _walk_values(item)
+    else:
+        yield payload
+
+
+def _device(identifier):
+    """Return a device registry row carrying one DOMAIN identifier."""
+    device = MagicMock()
+    device.identifiers = {(DOMAIN, identifier)}
+    return device
+
+
+class TestAllowList:
+    """The builders carry named fields and nothing else."""
+
+    def test_a_field_outside_the_allow_list_contributes_only_its_name(self):
+        """This is the property the whole module is built around."""
+        record = {"model": "HTV245FRF", "somethingVendorAddedLater": "a secret-ish value"}
+
+        selected = _select_allowed(record, frozenset({"model"}))
+
+        assert selected["model"] == "HTV245FRF"
+        assert selected["unlisted_keys"] == ["somethingVendorAddedLater"]
+        assert "a secret-ish value" not in list(_walk_values(selected))
+
+    def test_no_unlisted_keys_entry_when_every_field_is_named(self):
+        """The list is a signal, so it must not appear when there is nothing to signal."""
+        selected = _select_allowed({"model": "X"}, frozenset({"model", "mid"}))
+
+        assert selected == {"model": "X"}
+
+    def test_a_record_that_is_not_a_dict_is_typed_rather_than_raising(self):
+        """Diagnostics is reached when something is already wrong; it must not add to it."""
+        assert _select_allowed(["not", "a", "record"], frozenset({"model"})) == {"unexpected_type": "list"}
+
+
+class TestUnlistedKeys:
+    """A new vendor field surfaces as a question, through the real dump path."""
+
+    @pytest.mark.asyncio
+    async def test_a_new_hub_field_is_named_and_its_value_is_absent(self):
+        hubs = [_hub_record(extra={"newVendorField": "unreviewed-payload-value"})]
+        hass, entry = _make_hass(coordinator=_make_coordinator(hubs=hubs))
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert "newVendorField" in result["hubs"][0]["unlisted_keys"]
+        assert "unreviewed-payload-value" not in list(_walk_values(result))
+
+    @pytest.mark.asyncio
+    async def test_a_new_sub_device_field_is_named_and_its_value_is_absent(self):
+        """The sub-device walk has its own allow-list, so it needs its own proof."""
+        hub = _hub_record()
+        hub["subDevices"][0]["newSubField"] = "unreviewed-sub-value"
+        hass, entry = _make_hass(coordinator=_make_coordinator(hubs=[hub]))
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert "newSubField" in result["hubs"][0]["subDevices"][0]["unlisted_keys"]
+        assert "unreviewed-sub-value" not in list(_walk_values(result))
+
+
+class TestNothingSensitiveSurvives:
+    """DIAG-03 and DIAG-04, asserted by value rather than by key name."""
+
+    @pytest.mark.asyncio
+    async def test_no_credential_reaches_the_config_entry_dump(self):
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        values = list(_walk_values(await async_get_config_entry_diagnostics(hass, entry)))
+
+        assert SECRET_PASSWORD not in values
+        assert SECRET_TOKEN not in values
+        assert SECRET_TOKEN + "-r" not in values
+
+    @pytest.mark.asyncio
+    async def test_no_account_identity_reaches_the_config_entry_dump(self):
+        """The email is the single most harmful field here, per the logging review."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        values = list(_walk_values(await async_get_config_entry_diagnostics(hass, entry)))
+
+        assert ACCOUNT_EMAIL not in values
+        assert HOME_NAME not in values
+        assert HUB_MAC not in values
+        assert PRODUCT_KEY not in values
+        assert IOT_ID not in values
+
+    @pytest.mark.asyncio
+    async def test_entry_data_contributes_key_names_and_no_values(self):
+        """Stronger than redaction: the values are never read into the structure."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["entry"]["data_keys"] == [
+            "area_code",
+            "email",
+            "hids",
+            "password",
+            "refresh_token",
+            "token",
+        ]
+        assert result["entry"]["home_count"] == 1
+        assert "data" not in result["entry"]
+
+    @pytest.mark.asyncio
+    async def test_no_credential_reaches_a_device_dump(self):
+        """The device path builds its own payload, so it needs its own proof."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        values = list(_walk_values(await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))))
+
+        assert SECRET_PASSWORD not in values
+        assert ACCOUNT_EMAIL not in values
+        assert HUB_MAC not in values
+
+
+class TestSupportPayload:
+    """DIAG-05: the dump answers a decode question without a follow-up request."""
+
+    @pytest.mark.asyncio
+    async def test_the_raw_payload_and_the_decode_of_it_both_survive(self):
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        sensor = result["sensors"]["182509_236547_1"]
+        assert sensor["raw_status"]["value"] == "11#0100..."
+        assert sensor["data"]["zones"][1]["duration_seconds"] == 120
+        assert sensor["model"] == "HTV245FRF"
+
+    @pytest.mark.asyncio
+    async def test_the_hub_param_blob_survives(self):
+        """The field the throwaway probe script was written to read."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["hubs"][0]["param"] == "0|1||"
+
+    @pytest.mark.asyncio
+    async def test_the_integration_version_is_stamped(self):
+        """A support dump is worthless without knowing which build produced it."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["integration"] == {"domain": DOMAIN, "version": VERSION}
+
+
+class TestPushSection:
+    """The push channel reports liveness and carries no session credential."""
+
+    @pytest.mark.asyncio
+    async def test_absent_client_reports_that_and_nothing_else(self):
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["push"] == {"client_built": False}
+
+    @pytest.mark.asyncio
+    async def test_present_client_reports_the_four_liveness_fields(self):
+        mqtt_client = MagicMock()
+        mqtt_client.connected = True
+        mqtt_client.message_count = 17
+        mqtt_client.last_message_at = 1785420002.5
+        mqtt_client.hub_mid = 236547
+        mqtt_client.device_secret = "SECRET-SHOULD-NEVER-APPEAR"
+        hass, entry = _make_hass(coordinator=_make_coordinator(), mqtt_client=mqtt_client)
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["push"] == {
+            "client_built": True,
+            "connected": True,
+            "message_count": 17,
+            "last_message_at": 1785420002.5,
+            "hub_mid": 236547,
+        }
+        assert "SECRET-SHOULD-NEVER-APPEAR" not in list(_walk_values(result))
+
+
+class TestDeviceRouting:
+    """The DOMAIN identifier decides which of the three dumps a device page gets."""
+
+    @pytest.mark.asyncio
+    async def test_a_sub_device_row_yields_only_its_own_sensor_entry(self):
+        sensors = {
+            "182509_236547_1": _sensor_entry(addr=1),
+            "182509_236547_3": _sensor_entry(addr=3),
+        }
+        hass, entry = _make_hass(coordinator=_make_coordinator(sensors=sensors))
+
+        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_3"))
+
+        assert result["device"]["kind"] == "sub_device"
+        assert list(result["sensors"]) == ["182509_236547_3"]
+        assert result["sensors"]["182509_236547_3"]["addr"] == 3
+
+    @pytest.mark.asyncio
+    async def test_a_hub_row_yields_its_record_its_connectivity_and_its_children(self):
+        other_hub = _hub_record(mid=999999)
+        sensors = {
+            "182509_236547_1": _sensor_entry(mid=236547),
+            "182509_999999_1": _sensor_entry(mid=999999),
+        }
+        connectivity = {236547: {"state": "connected"}, 999999: {"state": "disconnected"}}
+        coordinator = _make_coordinator(hubs=[_hub_record(), other_hub], sensors=sensors, connectivity=connectivity)
+        hass, entry = _make_hass(coordinator=coordinator)
+
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_182509_236547"))
+
+        assert result["device"]["kind"] == "hub"
+        assert [hub["mid"] for hub in result["hubs"]] == [236547]
+        assert list(result["hub_connectivity"]) == [236547]
+        assert list(result["sensors"]) == ["182509_236547_1"]
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_no_domain_identifier_is_named_rather_than_returning_an_empty_dump(self):
+        """An empty dump would read as 'nothing wrong here', which is a different claim."""
+        device = MagicMock()
+        device.identifiers = {("other_integration", "whatever")}
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_device_diagnostics(hass, entry, device)
+
+        assert result["device"] == {"identifier": None, "kind": "unrecognised"}
+        assert "sensors" not in result
+
+    @pytest.mark.asyncio
+    async def test_a_sub_device_key_absent_from_this_poll_yields_an_empty_sensor_map(self):
+        """A silent device still has a device page, and downloading from it must not raise."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_99"))
+
+        assert result["sensors"] == {}
+
+
+class TestBeforeSetupCompletes:
+    """A dump taken while the entry is half up must not raise."""
+
+    @pytest.mark.asyncio
+    async def test_no_coordinator_reports_that_rather_than_raising(self):
+        hass, entry = _make_hass(coordinator=None)
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["coordinator"] == {"set_up": False}
+        assert result["hubs"] == []
+        assert result["sensors"] == {}
+
+    @pytest.mark.asyncio
+    async def test_a_coordinator_holding_no_data_yields_empty_sections(self):
+        """`coordinator.data` is None before the first refresh returns."""
+        coordinator = MagicMock()
+        coordinator.data = None
+        coordinator.last_update_success = False
+        coordinator.update_interval = None
+        hass, entry = _make_hass(coordinator=coordinator)
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["coordinator"]["hub_count"] == 0
+        assert result["coordinator"]["last_update_success"] is False
+        assert result["sensors"] == {}
+
+    @pytest.mark.asyncio
+    async def test_the_domain_store_missing_entirely_does_not_raise(self):
+        entry = MagicMock()
+        entry.entry_id = "entry-1"
+        entry.data = {}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {}
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["coordinator"] == {"set_up": False}
+        assert result["entry"]["home_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_hub_whose_sub_devices_are_not_a_list_is_typed_rather_than_raising(self):
+        hubs = [_hub_record(extra={"subDevices": "unexpected"})]
+        hass, entry = _make_hass(coordinator=_make_coordinator(hubs=hubs))
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["hubs"][0]["subDevices"] == {"unexpected_type": "str"}
+
+    @pytest.mark.asyncio
+    async def test_a_hub_record_that_is_not_a_dict_is_typed_rather_than_raising(self):
+        hass, entry = _make_hass(coordinator=_make_coordinator(hubs=["not-a-record"]))
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["hubs"][0] == {"unexpected_type": "str"}
+
+    @pytest.mark.asyncio
+    async def test_update_interval_is_reported_in_seconds_when_one_is_set(self):
+        coordinator = _make_coordinator()
+        coordinator.update_interval = MagicMock()
+        coordinator.update_interval.total_seconds.return_value = 120.0
+        hass, entry = _make_hass(coordinator=coordinator)
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["coordinator"]["update_interval_seconds"] == 120.0
+
+
+class TestRedactionKeySet:
+    """The key set itself, pinned so a rename on either side is visible."""
+
+    def test_both_spellings_of_every_dual_spelled_field_are_covered(self):
+        """A coordinator entry says device_name where a cloud record says deviceName."""
+        for camel, snake in (
+            ("deviceName", "device_name"),
+            ("productKey", "product_key"),
+            ("homeName", "home_name"),
+            ("deviceSecret", "device_secret"),
+        ):
+            assert camel in TO_REDACT
+            assert snake in TO_REDACT
