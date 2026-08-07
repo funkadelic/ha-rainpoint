@@ -90,6 +90,14 @@ class TestDecodeGenericRobustness:
     def test_non_hex_body(self):
         assert "error" in decode_generic("11#ZZZZ")
 
+    def test_non_string_raw_is_tolerated(self):
+        """A malformed cloud record can hand this a non-string value despite the
+        type hint; the ASCII-detection check ahead of the hex path must not
+        raise out of the function on that shape either."""
+        result = decode_generic(None)  # type: ignore[arg-type]
+        assert result["decoder"] == "generic-tlv"
+        assert "error" in result
+
 
 class TestDecodeGenericFraming:
     """Cover the remaining header-form and value-width branches."""
