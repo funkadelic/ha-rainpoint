@@ -148,6 +148,8 @@ One thing to know before deferring it: the card is withdrawn when the integratio
 
 In addition to the 120-second polling that always runs, the integration surfaces device state changes in near real time over an MQTT push connection. Push is additive and on by default: polling keeps running as the fallback no matter what, so nothing breaks whether push is on, off, or the connection drops. Turning it off is a supported choice, not a workaround.
 
+Poll and push do different jobs, not the same job at different speeds, which is why polling can never be turned off. Every 120 seconds, poll rebuilds the full picture of your account from scratch: it is what notices a device or hub added to the account, and what notices a hub that has quietly left it. Push carries no such information, only state changes for devices poll already knows about, so it can never take over poll's discovery role. Push exists purely to shorten how long a known device's reading, or a known hub's online or offline state, takes to reach Home Assistant, from up to two minutes down to about a second.
+
 Push carries two kinds of update: new readings from individual devices, and a hub going offline or coming back. The second is what makes [a hub outage](#when-a-hub-goes-offline) visible almost immediately rather than up to two minutes later. Note this speeds up the Cloud Connection entity and the recovery side, not the Repairs notice itself: that notice still waits for three consecutive checks before it appears, deliberately, so a brief blip doesn't flap a card on and off.
 
 ### Enabling or disabling push
@@ -166,7 +168,7 @@ A separate case is push never starting in the first place: if push is enabled bu
 
 ### Notes on push
 
-Push is on by default; if you would rather poll, switch it off on the Configure screen. If the connection ever drops, Home Assistant reconnects on its own, and the usual 120-second polling keeps your devices up to date in the meantime. In testing it ran alongside the RainPoint phone app without knocking either one offline.
+Push is on by default; if you would rather poll, switch it off on the Configure screen. Turning it off costs you speed, not data: every reading and every hub online or offline change still arrives, just on the 120-second poll cadence instead of within about a second. If the connection ever drops while push is on, Home Assistant reconnects on its own, and the usual 120-second polling keeps your devices up to date in the meantime.
 
 Turning push on doesn't change the [one-session-per-account note above](#use-a-dedicated-home-assistant-account-recommended): it's the sign-in used for setup that can bump your phone out of the app (and vice versa), whether or not push is enabled.
 
