@@ -1004,9 +1004,9 @@ class TestRunStateReading:
 
 
 # ---------------------------------------------------------------------------
-# ASCII-framed payload refusal (D-06): the write-confirmation path must
-# never read a body field the decoder declined, regardless of what a future
-# ASCII result's fields list happens to contain.
+# ASCII-framed payload refusal: the write-confirmation path must never read
+# a body field the decoder declined, regardless of what a future ASCII
+# result's fields list happens to contain.
 # ---------------------------------------------------------------------------
 
 
@@ -1021,9 +1021,11 @@ class TestAsciiFramedPayloadRefused:
     def test_fabricated_run_state_field_in_an_ascii_result_still_refuses(self):
         """Hand-built dict describing a future the code must survive, not an observed payload.
 
-        This dict is not a captured cloud response; D-10 forbids synthesizing
-        ASCII payloads. It describes a future where the ASCII branch grows a
-        body field, and every guard ``_run_state_open`` otherwise applies -- a
+        This dict is not a captured cloud response; this project's tests
+        avoid synthesizing ASCII payloads because the body's per-position
+        field order is unknown and cannot be guessed. It instead describes a
+        future where the ASCII branch grows a body field, and every guard
+        ``_run_state_open`` otherwise applies -- a
         matching ``catalog.dp_port``, a declared width that satisfies
         ``has_declared_width``, and an integer value of 1 -- is satisfied here.
         Without the ``ascii_framed`` refusal this would return True: a false
@@ -1067,8 +1069,8 @@ class TestAsciiFramedPayloadRefused:
 # ---------------------------------------------------------------------------
 # Consumers of decode_generic's fields list, proven inert against the new
 # co-present error-and-fields shape a declined ASCII result now carries.
-# _format_generic_fields is deliberately NOT asserted here: Task 4 changes
-# its behaviour and owns both it and its own tests.
+# _format_generic_fields is deliberately NOT asserted here: a separate
+# change owns both its behaviour and its own tests.
 # ---------------------------------------------------------------------------
 
 
