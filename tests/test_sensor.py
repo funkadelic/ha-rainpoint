@@ -11,6 +11,7 @@ from homeassistant.components.sensor import SensorDeviceClass
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import decode_htv213frf_valve
+from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_HIDS,
@@ -82,7 +83,12 @@ from custom_components.rainpoint.sensor import (
     async_setup_entry,
 )
 from tests.helpers import make_coordinator_data, make_hub_info, make_sensor_entry, make_silent_wrapper_hub_record
-from tests.payload_samples import SAMPLE_HTV345_TLV_PAYLOAD, SAMPLE_HTV405_TLV_PAYLOAD
+from tests.payload_samples import (
+    HWS019WRF_V2_PAYLOAD,
+    SAMPLE_HTV245_ASCII_PAYLOAD,
+    SAMPLE_HTV345_TLV_PAYLOAD,
+    SAMPLE_HTV405_TLV_PAYLOAD,
+)
 
 # ---------------------------------------------------------------------------
 # _slugify helper
@@ -1064,6 +1070,42 @@ class TestUnknownSensor:
                 "model": "MODELX",
                 "raw_value": "10#ZZ",
                 "generic": {"decoder": "generic-tlv", "error": "bad"},
+            }
+        )
+        attrs = sensor.extra_state_attributes
+        assert "decoded_fields" not in attrs
+        assert "decoded_values" not in attrs
+
+    def test_ascii_framed_payload_with_a_negative_header_rssi_exposes_decoded_fields(self):
+        """A declined ASCII body still yields decoded_fields for its one header field.
+
+        SAMPLE_HTV245_ASCII_PAYLOAD's header rssi is negative, so decode_generic
+        surfaces one synthetic STA_RSSI field even though the body is declined.
+        """
+        sensor = self._make(
+            data={
+                "type": "unknown",
+                "model": "MODELX",
+                "raw_value": SAMPLE_HTV245_ASCII_PAYLOAD,
+                "generic": decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD),
+            }
+        )
+        attrs = sensor.extra_state_attributes
+        assert attrs["decoded_fields"] == ["STA_RSSI"]
+
+    def test_ascii_framed_payload_with_a_non_negative_header_rssi_exposes_neither_attribute(self):
+        """Nothing was read, so nothing is claimed: this is the intended outcome, not a defect.
+
+        HWS019WRF_V2_PAYLOAD's header rssi is 0 (non-negative), so
+        decode_generic's ASCII branch yields an empty fields list, and the
+        gate on field_names truthiness produces no decoded_* attribute at all.
+        """
+        sensor = self._make(
+            data={
+                "type": "unknown",
+                "model": "MODELX",
+                "raw_value": HWS019WRF_V2_PAYLOAD,
+                "generic": decode_generic(HWS019WRF_V2_PAYLOAD),
             }
         )
         attrs = sensor.extra_state_attributes

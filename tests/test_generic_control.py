@@ -1065,6 +1065,24 @@ class TestAsciiFramedPayloadRefused:
 
 
 # ---------------------------------------------------------------------------
+# Consumers of decode_generic's fields list, proven inert against the new
+# co-present error-and-fields shape a declined ASCII result now carries.
+# _format_generic_fields is deliberately NOT asserted here: Task 4 changes
+# its behaviour and owns both it and its own tests.
+# ---------------------------------------------------------------------------
+
+
+class TestAsciiFieldsConsumersNonRegression:
+    def test_opt_in_generic_sensor_path_cannot_match_the_synthetic_rssi_entry(self):
+        """The synthetic entry carries no catalog sub-dict, so no identity/port pair
+        can match it, which is what keeps a header-derived value out of the
+        opt-in generic sensor entity surface.
+        """
+        result = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)
+        assert generic_control_module._matching_field(result["fields"], "STA_RSSI", 1) is None
+
+
+# ---------------------------------------------------------------------------
 # RainPointGenericValve control (open/close, refresh scheduling, no optimism)
 # ---------------------------------------------------------------------------
 
