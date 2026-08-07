@@ -127,18 +127,24 @@ def _is_ascii_payload(raw: str) -> bool:
     guarantee -- every payload ``_split_prefix``'s tail-truncation branch was
     written for carries that prefix, so it is routed away before this test is
     ever reached); ``";"`` is present, separating the header from the body;
-    and the pre-semicolon header splits on ``","`` into three or more parts,
-    matching the ``[flags],[rssi],[flags];...`` shape both hand-written ASCII
-    decoders in ``decoders.py`` already parse. Mirrors the ordering those two
-    routers use: hex prefix checked first, ASCII shape checked as the
-    fallback.
+    and a ``","`` appears in the pre-semicolon header, matching the
+    ``[flags],[rssi],[flags];...`` shape both hand-written ASCII decoders in
+    ``decoders.py`` already parse. Deliberately not requiring the full
+    three-part header here: an ASCII-shaped payload with a short or malformed
+    header must still route here and be declined by the ASCII branch, never
+    fall through to the hex path to be misreported as a hex parse failure
+    (the fail-closed rule this module's caller depends on). The stricter
+    three-part check belongs to ``_parse_ascii_rssi``, which reads the header
+    once it has already been routed here. Mirrors the ordering the two
+    routers in ``decoders.py`` use: hex prefix checked first, ASCII shape
+    checked as the fallback.
     """
     if "#" in raw:
         return False
     if ";" not in raw:
         return False
     header = raw.split(";", 1)[0]
-    return len(header.split(",")) >= 3
+    return "," in header
 
 
 def _parse_ascii_rssi(raw: str) -> int | None:
