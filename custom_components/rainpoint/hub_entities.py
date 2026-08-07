@@ -364,7 +364,7 @@ class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDev
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_channel"
-        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} RF Channel"
+        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} RF Communication Channel"
         self._attr_options = _hub_rf_channel_options(hub_info)
         # Current channel comes from the hub record; None renders as unknown when
         # the field is absent. Selecting a channel is still unsupported (below).
@@ -488,7 +488,7 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
         self._attr_unique_id = (
             f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_broadcast"
         )
-        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Automatic Broadcast"
+        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Automatic Broadcast Time"
         # The post-write override: set only after a write's cloud
         # acknowledgment, cleared by the next coordinator update so a poll
         # that contradicts the command always wins.
