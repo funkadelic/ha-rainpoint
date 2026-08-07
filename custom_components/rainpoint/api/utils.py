@@ -30,6 +30,32 @@ _HUB_BROADCAST_FIELD_INDEX = 1
 # they were pulled; a base of 2000 would put those same frames in 2006.
 _REPORT_TIME_BASE_YEAR = 2020
 
+# A sub-device record's own `param` field is a third wire shape, distinct from
+# both the structural indices above and the hub's pipe-delimited `param`: a
+# comma-separated list of `key=value` tokens, of unknown total key count. Key
+# 5 is the only one this integration understands -- its transmission-power
+# setting, confirmed twice by independent experiment. Keys 11, 12, 50 and 51
+# are observed but unidentified, and must survive a splice byte-for-byte.
+_SUB_PARAM_DELIMITER = ","
+_SUB_PARAM_ASSIGNMENT = "="
+_SUB_POWER_MODE_KEY = "5"
+# Every key-5 wire token this integration has been asked to accept, mapped to
+# its canonical one-character mode digit. Both an unpadded and a zero-padded
+# width are accepted -- the semantic mapping is the set {"0", "1", "2"},
+# but every blob captured from the only known target device uses the
+# zero-padded form ("01", "02"), so the unpadded set alone would ship the
+# entity dead on the one device this control targets. Nothing outside these six
+# literal tokens is ever accepted; widening this set is a captured-evidence
+# decision, never a guess.
+_SUB_POWER_MODE_WIRE_VALUES = {
+    "0": "0",
+    "00": "0",
+    "1": "1",
+    "01": "1",
+    "2": "2",
+    "02": "2",
+}
+
 
 def _parse_rainpoint_payload(raw: str) -> bytes:
     """Parse a RainPoint hex payload and return bytes."""
@@ -244,6 +270,95 @@ def _splice_hub_broadcast_param(param: object, enabled: bool) -> str | None:
     fields = param.split(_HUB_PARAM_DELIMITER)
     fields[_HUB_BROADCAST_FIELD_INDEX] = "1" if enabled else "0"
     return _HUB_PARAM_DELIMITER.join(fields)
+
+
+def _parse_sub_power_mode(param: object) -> str | None:
+    """Read a sub-device record's `param` key-5 transmission-power mode, or None.
+
+    `param` arrives from a cloud JSON document with no guaranteed type, so
+    anything other than a `str` is rejected outright -- `bool` is included in
+    that rejection deliberately, for the same reason `_parse_hub_broadcast_flag`
+    excludes it.
+
+    The blob is split on the comma delimiter into an ordered list of raw
+    tokens. Every token must contain exactly one `=`; a token with none or with
+    two returns None immediately. No key may repeat -- a duplicated key
+    anywhere in the blob, key 5 or otherwise, returns None rather than letting
+    a later occurrence silently win, which is the dict-coalescing key loss
+    this gate exists to prevent. Key 5 must be present, and its value must be a
+    member of `_SUB_POWER_MODE_WIRE_VALUES`; any other key and any other
+    value are read as opaque and simply carried past unvalidated.
+
+    The key count is deliberately not fixed to the four other keys (11, 12,
+    50, 51) the one observed device happens to produce: a blob carrying a key
+    nobody has yet identified, alongside a valid key 5, still parses. Do not
+    tighten this to an exact key set.
+
+    Returns the canonical one-character mode digit ("0", "1", or "2") on
+    success, None on any failure. Like `_parse_hub_broadcast_flag`, this never
+    raises and never logs at any level: it runs on every poll for an affected
+    sub-device, so a log line here would be per-poll spam rather than a
+    one-off diagnostic.
+    """
+    if not isinstance(param, str):
+        return None
+    seen_keys: set[str] = set()
+    mode: str | None = None
+    for token in param.split(_SUB_PARAM_DELIMITER):
+        parts = token.split(_SUB_PARAM_ASSIGNMENT)
+        if len(parts) != 2:
+            return None
+        key, value = parts
+        if key in seen_keys:
+            return None
+        seen_keys.add(key)
+        if key == _SUB_POWER_MODE_KEY:
+            mode = _SUB_POWER_MODE_WIRE_VALUES.get(value)
+            if mode is None:
+                return None
+    if _SUB_POWER_MODE_KEY not in seen_keys:
+        return None
+    return mode
+
+
+def _splice_sub_power_mode(param: object, mode: str) -> str | None:
+    """Return `param` with only key 5's value token replaced, or None when the
+    same gate that blocks the read blocks the write.
+
+    Calls `_parse_sub_power_mode` itself as the gate -- not a re-implementation
+    of it -- so the two functions cannot drift apart on what counts as
+    readable: a `param` this module could not itself parse (wrong type, a
+    malformed token, a duplicate key, an absent key 5, or an unrecognised
+    key-5 value) never reaches the splice below. `mode` must itself be one of
+    the three canonical digits; anything else returns None.
+
+    On success, the blob is split on the delimiter and rejoined; only the
+    token whose parsed key is the key-5 key has its value replaced, and the
+    replacement keeps the character width of the value it replaced (a
+    two-character value in yields a two-character value out, matching the
+    only write shape the cloud has been observed to accept). Every other
+    token -- keys 11, 12, 50, 51 and anything not yet identified -- is carried
+    across byte for byte, unparsed, unstripped, un-normalised, in its original
+    position. This never rebuilds the string from parsed keys and never
+    routes it through a dict, so a duplicate key cannot silently coalesce.
+    Never raises, never logs at any level, for the same reason
+    `_parse_sub_power_mode` does not.
+    """
+    if _parse_sub_power_mode(param) is None:
+        return None
+    if mode not in ("0", "1", "2"):
+        return None
+    # param is guaranteed a str with a well-formed, uniquely-keyed token list
+    # and a recoverable key-5 value at this point -- the gate above already
+    # proved it.
+    spliced_tokens = []
+    for token in param.split(_SUB_PARAM_DELIMITER):
+        key, sep, value = token.partition(_SUB_PARAM_ASSIGNMENT)
+        if key == _SUB_POWER_MODE_KEY:
+            spliced_tokens.append(f"{key}{sep}{mode.rjust(len(value), '0')}")
+        else:
+            spliced_tokens.append(token)
+    return _SUB_PARAM_DELIMITER.join(spliced_tokens)
 
 
 def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:

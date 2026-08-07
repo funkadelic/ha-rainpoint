@@ -24,7 +24,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Pool sensors | HCS0528ARF, HCS015ARF, HCS015ARF+ | Pool temperature, ambient |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
 | Flow meters | HCS008FRF | Flow reading |
-| Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration |
+| Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
 
 The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B** Bluetooth valve are the maintainer's own hardware and are the models tested against real devices. Other models are supported opportunistically from captured payloads.
 
@@ -115,8 +115,17 @@ For each device the coordinator discovers, the integration creates:
 - **Hub Cloud Connection**: one binary sensor per hub, on when RainPoint's cloud currently reports that hub as reachable. It exists whether or not [push](#real-time-push-updates) is enabled.
 - **Hub Automatic Broadcast Time**: one switch per hub, mirroring the same setting in the RainPoint app.
 - **Hub Broadcast Time Now**: one button per hub, sending the same one-shot time broadcast the app's button sends. A press only confirms the cloud accepted the command; there is nothing in the API response to confirm a sub-device actually acted on it.
+- **Transmission Power**: one select entity per hub-paired HTV210B. See [Transmission power control](#transmission-power-control) below for what it does and what it cannot confirm.
 
 All entities are grouped under their parent hub device in the Home Assistant device registry.
+
+---
+
+## Transmission power control
+
+A hub-paired HTV210B gets a **Transmission Power** select entity with three options: Power Saving, Standard, and Enhance. It is the only model with this control today. If you have another RainPoint device with a transmission power setting and would like it supported here, please [open an issue](https://github.com/funkadelic/ha-rainpoint/issues) to get it onboarded.
+
+The entity is a configuration control, and it is enabled by default. Nothing inside Home Assistant can confirm a change actually reached the device; only the RainPoint app can, by showing the updated setting there. Check there the first time you change it. If you would rather not have the control at all, disable the entity from the device page or from **Settings → Devices & Services → Entities**, filtered to the device.
 
 ---
 

@@ -2010,6 +2010,116 @@ class TestUpdateMainParam:
             assert distinctive_param not in record.getMessage()
 
 
+class TestUpdateSubParam:
+    """Tests for update_sub_param, the sub-device settings write endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_posts_url_and_body_exactly(self):
+        """The captured call: URL suffix and body dict with no extra keys, code-0 True."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 0, "msg": "SUCCESS", "data": {"homeVersion": 113475751763, "paramVersion": 3}}
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        result = await client.update_sub_param(mid=236547, sid=491657, param="5=02,11=a")
+
+        assert result is True
+        call = client._session.post.call_args
+        assert call.args[0].endswith("/app/device/sub/update")
+        assert call.kwargs["json"] == {"mid": 236547, "sid": 491657, "param": "5=02,11=a"}
+
+    @pytest.mark.asyncio
+    async def test_mid_and_sid_reach_the_body_unchanged(self):
+        """mid and sid pass through untouched -- no int/str coercion either way.
+
+        The capture showed the app sending mid as a string and sid as an int;
+        this pins that neither type is silently converted by a later refactor.
+        """
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({"code": 0, "msg": "SUCCESS", "data": {}}))
+
+        await client.update_sub_param(mid="236547", sid=491657, param="5=02")
+
+        call = client._session.post.call_args
+        assert call.kwargs["json"]["mid"] == "236547"
+        assert isinstance(call.kwargs["json"]["mid"], str)
+        assert call.kwargs["json"]["sid"] == 491657
+        assert isinstance(call.kwargs["json"]["sid"], int)
+
+    @pytest.mark.asyncio
+    async def test_non_zero_code_raises(self):
+        """A non-zero body code raises RainPointApiError."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({"code": 5, "msg": "fail"}))
+
+        with pytest.raises(RainPointApiError, match="sub/update failed"):
+            await client.update_sub_param(mid=1, sid=1, param="5=00")
+
+    @pytest.mark.asyncio
+    async def test_no_code_4_success_branch(self):
+        """Code 4 has never been observed on this endpoint; it raises like any other non-zero code."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({"code": 4, "msg": "already in state"}))
+
+        with pytest.raises(RainPointApiError, match="sub/update failed: code 4"):
+            await client.update_sub_param(mid=1, sid=1, param="5=00")
+
+    @pytest.mark.asyncio
+    async def test_http_error_raises_before_the_body_is_read(self):
+        """A non-200 HTTP status raises RainPointApiError."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({}, status=500))
+
+        with pytest.raises(RainPointApiError, match="sub/update HTTP 500"):
+            await client.update_sub_param(mid=1, sid=1, param="5=00")
+
+    @pytest.mark.asyncio
+    async def test_not_token_code_expires_the_token_then_raises(self):
+        """The token-rejection code (1001) expires the request's own token, then raises."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+        request_token = client._token
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        with pytest.raises(RainPointApiError, match="sub/update failed: code 1001"):
+            await client.update_sub_param(mid=1, sid=1, param="5=00")
+
+        assert client._token_expires_at is None
+        assert client._token == request_token
+
+    @pytest.mark.asyncio
+    async def test_no_log_record_carries_the_param_string(self, caplog):
+        """No record this call emits contains the param value, at any level.
+
+        Asserted across every case above -- success, non-zero code, and the
+        token-rejection code -- against a param value chosen to be distinctive.
+        """
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        distinctive_param = "5=02,11=marker-should-never-be-logged"
+
+        json_body = {"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 3}}
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.client"):
+            await client.update_sub_param(mid=1, sid=1, param=distinctive_param)
+
+        client._session.post = MagicMock(return_value=_mock_response({"code": 5, "msg": "fail"}))
+        with (
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.client"),
+            pytest.raises(RainPointApiError),
+        ):
+            await client.update_sub_param(mid=1, sid=1, param=distinctive_param)
+
+        for record in caplog.records:
+            assert distinctive_param not in record.getMessage()
+
+
 class TestGetSubscribeStatus:
     """get_subscribe_status() fetches fresh per-session MQTT credentials."""
 

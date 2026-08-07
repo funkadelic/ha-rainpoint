@@ -11,8 +11,10 @@ from custom_components.rainpoint.api import (
     _le16,
     _parse_hub_broadcast_flag,
     _parse_rainpoint_payload,
+    _parse_sub_power_mode,
     _parse_tlv_payload,
     _splice_hub_broadcast_param,
+    _splice_sub_power_mode,
 )
 from custom_components.rainpoint.api.utils import _is_ascii_payload, _parse_ascii_rssi, _split_prefix
 from tests.payload_samples import (
@@ -493,3 +495,155 @@ class TestSpliceHubBroadcastParamFieldPreservation:
         """len(splice(x).split('|')) == len(x.split('|')) for every parseable x."""
         result = _splice_hub_broadcast_param(param, True)
         assert len(result.split("|")) == len(param.split("|"))
+
+
+# The captured HTV210B blob verbatim, used for the round-trip case rather
+# than a blob this test file constructs from parts -- a self-constructed
+# blob only proves the test agrees with itself.
+_HTV210B_CAPTURED_PARAM = (
+    "5=01,11=58020a001e000000000000000000,12=58020a001e000000000000000000,50=646464646464646464646464,51=646464646464646464646464"
+)
+
+
+class TestParseSubPowerMode:
+    """Happy-path reads of the sub-device record's param key-5 power mode."""
+
+    @pytest.mark.parametrize(
+        "param, expected",
+        [
+            pytest.param("5=00", "0", id="unpadded-width-zero-padding"),
+            pytest.param("5=0", "0", id="power-saving-unpadded"),
+            pytest.param("5=01", "1", id="standard-padded"),
+            pytest.param("5=1", "1", id="standard-unpadded"),
+            pytest.param("5=02", "2", id="enhance-padded"),
+            pytest.param("5=2", "2", id="enhance-unpadded"),
+        ],
+    )
+    def test_recognised_wire_values(self, param, expected):
+        """Both the unpadded literal set and the captured zero-padded set parse."""
+        assert _parse_sub_power_mode(param) == expected
+
+    def test_only_key_five_present_parses(self):
+        """A blob carrying exactly key 5 and nothing else still parses."""
+        assert _parse_sub_power_mode("5=01") == "1"
+
+    def test_unidentified_key_alongside_a_valid_key_five_still_parses(self):
+        """A key nobody has identified does not block an otherwise-valid blob."""
+        assert _parse_sub_power_mode("5=01,99=whatever-this-is") == "1"
+
+    def test_captured_htv210b_blob_parses_as_standard(self):
+        """The captured HTV210B blob's key 5 (01) reads as Standard."""
+        assert _parse_sub_power_mode(_HTV210B_CAPTURED_PARAM) == "1"
+
+
+# Every input in this matrix is a param neither the parse gate nor the splice
+# gate may trust: a non-str type from a cloud JSON document, an empty string,
+# a malformed token, a duplicate key (key 5 or otherwise), or a blob missing
+# key 5 entirely -- including one whose keys merely contain "5" as a
+# substring ("15", "50"). Shared by both the parse-refusal and the
+# splice-refusal test classes below so the two gates cannot silently drift
+# apart on what counts as readable, since the splice calls the parse as its
+# own precondition.
+_MALFORMED_SUB_PARAMS = [
+    pytest.param(None, id="none"),
+    pytest.param(0, id="int-zero"),
+    pytest.param(1, id="int-one"),
+    pytest.param(True, id="bool-true"),
+    pytest.param([], id="empty-list"),
+    pytest.param({}, id="empty-dict"),
+    pytest.param("", id="empty-string"),
+    pytest.param("5=3", id="unrecognised-value-one-past-enhance"),
+    pytest.param("5=03", id="unrecognised-value-padded-one-past-enhance"),
+    pytest.param("5=002", id="unrecognised-value-three-digit-padding"),
+    pytest.param("5=-1", id="unrecognised-value-negative"),
+    pytest.param("5=", id="empty-value"),
+    pytest.param("5=x", id="non-numeric-value"),
+    pytest.param("5", id="token-with-no-assignment-character"),
+    pytest.param("5=01=02", id="token-with-two-assignment-characters"),
+    pytest.param("5=01,5=02", id="duplicate-key-five"),
+    pytest.param("11=a,11=b,5=01", id="duplicate-key-not-five"),
+    pytest.param(
+        "11=58020a001e000000000000000000,12=58020a001e000000000000000000,50=646464646464646464646464,51=646464646464646464646464",
+        id="every-known-key-except-five",
+    ),
+    pytest.param("15=a,50=b", id="keys-containing-five-as-a-substring-but-not-five-itself"),
+]
+
+
+class TestParseSubPowerModeMalformedMatrix:
+    """Every unreadable param shape leaves the mode unknown, never guessed."""
+
+    @pytest.mark.parametrize("param", _MALFORMED_SUB_PARAMS)
+    def test_returns_none_and_does_not_raise(self, param):
+        """Every malformed shape in the matrix returns None."""
+        assert _parse_sub_power_mode(param) is None
+
+    def test_no_log_record_emitted_for_any_matrix_input(self, caplog):
+        """No log record at any level for any input in the malformed matrix."""
+        with caplog.at_level(logging.DEBUG):
+            for param in [p.values[0] for p in _MALFORMED_SUB_PARAMS]:
+                _parse_sub_power_mode(param)
+        assert caplog.records == []
+
+
+class TestSpliceSubPowerMode:
+    """Happy-path and field-preservation writes of the sub-device param key 5."""
+
+    def test_captured_blob_splices_to_enhance_preserving_every_other_key(self):
+        """Splicing the captured blob to Enhance changes only the key-5 token.
+
+        Keys 11, 12, 50 and 51 compare equal to the captured literals
+        character for character.
+        """
+        result = _splice_sub_power_mode(_HTV210B_CAPTURED_PARAM, "2")
+        assert result == (
+            "5=02,11=58020a001e000000000000000000,12=58020a001e000000000000000000,"
+            "50=646464646464646464646464,51=646464646464646464646464"
+        )
+
+    def test_unpadded_input_splices_to_an_unpadded_output(self):
+        """Splicing an unpadded '5=1' blob to Enhance yields '5=2', not '5=02'.
+
+        The replacement keeps the character width of the value it replaced.
+        """
+        assert _splice_sub_power_mode("5=1,11=a", "2") == "5=2,11=a"
+
+    def test_token_order_survives_a_deliberately_unordered_blob(self):
+        """Token order in the output equals token order in the input."""
+        original = "51=z,5=01,11=a,50=y,12=b"
+        result = _splice_sub_power_mode(original, "2")
+        assert result == "51=z,5=02,11=a,50=y,12=b"
+
+    def test_resplicing_an_already_set_value_is_a_string_no_op(self):
+        """Re-splicing a param whose mode already matches the request changes nothing."""
+        assert _splice_sub_power_mode("5=02", "2") == "5=02"
+
+    @pytest.mark.parametrize("mode", ["3", "x", "", "01", None])
+    def test_non_canonical_mode_returns_none(self, mode):
+        """A mode that is not one of the three canonical digits refuses the write."""
+        assert _splice_sub_power_mode("5=01,11=a", mode) is None
+
+
+class TestSpliceSubPowerModeMalformedMatrix:
+    """A splice refuses on exactly the inputs the parser refuses on.
+
+    Driven from the same _MALFORMED_SUB_PARAMS table
+    TestParseSubPowerModeMalformedMatrix uses, rather than a second
+    hand-written list, so the read and write refusal contracts cannot drift
+    apart (the exact asymmetry the hub broadcast splice closed, generalized
+    here).
+    """
+
+    @pytest.mark.parametrize("param", _MALFORMED_SUB_PARAMS)
+    def test_returns_none_and_does_not_raise(self, param):
+        """Every malformed shape in the matrix refuses to build a write."""
+        assert _splice_sub_power_mode(param, "0") is None
+        assert _splice_sub_power_mode(param, "1") is None
+        assert _splice_sub_power_mode(param, "2") is None
+
+    def test_no_log_record_emitted_for_any_matrix_input(self, caplog):
+        """No log record at any level for any input in the malformed matrix."""
+        with caplog.at_level(logging.DEBUG):
+            for param in [p.values[0] for p in _MALFORMED_SUB_PARAMS]:
+                _splice_sub_power_mode(param, "1")
+        assert caplog.records == []
