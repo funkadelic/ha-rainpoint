@@ -1,5 +1,7 @@
 """Tests for the RainPoint API utility functions."""
 
+import logging
+
 import pytest
 
 from custom_components.rainpoint.api import (
@@ -7,8 +9,10 @@ from custom_components.rainpoint.api import (
     _extract_report_time,
     _f10_to_c,
     _le16,
+    _parse_hub_broadcast_flag,
     _parse_rainpoint_payload,
     _parse_tlv_payload,
+    _splice_hub_broadcast_param,
 )
 from custom_components.rainpoint.api.utils import _is_ascii_payload, _parse_ascii_rssi, _split_prefix
 from tests.payload_samples import (
@@ -333,3 +337,159 @@ class TestSplitPrefixCommaTruncation:
     def test_no_hash_prefix_returns_raw_body_uppercased(self):
         """A payload with no '#' is returned as-is (uppercased, comma-truncated)."""
         assert _split_prefix("aabb") == ("AABB", False)
+
+
+class TestParseHubBroadcastFlag:
+    """Happy-path reads of the hub record's param index-1 broadcast flag."""
+
+    def test_flag_on(self):
+        """Index 1 == '1' reads as True."""
+        assert _parse_hub_broadcast_flag("0|1||") is True
+
+    def test_flag_off(self):
+        """Index 1 == '0' reads as False."""
+        assert _parse_hub_broadcast_flag("0|0||") is False
+
+
+class TestSpliceHubBroadcastParam:
+    """Happy-path writes of the hub record's param index-1 broadcast flag."""
+
+    def test_splice_to_on(self):
+        """Splicing True into an off param flips only index 1."""
+        assert _splice_hub_broadcast_param("0|0||", True) == "0|1||"
+
+    def test_splice_to_off(self):
+        """Splicing False into an on param flips only index 1."""
+        assert _splice_hub_broadcast_param("0|1||", False) == "0|0||"
+
+
+# Every input in this matrix is a param this module must not trust, whether it
+# arrives as a non-str type from a cloud JSON document or as a str whose
+# index-1 token is missing, empty, padded, or not one of the two literals.
+# bool is included deliberately: it is an int subclass and a naive isinstance
+# check gets it wrong.
+_MALFORMED_HUB_PARAMS = [
+    pytest.param(None, id="none"),
+    pytest.param("", id="empty-string"),
+    pytest.param("0", id="single-field-zero"),
+    pytest.param("1", id="single-field-one"),
+    pytest.param(0, id="int-zero"),
+    pytest.param(1, id="int-one"),
+    pytest.param(True, id="bool-true"),
+    pytest.param([], id="empty-list"),
+    pytest.param({}, id="empty-dict"),
+    pytest.param("0|", id="empty-index-1"),
+    pytest.param("0|2||", id="out-of-range-token"),
+    pytest.param("0|x||", id="non-numeric-token"),
+    pytest.param("0|1 ||", id="padded-token"),
+    pytest.param("0||1|", id="empty-field-at-index-1"),
+]
+
+
+class TestParseHubBroadcastFlagMalformedMatrix:
+    """Every unreadable param shape leaves the flag unknown, never guessed.
+
+    Pins the rejected exact-4-field-gate alternative from the other side:
+    a two-field and a five-field param both parse below, so tightening the
+    gate to require exactly four fields would fail those two tests, not this
+    class's.
+    """
+
+    @pytest.mark.parametrize("param", _MALFORMED_HUB_PARAMS)
+    def test_returns_none_and_does_not_raise(self, param):
+        """Every malformed shape in the matrix returns None."""
+        assert _parse_hub_broadcast_flag(param) is None
+
+    def test_two_field_param_parses(self):
+        """A two-field param still has a recoverable index 1."""
+        assert _parse_hub_broadcast_flag("0|1") is True
+
+    def test_five_field_param_parses(self):
+        """A five-field param still has a recoverable index 1.
+
+        The one observed hub produces four fields; this is not that hub, and
+        the gate must not have been narrowed to require its exact shape.
+        """
+        assert _parse_hub_broadcast_flag("0|1|2|3|4") is True
+
+    def test_no_log_record_emitted_for_any_matrix_input(self, caplog):
+        """No log record at any level for any input in the malformed matrix."""
+        with caplog.at_level(logging.DEBUG):
+            for param in [p.values[0] for p in _MALFORMED_HUB_PARAMS]:
+                _parse_hub_broadcast_flag(param)
+        assert caplog.records == []
+
+
+class TestSpliceHubBroadcastParamMalformedMatrix:
+    """A splice refuses on exactly the inputs the parser refuses on.
+
+    This is the field-blanking-bug guard from the other side: a splice that
+    fell open to a reconstructed default for any of these inputs is exactly
+    the bug this gate exists to prevent. One gate governs both functions, so
+    this class parametrizes over the same matrix the parse test above uses.
+    """
+
+    @pytest.mark.parametrize("param", _MALFORMED_HUB_PARAMS)
+    def test_returns_none_and_does_not_raise(self, param):
+        """Every malformed shape in the matrix refuses to build a write."""
+        assert _splice_hub_broadcast_param(param, True) is None
+        assert _splice_hub_broadcast_param(param, False) is None
+
+    def test_no_log_record_emitted_for_any_matrix_input(self, caplog):
+        """No log record at any level for any input in the malformed matrix."""
+        with caplog.at_level(logging.DEBUG):
+            for param in [p.values[0] for p in _MALFORMED_HUB_PARAMS]:
+                _splice_hub_broadcast_param(param, True)
+        assert caplog.records == []
+
+
+class TestSpliceHubBroadcastParamFieldPreservation:
+    """Every field beyond index 1 round-trips byte-identical, index for index.
+
+    Proven against param shapes no observed hub has produced -- five fields
+    with non-empty trailing fields, and fields carrying non-ASCII code
+    points -- which is the phase's own success criterion.
+    """
+
+    def test_five_field_param_preserves_every_other_index(self):
+        """A five-field param with non-empty trailing fields round-trips."""
+        original = "9|0|abc|def|xyz"
+        result = _splice_hub_broadcast_param(original, True)
+        assert result == "9|1|abc|def|xyz"
+
+        original_fields = original.split("|")
+        result_fields = result.split("|")
+        assert len(result_fields) == len(original_fields)
+        for index, (before, after) in enumerate(zip(original_fields, result_fields, strict=True)):
+            if index == 1:
+                continue
+            assert after == before
+
+    def test_non_ascii_fields_are_not_reencoded_or_normalised(self):
+        """Fields carrying non-ASCII code points compare equal before and after."""
+        original = "0|0|éè|中文"
+        result = _splice_hub_broadcast_param(original, True)
+
+        original_fields = original.split("|")
+        result_fields = result.split("|")
+        assert len(result_fields) == len(original_fields)
+        assert result_fields[2] == original_fields[2]
+        assert result_fields[3] == original_fields[3]
+
+    def test_adjacent_delimiters_survive_as_empty_fields(self):
+        """Splicing '0|0||' yields '0|1||': the two trailing empty fields
+        are neither collapsed nor trimmed."""
+        assert _splice_hub_broadcast_param("0|0||", True) == "0|1||"
+
+    def test_resplicing_an_already_set_value_is_a_string_no_op(self):
+        """Re-splicing a param whose flag already matches the request changes nothing."""
+        assert _splice_hub_broadcast_param("0|1||", True) == "0|1||"
+
+    @pytest.mark.parametrize(
+        "param",
+        ["0|0||", "9|0|abc|def|xyz", "0|1|2|3|4", "0|1"],
+    )
+    def test_output_field_count_always_equals_input_field_count(self, param):
+        """len(splice(x).split('|')) == len(x.split('|')) for every parseable x."""
+        result = _splice_hub_broadcast_param(param, True)
+        assert len(result.split("|")) == len(param.split("|"))

@@ -113,6 +113,8 @@ For each device the coordinator discovers, the integration creates:
 - **Number entities**: one per zone for configuring zone run duration (1 to 60 minutes), on those same valve models. The duration applies to the next run: changing it while a zone is already open does not shorten or extend the run in progress.
 - **Hub diagnostic sensors**: RSSI, battery, firmware version, last-updated timestamp.
 - **Hub Cloud Connection**: one binary sensor per hub, on when RainPoint's cloud currently reports that hub as reachable. It exists whether or not [push](#real-time-push-updates) is enabled.
+- **Hub Automatic Broadcast Time**: one switch per hub, mirroring the same setting in the RainPoint app.
+- **Hub Broadcast Time Now**: one button per hub, sending the same one-shot time broadcast the app's button sends. A press only confirms the cloud accepted the command; there is nothing in the API response to confirm a sub-device actually acted on it.
 
 All entities are grouped under their parent hub device in the Home Assistant device registry.
 

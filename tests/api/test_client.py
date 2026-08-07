@@ -218,6 +218,81 @@ class TestControlWorkModeCode4:
         assert body["param"] == ""
         assert body["duration"] == 60
 
+    @pytest.mark.asyncio
+    async def test_control_work_mode_omits_duration_key_when_none(self):
+        """A hub-addressed call (duration=None, the default) sends no duration key at all."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": ""}))
+
+        await client.control_work_mode(
+            mid=1,
+            addr=0,
+            device_name="d",
+            product_key="p",
+            port=1,
+            mode=0,
+        )
+
+        body = client._session.post.call_args.kwargs["json"]
+        assert "duration" not in body
+        assert body["param"] == ""
+        assert body["addr"] == 0
+        assert body["port"] == 1
+        assert body["mode"] == 0
+
+    @pytest.mark.asyncio
+    async def test_control_work_mode_explicit_zero_duration_is_sent(self):
+        """An explicit duration=0 is not the same as an omission and is not silently dropped."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": ""}))
+
+        await client.control_work_mode(
+            mid=1,
+            addr=1,
+            device_name="d",
+            product_key="p",
+            port=1,
+            mode=0,
+            duration=0,
+        )
+
+        body = client._session.post.call_args.kwargs["json"]
+        assert body["duration"] == 0
+
+    @pytest.mark.asyncio
+    async def test_rf_valve_open_call_body_is_byte_identical_to_pre_change_source(self):
+        """The one existing caller's request body is proven unchanged, not assumed."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": "11#state"}))
+
+        await client.control_work_mode(
+            mid=123,
+            addr=1,
+            device_name="AABBCCDD",
+            product_key="pk123",
+            port=1,
+            mode=1,
+            duration=300,
+        )
+
+        body = client._session.post.call_args.kwargs["json"]
+        assert body == {
+            "mid": 123,
+            "addr": 1,
+            "deviceName": "AABBCCDD",
+            "productKey": "pk123",
+            "port": 1,
+            "mode": 1,
+            "param": "",
+            "duration": 300,
+        }
+
 
 class TestControlWorkModeDp:
     """controlWorkModeDP's full verdict matrix, mirroring TestControlWorkModeCode4's shape."""
@@ -1870,6 +1945,69 @@ class TestSetDeviceState:
 
         with pytest.raises(RainPointApiError):
             await client.set_device_state(home_id=1, device_name="dev", mid=100, product_key="pk", state={})
+
+
+class TestUpdateMainParam:
+    """Tests for update_main_param, the hub broadcast toggle's write endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_posts_url_and_body_exactly(self):
+        """The captured call: URL suffix and body dict with no extra keys, code-0 True."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 7, "hid": 182509}}
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        result = await client.update_main_param(mid=236547, param="0|1||")
+
+        assert result is True
+        call = client._session.post.call_args
+        assert call.args[0].endswith("/app/device/main/update")
+        assert call.kwargs["json"] == {"mid": 236547, "param": "0|1||"}
+
+    @pytest.mark.asyncio
+    async def test_non_zero_code_raises(self):
+        """A non-zero body code raises RainPointApiError."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.post = MagicMock(return_value=_mock_response({"code": 5, "msg": "fail"}))
+
+        with pytest.raises(RainPointApiError, match="main/update failed"):
+            await client.update_main_param(mid=1, param="0|0||")
+
+    @pytest.mark.asyncio
+    async def test_http_error_raises(self):
+        """A non-200 HTTP status raises RainPointApiError."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.post = MagicMock(return_value=_mock_response({}, status=500))
+
+        with pytest.raises(RainPointApiError, match="main/update HTTP 500"):
+            await client.update_main_param(mid=1, param="0|0||")
+
+    @pytest.mark.asyncio
+    async def test_no_log_record_carries_the_param_string(self, caplog):
+        """No record this call emits contains the param value, at any level.
+
+        Asserted positively (no record's formatted message contains the
+        string) rather than by an empty-records count: mid and code are
+        allowed to be logged, so counting would be the wrong assertion.
+        """
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 7, "hid": 182509}}
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        distinctive_param = "0|1|marker-should-never-be-logged|"
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.client"):
+            await client.update_main_param(mid=236547, param=distinctive_param)
+
+        for record in caplog.records:
+            assert distinctive_param not in record.getMessage()
 
 
 class TestGetSubscribeStatus:

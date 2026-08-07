@@ -15,6 +15,16 @@ _LOGGER = logging.getLogger(__name__)
 STA_BAT_FIELD = 31
 STA_REPTIME_FIELD = 54
 
+# The hub record's own `param` field is a separate pipe-delimited wire shape
+# from the structural indices above -- it is not a datapoint dpCode, it is the
+# raw string `POST /app/device/main/update` reads and writes. Index 1 is the
+# broadcast flag, "1" on and "0" off. Polarity comes from a bracketed pair of
+# writes whose paramVersion moved in opposite directions across two calls, not
+# from a single write: the first capture recorded the polarity backwards, and
+# only the second, bracketing write settled it.
+_HUB_PARAM_DELIMITER = "|"
+_HUB_BROADCAST_FIELD_INDEX = 1
+
 # STA_REPTIME packs a wall-clock date into 32 bits with the year counted from
 # this base. Confirmed against captures whose decoded value matched the moment
 # they were pulled; a base of 2000 would put those same frames in 2006.
@@ -168,6 +178,72 @@ def _parse_ascii_rssi(raw: str) -> int | None:
     except (ValueError, IndexError):
         return None
     return rssi if rssi < 0 else None
+
+
+def _parse_hub_broadcast_flag(param: object) -> bool | None:
+    """Read the hub record's `param` index-1 broadcast flag, or None when it
+    cannot be trusted.
+
+    `param` arrives from a cloud JSON document with no guaranteed type, so
+    anything other than a `str` is rejected outright -- `bool` is included in
+    that rejection deliberately, since it is an `int` subclass and would
+    otherwise pass a naive `isinstance(param, str)`-adjacent check by
+    accident on a caller that forgot the order.
+
+    The gate is a minimum-index test (`len(fields) > _HUB_BROADCAST_FIELD_INDEX`),
+    never an exact-field-count test: a hub whose `param` carries three or five
+    pipe-delimited fields still has a recoverable index 1, and an exact-count
+    gate would put such a hub permanently unknown even though nothing here
+    needs to understand its other fields. Do not tighten this to match the
+    four fields the one observed hub happens to produce.
+
+    Returns True for the token "1" at that index, False for "0", and None for
+    anything else -- a missing/empty/short param, a non-str param, or an
+    unrecognised token. Like `_parse_ascii_rssi`, this never raises and never
+    logs at any level: it runs on every poll for an affected hub, so a log
+    line here would be per-poll spam rather than a one-off diagnostic.
+    """
+    if not isinstance(param, str):
+        return None
+    fields = param.split(_HUB_PARAM_DELIMITER)
+    if len(fields) <= _HUB_BROADCAST_FIELD_INDEX:
+        return None
+    token = fields[_HUB_BROADCAST_FIELD_INDEX]
+    if token == "1":
+        return True
+    if token == "0":
+        return False
+    return None
+
+
+def _splice_hub_broadcast_param(param: object, enabled: bool) -> str | None:
+    """Return `param` with only index 1 replaced by the requested flag, or
+    None when the same gate that blocks the read blocks the write.
+
+    Calls `_parse_hub_broadcast_flag` itself as the gate -- not a
+    re-implementation of it -- so the two functions cannot drift apart on
+    what counts as readable: a `param` this module could not itself parse to
+    a `bool` (wrong type, too few fields, or an index-1 token that is neither
+    "0" nor "1") never reaches the split-and-replace below. On success the
+    string is split on the delimiter, the element at
+    `_HUB_BROADCAST_FIELD_INDEX` is replaced with the literal "1" or "0", and
+    the result is rejoined on the same delimiter. Every other element is
+    carried across untouched and unparsed: no `strip`, no case change, no
+    re-encode, no normalisation, no defaulting of an empty field. The output
+    field count always equals the input field count, and adjacent delimiters
+    -- which denote empty fields -- survive as the same empty fields. The
+    replacement token is always one of these two local literals; it is never
+    derived from the input, so no cloud-supplied text can reach the field
+    this function writes. Never raises, never logs at any level, for the same
+    reason `_parse_hub_broadcast_flag` does not.
+    """
+    if _parse_hub_broadcast_flag(param) is None:
+        return None
+    # param is guaranteed a str with a recoverable index 1 at this point --
+    # the gate above already proved it.
+    fields = param.split(_HUB_PARAM_DELIMITER)
+    fields[_HUB_BROADCAST_FIELD_INDEX] = "1" if enabled else "0"
+    return _HUB_PARAM_DELIMITER.join(fields)
 
 
 def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:

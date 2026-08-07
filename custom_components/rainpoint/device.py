@@ -86,8 +86,14 @@ class RainPointHubDevice(Entity):
         """Bind this entity to one hub record.
 
         hub_info is the raw top-level device record the coordinator collected,
-        with hid and brand injected. Held by reference so a later poll's field
-        changes are picked up without rebuilding the entity.
+        with hid and brand injected. This is a snapshot taken at construction
+        time, not a live view: `_collect_hubs` allocates a fresh dict for the
+        hub every poll, and no class in this package reassigns this stored
+        reference afterward, so the attribute stays frozen at whatever it read
+        on the entity's first build for its entire lifetime. An entity needing
+        a value that changes after setup must read `self.coordinator.data` in
+        its own property instead of this attribute -- the hub broadcast
+        switch's `is_on` is the example that does so.
 
         Hub identity is the pair of the home id and the carrying record's mid,
         not the home id alone: a home can hold more than one hub, and every

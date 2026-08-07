@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import logging
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from custom_components.rainpoint.api import RainPointApiError
 from custom_components.rainpoint.const import (
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
     PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
 )
+from custom_components.rainpoint.coordinator import HUB_CONNECTED
 from custom_components.rainpoint.hub_entities import (
+    RainPointHubBroadcastButton,
     RainPointHubBroadcastSwitch,
     RainPointHubChannelSelect,
     RainPointHubConnectivityBinarySensor,
@@ -20,6 +24,7 @@ from custom_components.rainpoint.hub_entities import (
     RainPointHubRSSISensor,
     RainPointPushConnectedBinarySensor,
     RainPointPushLastMessageSensor,
+    hub_record_for_mid,
     resolve_connectivity_hubs,
     resolve_push_diagnostic_hubs,
 )
@@ -43,6 +48,22 @@ def _make_hub_info(hid=100, name="Test Hub", soft_ver="2.0", mac="AA:BB:CC", mid
         "model": "HTV0540FRF",
         "hardwareVersion": "1.0",
     }
+
+
+class TestHubRecordForMid:
+    """hub_record_for_mid resolves a hub's own live record, or {} when none matches."""
+
+    def test_returns_the_matching_hub(self):
+        """The hub whose mid matches is returned."""
+        coord = _make_coordinator()
+        coord.data["hubs"] = [{"mid": 1001, "param": "0|1||"}, {"mid": 1002, "param": "0|0||"}]
+        assert hub_record_for_mid(coord, 1002) == {"mid": 1002, "param": "0|0||"}
+
+    def test_no_matching_mid_returns_empty_dict(self):
+        """No matching mid returns {} rather than None or raising."""
+        coord = _make_coordinator()
+        coord.data["hubs"] = [{"mid": 1001}]
+        assert hub_record_for_mid(coord, 9999) == {}
 
 
 class TestResolvePushDiagnosticHubs:
@@ -513,20 +534,38 @@ class TestRainPointHubChannelSelect:
 
 
 class TestRainPointHubBroadcastSwitch:
-    """Tests for hub broadcast switch entity."""
+    """Tests for the hub broadcast switch's live read-through and write path."""
 
-    def _make(self):
-        """Make helper."""
+    def _make(self, param="0|1||", mid=1001, hid=100):
+        """Build the switch over a coordinator whose hub record carries the given param."""
         coord = _make_coordinator()
-        hub_info = _make_hub_info()
+        hub_info = _make_hub_info(hid=hid, mid=mid)
+        coord.data["hubs"] = [{**hub_info, "param": param}]
         switch = RainPointHubBroadcastSwitch.__new__(RainPointHubBroadcastSwitch)
         RainPointHubBroadcastSwitch.__init__(switch, coord, hub_info)
+        switch.async_write_ha_state = MagicMock()
         return switch
 
-    def test_is_on_initially_none(self):
-        """is_on should be None initially."""
-        switch = self._make()
-        assert switch.is_on is None
+    def test_is_on_reads_the_live_hub_record(self):
+        """A switch over a hub record carrying param '0|1||' reports is_on True."""
+        switch = self._make(param="0|1||")
+        assert switch.is_on is True
+
+    def test_is_on_follows_a_replaced_hub_record(self):
+        """The same entity instance reports a different is_on after coordinator.data changes.
+
+        Asserts switch._hub_info stays the same object while is_on changes, which is
+        exactly what a regression to reading self._hub_info for the flag would break.
+        """
+        switch = self._make(param="0|1||")
+        assert switch.is_on is True
+        frozen_hub_info = switch._hub_info
+
+        switch.coordinator.data["hubs"] = [{**_make_hub_info(mid=1001), "param": "0|0||"}]
+        switch._handle_coordinator_update()
+
+        assert switch.is_on is False
+        assert switch._hub_info is frozen_hub_info
 
     def test_available_is_true(self):
         """Broadcast switch should always be available."""
@@ -534,27 +573,217 @@ class TestRainPointHubBroadcastSwitch:
         assert switch.available is True
 
     @pytest.mark.asyncio
-    async def test_turn_on_raises(self):
-        """async_turn_on should raise HomeAssistantError."""
+    async def test_turn_off_writes_spliced_param_and_shows_immediately(self):
+        """One update_main_param call carrying the spliced param; is_on flips with no poll."""
+        switch = self._make(param="0|1||", mid=1001)
+        switch.coordinator._client = MagicMock()
+        switch.coordinator._client.update_main_param = AsyncMock(return_value=True)
+
+        await switch.async_turn_off()
+
+        switch.coordinator._client.update_main_param.assert_called_once_with(mid=1001, param="0|0||")
+        assert switch.is_on is False
+        switch.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_raised_write_leaves_no_optimistic_state(self):
+        """A client error propagates and is_on still reflects the unchanged poll value."""
+        switch = self._make(param="0|1||", mid=1001)
+        switch.coordinator._client = MagicMock()
+        switch.coordinator._client.update_main_param = AsyncMock(side_effect=RainPointApiError("main/update failed: code 5"))
+
+        with pytest.raises(RainPointApiError):
+            await switch.async_turn_off()
+
+        assert switch._optimistic is None
+        assert switch.is_on is True
+        switch.async_write_ha_state.assert_not_called()
+
+    def test_unique_id_contains_broadcast(self):
+        """unique_id contains 'broadcast' and equals the pre-change source's literal shape."""
         switch = self._make()
+        assert "broadcast" in switch._attr_unique_id
+        assert switch._attr_unique_id == "rainpoint_hub_100_1001_broadcast"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_param", [None, "", "1"])
+    async def test_turn_on_refuses_when_param_is_unreadable(self, bad_param):
+        """A None, empty, or single-field param raises and issues zero client calls.
+
+        Asserting the zero call count explicitly is what makes this test fail
+        against an implementation that called the client first and raised
+        afterwards, rather than refusing before ever reaching it.
+        """
         from homeassistant.exceptions import HomeAssistantError
+
+        switch = self._make(param=bad_param)
+        switch.coordinator._client = MagicMock()
+        switch.coordinator._client.update_main_param = AsyncMock(return_value=True)
 
         with pytest.raises(HomeAssistantError):
             await switch.async_turn_on()
 
+        assert switch.coordinator._client.update_main_param.call_count == 0
+        assert switch.is_on is None
+
     @pytest.mark.asyncio
-    async def test_turn_off_raises(self):
-        """async_turn_off should raise HomeAssistantError."""
-        switch = self._make()
+    @pytest.mark.parametrize("bad_param", [None, "", "1"])
+    async def test_turn_off_refuses_when_param_is_unreadable(self, bad_param):
+        """Same refusal on the turn-off path."""
         from homeassistant.exceptions import HomeAssistantError
+
+        switch = self._make(param=bad_param)
+        switch.coordinator._client = MagicMock()
+        switch.coordinator._client.update_main_param = AsyncMock(return_value=True)
 
         with pytest.raises(HomeAssistantError):
             await switch.async_turn_off()
 
-    def test_unique_id_contains_broadcast(self):
-        """unique_id should contain 'broadcast'."""
-        switch = self._make()
-        assert "broadcast" in switch._attr_unique_id
+        assert switch.coordinator._client.update_main_param.call_count == 0
+        assert switch.is_on is None
+
+    @pytest.mark.asyncio
+    async def test_turn_on_twice_is_idempotent(self):
+        """Two consecutive turn_on calls leave is_on True with byte-identical params."""
+        switch = self._make(param="0|1||", mid=1001)
+        switch.coordinator._client = MagicMock()
+        switch.coordinator._client.update_main_param = AsyncMock(return_value=True)
+
+        await switch.async_turn_on()
+        assert switch.is_on is True
+        first_param = switch.coordinator._client.update_main_param.call_args.kwargs["param"]
+
+        await switch.async_turn_on()
+        assert switch.is_on is True
+        second_param = switch.coordinator._client.update_main_param.call_args.kwargs["param"]
+
+        assert first_param == second_param == "0|1||"
+        assert switch.coordinator._client.update_main_param.call_count == 2
+
+
+class TestRainPointHubBroadcastButton:
+    """Tests for the hub's one-shot time-broadcast button."""
+
+    def _make(self, mid=1001, hid=100, device_name="MAC-AABBCC", product_key="pk123"):
+        """Build the button over a coordinator whose hub record carries the given identity."""
+        coord = _make_coordinator()
+        hub_info = _make_hub_info(hid=hid, mid=mid)
+        coord.data["hubs"] = [{**hub_info, "deviceName": device_name, "productKey": product_key}]
+        button = RainPointHubBroadcastButton.__new__(RainPointHubBroadcastButton)
+        RainPointHubBroadcastButton.__init__(button, coord, hub_info)
+        button.coordinator._client = MagicMock()
+        button.coordinator._client.control_work_mode = AsyncMock(return_value="")
+        return button
+
+    def test_unique_id_ends_with_broadcast_now_and_differs_from_the_switch(self):
+        """The button's id is distinct from the switch's persisted _broadcast id."""
+        button = self._make()
+        switch = RainPointHubBroadcastSwitch.__new__(RainPointHubBroadcastSwitch)
+        RainPointHubBroadcastSwitch.__init__(switch, button.coordinator, button._hub_info)
+
+        assert button._attr_unique_id.endswith("_broadcast_now")
+        assert button._attr_unique_id != switch._attr_unique_id
+
+    def test_available_is_true(self):
+        """The broadcast button is always available."""
+        button = self._make()
+        assert button.available is True
+
+    @pytest.mark.asyncio
+    async def test_press_calls_control_work_mode_with_addr_0_port_1_mode_0_and_no_duration(self):
+        """Exactly one control_work_mode call, addressed at the hub itself."""
+        button = self._make(mid=1001, device_name="MAC-AABBCC", product_key="pk123")
+
+        result = await button.async_press()
+
+        assert result is None
+        button.coordinator._client.control_work_mode.assert_called_once_with(
+            mid=1001,
+            addr=0,
+            device_name="MAC-AABBCC",
+            product_key="pk123",
+            port=1,
+            mode=0,
+        )
+        call_kwargs = button.coordinator._client.control_work_mode.call_args.kwargs
+        assert "duration" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_press_reads_identity_from_the_live_record_not_the_frozen_snapshot(self):
+        """A hub record replaced after construction still addresses the current identity."""
+        button = self._make(mid=1001, device_name="MAC-OLD", product_key="pk-old")
+        button.coordinator.data["hubs"] = [{**_make_hub_info(mid=1001), "deviceName": "MAC-NEW", "productKey": "pk-new"}]
+
+        await button.async_press()
+
+        button.coordinator._client.control_work_mode.assert_called_once_with(
+            mid=1001,
+            addr=0,
+            device_name="MAC-NEW",
+            product_key="pk-new",
+            port=1,
+            mode=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_press_writes_no_entity_state(self):
+        """async_press returns None and calls neither async_write_ha_state nor an _attr_ assignment."""
+        button = self._make()
+        button.async_write_ha_state = MagicMock()
+
+        await button.async_press()
+
+        button.async_write_ha_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_press_propagates_a_raised_api_error(self):
+        """A client raising RainPointApiError propagates out of async_press rather than being swallowed."""
+        button = self._make()
+        button.coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
+
+        with pytest.raises(RainPointApiError):
+            await button.async_press()
+
+    @pytest.mark.asyncio
+    async def test_press_with_empty_response_state_returns_normally(self):
+        """The captured empty 'state' response completes the press without raising."""
+        button = self._make()
+        button.coordinator._client.control_work_mode = AsyncMock(return_value="")
+
+        await button.async_press()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_press_logs_no_cloud_supplied_free_text(self, caplog):
+        """No record emitted by a press contains the hub name, deviceName, or productKey."""
+        button = self._make(mid=1001, hid=100, device_name="MAC-SECRET-DEVICE", product_key="secret-product-key")
+
+        with caplog.at_level(logging.DEBUG):
+            await button.async_press()
+
+        for record in caplog.records:
+            message = record.getMessage()
+            assert "MAC-SECRET-DEVICE" not in message
+            assert "secret-product-key" not in message
+            assert "Test Hub" not in message
+
+    @pytest.mark.asyncio
+    async def test_press_refuses_when_the_hub_record_is_absent(self):
+        """A momentarily missing hub record raises rather than sending an
+        empty deviceName/productKey the cloud might silently misroute.
+
+        Mirrors the sibling switch's refusal on an unreadable param: zero
+        client calls, asserted explicitly so this fails against an
+        implementation that called the client first and raised afterwards.
+        """
+        from homeassistant.exceptions import HomeAssistantError
+
+        button = self._make(mid=1001)
+        button.coordinator.data["hubs"] = []  # mid 1001 no longer present
+
+        with pytest.raises(HomeAssistantError):
+            await button.async_press()
+
+        assert button.coordinator._client.control_work_mode.call_count == 0
 
 
 class TestRainPointPushLastMessageSensor:
@@ -689,3 +918,145 @@ class TestEveryHubUniqueIdCarriesTheMid:
             a = self._build(cls, coord, hub_a)._attr_unique_id
             b = self._build(cls, coord, hub_b)._attr_unique_id
             assert a != b, f"{cls.__name__} still collides across two hubs in one home"
+
+
+class TestHubBroadcastSwitchRealTimeline:
+    """The toggle proven correct on the real construct-then-poll sequence.
+
+    Drives a real RainPointCoordinator rather than an injected coordinator.data
+    snapshot: construct, first refresh, platform setup, then repeated
+    async_refresh calls with different canned hub records, asserting between
+    each step. An implementation that never clears the optimistic override
+    would pass the confirming poll below and fail the contradicting one and
+    the param-goes-missing one, which is exactly the point of driving this as
+    a timeline instead of three independent unit tests.
+    """
+
+    @staticmethod
+    def _hub_devices(param):
+        """A getDeviceByHid hub record carrying the given param, no sub-devices."""
+        return [
+            {
+                "mid": 236547,
+                "name": "Hub A",
+                "deviceName": "hub-mac",
+                "productKey": "hub-pk",
+                "homeName": "H",
+                "model": "HTV0540FRF",
+                "param": param,
+                "subDevices": [],
+            }
+        ]
+
+    @staticmethod
+    async def _build_timeline(initial_param):
+        """Construct -> first refresh -> switch platform setup.
+
+        Returns (coordinator, client, switch).
+        """
+        from custom_components.rainpoint.const import CONF_HIDS, DOMAIN
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.switch import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = TestHubBroadcastSwitchRealTimeline._hub_devices(initial_param)
+        client.get_multiple_device_status.return_value = [{"mid": 236547, "subDeviceStatus": []}]
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        switches = [e for e in captured if isinstance(e, RainPointHubBroadcastSwitch)]
+        assert len(switches) == 1
+        switch = switches[0]
+        switch.async_write_ha_state = MagicMock()
+        # Registers the coordinator listener the same way HA's real
+        # entity-platform add flow does, so async_refresh below actually
+        # reaches _handle_coordinator_update.
+        await switch.async_added_to_hass()
+        return coordinator, client, switch
+
+    @pytest.mark.asyncio
+    async def test_the_full_command_then_confirming_then_contradicting_then_missing_sequence(self):
+        """Construct off, flip on, poll confirms, poll contradicts, poll drops param."""
+        coordinator, client, switch = await self._build_timeline("0|0||")
+        frozen_hub_info = switch._hub_info
+
+        assert switch.is_on is False
+
+        client.update_main_param = AsyncMock(return_value=True)
+        await switch.async_turn_on()
+        assert switch.is_on is True
+        client.update_main_param.assert_called_once_with(mid=236547, param="0|1||")
+
+        # A poll confirming the command: the optimistic override is cleared,
+        # and the value now comes from the poll agreeing with it.
+        client.get_devices_by_hid.return_value = self._hub_devices("0|1||")
+        await coordinator.async_refresh()
+        assert switch.is_on is True
+        assert switch._optimistic is None
+
+        # A poll contradicting the command: the cloud did not keep the
+        # change, and the poll wins rather than the last command.
+        client.get_devices_by_hid.return_value = self._hub_devices("0|0||")
+        await coordinator.async_refresh()
+        assert switch.is_on is False
+
+        # A poll whose hub record carries no param at all: unknown, not the
+        # last commanded value.
+        no_param_hub = self._hub_devices("0|0||")
+        del no_param_hub[0]["param"]
+        client.get_devices_by_hid.return_value = no_param_hub
+        await coordinator.async_refresh()
+        assert switch.is_on is None
+
+        # Across the whole sequence the frozen snapshot never changed object
+        # identity, while is_on changed value repeatedly -- the pair that
+        # would fail if a regression routed the flag back through
+        # self._hub_info instead of the live coordinator read.
+        assert switch._hub_info is frozen_hub_info
+
+    @pytest.mark.asyncio
+    async def test_an_unrelated_push_does_not_clear_the_optimistic_value(self):
+        """A hub connectivity push fires the same _handle_coordinator_update
+        hook every entity gets, but never rebuilds coordinator.data["hubs"] --
+        so it must not revert a just-set optimistic value the way a real poll
+        legitimately would. Only the real poll below is allowed to clear it."""
+        coordinator, client, switch = await self._build_timeline("0|0||")
+
+        client.update_main_param = AsyncMock(return_value=True)
+        await switch.async_turn_on()
+        assert switch.is_on is True
+        assert switch._optimistic is True
+
+        # An unrelated hub-level push: apply_hub_push_update shallow-copies
+        # coordinator.data and carries "hubs" forward by reference, so this
+        # must not be mistaken for the poll that is supposed to confirm or
+        # contradict the command.
+        coordinator.apply_hub_push_update(236547, True, 1717200000000)
+        # Proves the push was applied rather than dropped by one of
+        # apply_hub_push_update's guards, which would make the two
+        # assertions below pass vacuously.
+        assert coordinator.data["hub_connectivity"][236547]["state"] == HUB_CONNECTED
+        assert switch.is_on is True
+        assert switch._optimistic is True
+
+        # The real poll, still reporting the pre-command value: only now
+        # does the optimistic override give way, and the poll's contradicting
+        # value wins.
+        client.get_devices_by_hid.return_value = self._hub_devices("0|0||")
+        await coordinator.async_refresh()
+        assert switch.is_on is False
+        assert switch._optimistic is None

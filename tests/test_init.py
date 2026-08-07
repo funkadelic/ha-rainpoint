@@ -12,6 +12,7 @@ from homeassistant.helpers import issue_registry as ir
 
 from custom_components.rainpoint import (
     DOMAIN,
+    PLATFORMS,
     _generic_control_row_removal_reason,
     _generic_row_removal_reason,
     _reconcile_sub_device_parents,
@@ -889,6 +890,43 @@ class TestAsyncUnloadEntry:
 
         assert result is False
         assert entry.entry_id in hass.data[DOMAIN]
+
+
+class TestPlatformsListSymmetry:
+    """The button platform is registered, and setup/unload stay symmetric by construction."""
+
+    def test_button_is_in_platforms(self):
+        """The button platform module exists only because it is reachable from this list."""
+        assert "button" in PLATFORMS
+
+    @pytest.mark.asyncio
+    async def test_setup_and_unload_are_handed_the_same_platforms_list(self):
+        """A future divergence between setup and unload fails here, not by leaking a registered platform."""
+        hass = _make_hass()
+        entry = _make_entry()
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            await async_setup_entry(hass, entry)
+
+        setup_platforms = hass.config_entries.async_forward_entry_setups.call_args[0][1]
+
+        hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
+        await async_unload_entry(hass, entry)
+        unload_platforms = hass.config_entries.async_unload_platforms.call_args[0][1]
+
+        assert setup_platforms == unload_platforms == PLATFORMS
 
 
 class TestAsyncReloadIntegration:
