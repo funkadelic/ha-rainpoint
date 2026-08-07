@@ -12,6 +12,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
+from homeassistant.components.button import ButtonEntity
 from homeassistant.components.select import SelectEntity
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.components.switch import SwitchEntity
@@ -554,3 +555,61 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
     async def async_turn_off(self) -> None:
         """Turn off automatic broadcast."""
         await self._async_set_broadcast(False)
+
+
+class RainPointHubBroadcastButton(CoordinatorEntity, ButtonEntity, RainPointHubDevice):
+    """The hub's one-shot time broadcast action.
+
+    Stateless by Home Assistant's own design: ButtonEntity.async_press
+    returns None, and this override writes no entity state, sets no
+    attribute, creates no Repairs issue and fires no notification. A
+    successful call means only that the cloud accepted the command --
+    whether a broadcast actually reached any sub-device is unobservable from
+    anything this integration reads, so nothing here may imply otherwise.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:broadcast"
+
+    def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
+        """Build the broadcast button with a unique id distinct from the switch's _broadcast id."""
+        CoordinatorEntity.__init__(self, coordinator)
+        RainPointHubDevice.__init__(self, hub_info)
+        self._attr_unique_id = (
+            f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_broadcast_now"
+        )
+        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Broadcast Time Now"
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def _record(self) -> dict:
+        """Return this hub's own live record, or {} when none exists yet."""
+        return hub_record_for_mid(self.coordinator, self._hub_info.get("mid"))
+
+    async def async_press(self) -> None:
+        """Send the one-shot broadcast command.
+
+        deviceName and productKey are read off the live hub record rather
+        than self._hub_info: self._hub_info is the snapshot from first
+        build, and this is a write, so an identity that changed under the
+        entity would produce a request the cloud rejects with nothing to
+        show the user. A raised RainPointApiError is left to propagate --
+        the client already raises on any body code other than 0 or 4 and on
+        any transport failure, which is the verdict this button wants, and
+        Home Assistant surfaces a raised exception from a button press to
+        the user synchronously.
+        """
+        record = self._record
+        client = self.coordinator._client
+        await client.control_work_mode(
+            mid=self._hub_info["mid"],
+            addr=0,
+            device_name=record.get("deviceName") or "",
+            product_key=record.get("productKey") or "",
+            port=1,
+            mode=0,
+        )
+        _LOGGER.info("Broadcast time now pressed for hub mid=%s", self._hub_info["mid"])

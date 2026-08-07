@@ -523,19 +523,24 @@ class RainPointClient:
         product_key: str,
         port: int,
         mode: int,
-        duration: int,
+        duration: int | None = None,
     ) -> str | None:
-        """Open or close a valve zone on a hub sub-device.
+        """Open or close a valve zone on a hub sub-device, or address the hub itself.
 
         Args:
             mid: Hub device ID.
-            addr: Sub-device address (e.g. 1 for the first RF valve).
+            addr: Sub-device address (e.g. 1 for the first RF valve, 0 for the hub itself).
             device_name: Hub deviceName (MAC-based identifier).
             product_key: Hub productKey.
             port: Zone/port number (1-based).
             mode: 1 = open, 0 = close.
-            duration: Run time in seconds. Pass 0 when mode=0: the device ignores
-                this field on close commands, but it must still be present in the request.
+            duration: Run time in seconds for an RF valve call. An int is sent as-is,
+                including 0: pass 0 on a close, since the device ignores this field on
+                close commands but it must still be present in the request. Pass None
+                (the default) to omit the "duration" key from the payload entirely,
+                which is what a hub-addressed call (addr=0) needs: the app sends no
+                duration field there, and there is no evidence an omission and an
+                explicit 0 are equivalent at that address.
 
         Returns:
             The value of ``data["data"]`` if it is a string, or
@@ -556,7 +561,6 @@ class RainPointClient:
             "productKey": product_key,
             "port": port,
             "mode": mode,
-            "duration": duration,
             # The RainPoint app sends this field on every controlWorkMode call
             # (empty for an RF valve) and the server accepts its absence, so
             # this is an alignment change rather than a fix. The hub broadcast
@@ -564,6 +568,11 @@ class RainPointClient:
             # added here rather than introduced blind later.
             "param": "",
         }
+        # Omitted rather than defaulted to 0: an absent duration and an
+        # explicit 0 are different requests, and only the omission matches
+        # what the app sends for a hub-addressed (addr=0) call.
+        if duration is not None:
+            payload["duration"] = duration
         _LOGGER.debug("API call: control_work_mode URL=%s payload=%s", url, payload)
         request_token = self._token
         async with self._session.post(url, headers=self._auth_headers(), json=payload) as resp:

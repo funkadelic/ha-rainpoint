@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from custom_components.rainpoint.api import RainPointApiError
 from custom_components.rainpoint.const import (
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
     PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
 )
 from custom_components.rainpoint.hub_entities import (
+    RainPointHubBroadcastButton,
     RainPointHubBroadcastSwitch,
     RainPointHubChannelSelect,
     RainPointHubConnectivityBinarySensor,
@@ -641,6 +644,112 @@ class TestRainPointHubBroadcastSwitch:
 
         assert first_param == second_param == "0|1||"
         assert switch.coordinator._client.update_main_param.call_count == 2
+
+
+class TestRainPointHubBroadcastButton:
+    """Tests for the hub's one-shot time-broadcast button."""
+
+    def _make(self, mid=1001, hid=100, device_name="MAC-AABBCC", product_key="pk123"):
+        """Build the button over a coordinator whose hub record carries the given identity."""
+        coord = _make_coordinator()
+        hub_info = _make_hub_info(hid=hid, mid=mid)
+        coord.data["hubs"] = [{**hub_info, "deviceName": device_name, "productKey": product_key}]
+        button = RainPointHubBroadcastButton.__new__(RainPointHubBroadcastButton)
+        RainPointHubBroadcastButton.__init__(button, coord, hub_info)
+        button.coordinator._client = MagicMock()
+        button.coordinator._client.control_work_mode = AsyncMock(return_value="")
+        return button
+
+    def test_unique_id_ends_with_broadcast_now_and_differs_from_the_switch(self):
+        """The button's id is distinct from the switch's persisted _broadcast id."""
+        button = self._make()
+        switch = RainPointHubBroadcastSwitch.__new__(RainPointHubBroadcastSwitch)
+        RainPointHubBroadcastSwitch.__init__(switch, button.coordinator, button._hub_info)
+
+        assert button._attr_unique_id.endswith("_broadcast_now")
+        assert button._attr_unique_id != switch._attr_unique_id
+
+    def test_available_is_true(self):
+        """The broadcast button is always available."""
+        button = self._make()
+        assert button.available is True
+
+    @pytest.mark.asyncio
+    async def test_press_calls_control_work_mode_with_addr_0_port_1_mode_0_and_no_duration(self):
+        """Exactly one control_work_mode call, addressed at the hub itself."""
+        button = self._make(mid=1001, device_name="MAC-AABBCC", product_key="pk123")
+
+        result = await button.async_press()
+
+        assert result is None
+        button.coordinator._client.control_work_mode.assert_called_once_with(
+            mid=1001,
+            addr=0,
+            device_name="MAC-AABBCC",
+            product_key="pk123",
+            port=1,
+            mode=0,
+        )
+        call_kwargs = button.coordinator._client.control_work_mode.call_args.kwargs
+        assert "duration" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_press_reads_identity_from_the_live_record_not_the_frozen_snapshot(self):
+        """A hub record replaced after construction still addresses the current identity."""
+        button = self._make(mid=1001, device_name="MAC-OLD", product_key="pk-old")
+        button.coordinator.data["hubs"] = [{**_make_hub_info(mid=1001), "deviceName": "MAC-NEW", "productKey": "pk-new"}]
+
+        await button.async_press()
+
+        button.coordinator._client.control_work_mode.assert_called_once_with(
+            mid=1001,
+            addr=0,
+            device_name="MAC-NEW",
+            product_key="pk-new",
+            port=1,
+            mode=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_press_writes_no_entity_state(self):
+        """async_press returns None and calls neither async_write_ha_state nor an _attr_ assignment."""
+        button = self._make()
+        button.async_write_ha_state = MagicMock()
+
+        await button.async_press()
+
+        button.async_write_ha_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_press_propagates_a_raised_api_error(self):
+        """A client raising RainPointApiError propagates out of async_press rather than being swallowed."""
+        button = self._make()
+        button.coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
+
+        with pytest.raises(RainPointApiError):
+            await button.async_press()
+
+    @pytest.mark.asyncio
+    async def test_press_with_empty_response_state_returns_normally(self):
+        """The captured empty 'state' response completes the press without raising."""
+        button = self._make()
+        button.coordinator._client.control_work_mode = AsyncMock(return_value="")
+
+        await button.async_press()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_press_logs_no_cloud_supplied_free_text(self, caplog):
+        """No record emitted by a press contains the hub name, deviceName, or productKey."""
+        button = self._make(mid=1001, hid=100, device_name="MAC-SECRET-DEVICE", product_key="secret-product-key")
+
+        with caplog.at_level(logging.DEBUG):
+            await button.async_press()
+
+        for record in caplog.records:
+            message = record.getMessage()
+            assert "MAC-SECRET-DEVICE" not in message
+            assert "secret-product-key" not in message
+            assert "Test Hub" not in message
 
 
 class TestRainPointPushLastMessageSensor:
