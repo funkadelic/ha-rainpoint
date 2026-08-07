@@ -98,6 +98,22 @@ class TestDecodeGenericRobustness:
         assert result["decoder"] == "generic-tlv"
         assert "error" in result
 
+    def test_non_string_raw_is_not_logged_verbatim(self, caplog):
+        """A list-shaped raw reaches the same except block via a different
+        exception (AttributeError on .split rather than a TypeError on 'in'),
+        and its contents must not appear in the diagnostic log line -- only
+        the type name may, since raw is untrusted cloud-supplied data."""
+        caplog.set_level(logging.DEBUG)
+
+        result = decode_generic(["marker-should-not-be-logged", ";"])  # type: ignore[arg-type]
+
+        assert "error" in result
+        rainpoint_records = [r for r in caplog.records if r.name.startswith("custom_components.rainpoint")]
+        assert len(rainpoint_records) == 1
+        message = rainpoint_records[0].getMessage()
+        assert "marker-should-not-be-logged" not in message
+        assert "list" in message
+
 
 class TestDecodeGenericFraming:
     """Cover the remaining header-form and value-width branches."""
