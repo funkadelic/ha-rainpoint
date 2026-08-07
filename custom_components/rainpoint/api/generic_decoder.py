@@ -380,7 +380,14 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
     """
     result: dict = {"decoder": "generic-tlv"}
 
-    if _is_ascii_payload(raw):
+    try:
+        ascii_framed = _is_ascii_payload(raw)
+    except Exception as exc:  # diagnostics must not break polling
+        _LOGGER.debug("decode_generic failed for %r: %s", raw, exc)
+        result["error"] = str(exc)
+        return result
+
+    if ascii_framed:
         rssi = _parse_ascii_rssi(raw)
         fields = (
             [
