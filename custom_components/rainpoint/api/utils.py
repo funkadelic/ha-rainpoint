@@ -35,17 +35,16 @@ _REPORT_TIME_BASE_YEAR = 2020
 # comma-separated list of `key=value` tokens, of unknown total key count. Key
 # 5 is the only one this integration understands -- its transmission-power
 # setting, confirmed twice by independent experiment. Keys 11, 12, 50 and 51
-# are observed but unidentified (PSET-03, deferred) and must survive a splice
-# byte-for-byte.
+# are observed but unidentified, and must survive a splice byte-for-byte.
 _SUB_PARAM_DELIMITER = ","
 _SUB_PARAM_ASSIGNMENT = "="
 _SUB_POWER_MODE_KEY = "5"
 # Every key-5 wire token this integration has been asked to accept, mapped to
 # its canonical one-character mode digit. Both an unpadded and a zero-padded
-# width are accepted -- D-02's semantic mapping is the set {"0", "1", "2"},
+# width are accepted -- the semantic mapping is the set {"0", "1", "2"},
 # but every blob captured from the only known target device uses the
 # zero-padded form ("01", "02"), so the unpadded set alone would ship the
-# entity dead on the one device this phase targets. Nothing outside these six
+# entity dead on the one device this control targets. Nothing outside these six
 # literal tokens is ever accepted; widening this set is a captured-evidence
 # decision, never a guess.
 _SUB_POWER_MODE_WIRE_VALUES = {
@@ -286,7 +285,7 @@ def _parse_sub_power_mode(param: object) -> str | None:
     two returns None immediately. No key may repeat -- a duplicated key
     anywhere in the blob, key 5 or otherwise, returns None rather than letting
     a later occurrence silently win, which is the dict-coalescing key loss
-    D-02 exists to prevent. Key 5 must be present, and its value must be a
+    this gate exists to prevent. Key 5 must be present, and its value must be a
     member of `_SUB_POWER_MODE_WIRE_VALUES`; any other key and any other
     value are read as opaque and simply carried past unvalidated.
 

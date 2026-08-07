@@ -497,10 +497,9 @@ class TestSpliceHubBroadcastParamFieldPreservation:
         assert len(result.split("|")) == len(param.split("|"))
 
 
-# The captured HTV210B blob verbatim (24-CONTEXT.md's <specifics>), used for
-# the round-trip case rather than a blob this test file constructs from
-# parts -- a self-constructed blob only proves the test agrees with itself
-# (ROADMAP Success Criterion 2).
+# The captured HTV210B blob verbatim, used for the round-trip case rather
+# than a blob this test file constructs from parts -- a self-constructed
+# blob only proves the test agrees with itself.
 _HTV210B_CAPTURED_PARAM = (
     "5=01,11=58020a001e000000000000000000,12=58020a001e000000000000000000,50=646464646464646464646464,51=646464646464646464646464"
 )
@@ -521,7 +520,7 @@ class TestParseSubPowerMode:
         ],
     )
     def test_recognised_wire_values(self, param, expected):
-        """Both the D-02 literal set and the captured zero-padded set parse."""
+        """Both the unpadded literal set and the captured zero-padded set parse."""
         assert _parse_sub_power_mode(param) == expected
 
     def test_only_key_five_present_parses(self):
@@ -543,7 +542,8 @@ class TestParseSubPowerMode:
 # key 5 entirely -- including one whose keys merely contain "5" as a
 # substring ("15", "50"). Shared by both the parse-refusal and the
 # splice-refusal test classes below so the two gates cannot silently drift
-# apart on what counts as readable (D-02's own precondition relationship).
+# apart on what counts as readable, since the splice calls the parse as its
+# own precondition.
 _MALFORMED_SUB_PARAMS = [
     pytest.param(None, id="none"),
     pytest.param(0, id="int-zero"),
@@ -593,7 +593,7 @@ class TestSpliceSubPowerMode:
         """Splicing the captured blob to Enhance changes only the key-5 token.
 
         Keys 11, 12, 50 and 51 compare equal to the captured literals
-        character for character (PSET-02, ROADMAP Success Criterion 2).
+        character for character.
         """
         result = _splice_sub_power_mode(_HTV210B_CAPTURED_PARAM, "2")
         assert result == (
@@ -630,8 +630,8 @@ class TestSpliceSubPowerModeMalformedMatrix:
     Driven from the same _MALFORMED_SUB_PARAMS table
     TestParseSubPowerModeMalformedMatrix uses, rather than a second
     hand-written list, so the read and write refusal contracts cannot drift
-    apart (the exact asymmetry Phase 23's D-02 closed and this phase's D-02
-    generalizes).
+    apart (the exact asymmetry the hub broadcast splice closed, generalized
+    here).
     """
 
     @pytest.mark.parametrize("param", _MALFORMED_SUB_PARAMS)

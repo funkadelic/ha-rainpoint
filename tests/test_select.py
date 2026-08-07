@@ -106,10 +106,10 @@ class TestSelectSetupEntry:
 class TestSubDevicePowerSelectRealTimeline:
     """End to end: an HTV210B sub-device's transmission power, driven through the
     real construct -> first refresh -> platform setup -> async_select_option
-    sequence (PSET-01, PSET-02), per the repo's timeline-not-end-state test rule.
+    sequence, per the repo's timeline-not-end-state test rule.
 
     An injected coordinator.data snapshot would pass at full branch coverage
-    while the D-07 discovery path (sensors_cfg / LateEntityAdder / add-once
+    while the discovery path (sensors_cfg / LateEntityAdder / add-once
     ledger) stayed dead in a live install, exactly the trap CLAUDE.md's
     testing section names.
     """
@@ -199,6 +199,13 @@ class TestSubDevicePowerSelectRealTimeline:
         assert select.current_option == "Standard"
 
     @pytest.mark.asyncio
+    async def test_the_power_select_is_enabled_by_default(self):
+        """The control is visible without the user enabling it first."""
+        _coordinator, _client, select = await self._build_timeline()
+
+        assert getattr(select, "_attr_entity_registry_enabled_default", True) is True
+
+    @pytest.mark.asyncio
     async def test_select_option_posts_read_modify_write_and_updates_display(self):
         """Choosing Enhance posts exactly one sub/update splicing only key 5.
 
@@ -214,7 +221,7 @@ class TestSubDevicePowerSelectRealTimeline:
             return_value=mock_json_response({"code": 0, "msg": "SUCCESS", "data": {"homeVersion": 1, "paramVersion": 3}})
         )
         client.update_sub_param = real_client.update_sub_param
-        # D-04's fresh pre-write read: still the value read at setup.
+        # The fresh pre-write read: still the value read at setup.
         client.get_devices_by_hid.return_value = self._hub_devices(self._INITIAL_PARAM)
 
         await select.async_select_option("Enhance")
@@ -272,7 +279,7 @@ class TestSubDevicePowerSelectRealTimeline:
     async def test_a_real_poll_clears_the_optimistic_value_and_the_polled_value_wins(self):
         """A real poll allocates a fresh "hubs" list, so it clears the
         optimistic override -- even when the poll's own value contradicts the
-        command that was just written (D-05)."""
+        command that was just written."""
         coordinator, client, select = await self._build_timeline()
 
         real_client = make_mock_session_client()
@@ -338,7 +345,7 @@ class TestSubDevicePowerSelectRealTimeline:
     @pytest.mark.asyncio
     async def test_unsplicable_fresh_param_raises(self):
         """A fresh read whose param the splice gate refuses cannot be written,
-        and the client is never called with a reconstructed blob (D-02, D-04)."""
+        and the client is never called with a reconstructed blob."""
         _coordinator, client, select = await self._build_timeline()
 
         unreadable_devices = self._hub_devices("not-a-valid-blob")
@@ -353,8 +360,7 @@ class TestSubDevicePowerSelectRealTimeline:
     async def test_a_failing_pre_write_read_never_reaches_the_client_and_display_is_unchanged(self):
         """A `get_devices_by_hid` that raises during the pre-write read is a
         refusal, not a fallback to the coordinator's stale copy: the client's
-        write method is never called and the displayed value is unchanged
-        (D-04)."""
+        write method is never called and the displayed value is unchanged."""
         _coordinator, client, select = await self._build_timeline()
         client.get_devices_by_hid.side_effect = RainPointApiError("getDeviceByHid failed: code 1001")
 
@@ -369,7 +375,7 @@ class TestSubDevicePowerSelectRealTimeline:
     async def test_a_raised_update_sub_param_leaves_the_optimistic_value_at_none(self):
         """A write that reaches the cloud and raises must not display as a
         success: the optimistic value stays unset and current_option still
-        reads the polled value (D-05 ordering)."""
+        reads the polled value."""
         _coordinator, client, select = await self._build_timeline()
         client.get_devices_by_hid.return_value = self._hub_devices(self._INITIAL_PARAM)
         client.update_sub_param.side_effect = RainPointApiError("sub/update failed: code 1001")
@@ -382,7 +388,7 @@ class TestSubDevicePowerSelectRealTimeline:
 
 
 class TestSubDevicePowerSelectAdmissionRealTimeline:
-    """The D-01 model gate and the D-07 silent-type guard, proven through the
+    """The model gate and the silent-type guard, proven through the
     real timeline rather than an injected coordinator.data snapshot -- the
     same trap TestSilentUnitGuardRealTimeline in test_valve.py exists for.
     """
@@ -489,7 +495,7 @@ class TestSubDevicePowerSelectAdmissionRealTimeline:
 
 class TestSubDevicePowerSelectAddOnceCycle:
     """Emit, gate, forget, re-emit through select.py's own real adder: no
-    unique_id this phase adds is ever offered to Home Assistant twice.
+    unique_id the power select adds is ever offered to Home Assistant twice.
 
     Mirrors TestNoUniqueIdIsEverOfferedTwice in test_entity.py, which
     parametrizes valve, number and sensor but not select.py's own adder --
@@ -554,7 +560,7 @@ class TestSubDevicePowerSelectSetupRobustness:
     """The sub-device block sits above the existing hub-record walk in
     async_setup_entry and must not be starved by that walk's own
     malformed-hubs early return -- the regression guard for their shared
-    setup function (D-07's positioning note)."""
+    setup function."""
 
     @pytest.mark.asyncio
     async def test_a_non_list_hubs_snapshot_still_yields_the_sub_device_select(self):
