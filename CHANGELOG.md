@@ -2,6 +2,23 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.14.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.13.1...v1.14.0) (2026-08-07)
+
+
+### Added
+
+* add hub broadcast toggle and one-shot button entities ([#156](https://github.com/funkadelic/ha-rainpoint/issues/156)) ([8bd67ec](https://github.com/funkadelic/ha-rainpoint/commit/8bd67ec4aab435f2827d32f1e83d1bc54e3fd13c))
+* add transmission power control for sub-device settings ([#157](https://github.com/funkadelic/ha-rainpoint/issues/157)) ([feaf61b](https://github.com/funkadelic/ha-rainpoint/commit/feaf61b09a47cf5f6e8d8ad7b9e6aec7425bb75c))
+* add zone valve control for the hub-paired HTV210B ([#150](https://github.com/funkadelic/ha-rainpoint/issues/150)) ([6819474](https://github.com/funkadelic/ha-rainpoint/commit/68194743d0c60f4ad528b48f4f0817c08aae8be2))
+* default the push channel on for all installs ([#154](https://github.com/funkadelic/ha-rainpoint/issues/154)) ([a38e938](https://github.com/funkadelic/ha-rainpoint/commit/a38e9381f35746524d10b69257cce7a47c1e3cc0))
+* read ASCII-framed headers in the generic decoder ([#155](https://github.com/funkadelic/ha-rainpoint/issues/155)) ([70df62b](https://github.com/funkadelic/ha-rainpoint/commit/70df62b3f1e11e9579c867ff210536ab03d1be78))
+* surface push-enable failure as a Repairs card ([#153](https://github.com/funkadelic/ha-rainpoint/issues/153)) ([7d8837a](https://github.com/funkadelic/ha-rainpoint/commit/7d8837a950a7ea680ac0335867810b4af19ce371))
+
+
+### Fixed
+
+* force both jitter signs in renewal delay test ([#152](https://github.com/funkadelic/ha-rainpoint/issues/152)) ([c022f5b](https://github.com/funkadelic/ha-rainpoint/commit/c022f5b62a9731692deb6e9d9689249c2d2efcd7))
+
 ## [1.13.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.13.0...v1.13.1) (2026-08-05)
 
 
