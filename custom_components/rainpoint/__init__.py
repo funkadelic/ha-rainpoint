@@ -45,7 +45,7 @@ _RELOAD_STATUS_NOTIFS: dict[_ReloadStatus, tuple[str, str]] = {
     "failed": _NOTIF_FAILED,
 }
 
-PLATFORMS: list[str] = ["sensor", "binary_sensor", "select", "valve", "number", "switch"]
+PLATFORMS: list[str] = ["sensor", "binary_sensor", "select", "valve", "number", "switch", "button"]
 
 # Hub identity is spelled {hid}_{mid} everywhere: hub entity unique ids as
 # rainpoint_hub_{hid}_{mid}_{suffix}, the hub device identifier as
