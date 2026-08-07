@@ -155,8 +155,7 @@ class RainPointSubDevicePowerSelect(RainPointSubDeviceEntity, SelectEntity):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_options = list(POWER_MODE_LABELS.values())
         self._attr_unique_id = f"{UNIQUE_ID_PREFIX}{base_slug}_power_mode"
-        sub_name = sensor_info.get("sub_name") or f"{self._device_name_prefix} {addr}"
-        self._attr_name = f"{sub_name} Transmission Power"
+        self._attr_name = "Transmission Power"
         # The post-write override: set only after a write's cloud
         # acknowledgment, cleared by the next real poll so a poll that
         # contradicts the command always wins. Mirrors
