@@ -157,12 +157,12 @@ class RainPointSubDevicePowerSelect(RainPointSubDeviceEntity, SelectEntity):
         # acknowledgment, cleared by the next real poll so a poll that
         # contradicts the command always wins. Mirrors
         # RainPointHubBroadcastSwitch's _optimistic / _hubs_snapshot_id pair
-        # and the reasoning in its _handle_coordinator_update override:
-        # seeded from current data rather than left None, since
+        # and the reasoning in its _handle_coordinator_update override.
+        self._optimistic: str | None = None
+        # Seeded from current data rather than left None, since
         # CoordinatorEntity.async_added_to_hass never calls
         # _handle_coordinator_update itself, so a None seed would make the
         # very first push after setup look like a poll.
-        self._optimistic: str | None = None
         current_hubs = coordinator.data.get("hubs") if coordinator.data else None
         self._hubs_snapshot_id: int | None = id(current_hubs) if current_hubs is not None else None
 

@@ -499,8 +499,7 @@ class TestSubDevicePowerSelectAddOnceCycle:
 
     Mirrors TestNoUniqueIdIsEverOfferedTwice in test_entity.py, which
     parametrizes valve, number and sensor but not select.py's own adder --
-    this closes that gap without touching that shared test module (plan's
-    file scope is tests/test_select.py and select.py alone).
+    this closes that gap without touching that shared test module.
     """
 
     @pytest.mark.asyncio

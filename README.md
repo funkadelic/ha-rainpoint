@@ -24,7 +24,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Pool sensors | HCS0528ARF, HCS015ARF, HCS015ARF+ | Pool temperature, ambient |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
 | Flow meters | HCS008FRF | Flow reading |
-| Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration |
+| Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
 
 The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B** Bluetooth valve are the maintainer's own hardware and are the models tested against real devices. Other models are supported opportunistically from captured payloads.
 
