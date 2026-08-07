@@ -119,6 +119,51 @@ def _split_prefix(raw: str) -> tuple[str, bool]:
     return body.strip().upper(), dp_id_prefixed
 
 
+def _is_ascii_payload(raw: str) -> bool:
+    """True when raw is the comma-and-semicolon ASCII framing, not a hex body.
+
+    Three clauses, all required: ``"#"`` is absent (a ``NN#`` prefix always
+    wins and routes to the hex path first, which is the whole of ASCII-07's
+    guarantee -- every payload ``_split_prefix``'s tail-truncation branch was
+    written for carries that prefix, so it is routed away before this test is
+    ever reached); ``";"`` is present, separating the header from the body;
+    and the pre-semicolon header splits on ``","`` into three or more parts,
+    matching the ``[flags],[rssi],[flags];...`` shape both hand-written ASCII
+    decoders in ``decoders.py`` already parse. Mirrors the ordering those two
+    routers use: hex prefix checked first, ASCII shape checked as the
+    fallback.
+    """
+    if "#" in raw:
+        return False
+    if ";" not in raw:
+        return False
+    header = raw.split(";", 1)[0]
+    return len(header.split(",")) >= 3
+
+
+def _parse_ascii_rssi(raw: str) -> int | None:
+    """Read the ASCII header's rssi token, or None when it cannot be trusted.
+
+    Splits on the first ``";"``, then the header on ``","``. Returns None on
+    a header with fewer than three parts, on a non-integer rssi token, and on
+    a non-negative value -- non-negative already means "malformed" on this
+    wire format (both hand-written ASCII decoders treat it the same way).
+    Unlike those two decoders, this helper emits no log record on any path,
+    at any level: it runs on every poll for an affected device, not once per
+    manually-triggered decode, so the same WARNING here would be per-poll
+    spam rather than a one-off diagnostic.
+    """
+    header = raw.split(";", 1)[0]
+    parts = header.split(",")
+    if len(parts) < 3:
+        return None
+    try:
+        rssi = int(parts[1])
+    except (ValueError, IndexError):
+        return None
+    return rssi if rssi < 0 else None
+
+
 def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
     """Walk the self-describing byte stream into structural entries.
 

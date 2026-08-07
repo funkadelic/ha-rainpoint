@@ -16,9 +16,29 @@ import logging
 import re
 
 from .product_catalog import get_catalog_entry, get_catalog_port_number
-from .utils import _parse_entries, _split_prefix
+from .utils import _is_ascii_payload, _parse_ascii_rssi, _parse_entries, _split_prefix
 
 _LOGGER = logging.getLogger(__name__)
+
+# The result-dict key marking a decode that went through the ASCII branch.
+# Present only on that branch's result (never False on a hex result, only
+# absent) so is_ascii_declined's truthiness read fails closed on every hex
+# path and on a dict that never went through decode_generic at all.
+_ASCII_FRAMED_KEY = "ascii_framed"
+
+# ASCII-framed payloads carry no ordering rule the body can be recovered
+# under. The header holds in 3 of 3 committed samples across 3 unrelated
+# device families (HTV213FRF/245, HCS021FRF, HWS019WRF-V2), while the body
+# agrees across none of them: pipe-separated six-field zone groups; a flat
+# triple with a G= sub-encoding; parenthesised current/min/flag triples with
+# a P= prefix and a trailing comma. The catalog is keyed by dpCode, not by
+# wire position, so it carries no positional meaning to derive an ordering
+# from either. A per-family position table and a catalog-derived ordering
+# were both considered and rejected: a table with zero populated rows is a
+# code path nothing exercises, and asserting a dpCode-to-wire-position
+# correspondence no sample supports would be inventing evidence. The body is
+# therefore declined outright rather than guessed at.
+_ASCII_DECLINED_ERROR = "ASCII-framed payload: header read, body declined (field ordering is positional and not recoverable)"
 
 
 # Field index -> status identity, harvested from the RainPoint/HomGar cloud
@@ -330,6 +350,19 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
     On any parse failure it returns ``{"decoder": "generic-tlv", "error": ...}``
     - it never raises, so the unknown-device path stays robust.
 
+    A payload using the comma-and-semicolon ASCII framing (``[flags],[rssi],
+    [flags];...``) is read for its header only. The result carries both
+    "error" and "fields" together - unlike the hex failure paths, which
+    carry "error" alone - because the header rssi is a genuine reading even
+    though the body is declined. "fields" holds at most one entry, a
+    synthetic ``STA_RSSI`` field with "index", "dp_id" and "raw" all
+    ``None`` (there is no byte-stream position behind a header-derived
+    value) or is empty when the header rssi is non-negative or unparseable.
+    "ascii_framed" is ``True`` on this result and absent - never ``False`` -
+    on every hex result; see ``is_ascii_declined``. The catalog annotation
+    step below never runs for an ASCII result: a header-derived field has no
+    structural index for it to match against.
+
     When ``model`` is given, each field whose position matches an entry in the
     committed product catalog for that model additionally carries a "catalog"
     sub-dict: ``{"dp_port": ..., "data_type": ..., "declared_width": ...,
@@ -346,6 +379,29 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
     coin-flip between variants.
     """
     result: dict = {"decoder": "generic-tlv"}
+
+    if _is_ascii_payload(raw):
+        rssi = _parse_ascii_rssi(raw)
+        fields = (
+            [
+                {
+                    "name": "STA_RSSI",
+                    "index": None,
+                    "dp_id": None,
+                    "raw": None,
+                    "value": rssi,
+                }
+            ]
+            if rssi is not None
+            else []
+        )
+        result[_ASCII_FRAMED_KEY] = True
+        result["error"] = _ASCII_DECLINED_ERROR
+        result["dp_id_prefixed"] = False
+        result["fields"] = fields
+        result["field_names"] = [f["name"] for f in fields]
+        return result
+
     try:
         body, dp_id_prefixed = _split_prefix(raw)
         if not body or len(body) % 2 != 0:
@@ -391,3 +447,20 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
     result["fields"] = fields
     result["field_names"] = [f["name"] for f in fields]
     return result
+
+
+def is_ascii_declined(generic: dict | None) -> bool:
+    """True when a decode_generic result went through the declined-ASCII branch.
+
+    Public-named rather than underscore-prefixed to match has_declared_width,
+    the existing guard in this codebase that crosses a module boundary for
+    the same reason: generic_control's readback needs to refuse an
+    ASCII-framed result explicitly (D-06) rather than relying on its fields
+    list happening to be run-state-free.
+
+    Fails closed on None, on a non-dict, and on any hex result, because the
+    marker is never set to False - only left absent - on those. A caller
+    cannot distinguish "this was a hex result" from "this was never decoded"
+    from this function's return value alone, and must not try.
+    """
+    return bool(isinstance(generic, dict) and generic.get(_ASCII_FRAMED_KEY))
