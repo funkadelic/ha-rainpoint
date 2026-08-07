@@ -570,6 +570,61 @@ class TestRainPointHubBroadcastSwitch:
         assert "broadcast" in switch._attr_unique_id
         assert switch._attr_unique_id == "rainpoint_hub_100_1001_broadcast"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_param", [None, "", "1"])
+    async def test_turn_on_refuses_when_param_is_unreadable(self, bad_param):
+        """A None, empty, or single-field param raises and issues zero client calls.
+
+        Asserting the zero call count explicitly is what makes this test fail
+        against an implementation that called the client first and raised
+        afterwards, rather than refusing before ever reaching it.
+        """
+        from homeassistant.exceptions import HomeAssistantError
+
+        switch = self._make(param=bad_param)
+        switch.coordinator._client = MagicMock()
+        switch.coordinator._client.update_main_param = AsyncMock(return_value=True)
+
+        with pytest.raises(HomeAssistantError):
+            await switch.async_turn_on()
+
+        assert switch.coordinator._client.update_main_param.call_count == 0
+        assert switch.is_on is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_param", [None, "", "1"])
+    async def test_turn_off_refuses_when_param_is_unreadable(self, bad_param):
+        """Same refusal on the turn-off path."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        switch = self._make(param=bad_param)
+        switch.coordinator._client = MagicMock()
+        switch.coordinator._client.update_main_param = AsyncMock(return_value=True)
+
+        with pytest.raises(HomeAssistantError):
+            await switch.async_turn_off()
+
+        assert switch.coordinator._client.update_main_param.call_count == 0
+        assert switch.is_on is None
+
+    @pytest.mark.asyncio
+    async def test_turn_on_twice_is_idempotent(self):
+        """Two consecutive turn_on calls leave is_on True with byte-identical params."""
+        switch = self._make(param="0|1||", mid=1001)
+        switch.coordinator._client = MagicMock()
+        switch.coordinator._client.update_main_param = AsyncMock(return_value=True)
+
+        await switch.async_turn_on()
+        assert switch.is_on is True
+        first_param = switch.coordinator._client.update_main_param.call_args.kwargs["param"]
+
+        await switch.async_turn_on()
+        assert switch.is_on is True
+        second_param = switch.coordinator._client.update_main_param.call_args.kwargs["param"]
+
+        assert first_param == second_param == "0|1||"
+        assert switch.coordinator._client.update_main_param.call_count == 2
+
 
 class TestRainPointPushLastMessageSensor:
     """Tests for the push last-message-age timestamp entity."""

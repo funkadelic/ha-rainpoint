@@ -1913,6 +1913,27 @@ class TestUpdateMainParam:
         with pytest.raises(RainPointApiError, match="main/update HTTP 500"):
             await client.update_main_param(mid=1, param="0|0||")
 
+    @pytest.mark.asyncio
+    async def test_no_log_record_carries_the_param_string(self, caplog):
+        """No record this call emits contains the param value, at any level.
+
+        Asserted positively (no record's formatted message contains the
+        string) rather than by an empty-records count: mid and code are
+        allowed to be logged, so counting would be the wrong assertion.
+        """
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 7, "hid": 182509}}
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        distinctive_param = "0|1|marker-should-never-be-logged|"
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.client"):
+            await client.update_main_param(mid=236547, param=distinctive_param)
+
+        for record in caplog.records:
+            assert distinctive_param not in record.getMessage()
+
 
 class TestGetSubscribeStatus:
     """get_subscribe_status() fetches fresh per-session MQTT credentials."""

@@ -220,9 +220,12 @@ def _splice_hub_broadcast_param(param: object, enabled: bool) -> str | None:
     """Return `param` with only index 1 replaced by the requested flag, or
     None when the same gate that blocks the read blocks the write.
 
-    Applies the identical gate `_parse_hub_broadcast_flag` uses, so a write is
-    never buildable from a `param` this module could not itself read. On
-    success the string is split on the delimiter, the element at
+    Calls `_parse_hub_broadcast_flag` itself as the gate -- not a
+    re-implementation of it -- so the two functions cannot drift apart on
+    what counts as readable: a `param` this module could not itself parse to
+    a `bool` (wrong type, too few fields, or an index-1 token that is neither
+    "0" nor "1") never reaches the split-and-replace below. On success the
+    string is split on the delimiter, the element at
     `_HUB_BROADCAST_FIELD_INDEX` is replaced with the literal "1" or "0", and
     the result is rejoined on the same delimiter. Every other element is
     carried across untouched and unparsed: no `strip`, no case change, no
@@ -234,11 +237,11 @@ def _splice_hub_broadcast_param(param: object, enabled: bool) -> str | None:
     this function writes. Never raises, never logs at any level, for the same
     reason `_parse_hub_broadcast_flag` does not.
     """
-    if not isinstance(param, str):
+    if _parse_hub_broadcast_flag(param) is None:
         return None
+    # param is guaranteed a str with a recoverable index 1 at this point --
+    # the gate above already proved it.
     fields = param.split(_HUB_PARAM_DELIMITER)
-    if len(fields) <= _HUB_BROADCAST_FIELD_INDEX:
-        return None
     fields[_HUB_BROADCAST_FIELD_INDEX] = "1" if enabled else "0"
     return _HUB_PARAM_DELIMITER.join(fields)
 
