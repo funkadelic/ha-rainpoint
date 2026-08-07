@@ -751,6 +751,25 @@ class TestRainPointHubBroadcastButton:
             assert "secret-product-key" not in message
             assert "Test Hub" not in message
 
+    @pytest.mark.asyncio
+    async def test_press_refuses_when_the_hub_record_is_absent(self):
+        """A momentarily missing hub record raises rather than sending an
+        empty deviceName/productKey the cloud might silently misroute.
+
+        Mirrors the sibling switch's refusal on an unreadable param: zero
+        client calls, asserted explicitly so this fails against an
+        implementation that called the client first and raised afterwards.
+        """
+        from homeassistant.exceptions import HomeAssistantError
+
+        button = self._make(mid=1001)
+        button.coordinator.data["hubs"] = []  # mid 1001 no longer present
+
+        with pytest.raises(HomeAssistantError):
+            await button.async_press()
+
+        assert button.coordinator._client.control_work_mode.call_count == 0
+
 
 class TestRainPointPushLastMessageSensor:
     """Tests for the push last-message-age timestamp entity."""
@@ -993,3 +1012,32 @@ class TestHubBroadcastSwitchRealTimeline:
         # would fail if a regression routed the flag back through
         # self._hub_info instead of the live coordinator read.
         assert switch._hub_info is frozen_hub_info
+
+    @pytest.mark.asyncio
+    async def test_an_unrelated_push_does_not_clear_the_optimistic_value(self):
+        """A hub connectivity push fires the same _handle_coordinator_update
+        hook every entity gets, but never rebuilds coordinator.data["hubs"] --
+        so it must not revert a just-set optimistic value the way a real poll
+        legitimately would. Only the real poll below is allowed to clear it."""
+        coordinator, client, switch = await self._build_timeline("0|0||")
+
+        client.update_main_param = AsyncMock(return_value=True)
+        await switch.async_turn_on()
+        assert switch.is_on is True
+        assert switch._optimistic is True
+
+        # An unrelated hub-level push: apply_hub_push_update shallow-copies
+        # coordinator.data and carries "hubs" forward by reference, so this
+        # must not be mistaken for the poll that is supposed to confirm or
+        # contradict the command.
+        coordinator.apply_hub_push_update(236547, True, 1717200000000)
+        assert switch.is_on is True
+        assert switch._optimistic is True
+
+        # The real poll, still reporting the pre-command value: only now
+        # does the optimistic override give way, and the poll's contradicting
+        # value wins.
+        client.get_devices_by_hid.return_value = self._hub_devices("0|0||")
+        await coordinator.async_refresh()
+        assert switch.is_on is False
+        assert switch._optimistic is None

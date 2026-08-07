@@ -490,9 +490,20 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
         )
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Automatic Broadcast Time"
         # The post-write override: set only after a write's cloud
-        # acknowledgment, cleared by the next coordinator update so a poll
-        # that contradicts the command always wins.
+        # acknowledgment, cleared by the next real poll so a poll that
+        # contradicts the command always wins.
         self._optimistic: bool | None = None
+        # Identity of coordinator.data["hubs"] as of the last time it was
+        # observed -- see _handle_coordinator_update for why this, and not
+        # the optimistic flag itself, is what a push notification must not
+        # be allowed to disturb. Seeded from the coordinator's current data
+        # rather than left None: CoordinatorEntity.async_added_to_hass only
+        # registers the listener, it never calls _handle_coordinator_update
+        # itself, so a None seed would make the very first push after setup
+        # look like a poll and clear an optimistic value that was never
+        # actually confirmed or contradicted.
+        current_hubs = coordinator.data.get("hubs") if coordinator.data else None
+        self._hubs_snapshot_id: int | None = id(current_hubs) if current_hubs is not None else None
 
     @property
     def available(self) -> bool:
@@ -516,7 +527,7 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Clear the optimistic override so the fresh poll becomes the authority.
+        """Clear the optimistic override only on a real poll, not on every push.
 
         The first override of this CoordinatorEntity hook anywhere in this
         package. Without it, a command's optimistic value would outlive the
@@ -524,8 +535,25 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
         poll interval until the next real read. Does not reassign
         self._hub_info -- that snapshot stays frozen deliberately, since
         changing it would change every other hub entity reading it.
+
+        This hook fires on every coordinator listener notification, not only
+        a genuine 120s poll: apply_push_update and apply_hub_push_update both
+        call async_update_listeners() for any unrelated sub-device reading or
+        hub connectivity edge, and neither one rebuilds coordinator.data --
+        both shallow-copy the top-level dict and carry "hubs" forward by
+        reference. A REST poll's _collect_hubs is the only thing that ever
+        allocates a fresh "hubs" list. So the identity of coordinator.data
+        ["hubs"] is what distinguishes "the hub record may actually have
+        changed" from "some other device pushed a reading" -- without this
+        check, any push on a push-enabled install (the default) clears a
+        just-set optimistic value within moments, well before the poll that
+        is supposed to be the one to confirm or correct it.
         """
-        self._optimistic = None
+        current_hubs = self.coordinator.data.get("hubs") if self.coordinator.data else None
+        current_id = id(current_hubs) if current_hubs is not None else None
+        if current_id != self._hubs_snapshot_id:
+            self._hubs_snapshot_id = current_id
+            self._optimistic = None
         super()._handle_coordinator_update()
 
     async def _async_set_broadcast(self, enabled: bool) -> None:
@@ -601,8 +629,17 @@ class RainPointHubBroadcastButton(CoordinatorEntity, ButtonEntity, RainPointHubD
         any transport failure, which is the verdict this button wants, and
         Home Assistant surfaces a raised exception from a button press to
         the user synchronously.
+
+        A momentarily absent record (hub not yet in coordinator.data) is
+        refused outright, the same way the sibling switch's
+        _async_set_broadcast refuses to write from an unreadable param:
+        sending deviceName="" and productKey="" would not raise here on its
+        own, and it is exactly the kind of request the cloud might silently
+        misroute rather than reject.
         """
         record = self._record
+        if not record.get("deviceName") or not record.get("productKey"):
+            raise HomeAssistantError("The hub's device identity could not be read, so this command cannot be sent")
         client = self.coordinator._client
         await client.control_work_mode(
             mid=self._hub_info["mid"],
