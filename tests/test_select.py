@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.rainpoint.api import RainPointApiError
 from custom_components.rainpoint.const import DOMAIN, MODEL_HTV210B
 from custom_components.rainpoint.select import RainPointSubDevicePowerSelect, _sub_device_record, async_setup_entry
 from tests.helpers import htv210b_status, make_mock_session_client, mock_json_response
@@ -244,7 +245,10 @@ class TestSubDevicePowerSelectRealTimeline:
         hook every entity gets, but never rebuilds coordinator.data["hubs"] --
         so it must not revert a just-set optimistic value the way a real poll
         legitimately would. Mirrors TestHubBroadcastSwitchRealTimeline's
-        equivalent case for the sibling hub-broadcast switch."""
+        equivalent case for the sibling hub-broadcast switch.
+
+        Distinct test from the real-poll case below (not the same test doing
+        both), so a change that broke either half fails on its own line."""
         coordinator, client, select = await self._build_timeline()
 
         real_client = make_mock_session_client()
@@ -263,6 +267,24 @@ class TestSubDevicePowerSelectRealTimeline:
         assert select.current_option == "Enhance"
         assert select._optimistic == "2"
 
+    @pytest.mark.asyncio
+    async def test_a_real_poll_clears_the_optimistic_value_and_the_polled_value_wins(self):
+        """A real poll allocates a fresh "hubs" list, so it clears the
+        optimistic override -- even when the poll's own value contradicts the
+        command that was just written (D-05)."""
+        coordinator, client, select = await self._build_timeline()
+
+        real_client = make_mock_session_client()
+        real_client.ensure_logged_in = AsyncMock()
+        real_client._session.post = MagicMock(
+            return_value=mock_json_response({"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 3}})
+        )
+        client.update_sub_param = real_client.update_sub_param
+        client.get_devices_by_hid.return_value = self._hub_devices(self._INITIAL_PARAM)
+
+        await select.async_select_option("Enhance")
+        assert select.current_option == "Enhance"
+
         # The real poll, still reporting the pre-command value: only now does
         # the optimistic override give way, and the poll's own value wins.
         client.get_devices_by_hid.return_value = self._hub_devices(self._INITIAL_PARAM)
@@ -272,15 +294,19 @@ class TestSubDevicePowerSelectRealTimeline:
 
     @pytest.mark.asyncio
     async def test_unknown_option_raises(self):
-        """An option string that does not resolve to a canonical digit refuses."""
-        _coordinator, _client, select = await self._build_timeline()
+        """An option string that does not resolve to a canonical digit refuses
+        without ever reaching the client."""
+        _coordinator, client, select = await self._build_timeline()
 
         with pytest.raises(HomeAssistantError, match="Unknown transmission power option"):
             await select.async_select_option("Not A Real Option")
 
+        client.update_sub_param.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_missing_sid_on_the_fresh_read_raises(self):
-        """A fresh sub-device record with no `sid` cannot be addressed for the write."""
+        """A fresh sub-device record with no `sid` cannot be addressed for the
+        write, and the client is never called with an unaddressable request."""
         _coordinator, client, select = await self._build_timeline()
 
         no_sid_devices = self._hub_devices(self._INITIAL_PARAM)
@@ -290,9 +316,28 @@ class TestSubDevicePowerSelectRealTimeline:
         with pytest.raises(HomeAssistantError, match="could not be addressed"):
             await select.async_select_option("Enhance")
 
+        client.update_sub_param.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_matching_sub_device_on_the_fresh_read_raises(self):
+        """A fresh read whose hub carries no matching sub-device at all (as
+        opposed to one carrying no `sid`) resolves to the same empty record
+        and the same refusal -- the client is never called."""
+        _coordinator, client, select = await self._build_timeline()
+
+        no_such_device = self._hub_devices(self._INITIAL_PARAM)
+        no_such_device[0]["subDevices"] = []
+        client.get_devices_by_hid.return_value = no_such_device
+
+        with pytest.raises(HomeAssistantError, match="could not be addressed"):
+            await select.async_select_option("Enhance")
+
+        client.update_sub_param.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_unsplicable_fresh_param_raises(self):
-        """A fresh read whose param the splice gate refuses cannot be written."""
+        """A fresh read whose param the splice gate refuses cannot be written,
+        and the client is never called with a reconstructed blob (D-02, D-04)."""
         _coordinator, client, select = await self._build_timeline()
 
         unreadable_devices = self._hub_devices("not-a-valid-blob")
@@ -300,6 +345,39 @@ class TestSubDevicePowerSelectRealTimeline:
 
         with pytest.raises(HomeAssistantError, match="could not be read"):
             await select.async_select_option("Enhance")
+
+        client.update_sub_param.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_pre_write_read_never_reaches_the_client_and_display_is_unchanged(self):
+        """A `get_devices_by_hid` that raises during the pre-write read is a
+        refusal, not a fallback to the coordinator's stale copy: the client's
+        write method is never called and the displayed value is unchanged
+        (D-04)."""
+        _coordinator, client, select = await self._build_timeline()
+        client.get_devices_by_hid.side_effect = RainPointApiError("getDeviceByHid failed: code 1001")
+
+        before = select.current_option
+        with pytest.raises(RainPointApiError):
+            await select.async_select_option("Enhance")
+
+        client.update_sub_param.assert_not_called()
+        assert select.current_option == before
+
+    @pytest.mark.asyncio
+    async def test_a_raised_update_sub_param_leaves_the_optimistic_value_at_none(self):
+        """A write that reaches the cloud and raises must not display as a
+        success: the optimistic value stays unset and current_option still
+        reads the polled value (D-05 ordering)."""
+        _coordinator, client, select = await self._build_timeline()
+        client.get_devices_by_hid.return_value = self._hub_devices(self._INITIAL_PARAM)
+        client.update_sub_param.side_effect = RainPointApiError("sub/update failed: code 1001")
+
+        with pytest.raises(RainPointApiError):
+            await select.async_select_option("Enhance")
+
+        assert select._optimistic is None
+        assert select.current_option == "Standard"
 
 
 class TestSubDevicePowerSelectAdmissionRealTimeline:
@@ -375,6 +453,139 @@ class TestSubDevicePowerSelectAdmissionRealTimeline:
         key = "10_20_1"
         assert coordinator.data["sensors"][key]["data"]["type"] == SILENT_DATA_TYPE
         assert not [e for e in captured if isinstance(e, RainPointSubDevicePowerSelect)]
+
+    @pytest.mark.asyncio
+    async def test_a_silent_htv210b_that_later_reports_gains_exactly_one_entity(self):
+        """Silent at setup, then reporting on a later refresh: the entity
+        appears through the coordinator listener registered at setup, with
+        no second call to async_setup_entry (rainpoint-entities SKILL.md's
+        "creation is one-shot" invariant, and the reason the listener exists
+        at all).
+
+        The subject is genuinely silent through the whole debounce window
+        before it starts reporting -- substituting an already-reporting
+        device in its place would test nothing, per CLAUDE.md's test-shape
+        rule.
+        """
+        from custom_components.rainpoint.coordinator import SILENT_DEBOUNCE_POLLS
+        from tests.helpers import htv210b_hub_devices, htv210b_silent_status
+
+        coordinator, client, captured = await self._build(htv210b_hub_devices(), htv210b_silent_status())
+        assert not [e for e in captured if isinstance(e, RainPointSubDevicePowerSelect)]
+
+        for _ in range(SILENT_DEBOUNCE_POLLS):
+            await coordinator.async_refresh()
+        assert not [e for e in captured if isinstance(e, RainPointSubDevicePowerSelect)]
+
+        # Now it reports: only the registered listener can reach it, since
+        # async_setup_entry is never called again in this test.
+        client.get_multiple_device_status.return_value = htv210b_status(mid=20)
+        await coordinator.async_refresh()
+
+        power_selects = [e for e in captured if isinstance(e, RainPointSubDevicePowerSelect)]
+        assert len(power_selects) == 1
+
+
+class TestSubDevicePowerSelectAddOnceCycle:
+    """Emit, gate, forget, re-emit through select.py's own real adder: no
+    unique_id this phase adds is ever offered to Home Assistant twice.
+
+    Mirrors TestNoUniqueIdIsEverOfferedTwice in test_entity.py, which
+    parametrizes valve, number and sensor but not select.py's own adder --
+    this closes that gap without touching that shared test module (plan's
+    file scope is tests/test_select.py and select.py alone).
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_full_cycle_offers_the_power_select_id_once_per_emission(self):
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.entity import late_adders
+        from tests.helpers import htv210b_hub_devices
+
+        key = "10_20_1"
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = htv210b_hub_devices(mid=20, addr=1)
+        client.get_multiple_device_status.return_value = htv210b_status(mid=20)
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+        await coordinator.async_config_entry_first_refresh()
+
+        calls: list[list] = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: calls.append([e._attr_unique_id for e in ents]))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        def all_ids():
+            return [uid for call in calls for uid in call]
+
+        adder = late_adders(hass.data[DOMAIN]["e1"])[0]
+        recorded = adder.ledger.unique_ids_for(key)
+        assert recorded, "the platform emitted nothing, so the cycle proves nothing"
+        assert all(all_ids().count(uid) == 1 for uid in recorded)
+
+        # The gate still holds: a repeat while the ledger holds the ids
+        # offers nothing, which is the half of the guarantee that must not
+        # regress.
+        adder.async_on_coordinator_update()
+        assert all(all_ids().count(uid) == 1 for uid in recorded)
+
+        adder.forget(key)
+        assert adder.ledger.unique_ids_for(key) == frozenset()
+
+        adder.async_on_coordinator_update()
+        assert all(all_ids().count(uid) == 2 for uid in recorded)
+        assert adder.ledger.unique_ids_for(key) == recorded
+
+        # No single call ever carried a duplicate, on any leg of the cycle.
+        for call in calls:
+            assert len(call) == len(set(call))
+
+
+class TestSubDevicePowerSelectSetupRobustness:
+    """The sub-device block sits above the existing hub-record walk in
+    async_setup_entry and must not be starved by that walk's own
+    malformed-hubs early return -- the regression guard for their shared
+    setup function (D-07's positioning note)."""
+
+    @pytest.mark.asyncio
+    async def test_a_non_list_hubs_snapshot_still_yields_the_sub_device_select(self):
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from tests.helpers import htv210b_hub_devices
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = htv210b_hub_devices(mid=20, addr=1)
+        client.get_multiple_device_status.return_value = htv210b_status(mid=20)
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+        await coordinator.async_config_entry_first_refresh()
+
+        # The malformed-hubs edge case the existing hub-record walk already
+        # guards against; the sub-device block above it must still run.
+        coordinator.data["hubs"] = "not-a-list"
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        power_selects = [e for e in captured if isinstance(e, RainPointSubDevicePowerSelect)]
+        assert len(power_selects) == 1
 
 
 class TestSubDeviceRecordHelper:
