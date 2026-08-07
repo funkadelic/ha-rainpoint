@@ -183,6 +183,8 @@ For a device this integration has no tested decoder for, it can fall back to Rai
 
 Both are conservative about what they create. Generic sensors appear for a device only when every reading it reports has a definition the integration recognises, so many devices produce none at all. A generic control never guesses: it shows only state it has read back from the device, never the state you just commanded.
 
+Some device firmwares report their status in a comma-and-semicolon text format rather than the hex format most report in. For a device on that format, unverified generic sensors surface only its signal strength. The rest of that format is deliberately left unparsed, not missing by accident: it carries its readings by position with no label, each device family orders them differently, and RainPoint's own product data does not record that order, so parsing it would mean guessing, and a guessed reading that looks plausible and is wrong is worse than no reading at all. For the same reason, unverified generic device control will not report such a device as open or closed and will not confirm that a command took effect.
+
 ### Enabling or disabling generic entities
 
 1. Go to **Settings → Devices & Services → RainPoint Cloud → Configure**.
