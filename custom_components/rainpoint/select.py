@@ -25,7 +25,7 @@ _LOGGER = logging.getLogger(__name__)
 # The only device this key-5 blob shape has ever been observed on. Widening
 # this set later is a one-line addition once someone captures a second
 # device's traffic and confirms key 5 means the same thing there -- the
-# parse/splice contract in api/utils.py does not need to change (D-01).
+# parse/splice contract in api/utils.py does not need to change.
 SUB_POWER_MODE_MODELS = frozenset({MODEL_HTV210B})
 
 # Canonical key-5 mode digit -> display label, insertion-ordered so
@@ -42,7 +42,7 @@ def _sub_device_record(hub_records: list, mid, addr) -> dict:
     """Return one sub-device's raw record from a list of top-level hub records, or {}.
 
     Serves both `coordinator.data["hubs"]` (the polled snapshot) and a fresh
-    `get_devices_by_hid` response (D-04's pre-write read) -- both are lists of
+    `get_devices_by_hid` response (the pre-write read) -- both are lists of
     the same top-level hub-record shape, so one function can resolve either.
     Matches the hub on its `mid` field, skipping non-dict entries, then
     reuses `_sub_devices_by_addr` for the inner index rather than walking
@@ -69,7 +69,7 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
-    # Sub-device transmission-power select, per D-07: discovery and
+    # Sub-device transmission-power select: discovery and
     # governance come from coordinator.data["sensors"] through the
     # LateEntityAdder / add-once ledger machinery, the same pattern
     # number.py's async_setup_entry uses -- not the raw hub-record walk
@@ -132,18 +132,15 @@ class RainPointSubDevicePowerSelect(RainPointSubDeviceEntity, SelectEntity):
     """Transmission power for a hub-paired HTV210B, read and written over `param` key 5.
 
     `EntityCategory.CONFIG` matches this repo's unbroken convention that every
-    writable settings entity carries CONFIG, never DIAGNOSTIC (D-06).
-    Default-disabled (`entity_registry_enabled_default = False`) for the same
-    D-06 reason `RainPointHubBroadcastSwitch` is not: nothing inside Home
-    Assistant can confirm a write actually landed on the device, only the
-    vendor app can, so this ships hidden until the maintainer verifies the
-    write path on real hardware. Flipping the flag later changes the default
-    for newly-added entities only -- the unique_id shape below does not
-    depend on it.
+    writable settings entity carries CONFIG, never DIAGNOSTIC. Enabled by
+    default, like `RainPointHubBroadcastSwitch`: the write path is confirmed
+    against real HTV210B hardware, so the control ships visible rather than
+    hidden. The caveat that no reading inside Home Assistant can prove a write
+    landed on the device, only the vendor app can, is documented for users in
+    the README instead of being enforced by hiding the entity.
     """
 
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_entity_registry_enabled_default = False
     _attr_icon = "mdi:antenna"
 
     def __init__(self, coordinator: RainPointCoordinator, sensor_key: str, sensor_info: dict) -> None:
@@ -204,9 +201,10 @@ class RainPointSubDevicePowerSelect(RainPointSubDeviceEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         """Splice, write, and (only on success) apply the requested power mode.
 
-        D-04's fresh pre-write read: the coordinator's copy of `param` can be
-        up to 120s stale, and keys 11, 12, 50 and 51 are unidentified settings
-        this phase must never blank, so the write is spliced against a
+        The fresh pre-write read exists because the coordinator's copy of
+        `param` can be up to 120s stale, and keys 11, 12, 50 and 51 are
+        unidentified settings this integration must never blank, so the write
+        is spliced against a
         `get_devices_by_hid` call issued immediately before it, never against
         `coordinator.data`. If that read raises, the exception propagates as
         the write's own refusal -- there is no fallback to the stale copy.
