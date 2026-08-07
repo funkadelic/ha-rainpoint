@@ -10,6 +10,7 @@ import pytest
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint.api import RainPointApiError, get_catalog_variant_codes
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
+from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.api.product_catalog import UNCODED_VARIANT
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ENABLED,
@@ -41,6 +42,7 @@ from custom_components.rainpoint.generic_control import (
 from custom_components.rainpoint.number import RainPointZoneDurationNumber, build_generic_duration_entities
 from custom_components.rainpoint.valve import RainPointValveEntity
 from tests.helpers import make_coordinator_data, make_sensor_entry
+from tests.payload_samples import SAMPLE_HTV245_ASCII_PAYLOAD
 
 ANCHOR_MODEL = "HTV103FRF"
 ANCHOR_MODEL_CODE = 31
@@ -999,6 +1001,67 @@ class TestRunStateReading:
 
         coordinator.data["sensors"]["100_200_1"]["data"]["generic"]["fields"][0]["value"] = 0
         assert entity.is_closed is True
+
+
+# ---------------------------------------------------------------------------
+# ASCII-framed payload refusal (D-06): the write-confirmation path must
+# never read a body field the decoder declined, regardless of what a future
+# ASCII result's fields list happens to contain.
+# ---------------------------------------------------------------------------
+
+
+class TestAsciiFramedPayloadRefused:
+    def test_real_ascii_decode_yields_no_run_state_confirmation(self):
+        """The realistic case: decode_generic's own ASCII branch over a committed sample."""
+        entity, coordinator, _ = _build_anchor_valve(fields=[_run_state_field(1, 1)])
+        coordinator.data["sensors"]["100_200_1"]["data"]["generic"] = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)
+
+        assert entity._run_state_open is None
+
+    def test_fabricated_run_state_field_in_an_ascii_result_still_refuses(self):
+        """Hand-built dict describing a future the code must survive, not an observed payload.
+
+        This dict is not a captured cloud response; D-10 forbids synthesizing
+        ASCII payloads. It describes a future where the ASCII branch grows a
+        body field, and every guard ``_run_state_open`` otherwise applies -- a
+        matching ``catalog.dp_port``, a declared width that satisfies
+        ``has_declared_width``, and an integer value of 1 -- is satisfied here.
+        Without the ``ascii_framed`` refusal this would return True: a false
+        write confirmation.
+        """
+        field = _run_state_field(1, 1)
+        entity, coordinator, _ = _build_anchor_valve(fields=[field])
+        coordinator.data["sensors"]["100_200_1"]["data"]["generic"] = {
+            "fields": [field],
+            "field_names": [field["name"]],
+            "ascii_framed": True,
+        }
+
+        assert entity._run_state_open is None
+
+    def test_same_dict_without_the_marker_returns_true(self):
+        """Proves the refusal, not a neighbouring guard, is what returned None above."""
+        field = _run_state_field(1, 1)
+        entity, coordinator, _ = _build_anchor_valve(fields=[field])
+        coordinator.data["sensors"]["100_200_1"]["data"]["generic"] = {
+            "fields": [field],
+            "field_names": [field["name"]],
+        }
+
+        assert entity._run_state_open is True
+
+    def test_matching_field_is_never_called_on_the_ascii_path(self):
+        field = _run_state_field(1, 1)
+        entity, coordinator, _ = _build_anchor_valve(fields=[field])
+        coordinator.data["sensors"]["100_200_1"]["data"]["generic"] = {
+            "fields": [field],
+            "field_names": [field["name"]],
+            "ascii_framed": True,
+        }
+
+        with patch.object(generic_control_module, "_matching_field") as mock_matching_field:
+            assert entity._run_state_open is None
+            mock_matching_field.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
