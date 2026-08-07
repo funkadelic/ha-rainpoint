@@ -115,8 +115,21 @@ For each device the coordinator discovers, the integration creates:
 - **Hub Cloud Connection**: one binary sensor per hub, on when RainPoint's cloud currently reports that hub as reachable. It exists whether or not [push](#real-time-push-updates) is enabled.
 - **Hub Automatic Broadcast Time**: one switch per hub, mirroring the same setting in the RainPoint app.
 - **Hub Broadcast Time Now**: one button per hub, sending the same one-shot time broadcast the app's button sends. A press only confirms the cloud accepted the command; there is nothing in the API response to confirm a sub-device actually acted on it.
+- **Transmission Power**: one select entity per hub-paired HTV210B, disabled by default. See [Transmission power control](#transmission-power-control) below for what it does and why it ships hidden.
 
 All entities are grouped under their parent hub device in the Home Assistant device registry.
+
+---
+
+## Transmission power control
+
+A hub-paired HTV210B gets a **Transmission Power** select entity with three options: Power Saving, Standard, and Enhance. This is currently the only device family the control applies to. Its meaning has only been confirmed on this one model, and RainPoint's own device data does not describe it, so widening the control to a second device waits on someone capturing that device's own traffic and confirming the same value means the same thing there.
+
+The entity is a configuration control, and it ships disabled by default. Nothing inside Home Assistant can confirm a change actually reached the device; only the RainPoint app can, by showing the updated setting there. Enable it once you are ready to verify a change yourself: open the device page, find **Transmission Power** among its disabled entities, and enable it (or use **Settings → Devices & Services → Entities**, filtered to the device).
+
+Changing the option rewrites the device's whole settings record on the RainPoint cloud, not just this one field. To avoid touching settings this integration does not understand, it reads the device's current settings immediately before writing, changes only the transmission power value, and sends everything else back exactly as read.
+
+That immediate read narrows one edge case without closing it entirely. Changing this same setting in the RainPoint app within about a second of changing it here means whichever write reaches the cloud second wins, and the other is silently lost, with no way for either side to detect that a collision happened. In practice this only matters if the same setting is being changed from two places at nearly the same moment.
 
 ---
 
