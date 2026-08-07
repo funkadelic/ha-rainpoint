@@ -5,9 +5,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.rainpoint.const import DOMAIN, MODEL_HTV210B
-from custom_components.rainpoint.select import RainPointSubDevicePowerSelect, async_setup_entry
+from custom_components.rainpoint.select import RainPointSubDevicePowerSelect, _sub_device_record, async_setup_entry
 from tests.helpers import htv210b_status, make_mock_session_client, mock_json_response
 
 
@@ -236,3 +237,164 @@ class TestSubDevicePowerSelectRealTimeline:
         # current_option a second time rather than trusting the first.
         assert select.current_option == "Enhance"
         assert coordinator.data["sensors"]["10_236547_1"]["data"] is not None
+
+    @pytest.mark.asyncio
+    async def test_an_unrelated_push_does_not_clear_the_optimistic_value(self):
+        """A hub connectivity push fires the same _handle_coordinator_update
+        hook every entity gets, but never rebuilds coordinator.data["hubs"] --
+        so it must not revert a just-set optimistic value the way a real poll
+        legitimately would. Mirrors TestHubBroadcastSwitchRealTimeline's
+        equivalent case for the sibling hub-broadcast switch."""
+        coordinator, client, select = await self._build_timeline()
+
+        real_client = make_mock_session_client()
+        real_client.ensure_logged_in = AsyncMock()
+        real_client._session.post = MagicMock(
+            return_value=mock_json_response({"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 3}})
+        )
+        client.update_sub_param = real_client.update_sub_param
+        client.get_devices_by_hid.return_value = self._hub_devices(self._INITIAL_PARAM)
+
+        await select.async_select_option("Enhance")
+        assert select.current_option == "Enhance"
+        assert select._optimistic == "2"
+
+        coordinator.apply_hub_push_update(self._MID, True, 1717200000000)
+        assert select.current_option == "Enhance"
+        assert select._optimistic == "2"
+
+        # The real poll, still reporting the pre-command value: only now does
+        # the optimistic override give way, and the poll's own value wins.
+        client.get_devices_by_hid.return_value = self._hub_devices(self._INITIAL_PARAM)
+        await coordinator.async_refresh()
+        assert select._optimistic is None
+        assert select.current_option == "Standard"
+
+    @pytest.mark.asyncio
+    async def test_unknown_option_raises(self):
+        """An option string that does not resolve to a canonical digit refuses."""
+        _coordinator, _client, select = await self._build_timeline()
+
+        with pytest.raises(HomeAssistantError, match="Unknown transmission power option"):
+            await select.async_select_option("Not A Real Option")
+
+    @pytest.mark.asyncio
+    async def test_missing_sid_on_the_fresh_read_raises(self):
+        """A fresh sub-device record with no `sid` cannot be addressed for the write."""
+        _coordinator, client, select = await self._build_timeline()
+
+        no_sid_devices = self._hub_devices(self._INITIAL_PARAM)
+        del no_sid_devices[0]["subDevices"][0]["sid"]
+        client.get_devices_by_hid.return_value = no_sid_devices
+
+        with pytest.raises(HomeAssistantError, match="could not be addressed"):
+            await select.async_select_option("Enhance")
+
+    @pytest.mark.asyncio
+    async def test_unsplicable_fresh_param_raises(self):
+        """A fresh read whose param the splice gate refuses cannot be written."""
+        _coordinator, client, select = await self._build_timeline()
+
+        unreadable_devices = self._hub_devices("not-a-valid-blob")
+        client.get_devices_by_hid.return_value = unreadable_devices
+
+        with pytest.raises(HomeAssistantError, match="could not be read"):
+            await select.async_select_option("Enhance")
+
+
+class TestSubDevicePowerSelectAdmissionRealTimeline:
+    """The D-01 model gate and the D-07 silent-type guard, proven through the
+    real timeline rather than an injected coordinator.data snapshot -- the
+    same trap TestSilentUnitGuardRealTimeline in test_valve.py exists for.
+    """
+
+    @staticmethod
+    async def _build(hub_devices, status):
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = hub_devices
+        client.get_multiple_device_status.return_value = status
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        return coordinator, client, captured
+
+    @pytest.mark.asyncio
+    async def test_a_non_htv210b_model_gets_no_power_select(self):
+        """A model outside SUB_POWER_MODE_MODELS produces no power select."""
+        hub_devices = [
+            {
+                "mid": 1001,
+                "name": "Hub 1",
+                "deviceName": "hub-mac",
+                "productKey": "hub-pk",
+                "homeName": "H",
+                "model": "HTV0540FRF",
+                "subDevices": [{"addr": 1, "sid": 555, "name": "Soil", "model": "HCS026FRF", "modelCode": 1, "param": "5=01"}],
+            }
+        ]
+        status = [{"mid": 1001, "subDeviceStatus": []}]
+        _coordinator, _client, captured = await self._build(hub_devices, status)
+
+        assert not [e for e in captured if isinstance(e, RainPointSubDevicePowerSelect)]
+
+    @pytest.mark.asyncio
+    async def test_a_silent_htv210b_gets_no_power_select(self):
+        """A hub-paired but silent HTV210B carries model == HTV210B on its
+        debounced silent entry, so the model check alone would admit it --
+        the SILENT_DATA_TYPE guard is what actually blocks creation.
+
+        The debounce means the sensors-dict entry does not even exist at the
+        first refresh async_setup_entry runs against; the registered
+        coordinator listener is what reaches the build() closure once the
+        entry exists and carries the silent type, exercising the guard.
+        """
+        from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS
+        from tests.helpers import htv210b_hub_devices, htv210b_silent_status
+
+        coordinator, _client, captured = await self._build(htv210b_hub_devices(), htv210b_silent_status())
+        assert not [e for e in captured if isinstance(e, RainPointSubDevicePowerSelect)]
+
+        for _ in range(SILENT_DEBOUNCE_POLLS):
+            await coordinator.async_refresh()
+
+        key = "10_20_1"
+        assert coordinator.data["sensors"][key]["data"]["type"] == SILENT_DATA_TYPE
+        assert not [e for e in captured if isinstance(e, RainPointSubDevicePowerSelect)]
+
+
+class TestSubDeviceRecordHelper:
+    """Unit tests for _sub_device_record's malformed-input tolerance."""
+
+    def test_non_list_hub_records_returns_empty_dict(self):
+        """A non-list hub_records (e.g. an odd coordinator.data snapshot) yields {}."""
+        assert _sub_device_record("not-a-list", 1, 1) == {}
+
+    def test_non_dict_hub_entries_are_skipped(self):
+        """A malformed (non-dict) hub entry does not raise and is simply skipped."""
+        hub_records = ["not-a-dict", {"mid": 1, "subDevices": [{"addr": 1, "sid": 9}]}]
+        assert _sub_device_record(hub_records, 1, 1) == {"addr": 1, "sid": 9}
+
+    def test_no_matching_mid_returns_empty_dict(self):
+        """No hub carrying the requested mid yields {}."""
+        hub_records = [{"mid": 999, "subDevices": []}]
+        assert _sub_device_record(hub_records, 1, 1) == {}
+
+    def test_no_matching_addr_returns_empty_dict(self):
+        """A matching hub with no sub-device at the requested addr yields {}."""
+        hub_records = [{"mid": 1, "subDevices": [{"addr": 2, "sid": 9}]}]
+        assert _sub_device_record(hub_records, 1, 1) == {}
