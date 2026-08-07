@@ -45,7 +45,13 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import RainPointApiError, get_catalog_entry, get_catalog_port_number, is_hand_written_model
+from .api import (
+    RainPointApiError,
+    get_catalog_entry,
+    get_catalog_port_number,
+    is_ascii_declined,
+    is_hand_written_model,
+)
 from .api.product_catalog import UNCODED_VARIANT
 from .const import (
     DOMAIN,
@@ -573,6 +579,16 @@ class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
         if not data:
             return None
         generic = data.get("generic") or {}
+        if is_ascii_declined(generic):
+            # An ASCII-framed payload had its body declined by the decoder, so
+            # nothing in this result was read from a positional field, and a
+            # reading that was never taken must read as unknown rather than as
+            # a confirmation. This does not rest on the run-state field being
+            # absent from a header-only parse: that absence is true today and
+            # would stop being true the moment anyone added a body field, and
+            # this control path is exactly where that change would silently
+            # become a false write confirmation.
+            return None
         fields = generic.get("fields") or []
         field = _matching_field(fields, RUN_STATE_IDENTITY, self._datapoint.dp_port)
         if field is None:
