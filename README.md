@@ -54,6 +54,7 @@ To get your device added:
 
 1. Open a [New device support issue](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) (the notification link, or the Not Reporting entity's report link, pre-fills the model and whatever payload is available for you).
 2. Include raw payloads in a few known states (valve closed vs open, a sensor at a known reading). One capture shows the byte layout; different states reveal what each byte means. See [`DEBUG_VALVE_PAYLOAD.md`](DEBUG_VALVE_PAYLOAD.md) for how to capture. A device that never reports has no payload to capture; describe what you see in the RainPoint app instead.
+3. Attach a diagnostics file, which carries the same information without any capturing on your part. See [Downloading diagnostics](#downloading-diagnostics).
 
 ---
 
@@ -205,6 +206,16 @@ Some device firmwares report their status in a comma-and-semicolon text format r
 The form tells you how many devices on your account each option would currently affect, so you can see whether turning it on would produce anything at all before you commit to it. Unchecking an option on the same screen turns it back off, and the entities it created are removed rather than left behind unavailable, along with their recorded history.
 
 If a generic reading turns out to be right (or wrong) for your device, that is worth [reporting](#my-device-isnt-listed): it is what turns a catalog guess into a tested decoder.
+
+---
+
+## Downloading diagnostics
+
+Home Assistant can write out a diagnostics file describing what this integration last received from RainPoint and what it made of it. It is the single most useful thing to attach to a bug report, and it saves a round trip asking you for details.
+
+Go to **Settings → Devices & Services → RainPoint**, open the three-dot menu on the RainPoint entry and choose **Download diagnostics**. Every device page carries the same option in its own menu, which is the one to use when only one device is misbehaving.
+
+Your password, your login tokens, your email address, your home's name and your hardware's network addresses are all removed before the file is written, so it is safe to attach to a public issue. Only Home Assistant administrators can download it.
 
 ---
 
