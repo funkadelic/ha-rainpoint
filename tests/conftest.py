@@ -227,6 +227,15 @@ class _CoordinatorEntity(_HABaseEntity):
         """Init helper."""
         self.coordinator = coordinator
 
+    def _handle_coordinator_update(self) -> None:
+        """Match the real hook's default body: write state on every coordinator update.
+
+        Added when the hub broadcast switch became the package's first
+        subclass to override this hook and call super() from its override;
+        the stand-in previously had nothing for that super() call to reach.
+        """
+        self.async_write_ha_state()
+
     def __class_getitem__(cls, _item):
         """Accept the generic parameter the real CoordinatorEntity takes.
 

@@ -44,8 +44,10 @@ from .utils import (
     _extract_report_time,
     _f10_to_c,
     _le16,
+    _parse_hub_broadcast_flag,
     _parse_rainpoint_payload,
     _parse_tlv_payload,
+    _splice_hub_broadcast_param,
 )
 from .validators import (
     _battery_flag_to_percent,
@@ -73,8 +75,10 @@ __all__ = [
     "_extract_rssi",
     "_f10_to_c",
     "_le16",
+    "_parse_hub_broadcast_flag",
     "_parse_rainpoint_payload",
     "_parse_tlv_payload",
+    "_splice_hub_broadcast_param",
     "_validate_payload",
     "_validate_tag",
     # Decoders

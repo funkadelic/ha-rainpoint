@@ -7,8 +7,10 @@ from custom_components.rainpoint.api import (
     _extract_report_time,
     _f10_to_c,
     _le16,
+    _parse_hub_broadcast_flag,
     _parse_rainpoint_payload,
     _parse_tlv_payload,
+    _splice_hub_broadcast_param,
 )
 from custom_components.rainpoint.api.utils import _is_ascii_payload, _parse_ascii_rssi, _split_prefix
 from tests.payload_samples import (
@@ -333,3 +335,27 @@ class TestSplitPrefixCommaTruncation:
     def test_no_hash_prefix_returns_raw_body_uppercased(self):
         """A payload with no '#' is returned as-is (uppercased, comma-truncated)."""
         assert _split_prefix("aabb") == ("AABB", False)
+
+
+class TestParseHubBroadcastFlag:
+    """Happy-path reads of the hub record's param index-1 broadcast flag."""
+
+    def test_flag_on(self):
+        """Index 1 == '1' reads as True."""
+        assert _parse_hub_broadcast_flag("0|1||") is True
+
+    def test_flag_off(self):
+        """Index 1 == '0' reads as False."""
+        assert _parse_hub_broadcast_flag("0|0||") is False
+
+
+class TestSpliceHubBroadcastParam:
+    """Happy-path writes of the hub record's param index-1 broadcast flag."""
+
+    def test_splice_to_on(self):
+        """Splicing True into an off param flips only index 1."""
+        assert _splice_hub_broadcast_param("0|0||", True) == "0|1||"
+
+    def test_splice_to_off(self):
+        """Splicing False into an on param flips only index 1."""
+        assert _splice_hub_broadcast_param("0|1||", False) == "0|0||"

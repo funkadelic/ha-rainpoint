@@ -484,6 +484,37 @@ class RainPointClient:
                 raise RainPointApiError(f"Set device state API error: {data.get('msg')}")
             return True
 
+    async def update_main_param(self, mid: int, param: str) -> bool:
+        """Write a hub's top-level `param` blob back to the cloud.
+
+        `param` is the same pipe-delimited string the poll reads off the hub
+        record, spliced by the caller so only the field it understands
+        changes. Code 0 is the only success verdict; there is no code-4
+        idempotent branch here as there is on `control_work_mode` -- code 4 is
+        that endpoint's already-in-state signal, never observed on this one,
+        and inventing the branch would ship an untested success path.
+        """
+        await self.ensure_logged_in()
+        url = f"{self._base_url}/app/device/main/update"
+        payload = {"mid": mid, "param": param}
+        request_token = self._token
+        async with self._session.post(url, headers=self._auth_headers(), json=payload) as resp:
+            if resp.status != 200:
+                raise RainPointApiError(f"main/update HTTP {resp.status}")
+            data = await resp.json()
+
+        code = data.get("code")
+        # `param` is a cloud-supplied string being echoed back to the cloud,
+        # exactly the free text the house logging rule keeps out of log
+        # lines; only the integer mid and code are logged, matching
+        # control_work_mode_dp's redaction rather than control_work_mode's
+        # payload dump.
+        _LOGGER.debug("API call: update_main_param mid=%s code=%s", mid, code)
+        if code != 0:
+            self._maybe_invalidate_token(code, request_token)
+            raise RainPointApiError(f"main/update failed: code {code}")
+        return True
+
     async def control_work_mode(
         self,
         mid: int,

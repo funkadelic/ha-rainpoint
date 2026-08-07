@@ -20,6 +20,7 @@ from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .api import _parse_hub_broadcast_flag, _splice_hub_broadcast_param
 from .const import (
     HUB_UNIQUE_ID_PREFIX,
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
@@ -45,6 +46,20 @@ def _hub_records(coordinator: RainPointCoordinator) -> list[dict]:
     """
     hubs_cfg = (coordinator.data or {}).get("hubs", [])
     return list(hubs_cfg.values()) if isinstance(hubs_cfg, dict) else list(hubs_cfg)
+
+
+def hub_record_for_mid(coordinator: RainPointCoordinator, mid) -> dict:
+    """Return one hub's own live record from coordinator.data["hubs"] by mid, or {}.
+
+    Reuses _hub_records for the dict-or-list snapshot tolerance rather than
+    re-deriving it, so the two resolvers cannot disagree about what an odd
+    snapshot shape means. Public-named because more than one hub entity needs
+    a hub's own live record by mid, not just the broadcast switch below.
+    """
+    for hub in _hub_records(coordinator):
+        if isinstance(hub, dict) and hub.get("mid") == mid:
+            return hub
+    return {}
 
 
 def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client) -> list[dict]:
@@ -453,37 +468,89 @@ class RainPointPushLastMessageSensor(_RainPointPushDiagnosticBase, SensorEntity)
 
 
 class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubDevice):
-    """Automatic Broadcast Time switch for RainPoint hub."""
+    """Automatic Broadcast Time switch for RainPoint hub.
+
+    is_on is read live off coordinator.data["hubs"] on every access rather
+    than off self._hub_info: _collect_hubs allocates a fresh dict(hub) every
+    poll and nothing in this package reassigns self._hub_info after
+    construction, so a flag read from it would appear stuck at whatever the
+    entity's first refresh happened to see, for the entity's entire lifetime.
+    """
 
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:clock-outline"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
-        """Build the broadcast switch with an unknown initial state.
-
-        The API exposes no way to read the current setting, so the state stays
-        None rather than asserting a value that was never reported.
-        """
+        """Build the broadcast switch; is_on is derived live, never stored here."""
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
         self._attr_unique_id = (
             f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_broadcast"
         )
         self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Automatic Broadcast"
-        self._attr_is_on = None  # Unknown until API supports reading
+        # The post-write override: set only after a write's cloud
+        # acknowledgment, cleared by the next coordinator update so a poll
+        # that contradicts the command always wins.
+        self._optimistic: bool | None = None
 
     @property
     def available(self) -> bool:
         return True
 
     @property
+    def _record(self) -> dict:
+        """Return this hub's own live record, or {} when none exists yet."""
+        return hub_record_for_mid(self.coordinator, self._hub_info.get("mid"))
+
+    @property
     def is_on(self) -> bool | None:
-        return self._attr_is_on
+        """Return the optimistic override if one is pending, else the live poll value.
+
+        Reads only the coordinator-backed record, never the frozen snapshot
+        attribute -- see the class docstring for why that distinction matters.
+        """
+        if self._optimistic is not None:
+            return self._optimistic
+        return _parse_hub_broadcast_flag(self._record.get("param"))
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Clear the optimistic override so the fresh poll becomes the authority.
+
+        The first override of this CoordinatorEntity hook anywhere in this
+        package. Without it, a command's optimistic value would outlive the
+        poll that contradicts it, rather than acting as a bridge across the
+        poll interval until the next real read. Does not reassign
+        self._hub_info -- that snapshot stays frozen deliberately, since
+        changing it would change every other hub entity reading it.
+        """
+        self._optimistic = None
+        super()._handle_coordinator_update()
+
+    async def _async_set_broadcast(self, enabled: bool) -> None:
+        """Splice, write, and (only on success) apply the requested flag.
+
+        Ordering is load-bearing: the optimistic value is set only after the
+        client's write returns successfully, so a raised write leaves no
+        optimistic state behind.
+        """
+        spliced = _splice_hub_broadcast_param(self._record.get("param"), enabled)
+        if spliced is None:
+            raise HomeAssistantError("The hub's settings could not be read, so this setting cannot be changed")
+        client = self.coordinator._client
+        await client.update_main_param(mid=self._hub_info["mid"], param=spliced)
+        # Optimistic, deliberately diverging from generic_control.py's
+        # never-optimistic rule: that rule guards against showing an unread
+        # hardware actuation state, while this write receives a genuine cloud
+        # acknowledgment (code 0), which is the same case Home Assistant
+        # core's own template and MQTT switches treat this way.
+        self._optimistic = enabled
+        self.async_write_ha_state()
 
     async def async_turn_on(self) -> None:
         """Turn on automatic broadcast."""
-        raise HomeAssistantError("Automatic broadcast control is not yet supported by the RainPoint API")
+        await self._async_set_broadcast(True)
 
     async def async_turn_off(self) -> None:
         """Turn off automatic broadcast."""
-        raise HomeAssistantError("Automatic broadcast control is not yet supported by the RainPoint API")
+        await self._async_set_broadcast(False)

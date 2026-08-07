@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -513,20 +513,38 @@ class TestRainPointHubChannelSelect:
 
 
 class TestRainPointHubBroadcastSwitch:
-    """Tests for hub broadcast switch entity."""
+    """Tests for the hub broadcast switch's live read-through and write path."""
 
-    def _make(self):
-        """Make helper."""
+    def _make(self, param="0|1||", mid=1001, hid=100):
+        """Build the switch over a coordinator whose hub record carries the given param."""
         coord = _make_coordinator()
-        hub_info = _make_hub_info()
+        hub_info = _make_hub_info(hid=hid, mid=mid)
+        coord.data["hubs"] = [{**hub_info, "param": param}]
         switch = RainPointHubBroadcastSwitch.__new__(RainPointHubBroadcastSwitch)
         RainPointHubBroadcastSwitch.__init__(switch, coord, hub_info)
+        switch.async_write_ha_state = MagicMock()
         return switch
 
-    def test_is_on_initially_none(self):
-        """is_on should be None initially."""
-        switch = self._make()
-        assert switch.is_on is None
+    def test_is_on_reads_the_live_hub_record(self):
+        """A switch over a hub record carrying param '0|1||' reports is_on True."""
+        switch = self._make(param="0|1||")
+        assert switch.is_on is True
+
+    def test_is_on_follows_a_replaced_hub_record(self):
+        """The same entity instance reports a different is_on after coordinator.data changes.
+
+        Asserts switch._hub_info stays the same object while is_on changes, which is
+        exactly what a regression to reading self._hub_info for the flag would break.
+        """
+        switch = self._make(param="0|1||")
+        assert switch.is_on is True
+        frozen_hub_info = switch._hub_info
+
+        switch.coordinator.data["hubs"] = [{**_make_hub_info(mid=1001), "param": "0|0||"}]
+        switch._handle_coordinator_update()
+
+        assert switch.is_on is False
+        assert switch._hub_info is frozen_hub_info
 
     def test_available_is_true(self):
         """Broadcast switch should always be available."""
@@ -534,27 +552,23 @@ class TestRainPointHubBroadcastSwitch:
         assert switch.available is True
 
     @pytest.mark.asyncio
-    async def test_turn_on_raises(self):
-        """async_turn_on should raise HomeAssistantError."""
-        switch = self._make()
-        from homeassistant.exceptions import HomeAssistantError
+    async def test_turn_off_writes_spliced_param_and_shows_immediately(self):
+        """One update_main_param call carrying the spliced param; is_on flips with no poll."""
+        switch = self._make(param="0|1||", mid=1001)
+        switch.coordinator._client = MagicMock()
+        switch.coordinator._client.update_main_param = AsyncMock(return_value=True)
 
-        with pytest.raises(HomeAssistantError):
-            await switch.async_turn_on()
+        await switch.async_turn_off()
 
-    @pytest.mark.asyncio
-    async def test_turn_off_raises(self):
-        """async_turn_off should raise HomeAssistantError."""
-        switch = self._make()
-        from homeassistant.exceptions import HomeAssistantError
-
-        with pytest.raises(HomeAssistantError):
-            await switch.async_turn_off()
+        switch.coordinator._client.update_main_param.assert_called_once_with(mid=1001, param="0|0||")
+        assert switch.is_on is False
+        switch.async_write_ha_state.assert_called_once()
 
     def test_unique_id_contains_broadcast(self):
-        """unique_id should contain 'broadcast'."""
+        """unique_id contains 'broadcast' and equals the pre-change source's literal shape."""
         switch = self._make()
         assert "broadcast" in switch._attr_unique_id
+        assert switch._attr_unique_id == "rainpoint_hub_100_1001_broadcast"
 
 
 class TestRainPointPushLastMessageSensor:

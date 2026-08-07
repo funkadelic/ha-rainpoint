@@ -1872,6 +1872,48 @@ class TestSetDeviceState:
             await client.set_device_state(home_id=1, device_name="dev", mid=100, product_key="pk", state={})
 
 
+class TestUpdateMainParam:
+    """Tests for update_main_param, the hub broadcast toggle's write endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_posts_url_and_body_exactly(self):
+        """The captured call: URL suffix and body dict with no extra keys, code-0 True."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        json_body = {"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 7, "hid": 182509}}
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        result = await client.update_main_param(mid=236547, param="0|1||")
+
+        assert result is True
+        call = client._session.post.call_args
+        assert call.args[0].endswith("/app/device/main/update")
+        assert call.kwargs["json"] == {"mid": 236547, "param": "0|1||"}
+
+    @pytest.mark.asyncio
+    async def test_non_zero_code_raises(self):
+        """A non-zero body code raises RainPointApiError."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.post = MagicMock(return_value=_mock_response({"code": 5, "msg": "fail"}))
+
+        with pytest.raises(RainPointApiError, match="main/update failed"):
+            await client.update_main_param(mid=1, param="0|0||")
+
+    @pytest.mark.asyncio
+    async def test_http_error_raises(self):
+        """A non-200 HTTP status raises RainPointApiError."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+
+        client._session.post = MagicMock(return_value=_mock_response({}, status=500))
+
+        with pytest.raises(RainPointApiError, match="main/update HTTP 500"):
+            await client.update_main_param(mid=1, param="0|0||")
+
+
 class TestGetSubscribeStatus:
     """get_subscribe_status() fetches fresh per-session MQTT credentials."""
 
