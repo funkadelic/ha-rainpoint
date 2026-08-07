@@ -389,7 +389,7 @@ _MALFORMED_HUB_PARAMS = [
 class TestParseHubBroadcastFlagMalformedMatrix:
     """Every unreadable param shape leaves the flag unknown, never guessed.
 
-    Pins D-01's rejected exact-4-field-gate alternative from the other side:
+    Pins the rejected exact-4-field-gate alternative from the other side:
     a two-field and a five-field param both parse below, so tightening the
     gate to require exactly four fields would fail those two tests, not this
     class's.
@@ -424,9 +424,9 @@ class TestSpliceHubBroadcastParamMalformedMatrix:
     """A splice refuses on exactly the inputs the parser refuses on.
 
     This is the field-blanking-bug guard from the other side: a splice that
-    fell open to a reconstructed default for any of these inputs is the bug
-    D-01/HBCTL-03 exist to prevent. One gate governs both functions, so this
-    class parametrizes over the same matrix the parse test above uses.
+    fell open to a reconstructed default for any of these inputs is exactly
+    the bug this gate exists to prevent. One gate governs both functions, so
+    this class parametrizes over the same matrix the parse test above uses.
     """
 
     @pytest.mark.parametrize("param", _MALFORMED_HUB_PARAMS)
