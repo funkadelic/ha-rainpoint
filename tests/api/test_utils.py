@@ -313,9 +313,8 @@ class TestParseAsciiRssi:
 class TestSplitPrefixCommaTruncation:
     """Characterization tests for _split_prefix's existing tail-truncation behaviour.
 
-    ASCII-07 requires this behaviour survive unchanged; these pin it
-    behaviourally as well as by the source-identity check in
-    tests/api/test_generic_decoder.py.
+    This behaviour must survive unchanged; these pin it behaviourally as
+    well as by the source-identity check in tests/api/test_generic_decoder.py.
     """
 
     def test_hex_body_with_no_comma_tail_is_returned_whole(self):

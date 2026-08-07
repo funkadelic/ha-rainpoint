@@ -19,9 +19,9 @@ from tests.payload_samples import (
 )
 
 # custom_components/rainpoint/api/decoders.py is the trusted reference this
-# phase reads and must never edit (ASCII-07, ROADMAP criterion 5). Pinned by
-# whole-file digest rather than a per-function comparison, computed against
-# the file as it stood at the start of this phase's work.
+# phase reads and must never edit. Pinned by whole-file digest rather than a
+# per-function comparison, computed against the file as it stood at the
+# start of this phase's work.
 _DECODERS_PY_PRE_PHASE_SHA256 = "fb4115b5fab5c1378795668d836dc69083d52ef1ad6d1e38184fd864a726ab4a"
 
 
@@ -470,7 +470,7 @@ class TestDecodeGenericAscii:
         assert fields[0]["value"] == -84
 
     def test_synthetic_entry_has_null_provenance_keys(self):
-        """index, dp_id and raw are all None - Task 2's option-a resolution."""
+        """index, dp_id and raw are all None: there is no byte-stream position behind a header-derived value."""
         field = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)["fields"][0]
 
         assert field["index"] is None
@@ -478,7 +478,7 @@ class TestDecodeGenericAscii:
         assert field["raw"] is None
 
     def test_result_shape(self):
-        """field_names, dp_id_prefixed and the ascii_framed marker all match D-08/D-02."""
+        """field_names, dp_id_prefixed and the ascii_framed marker all match the documented ASCII result shape."""
         result = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)
 
         assert result["field_names"] == ["STA_RSSI"]
@@ -523,7 +523,7 @@ class TestDecodeGenericAscii:
         assert is_ascii_declined(result) is True
 
     def test_hws019wrf_v2_non_negative_rssi_yields_no_field_and_no_log(self, caplog):
-        """D-07/D-05: the third committed family carries a real rssi=0 sample.
+        """The third committed family carries a real rssi=0 sample.
 
         Both hand-written ASCII decoders emit an _LOGGER.warning on exactly
         this condition, which would spam every poll for an affected device on
@@ -565,7 +565,7 @@ class TestDecodeGenericAscii:
         assert result["fields"][0]["value"] == -84
 
     def test_hex_payload_with_ascii_tail_is_unaffected(self):
-        """ASCII-07, asserted positively: a hex-with-tail payload decodes exactly as before."""
+        """Asserted positively: a hex-with-tail payload decodes exactly as before."""
         result = decode_generic("10#AABBCC,1,2")
 
         assert "ascii_framed" not in result
@@ -586,7 +586,7 @@ class TestAsciiFramingNonRegression:
     """Source-level pins: the trusted decoders and the no-ordering-table rule."""
 
     def test_decoders_py_is_byte_identical_to_the_phase_base(self):
-        """ASCII-07: api/decoders.py is read for reference and never edited.
+        """api/decoders.py is read for reference and never edited.
 
         Pinned by whole-file digest rather than relying on `git diff` alone,
         so a regression is caught by the test suite itself.
@@ -597,11 +597,11 @@ class TestAsciiFramingNonRegression:
         assert digest == _DECODERS_PY_PRE_PHASE_SHA256
 
     def test_no_per_family_body_position_table_exists(self):
-        """ASCII-03: no ordering machinery ships, not even a declared-empty table.
+        """No ordering machinery ships, not even a declared-empty table.
 
         Checked as an absence over the two edited modules' own namespaces,
-        not a repo-wide grep, so Task 3's explanatory comment (prose
-        describing why no table exists) cannot trip its own gate.
+        not a repo-wide grep, so the explanatory comment elsewhere describing
+        why no table exists cannot trip its own gate.
         """
         forbidden_fragments = ("BODY_ORDER", "FIELD_ORDER", "POSITION_TABLE", "ZONE_ORDER", "ORDERING_TABLE")
 

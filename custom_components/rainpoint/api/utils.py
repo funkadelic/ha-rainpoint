@@ -123,10 +123,10 @@ def _is_ascii_payload(raw: str) -> bool:
     """True when raw is the comma-and-semicolon ASCII framing, not a hex body.
 
     Three clauses, all required: ``"#"`` is absent (a ``NN#`` prefix always
-    wins and routes to the hex path first, which is the whole of ASCII-07's
-    guarantee -- every payload ``_split_prefix``'s tail-truncation branch was
-    written for carries that prefix, so it is routed away before this test is
-    ever reached); ``";"`` is present, separating the header from the body;
+    wins and routes to the hex path first -- every payload
+    ``_split_prefix``'s tail-truncation branch was written for carries that
+    prefix, so it is routed away before this test is ever reached); ``";"``
+    is present, separating the header from the body;
     and a ``","`` appears in the pre-semicolon header, matching the
     ``[flags],[rssi],[flags];...`` shape both hand-written ASCII decoders in
     ``decoders.py`` already parse. Deliberately not requiring the full

@@ -462,8 +462,8 @@ def is_ascii_declined(generic: dict | None) -> bool:
     Public-named rather than underscore-prefixed to match has_declared_width,
     the existing guard in this codebase that crosses a module boundary for
     the same reason: generic_control's readback needs to refuse an
-    ASCII-framed result explicitly (D-06) rather than relying on its fields
-    list happening to be run-state-free.
+    ASCII-framed result explicitly rather than relying on its fields list
+    happening to be run-state-free.
 
     Fails closed on None, on a non-dict, and on any hex result, because the
     marker is never set to False - only left absent - on those. A caller
