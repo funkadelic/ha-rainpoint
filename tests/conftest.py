@@ -236,6 +236,17 @@ class _CoordinatorEntity(_HABaseEntity):
         """
         self.async_write_ha_state()
 
+    async def async_added_to_hass(self) -> None:
+        """Register the coordinator listener, matching the real class's default wiring.
+
+        Needed so a driven-timeline test's coordinator.async_refresh() calls
+        actually invoke a subclass's _handle_coordinator_update, the way
+        production's entity-platform add-entity flow does when it calls this
+        hook on every added entity.
+        """
+        if self.coordinator is not None:
+            self.coordinator.async_add_listener(self._handle_coordinator_update)
+
     def __class_getitem__(cls, _item):
         """Accept the generic parameter the real CoordinatorEntity takes.
 

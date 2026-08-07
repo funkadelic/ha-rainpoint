@@ -20,6 +20,7 @@ from custom_components.rainpoint.hub_entities import (
     RainPointHubRSSISensor,
     RainPointPushConnectedBinarySensor,
     RainPointPushLastMessageSensor,
+    hub_record_for_mid,
     resolve_connectivity_hubs,
     resolve_push_diagnostic_hubs,
 )
@@ -43,6 +44,22 @@ def _make_hub_info(hid=100, name="Test Hub", soft_ver="2.0", mac="AA:BB:CC", mid
         "model": "HTV0540FRF",
         "hardwareVersion": "1.0",
     }
+
+
+class TestHubRecordForMid:
+    """hub_record_for_mid resolves a hub's own live record, or {} when none matches."""
+
+    def test_returns_the_matching_hub(self):
+        """The hub whose mid matches is returned."""
+        coord = _make_coordinator()
+        coord.data["hubs"] = [{"mid": 1001, "param": "0|1||"}, {"mid": 1002, "param": "0|0||"}]
+        assert hub_record_for_mid(coord, 1002) == {"mid": 1002, "param": "0|0||"}
+
+    def test_no_matching_mid_returns_empty_dict(self):
+        """No matching mid returns {} rather than None or raising."""
+        coord = _make_coordinator()
+        coord.data["hubs"] = [{"mid": 1001}]
+        assert hub_record_for_mid(coord, 9999) == {}
 
 
 class TestResolvePushDiagnosticHubs:
@@ -758,3 +775,112 @@ class TestEveryHubUniqueIdCarriesTheMid:
             a = self._build(cls, coord, hub_a)._attr_unique_id
             b = self._build(cls, coord, hub_b)._attr_unique_id
             assert a != b, f"{cls.__name__} still collides across two hubs in one home"
+
+
+class TestHubBroadcastSwitchRealTimeline:
+    """The toggle proven correct on the real construct-then-poll sequence.
+
+    Drives a real RainPointCoordinator rather than an injected coordinator.data
+    snapshot: construct, first refresh, platform setup, then repeated
+    async_refresh calls with different canned hub records, asserting between
+    each step. An implementation that never clears the optimistic override
+    would pass the confirming poll below and fail the contradicting one and
+    the param-goes-missing one, which is exactly the point of driving this as
+    a timeline instead of three independent unit tests.
+    """
+
+    @staticmethod
+    def _hub_devices(param):
+        """A getDeviceByHid hub record carrying the given param, no sub-devices."""
+        return [
+            {
+                "mid": 236547,
+                "name": "Hub A",
+                "deviceName": "hub-mac",
+                "productKey": "hub-pk",
+                "homeName": "H",
+                "model": "HTV0540FRF",
+                "param": param,
+                "subDevices": [],
+            }
+        ]
+
+    @staticmethod
+    async def _build_timeline(initial_param):
+        """Construct -> first refresh -> switch platform setup.
+
+        Returns (coordinator, client, switch).
+        """
+        from custom_components.rainpoint.const import CONF_HIDS, DOMAIN
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.switch import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = TestHubBroadcastSwitchRealTimeline._hub_devices(initial_param)
+        client.get_multiple_device_status.return_value = [{"mid": 236547, "subDeviceStatus": []}]
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        switches = [e for e in captured if isinstance(e, RainPointHubBroadcastSwitch)]
+        assert len(switches) == 1
+        switch = switches[0]
+        switch.async_write_ha_state = MagicMock()
+        # Registers the coordinator listener the same way HA's real
+        # entity-platform add flow does, so async_refresh below actually
+        # reaches _handle_coordinator_update.
+        await switch.async_added_to_hass()
+        return coordinator, client, switch
+
+    @pytest.mark.asyncio
+    async def test_the_full_command_then_confirming_then_contradicting_then_missing_sequence(self):
+        """Construct off, flip on, poll confirms, poll contradicts, poll drops param."""
+        coordinator, client, switch = await self._build_timeline("0|0||")
+        frozen_hub_info = switch._hub_info
+
+        assert switch.is_on is False
+
+        client.update_main_param = AsyncMock(return_value=True)
+        await switch.async_turn_on()
+        assert switch.is_on is True
+        client.update_main_param.assert_called_once_with(mid=236547, param="0|1||")
+
+        # A poll confirming the command: the optimistic override is cleared,
+        # and the value now comes from the poll agreeing with it.
+        client.get_devices_by_hid.return_value = self._hub_devices("0|1||")
+        await coordinator.async_refresh()
+        assert switch.is_on is True
+        assert switch._optimistic is None
+
+        # A poll contradicting the command: the cloud did not keep the
+        # change, and the poll wins rather than the last command.
+        client.get_devices_by_hid.return_value = self._hub_devices("0|0||")
+        await coordinator.async_refresh()
+        assert switch.is_on is False
+
+        # A poll whose hub record carries no param at all: unknown, not the
+        # last commanded value.
+        no_param_hub = self._hub_devices("0|0||")
+        del no_param_hub[0]["param"]
+        client.get_devices_by_hid.return_value = no_param_hub
+        await coordinator.async_refresh()
+        assert switch.is_on is None
+
+        # Across the whole sequence the frozen snapshot never changed object
+        # identity, while is_on changed value repeatedly -- the pair that
+        # would fail if a regression routed the flag back through
+        # self._hub_info instead of the live coordinator read.
+        assert switch._hub_info is frozen_hub_info
