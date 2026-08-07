@@ -10,7 +10,7 @@ from custom_components.rainpoint.api import (
     _parse_rainpoint_payload,
     _parse_tlv_payload,
 )
-from custom_components.rainpoint.api.utils import _is_ascii_payload, _parse_ascii_rssi
+from custom_components.rainpoint.api.utils import _is_ascii_payload, _parse_ascii_rssi, _split_prefix
 from tests.payload_samples import (
     HWS019WRF_V2_PAYLOAD,
     MOISTURE_FULL_ASCII_PAYLOAD,
@@ -308,3 +308,29 @@ class TestParseAsciiRssi:
     def test_non_integer_rssi_token_returns_none(self):
         """A non-integer rssi token yields None, no raise."""
         assert _parse_ascii_rssi("1,x,1;body") is None
+
+
+class TestSplitPrefixCommaTruncation:
+    """Characterization tests for _split_prefix's existing tail-truncation behaviour.
+
+    ASCII-07 requires this behaviour survive unchanged; these pin it
+    behaviourally as well as by the source-identity check in
+    tests/api/test_generic_decoder.py.
+    """
+
+    def test_hex_body_with_no_comma_tail_is_returned_whole(self):
+        """A hex body with no ASCII tail passes through unchanged (uppercased)."""
+        assert _split_prefix("10#aabbcc") == ("AABBCC", False)
+
+    def test_hex_body_with_ascii_tail_truncates_at_first_comma(self):
+        """The comma-separated ASCII tail is dropped, keeping only the hex block."""
+        assert _split_prefix("10#AABBCC,1,2") == ("AABBCC", False)
+
+    def test_11_prefix_marks_dp_id_prefixed(self):
+        """An 11# prefix sets dp_id_prefixed True; 10# leaves it False."""
+        assert _split_prefix("11#AABB")[1] is True
+        assert _split_prefix("10#AABB")[1] is False
+
+    def test_no_hash_prefix_returns_raw_body_uppercased(self):
+        """A payload with no '#' is returned as-is (uppercased, comma-truncated)."""
+        assert _split_prefix("aabb") == ("AABB", False)
