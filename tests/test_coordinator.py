@@ -7,6 +7,7 @@ import types
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs
 
 import aiohttp
 import pytest
@@ -63,7 +64,9 @@ from custom_components.rainpoint.repairs import (  # noqa: E402
 )
 from tests.payload_samples import (  # noqa: E402
     CATALOG_ANCHOR_MODEL,
+    HWS019WRF_V2_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
+    SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
     SAMPLE_HUB_DISCONNECT_CHANGED_AT_ISO,
@@ -524,6 +527,49 @@ class TestCoordinatorUpdate:
         }
 
         assert _coord_module._format_generic_fields(generic) == "STA_BAT: raw=64 value=100"
+
+    def test_format_generic_fields_renders_the_decline_reason_when_no_fields_were_read(self):
+        """The case this task exists for: a non-negative header rssi yields no field,
+        so before this task the bug report carried no decode section and no
+        explanation at all.
+        """
+        generic = _coord_module.decode_generic(HWS019WRF_V2_PAYLOAD)
+
+        rendered = _coord_module._format_generic_fields(generic)
+
+        assert rendered != ""
+        assert generic["error"] in rendered
+
+    def test_format_generic_fields_orders_the_decline_reason_before_the_field_lines(self):
+        """A reader scanning the issue form should meet the explanation before the field it explains."""
+        generic = _coord_module.decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)
+
+        rendered = _coord_module._format_generic_fields(generic)
+
+        assert generic["error"] in rendered
+        assert "STA_RSSI" in rendered
+        assert rendered.index(generic["error"]) < rendered.index("STA_RSSI")
+
+    def test_format_generic_fields_does_not_render_a_hex_parse_failure(self):
+        """A hex parse failure also carries error, but this rendering must gate on the
+        ascii_framed marker, never on error's presence: rendering a hex error here
+        would change the shape of every hex bug report.
+        """
+        generic = _coord_module.decode_generic("11#")
+
+        assert "error" in generic
+        assert _coord_module._format_generic_fields(generic) == ""
+
+    def test_build_new_device_issue_url_prefills_the_ascii_decline_reason(self):
+        """A device whose header rssi is non-negative now carries the decline reason
+        in its bug report instead of no auto_decoded parameter at all.
+        """
+        url = _coord_module._build_new_device_issue_url("HWS019WRF_V2", HWS019WRF_V2_PAYLOAD)
+
+        assert "auto_decoded=" in url
+        decoded_error = _coord_module.decode_generic(HWS019WRF_V2_PAYLOAD)["error"]
+        query = parse_qs(url.split("?", 1)[1])
+        assert decoded_error in query["auto_decoded"][0]
 
     @pytest.mark.asyncio
     async def test_notification_id_unchanged_when_model_code_absent(self):
