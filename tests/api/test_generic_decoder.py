@@ -1,10 +1,11 @@
 """Tests for the model-agnostic diagnostic decoder (decode_generic)."""
 
 import custom_components.rainpoint.api.generic_decoder as generic_decoder_module
-from custom_components.rainpoint.api import decode_generic
+from custom_components.rainpoint.api import decode_generic, is_ascii_declined
 from tests.payload_samples import (
     CATALOG_ANCHOR_MODEL,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
+    SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
     SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
@@ -442,3 +443,59 @@ class TestDecodeGenericCatalogAnnotation:
         assert "error" not in result
         for field in result["fields"]:
             assert "catalog" not in field
+
+
+class TestDecodeGenericAscii:
+    """The comma-and-semicolon ASCII framing: header rssi read, body declined."""
+
+    def test_yields_one_header_derived_rssi_field(self):
+        """The HTV245 ASCII sample decodes to exactly one STA_RSSI field at -84."""
+        fields = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)["fields"]
+
+        assert len(fields) == 1
+        assert fields[0]["name"] == "STA_RSSI"
+        assert fields[0]["value"] == -84
+
+    def test_synthetic_entry_has_null_provenance_keys(self):
+        """index, dp_id and raw are all None - Task 2's option-a resolution."""
+        field = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)["fields"][0]
+
+        assert field["index"] is None
+        assert field["dp_id"] is None
+        assert field["raw"] is None
+
+    def test_result_shape(self):
+        """field_names, dp_id_prefixed and the ascii_framed marker all match D-08/D-02."""
+        result = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)
+
+        assert result["field_names"] == ["STA_RSSI"]
+        assert result["dp_id_prefixed"] is False
+        assert result["ascii_framed"] is True
+
+    def test_error_names_the_real_condition(self):
+        """The error names the ASCII framing and never claims 'empty' or 'hex'."""
+        error = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)["error"]
+
+        assert isinstance(error, str)
+        assert "ASCII" in error
+        assert "empty" not in error.lower()
+        assert "hex" not in error.lower()
+
+    def test_is_ascii_declined_true_for_ascii_result(self):
+        """is_ascii_declined reads the marker back off a real ASCII decode."""
+        assert is_ascii_declined(decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD)) is True
+
+    def test_is_ascii_declined_false_for_hex_result(self):
+        """A hex decode never carries the marker."""
+        assert is_ascii_declined(decode_generic("11#1FD801")) is False
+
+    def test_is_ascii_declined_fails_closed_on_none_and_empty_dict(self):
+        """A caller that has not run a decode yet gets False, not a raise."""
+        assert is_ascii_declined(None) is False
+        assert is_ascii_declined({}) is False
+
+    def test_no_catalog_annotation_even_with_model(self):
+        """The ASCII branch returns before the catalog block; model is inert here."""
+        result = decode_generic(SAMPLE_HTV245_ASCII_PAYLOAD, model="HTV245FRF", model_code="303")
+
+        assert "catalog" not in result["fields"][0]
