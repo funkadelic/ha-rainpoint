@@ -37,6 +37,7 @@ from .api import (
     decode_rain,
     decode_temphum,
     decode_valve_hub,
+    is_ascii_declined,
 )
 from .const import (
     CONF_HIDS,
@@ -196,14 +197,22 @@ NO_STATUS_PAYLOAD_MARKER = (
 def _format_generic_fields(generic: dict | None) -> str:
     """Render a best-effort generic decode as a text block for the issue form.
 
-    Returns "" when the decode found no fields, so the caller can omit the
-    pre-fill rather than seed the form with an empty section.
+    Returns "" when the decode found no fields and the decoder did not
+    decline an ASCII-framed body. A declined ASCII payload renders its
+    reason as a leading line even when it found no fields, because a bug
+    report that shows nothing is indistinguishable from a device that had
+    nothing to say, and that ambiguity is what this rendering exists to
+    retire. The gate is the ascii_framed marker, never the presence of an
+    error key: a hex parse failure also carries error, and rendering that
+    would change the shape of every hex bug report.
     """
     fields = (generic or {}).get("fields") or []
-    if not fields:
+    lines = []
+    if is_ascii_declined(generic):
+        lines.append(f"Decoder: {generic.get('error', '')}")
+    if not fields and not lines:
         return ""
     dp_prefixed = generic.get("dp_id_prefixed", False)
-    lines = []
     for f in fields:
         suffix = f" (dp {f['dp_id']})" if dp_prefixed else ""
         catalog = f.get("catalog")
