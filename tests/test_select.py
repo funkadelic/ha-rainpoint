@@ -226,7 +226,8 @@ class TestSubDevicePowerSelectRealTimeline:
 
         assert url.endswith("/app/device/sub/update")
         assert set(body.keys()) == {"mid", "sid", "param"}
-        assert body["mid"] == self._MID
+        assert body["mid"] == str(self._MID)
+        assert isinstance(body["mid"], str)
         assert body["sid"] == self._SID
         assert body["param"] == self._EXPECTED_ENHANCE_PARAM
 
