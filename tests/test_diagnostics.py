@@ -196,6 +196,38 @@ class TestUnlistedKeys:
         assert "unreviewed-payload-value" not in list(_walk_values(result))
 
     @pytest.mark.asyncio
+    async def test_a_new_status_entry_field_is_named_and_its_value_is_absent(self):
+        """The nested cloud mapping needs its own pass, not its container's.
+
+        `raw_status` is held whole by the sensor entry, so allow-listing the
+        entry says nothing about what is inside it. Without a second pass a
+        field the vendor adds to a status entry ships its value on the first
+        poll after they add it.
+        """
+        entry = _sensor_entry()
+        entry["raw_status"]["newStatusField"] = "unreviewed-status-value"
+        hass, hass_entry = _make_hass(coordinator=_make_coordinator(sensors={"182509_236547_1": entry}))
+
+        result = await async_get_config_entry_diagnostics(hass, hass_entry)
+
+        raw_status = result["sensors"]["182509_236547_1"]["raw_status"]
+        assert raw_status["unlisted_keys"] == ["newStatusField"]
+        assert raw_status["value"] == "11#0100..."
+        assert "unreviewed-status-value" not in list(_walk_values(result))
+
+    @pytest.mark.asyncio
+    async def test_an_option_no_longer_written_is_named_and_its_value_is_absent(self):
+        """`entry.options` holds whatever any past version persisted."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+        entry.options = {"push_enabled": True, "debug_last_submission": "some-stale-value"}
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["entry"]["options"]["push_enabled"] is True
+        assert result["entry"]["options"]["unlisted_keys"] == ["debug_last_submission"]
+        assert "some-stale-value" not in list(_walk_values(result))
+
+    @pytest.mark.asyncio
     async def test_a_new_sub_device_field_is_named_and_its_value_is_absent(self):
         """The sub-device walk has its own allow-list, so it needs its own proof."""
         hub = _hub_record()
@@ -209,7 +241,7 @@ class TestUnlistedKeys:
 
 
 class TestNothingSensitiveSurvives:
-    """DIAG-03 and DIAG-04, asserted by value rather than by key name."""
+    """No credential and no account identity survives, asserted by value."""
 
     @pytest.mark.asyncio
     async def test_no_credential_reaches_the_config_entry_dump(self):
@@ -265,7 +297,7 @@ class TestNothingSensitiveSurvives:
 
 
 class TestSupportPayload:
-    """DIAG-05: the dump answers a decode question without a follow-up request."""
+    """The dump answers a decode question without a follow-up request."""
 
     @pytest.mark.asyncio
     async def test_the_raw_payload_and_the_decode_of_it_both_survive(self):
@@ -366,6 +398,65 @@ class TestDeviceRouting:
         assert list(result["sensors"]) == ["182509_236547_1"]
 
     @pytest.mark.asyncio
+    async def test_a_hub_row_still_on_the_older_hid_only_identity_still_resolves(self):
+        """A row the identity migration could not finish keeps the `hub_{hid}` shape.
+
+        Matching the identifier as a string would hand that row an empty dump on
+        the one device page most likely to be opened when something is wrong
+        with it, so the identity helper's both-shapes reading is what routes it.
+        """
+        coordinator = _make_coordinator()
+        hass, entry = _make_hass(coordinator=coordinator)
+
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_182509"))
+
+        assert result["device"]["kind"] == "hub"
+        assert [hub["mid"] for hub in result["hubs"]] == [236547]
+        assert list(result["hub_connectivity"]) == [236547]
+        assert list(result["sensors"]) == ["182509_236547_1"]
+
+    @pytest.mark.asyncio
+    async def test_a_hid_only_identity_in_a_two_hub_home_returns_both_rather_than_neither(self):
+        """The identifier is genuinely ambiguous there, and both beats an empty dump."""
+        hubs = [_hub_record(), _hub_record(mid=999999)]
+        sensors = {
+            "182509_236547_1": _sensor_entry(mid=236547),
+            "182509_999999_1": _sensor_entry(mid=999999),
+        }
+        coordinator = _make_coordinator(hubs=hubs, sensors=sensors)
+        hass, entry = _make_hass(coordinator=coordinator)
+
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_182509"))
+
+        assert sorted(hub["mid"] for hub in result["hubs"]) == [236547, 999999]
+        assert sorted(result["sensors"]) == ["182509_236547_1", "182509_999999_1"]
+
+    @pytest.mark.asyncio
+    async def test_a_hub_prefixed_identifier_of_neither_shape_yields_empty_sections(self):
+        """`_hub_identity` returns None for it, and an empty dump is then correct."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_a_b_c"))
+
+        assert result["device"]["kind"] == "hub"
+        assert result["hubs"] == []
+        assert result["hub_connectivity"] == {}
+        assert result["sensors"] == {}
+
+    @pytest.mark.asyncio
+    async def test_a_hub_row_from_another_home_is_not_matched_by_mid_alone(self):
+        """hid is checked first, so two homes reusing a mid do not cross over."""
+        hubs = [_hub_record(hid=182710, mid=236547)]
+        sensors = {"182710_236547_1": _sensor_entry(hid=182710)}
+        coordinator = _make_coordinator(hubs=hubs, sensors=sensors)
+        hass, entry = _make_hass(coordinator=coordinator)
+
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_182509_236547"))
+
+        assert result["hubs"] == []
+        assert result["sensors"] == {}
+
+    @pytest.mark.asyncio
     async def test_a_row_with_no_domain_identifier_is_named_rather_than_returning_an_empty_dump(self):
         """An empty dump would read as 'nothing wrong here', which is a different claim."""
         device = MagicMock()
@@ -437,6 +528,19 @@ class TestBeforeSetupCompletes:
         result = await async_get_config_entry_diagnostics(hass, entry)
 
         assert result["hubs"][0]["subDevices"] == {"unexpected_type": "str"}
+
+    @pytest.mark.asyncio
+    async def test_a_sensor_entry_carrying_no_status_is_dumped_without_the_nested_pass(self):
+        """The nested pass is conditional, so an entry without one must still dump."""
+        entry = _sensor_entry()
+        del entry["raw_status"]
+        hass, hass_entry = _make_hass(coordinator=_make_coordinator(sensors={"182509_236547_1": entry}))
+
+        result = await async_get_config_entry_diagnostics(hass, hass_entry)
+
+        dumped = result["sensors"]["182509_236547_1"]
+        assert "raw_status" not in dumped
+        assert dumped["model"] == "HTV245FRF"
 
     @pytest.mark.asyncio
     async def test_a_hub_record_that_is_not_a_dict_is_typed_rather_than_raising(self):

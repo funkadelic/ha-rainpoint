@@ -34,8 +34,17 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntry
 
-from . import _domain_sensor_key
-from .const import CONF_AREA_CODE, CONF_HIDS, DOMAIN, HUB_IDENTIFIER_PREFIX, VERSION
+from . import _domain_sensor_key, _hub_identity
+from .const import (
+    CONF_AREA_CODE,
+    CONF_GENERIC_CONTROL_ENABLED,
+    CONF_GENERIC_ENTITIES_ENABLED,
+    CONF_HIDS,
+    CONF_PUSH_ENABLED,
+    DOMAIN,
+    HUB_IDENTIFIER_PREFIX,
+    VERSION,
+)
 
 # Values replaced with a redaction marker wherever they appear, at any depth.
 #
@@ -150,9 +159,11 @@ _SUB_DEVICE_FIELDS = frozenset(
 
 # The coordinator sensor-entry fields carried verbatim. Unlike the two above,
 # this shape is built by this integration rather than by the cloud, so a new key
-# here is a change someone in this repo made deliberately. It still goes through
-# the same allow-list so that "raw_status" and "data" are the only places a
-# cloud value reaches the dump, and both are wanted.
+# here is a change someone in this repo made deliberately.
+#
+# "raw_status" is the exception and gets its own pass below: it is a cloud
+# mapping stored whole, so allow-listing the entry that holds it says nothing
+# about what is inside it.
 _SENSOR_ENTRY_FIELDS = frozenset(
     {
         "addr",
@@ -171,6 +182,16 @@ _SENSOR_ENTRY_FIELDS = frozenset(
         "sub_name",
     }
 )
+
+# The cloud status entry nested inside a sensor entry's "raw_status". Three
+# fields, and the payload itself is the middle one.
+_STATUS_ENTRY_FIELDS = frozenset({"id", "time", "value"})
+
+# The options the options flow writes, all three of them booleans. Allow-listed
+# for the same reason the cloud records are, one step removed: the options dict
+# is whatever has ever been persisted against this entry, which includes
+# anything a past version wrote and stopped using.
+_OPTION_FIELDS = frozenset({CONF_GENERIC_CONTROL_ENABLED, CONF_GENERIC_ENTITIES_ENABLED, CONF_PUSH_ENABLED})
 
 
 def _select_allowed(record: Any, allowed: frozenset[str]) -> dict:
@@ -209,12 +230,21 @@ def _hub_dump(hub: Any) -> dict:
 def _sensor_dump(entry: Any) -> dict:
     """Return one coordinator sensor entry.
 
-    `raw_status` and `data` are carried whole and are the reason this dump is
-    worth downloading: the first is the undecoded payload the cloud sent, the
-    second is what this integration made of it. A bug report about a misread
-    device is answerable from the pair without a follow-up request.
+    The undecoded payload and this integration's reading of it are both here,
+    and they are the reason the dump is worth downloading: a bug report about a
+    misread device is answerable from the pair without a follow-up request.
+
+    They are treated differently, though, and the difference is the whole point
+    of the second pass below. `data` is decoder output, so its keys are written
+    in this repo and a new one is somebody's deliberate change. `raw_status` is
+    a cloud mapping held whole, so allow-listing the entry that carries it says
+    nothing about what is inside it: without this pass a field the vendor adds
+    to a status entry would ship its value on the first poll after they add it.
     """
-    return _select_allowed(entry, _SENSOR_ENTRY_FIELDS)
+    dumped = _select_allowed(entry, _SENSOR_ENTRY_FIELDS)
+    if "raw_status" in dumped:
+        dumped["raw_status"] = _select_allowed(dumped["raw_status"], _STATUS_ENTRY_FIELDS)
+    return dumped
 
 
 def _coordinator_dump(coordinator: Any) -> dict:
@@ -260,7 +290,7 @@ def _entry_dump(config_entry: ConfigEntry) -> dict:
         "data_keys": sorted(str(key) for key in config_entry.data),
         "home_count": len(config_entry.data.get(CONF_HIDS) or []),
         "area_code": config_entry.data.get(CONF_AREA_CODE),
-        "options": dict(config_entry.options),
+        "options": _select_allowed(dict(config_entry.options), _OPTION_FIELDS),
     }
 
 
@@ -290,11 +320,18 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, config_entry: 
 async def async_get_device_diagnostics(hass: HomeAssistant, config_entry: ConfigEntry, device: DeviceEntry) -> dict[str, Any]:
     """Return diagnostics scoped to one device page.
 
-    The device's own DOMAIN identifier is what routes this: a hub row carries
-    `hub_{hid}_{mid}` and a sub-device row carries its `{hid}_{mid}_{addr}`
+    The device's own DOMAIN identifier is what routes this: a hub row carries a
+    `hub_`-prefixed identity and a sub-device row carries its `{hid}_{mid}_{addr}`
     sensor key, which is the same round trip `_domain_sensor_key` already
     performs for the orphaned-entity sweep. Reusing it keeps one reading of the
     identifier shape rather than a second spelling that could drift from it.
+
+    The hub half reuses `_hub_identity` for the same reason, and it matters more
+    there: that helper accepts both the migrated `hub_{hid}_{mid}` shape and the
+    older `hub_{hid}` one, which still exists on any row the identity migration
+    could not resolve a mid for. Matching the identifier as a string would hand
+    such a row an empty dump on the one device page most likely to be opened
+    when something is wrong with it.
     """
     entry_store = _entry_store(hass, config_entry)
     coordinator = entry_store.get("coordinator")
@@ -315,17 +352,7 @@ async def async_get_device_diagnostics(hass: HomeAssistant, config_entry: Config
 
     if identifier.startswith(HUB_IDENTIFIER_PREFIX):
         payload["device"]["kind"] = "hub"
-        hub_key = identifier[len(HUB_IDENTIFIER_PREFIX) :]
-        payload["hubs"] = [hub for hub in (_hub_dump(hub) for hub in data.get("hubs") or []) if _hub_key(hub) == hub_key]
-        payload["hub_connectivity"] = {
-            mid: record for mid, record in (data.get("hub_connectivity") or {}).items() if f"{mid}" == hub_key.rsplit("_", 1)[-1]
-        }
-        payload["sensors"] = {
-            key: _sensor_dump(entry)
-            for key, entry in (data.get("sensors") or {}).items()
-            if isinstance(entry, dict) and f"{entry.get('hid')}_{entry.get('mid')}" == hub_key
-        }
-        return async_redact_data(payload, TO_REDACT)
+        return async_redact_data(_hub_scoped_payload(payload, _hub_identity(identifier), data), TO_REDACT)
 
     payload["device"]["kind"] = "sub_device"
     sensors = data.get("sensors") or {}
@@ -333,11 +360,47 @@ async def async_get_device_diagnostics(hass: HomeAssistant, config_entry: Config
     return async_redact_data(payload, TO_REDACT)
 
 
-def _hub_key(dumped_hub: dict) -> str:
-    """Return `{hid}_{mid}` for an already-dumped hub record.
+def _hub_scoped_payload(payload: dict, identity: tuple[str, str | None] | None, data: dict) -> dict:
+    """Add the hub's record, connectivity and children to a device payload.
 
-    Reads the dumped copy rather than the raw record so the key is built from
-    the same allow-listed fields the caller is filtering, and a record missing
-    either field yields a key no device identifier can match instead of raising.
+    `identity` is `_hub_identity`'s answer: `(hid, mid)` for a migrated row,
+    `(hid, None)` for a row still on the older hid-only identity, and None for a
+    `hub_`-prefixed value that is neither shape.
+
+    A hid-only row matches every hub in that home rather than none of them. That
+    is the honest answer to an ambiguous identifier: a home with one hub, which
+    is every install that has ever been reported here, gets exactly its own hub,
+    and a two-hub home gets both rather than silently getting neither. Both
+    beat an empty dump on a device page opened because something is wrong.
     """
-    return f"{dumped_hub.get('hid')}_{dumped_hub.get('mid')}"
+    if identity is None:
+        payload["hubs"] = []
+        payload["hub_connectivity"] = {}
+        payload["sensors"] = {}
+        return payload
+
+    hid, mid = identity
+    hubs = [hub for hub in (_hub_dump(hub) for hub in data.get("hubs") or []) if _matches_hub(hub, hid, mid)]
+    mids = {f"{hub.get('mid')}" for hub in hubs}
+    payload["hubs"] = hubs
+    payload["hub_connectivity"] = {
+        record_mid: record for record_mid, record in (data.get("hub_connectivity") or {}).items() if f"{record_mid}" in mids
+    }
+    payload["sensors"] = {
+        key: _sensor_dump(entry)
+        for key, entry in (data.get("sensors") or {}).items()
+        if isinstance(entry, dict) and f"{entry.get('hid')}" == hid and f"{entry.get('mid')}" in mids
+    }
+    return payload
+
+
+def _matches_hub(dumped_hub: dict, hid: str, mid: str | None) -> bool:
+    """Return whether an already-dumped hub record answers to this identity.
+
+    Reads the dumped copy rather than the raw record, so the match is made
+    against the same allow-listed fields the caller is filtering and a record
+    missing either field simply fails to match instead of raising.
+    """
+    if f"{dumped_hub.get('hid')}" != hid:
+        return False
+    return mid is None or f"{dumped_hub.get('mid')}" == mid
