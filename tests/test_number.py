@@ -253,11 +253,11 @@ class TestNumberConstructor:
         assert inst._attr_name == "Zone 2 Duration"
 
     def test_constructor_fallback_sub_name(self):
-        """Missing sub_name leaves the entity name unaffected; the device page
+        """Missing sub_name leaves the entity name unaffected.
 
-        falls back to '{model} {addr}' instead, since the display name is now
-        composed by Home Assistant from device_info rather than interpolated
-        here.
+        The device page falls back to '{model} {addr}' instead, since the
+        display name is now composed by Home Assistant from device_info
+        rather than interpolated here.
         """
         import custom_components.rainpoint.number as num_mod
 

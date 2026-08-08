@@ -495,11 +495,11 @@ class TestValveInit:
         assert valve._attr_name == "Zone 2"
 
     def test_init_defaults_sub_name_when_missing(self):
-        """Missing sub_name leaves the entity name unaffected; the device page
+        """Missing sub_name leaves the entity name unaffected.
 
-        falls back to '{model} {addr}' instead, since the display name is now
-        composed by Home Assistant from device_info rather than interpolated
-        here.
+        The device page falls back to '{model} {addr}' instead, since the
+        display name is now composed by Home Assistant from device_info
+        rather than interpolated here.
         """
         from custom_components.rainpoint.valve import RainPointValveEntity
 
