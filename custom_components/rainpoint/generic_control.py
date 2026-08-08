@@ -560,7 +560,7 @@ class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
 
     @property
     def device_info(self) -> DeviceInfo:
-        return build_sub_device_info(self._sensor_info, name_fallback=f"Device {self._sensor_info['addr']}")
+        return build_sub_device_info(self._sensor_info)
 
     @property
     def _run_state_open(self) -> bool | None:

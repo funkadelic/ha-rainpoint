@@ -313,15 +313,10 @@ def sub_device_attributes(coordinator: RainPointCoordinator, sensor_key: str) ->
 
 
 class RainPointSubDeviceEntity(CoordinatorEntity[RainPointCoordinator]):
-    """Coordinator-backed entity bound to a single sub-device.
-
-    ``_device_name_prefix`` only ever reaches a user for a sub-device the cloud
-    gave no name, so a subclass changing it would rename those devices in place.
-    """
+    """Coordinator-backed entity bound to a single sub-device."""
 
     _attr_should_poll = False
     _attr_has_entity_name = True
-    _device_name_prefix = "Device"
 
     def __init__(
         self,
@@ -361,7 +356,4 @@ class RainPointSubDeviceEntity(CoordinatorEntity[RainPointCoordinator]):
     @property
     def device_info(self) -> DeviceInfo:
         """Represent each subDevice as its own HA device, child of hub."""
-        return build_sub_device_info(
-            self._sensor_info,
-            name_fallback=f"{self._device_name_prefix} {self._sensor_info['addr']}",
-        )
+        return build_sub_device_info(self._sensor_info)

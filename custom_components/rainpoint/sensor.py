@@ -518,8 +518,6 @@ async def async_setup_entry(
 class RainPointSensorBase(RainPointSubDeviceEntity, SensorEntity):
     """Base class for RainPoint sensors."""
 
-    _device_name_prefix = "Sensor"
-
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self._sensor_data or {}

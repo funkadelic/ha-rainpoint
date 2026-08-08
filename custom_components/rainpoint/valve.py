@@ -253,7 +253,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
 
     @property
     def device_info(self) -> DeviceInfo:
-        return build_sub_device_info(self._sensor_info, name_fallback=f"Valve Hub {self._sensor_info['addr']}")
+        return build_sub_device_info(self._sensor_info)
 
     # ------------------------------------------------------------------
     # Control

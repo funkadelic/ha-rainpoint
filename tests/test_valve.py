@@ -497,7 +497,7 @@ class TestValveInit:
     def test_init_defaults_sub_name_when_missing(self):
         """Missing sub_name leaves the entity name unaffected; the device page
 
-        falls back to 'Valve Hub {addr}' instead, since the display name is now
+        falls back to '{model} {addr}' instead, since the display name is now
         composed by Home Assistant from device_info rather than interpolated
         here.
         """
@@ -510,7 +510,7 @@ class TestValveInit:
         valve = RainPointValveEntity(mock_coordinator, "1_2_7", sensor_info, 1)
 
         assert valve._attr_name == "Zone 1"
-        assert valve.device_info["name"] == "Valve Hub 7"
+        assert valve.device_info["name"] == "HTV245FRF 7"
 
 
 class TestValveSetupEntry:

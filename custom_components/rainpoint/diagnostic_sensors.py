@@ -84,7 +84,6 @@ class RainPointDiagnosticSensorBase(RainPointSubDeviceEntity, SensorEntity):
     """Base class for RainPoint diagnostic sensors."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _device_name_prefix = "Sensor"
 
 
 class RainPointDeviceIDSensor(RainPointDiagnosticSensorBase):

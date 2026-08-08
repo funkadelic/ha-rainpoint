@@ -255,7 +255,7 @@ class TestNumberConstructor:
     def test_constructor_fallback_sub_name(self):
         """Missing sub_name leaves the entity name unaffected; the device page
 
-        falls back to 'Valve Hub {addr}' instead, since the display name is now
+        falls back to '{model} {addr}' instead, since the display name is now
         composed by Home Assistant from device_info rather than interpolated
         here.
         """
@@ -269,7 +269,7 @@ class TestNumberConstructor:
         real_init(inst, coord, "9_8_7", sensor_info, 1)
 
         assert inst._attr_name == "Zone 1 Duration"
-        assert inst.device_info["name"] == "Valve Hub 7"
+        assert inst.device_info["name"] == "M 7"
 
 
 class TestNumberAsyncAddedToHass:

@@ -107,7 +107,6 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
     _attr_native_step = DURATION_STEP_MINUTES
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_mode = NumberMode.BOX
-    _device_name_prefix = "Valve Hub"
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -139,10 +138,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
 
     @property
     def device_info(self) -> DeviceInfo:
-        return build_sub_device_info(
-            self._sensor_info,
-            name_fallback=f"{self._device_name_prefix} {self._sensor_info['addr']}",
-        )
+        return build_sub_device_info(self._sensor_info)
 
 
 class RainPointZoneDurationNumber(_RainPointDurationNumberBase):
@@ -214,8 +210,6 @@ class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
     resolves this entity by unique_id through the entity registry, exactly
     the way the trusted valve resolves its own duration companion.
     """
-
-    _device_name_prefix = "Device"
 
     def __init__(
         self,
