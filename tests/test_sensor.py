@@ -485,7 +485,7 @@ class TestMoisturePercentSensor:
         )
         sensor._simple = simple
         sensor._attr_unique_id = "rainpoint_100_200_1_moisture_percent"
-        sensor._attr_name = "Test Sensor Moisture Percent"
+        sensor._attr_name = "Moisture Percent"
         return sensor
 
     def test_moisture_sensor_native_value(self):
@@ -507,7 +507,7 @@ class TestMoisturePercentSensor:
         )
         sensor._simple = True
         sensor._attr_unique_id = "rainpoint_100_200_1_moisture_percent"
-        sensor._attr_name = "Test Sensor Moisture Percent"
+        sensor._attr_name = "Moisture Percent"
         assert sensor.native_value is None
 
     def test_moisture_sensor_available_with_data(self):
@@ -536,7 +536,7 @@ class TestSensorPlatformToleranceOfHubConnectivity:
         )
         sensor._simple = True
         sensor._attr_unique_id = "rainpoint_100_200_1_moisture_percent"
-        sensor._attr_name = "Test Sensor Moisture Percent"
+        sensor._attr_name = "Moisture Percent"
         if hub_connectivity is not None:
             sensor.coordinator.data["hub_connectivity"] = hub_connectivity
         return sensor
@@ -585,7 +585,7 @@ class TestRainSensor:
         )
         sensor._data_key = data_key
         sensor._attr_unique_id = f"rainpoint_100_200_1_{data_key}"
-        sensor._attr_name = "Rain Sensor Rain (Last 24 Hours)"
+        sensor._attr_name = "Rain (Last 24 Hours)"
         return sensor
 
     def test_rain_sensor_native_value(self):
@@ -608,7 +608,7 @@ class TestRainSensor:
         sensor = _make_sensor_base(RainPointRainSensor, "100_200_1", None)
         sensor._data_key = "rain_last_24h_mm"
         sensor._attr_unique_id = "rainpoint_100_200_1_rain_last_24h_mm"
-        sensor._attr_name = "Rain Sensor Rain"
+        sensor._attr_name = "Rain"
         assert sensor.native_value is None
 
     def test_rain_sensor_last_hour(self):
@@ -625,7 +625,7 @@ class TestRainSensor:
         )
         sensor._data_key = "rain_last_24h_mm"
         sensor._attr_unique_id = "rainpoint_100_200_1_rain_last_24h_mm"
-        sensor._attr_name = "Rain Sensor Rain (Last 24 Hours)"
+        sensor._attr_name = "Rain (Last 24 Hours)"
         assert sensor.native_value is None
 
 
@@ -640,7 +640,7 @@ class TestTemperatureSensor:
             {"type": "moisture_full", "moisture_percent": 42, "temperature_c": temperature_c, "illuminance_lux": 1000},
         )
         sensor._attr_unique_id = "rainpoint_100_200_1_temperature"
-        sensor._attr_name = "Test Sensor Temperature"
+        sensor._attr_name = "Temperature"
         return sensor
 
     def test_temperature_sensor_native_value(self):
@@ -661,7 +661,7 @@ class TestTemperatureSensor:
             {"type": "moisture_full", "moisture_percent": 42},
         )
         sensor._attr_unique_id = "rainpoint_100_200_1_temperature"
-        sensor._attr_name = "Test Sensor Temperature"
+        sensor._attr_name = "Temperature"
         assert sensor.native_value is None
 
     def test_temperature_sensor_device_info(self):
@@ -684,7 +684,7 @@ class TestDisplayHubReadingSensor:
         )
         sensor._reading_key = reading_key
         sensor._attr_unique_id = f"rainpoint_100_200_1_displayhub_{reading_key}"
-        sensor._attr_name = f"Display Hub {reading_key}"
+        sensor._attr_name = str(reading_key)
         return sensor
 
     def test_display_hub_reading_sensor_returns_float_for_numeric(self):
@@ -702,7 +702,7 @@ class TestDisplayHubReadingSensor:
         sensor = _make_sensor_base(DisplayHubReadingSensor, "100_200_1", None)
         sensor._reading_key = "temp"
         sensor._attr_unique_id = "rainpoint_100_200_1_displayhub_temp"
-        sensor._attr_name = "Display Hub temp"
+        sensor._attr_name = "temp"
         assert sensor.native_value is None
 
     def test_display_hub_reading_sensor_unique_id(self):
@@ -723,7 +723,7 @@ class TestIlluminanceSensor:
             {"type": "moisture_full", "moisture_percent": 42, "temperature_c": 20.0, "illuminance_lux": illuminance_lux},
         )
         sensor._attr_unique_id = "rainpoint_100_200_1_illuminance"
-        sensor._attr_name = "Test Sensor Illuminance"
+        sensor._attr_name = "Illuminance"
         return sensor
 
     def test_illuminance_sensor_native_value(self):
@@ -739,7 +739,7 @@ class TestIlluminanceSensor:
             {"type": "moisture_full"},
         )
         sensor._attr_unique_id = "rainpoint_100_200_1_illuminance"
-        sensor._attr_name = "Test Sensor Illuminance"
+        sensor._attr_name = "Illuminance"
         assert sensor.native_value is None
 
 
@@ -761,7 +761,7 @@ class TestSensorBaseProperties:
         )
         sensor._simple = True
         sensor._attr_unique_id = "rainpoint_100_200_1_moisture_percent"
-        sensor._attr_name = "Test Sensor Moisture Percent"
+        sensor._attr_name = "Moisture Percent"
         return sensor
 
     def test_available_true_with_data(self):
@@ -941,7 +941,7 @@ def test_native_value_returns_data_key(cls, data_key, uid_suffix, value):
     """Each simple sensor reads its dedicated data key and returns that value."""
     sensor = _make_sensor_base(cls, "100_200_1", {"type": "x", data_key: value})
     sensor._attr_unique_id = f"rainpoint_100_200_1_{uid_suffix}"
-    sensor._attr_name = f"Test Sensor {uid_suffix}"
+    sensor._attr_name = uid_suffix
     assert sensor.native_value == value
 
 
@@ -950,7 +950,7 @@ def test_native_value_none_when_data_missing(cls, data_key, uid_suffix, _value):
     """Each simple sensor returns None when _sensor_data is None."""
     sensor = _make_sensor_base(cls, "100_200_1", None)
     sensor._attr_unique_id = f"rainpoint_100_200_1_{uid_suffix}"
-    sensor._attr_name = f"Test Sensor {uid_suffix}"
+    sensor._attr_name = uid_suffix
     assert sensor.native_value is None
 
 
@@ -973,7 +973,7 @@ def _make_unknown_sensor(data=_UNK_SENTINEL, model="MYSTERY"):
         sensor_info_overrides={"model": model, "sub_name": "Mystery"},
     )
     sensor._attr_unique_id = f"rainpoint_100_200_1_unknown_{model}"
-    sensor._attr_name = f"Mystery Unsupported ({model})"
+    sensor._attr_name = f"Unsupported ({model})"
     return sensor
 
 
@@ -993,7 +993,7 @@ def _make_unknown_sensor_with_model_code(model, model_code, data=_UNK_SENTINEL):
         sensor_info_overrides={"model": model, "model_code": model_code, "sub_name": "Mystery"},
     )
     sensor._attr_unique_id = f"rainpoint_100_200_1_unknown_{model}"
-    sensor._attr_name = f"Mystery Unsupported ({model})"
+    sensor._attr_name = f"Unsupported ({model})"
     return sensor
 
 
@@ -1372,7 +1372,7 @@ class TestRawPayloadSensor:
         key = sensor._sensor_key
         sensor.coordinator.data["sensors"][key]["raw_status"] = {"value": raw_value}
         sensor._attr_unique_id = "rainpoint_100_200_1_raw_payload"
-        sensor._attr_name = "Sensor Raw Payload"
+        sensor._attr_name = "Raw Payload"
         return sensor
 
     def test_native_value_returns_raw_payload(self):
@@ -1623,7 +1623,7 @@ class TestZoneWaterUsageSensor:
         assert len(usage) == 2
         assert [e.native_value for e in usage] == [0.842, 0.096]
         assert usage[0]._attr_unique_id == "rainpoint_100_200_1_zone1_water_used"
-        assert usage[0]._attr_name == "Valve Zone 1 Water Used"
+        assert usage[0]._attr_name == "Zone 1 Water Used"
 
     @pytest.mark.asyncio
     async def test_no_usage_entities_when_no_zones_reported(self):
@@ -1773,7 +1773,7 @@ class TestHtv210bDispatch:
         states = [e for e in captured if isinstance(e, RainPointZoneStateSensor)]
         assert len(states) == 2
         assert states[0]._attr_unique_id == "rainpoint_100_200_3_zone1_state"
-        assert states[0]._attr_name == "BT Valve Zone 1 State"
+        assert states[0]._attr_name == "Zone 1 State"
         # battery + RSSI + 2 zone states + raw payload sensor, nothing else.
         assert len(captured) == 5
 
@@ -1861,22 +1861,22 @@ def _make_not_reporting_sensor(data, sub_name="BT Valve"):
 class TestNotReportingSensor:
     """Tests for RainPointNotReportingSensor."""
 
-    def test_constructor_sets_unique_id_and_name_from_sub_name(self):
-        """The hub's own name for the device is the only label a user recognises."""
+    def test_constructor_sets_unique_id_and_name_with_sub_name_present(self):
+        """The entity's own name is fixed; the device page carries the sub-device identity instead."""
         coordinator = MagicMock()
         coordinator.data = {"sensors": {}}
         sensor = RainPointNotReportingSensor(coordinator, "100_200_1", {"addr": 1, "sub_name": "BT Valve"}, "100_200_1")
 
         assert sensor._attr_unique_id == "rainpoint_100_200_1_not_reporting"
-        assert sensor._attr_name == "BT Valve Not Reporting"
+        assert sensor._attr_name == "Not Reporting"
 
-    def test_constructor_name_falls_back_to_device_when_sub_name_absent(self):
-        """A nameless sub-device still needs a readable entity name."""
+    def test_constructor_name_is_unaffected_by_missing_sub_name(self):
+        """A nameless sub-device's own entity name is unaffected; only its device page falls back."""
         coordinator = MagicMock()
         coordinator.data = {"sensors": {}}
         sensor = RainPointNotReportingSensor(coordinator, "100_200_1", {"addr": 1}, "100_200_1")
 
-        assert sensor._attr_name == "Device Not Reporting"
+        assert sensor._attr_name == "Not Reporting"
 
     def test_always_available(self):
         """The absence of a reading is exactly what this entity reports, so it

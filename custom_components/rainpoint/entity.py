@@ -320,6 +320,7 @@ class RainPointSubDeviceEntity(CoordinatorEntity[RainPointCoordinator]):
     """
 
     _attr_should_poll = False
+    _attr_has_entity_name = True
     _device_name_prefix = "Device"
 
     def __init__(

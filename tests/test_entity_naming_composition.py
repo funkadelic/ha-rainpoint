@@ -28,7 +28,9 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.rainpoint.const import DOMAIN
+from custom_components.rainpoint.diagnostic_sensors import RainPointBatterySensor
 from custom_components.rainpoint.number import RainPointZoneDurationNumber
+from custom_components.rainpoint.sensor import RainPointMoisturePercentSensor, RainPointZoneStateSensor
 from custom_components.rainpoint.valve import RainPointValveEntity
 
 assert not isinstance(er.async_get, MagicMock), "entity_registry is stubbed; every proof here would be a no-op"
@@ -141,6 +143,39 @@ class TestRenamedDeviceComposesShortName:
         assert _compose(hass, number, device) == "HTV210B Zone 1 Duration"
 
 
+class TestRenamedDeviceComposesShortNameForTheSensorTree:
+    """The behavioural proof for the shared RainPointSubDeviceEntity base.
+
+    The maintainer's second reproduction device is the HCS026FRF soil sensor,
+    named "HCS026FRF Moisture Sensor" -- diverging from the sub-device's own
+    "HCS026FRF" name the same way the HTV210B does, so it proves the base
+    class's composition rather than only the two platforms with their own
+    constructors.
+    """
+
+    @pytest.mark.asyncio
+    async def test_moisture_percent_composes_against_renamed_device(self, hass, device_registry):
+        entry = _make_entry(hass)
+        device = _make_renamed_device(
+            hass, device_registry, entry, sub_name="HCS026FRF", display_name="HCS026FRF Moisture Sensor"
+        )
+        sensor_info = _sensor_info("HCS026FRF")
+        sensor = RainPointMoisturePercentSensor(_mock_coordinator(), "100_200_1", sensor_info, "100_200_1", simple=True)
+
+        assert _compose(hass, sensor, device) == "HCS026FRF Moisture Sensor Moisture Percent"
+
+    @pytest.mark.asyncio
+    async def test_battery_composes_against_renamed_device(self, hass, device_registry):
+        entry = _make_entry(hass)
+        device = _make_renamed_device(
+            hass, device_registry, entry, sub_name="HCS026FRF", display_name="HCS026FRF Moisture Sensor"
+        )
+        sensor_info = _sensor_info("HCS026FRF")
+        sensor = RainPointBatterySensor(_mock_coordinator(), "100_200_1", sensor_info, "100_200_1")
+
+        assert _compose(hass, sensor, device) == "HCS026FRF Moisture Sensor Battery"
+
+
 class TestEveryConvertedPlatformSetsHasEntityName:
     def test_valve_and_duration_carry_the_flag(self):
         valve = RainPointValveEntity(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
@@ -148,6 +183,25 @@ class TestEveryConvertedPlatformSetsHasEntityName:
 
         assert valve._attr_has_entity_name is True
         assert number._attr_has_entity_name is True
+
+    def test_sensor_tree_platforms_carry_the_flag_by_inheritance(self):
+        """None of these three declares the flag on its own class (checked by
+
+        source grep in this plan's acceptance criteria); each inherits it from
+        RainPointSubDeviceEntity or RainPointSensorBase.
+        """
+        sensor_info = _sensor_info("HCS026FRF")
+        coordinator = _mock_coordinator()
+        moisture = RainPointMoisturePercentSensor(coordinator, "100_200_1", sensor_info, "100_200_1", simple=True)
+        battery = RainPointBatterySensor(coordinator, "100_200_1", sensor_info, "100_200_1")
+        zone_state = RainPointZoneStateSensor(coordinator, "100_200_1", sensor_info, "100_200_1", 1)
+
+        assert moisture._attr_has_entity_name is True
+        assert battery._attr_has_entity_name is True
+        assert zone_state._attr_has_entity_name is True
+        assert "_attr_has_entity_name" not in RainPointMoisturePercentSensor.__dict__
+        assert "_attr_has_entity_name" not in RainPointBatterySensor.__dict__
+        assert "_attr_has_entity_name" not in RainPointZoneStateSensor.__dict__
 
 
 class TestUserOverrideWins:
