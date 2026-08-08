@@ -320,16 +320,17 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
     """
     raw_model = info.get("model")
     model = _SENSOR_MODEL_ALIASES.get(raw_model, raw_model)
-    sub_name = info.get("sub_name") or f"Sensor {info['addr']}"
     hid = info.get("hid", "")
     mid = info.get("mid", "")
     addr = info.get("addr", "")
     base_slug = f"{hid}_{mid}_{addr}"
+    # Keys and the numeric model code only. The model string and the cloud's
+    # own name for the device are free text the cloud supplies, and this
+    # integration's logging rule keeps both out of every cloud-record path.
     _LOGGER.debug(
-        "Creating sensor entity: key=%s, model=%s, sub_name=%s, base_slug=%s",
+        "Creating sensor entity: key=%s, model_code=%s, base_slug=%s",
         key,
-        model,
-        sub_name,
+        info.get("model_code"),
         base_slug,
     )
 
