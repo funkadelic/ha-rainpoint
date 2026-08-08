@@ -153,7 +153,7 @@ class RainPointHubDeviceIDSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:identifier"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
-        """Name the entity after the hub and key the entity to its home id and mid."""
+        """Key the entity to its home id and mid."""
         super().__init__(coordinator, hub_info)
         # The five inline ids in this file keep the defaulted mid lookup so the
         # file carries one spelling of the segment. It cannot actually default:
@@ -177,7 +177,7 @@ class RainPointHubFirmwareSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:chip"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
-        """Name the entity after the hub and key the entity to its home id and mid."""
+        """Key the entity to its home id and mid."""
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_firmware"
         self._attr_name = "Firmware Version"
@@ -193,7 +193,7 @@ class RainPointHubMACSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:network-outline"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
-        """Name the entity after the hub and key the entity to its home id and mid."""
+        """Key the entity to its home id and mid."""
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_mac"
         self._attr_name = "MAC Address"

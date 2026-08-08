@@ -1330,10 +1330,15 @@ class RainPointNotReportingSensor(RainPointSensorBase):
     _report_url: str | None = None
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
-        """Name the entity after the sub-device the hub lists, not the model.
+        """Carry the entity's own short label and let the device page identify the device.
 
-        A silent device has no reading to identify it by, so the hub's own
-        name for it is the only label a user will recognise.
+        A silent device has no reading to identify it by, so the label a user
+        recognises has to come from somewhere other than this entity's own
+        name. It now comes from the device page this entity sits under, which
+        Home Assistant composes in front of the short name. Do not restore a
+        device-name prefix here on the strength of the older argument: an
+        inlined prefix survives verbatim the moment a user renames the
+        device, which is the display defect the short names removed.
         """
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_not_reporting"
