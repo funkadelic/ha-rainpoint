@@ -94,12 +94,24 @@ def _compose(hass, entity, device):
     registry override, and passing it None is what makes the composed string
     reflect only what the code supplies (``original_name`` and
     ``has_entity_name``), not a user's own override.
+
+    The flag is read through ``entity.has_entity_name``, the property Home
+    Assistant itself consults, rather than through the ``_attr_`` backing
+    attribute, so a class that satisfied one and not the other would not
+    compose correctly here.
+
+    ``_async_get_full_entity_name`` is private to Home Assistant and carries
+    no compatibility guarantee, but it is the function that does this
+    composition and there is no public equivalent to assert against. If a
+    future release moves or renames it, this module breaks at the call rather
+    than silently proving nothing; re-point this one wrapper at whatever
+    replaced it rather than weakening the assertions to a string built here.
     """
     return er._async_get_full_entity_name(
         hass,
         device_id=device.id,
         fallback="unnamed",
-        has_entity_name=getattr(entity, "_attr_has_entity_name", False),
+        has_entity_name=entity.has_entity_name,
         name=None,
         original_name=entity._attr_name,
     )
@@ -178,9 +190,9 @@ class TestRenamedDeviceComposesShortName:
 
     The maintainer owned two HTV210Bs and renamed one to "HTV210B (Hub paired)"
     to tell them apart -- an ordinary user action the integration cannot
-    prevent. Before this phase, composing against that renamed device still
-    surfaced the un-stripped "HTV210B Zone 1" because has_entity_name was False
-    and the device was never consulted.
+    prevent. Composing against that renamed device previously surfaced the
+    un-stripped "HTV210B Zone 1", because has_entity_name was False and the
+    device registry was never consulted.
     """
 
     @pytest.mark.asyncio
@@ -252,11 +264,12 @@ class TestRenamedDeviceComposesShortNameForTheSensorTree:
 class TestRenamedDeviceComposesShortNameForGenericAndSelect:
     """The behavioural proof for the two remaining converted platforms.
 
-    RainPointGenericSwitch declares its own flag (it shares no base with
-    RainPointSubDeviceEntity); RainPointSubDevicePowerSelect needed no source
-    change at all, since it already inherits the flag and already carried a
-    short name -- this is what proves that inheritance claim rather than
-    trusting it.
+    RainPointGenericSwitch inherits the flag from RainPointGenericControlBase,
+    which shares no base with RainPointSubDeviceEntity;
+    RainPointSubDevicePowerSelect needed no source change at all, since it
+    inherits the flag from RainPointSubDeviceEntity and already carried a
+    short name -- this is what proves both inheritance claims rather than
+    trusting them.
     """
 
     @pytest.mark.asyncio
@@ -343,7 +356,7 @@ class TestEveryHubEntitySetsHasEntityName:
         broadcast_button = RainPointHubBroadcastButton(coordinator, hub_info)
 
         for entity in (rssi, connectivity, channel_select, push_connected, broadcast_switch, broadcast_button):
-            assert entity._attr_has_entity_name is True
+            assert entity.has_entity_name is True
 
 
 class TestHubEntityUniqueIdsUnchanged:
@@ -361,26 +374,34 @@ class TestEveryConvertedPlatformSetsHasEntityName:
         valve = RainPointValveEntity(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
         number = RainPointZoneDurationNumber(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
 
-        assert valve._attr_has_entity_name is True
-        assert number._attr_has_entity_name is True
+        assert valve.has_entity_name is True
+        assert number.has_entity_name is True
 
     def test_generic_switch_and_select_carry_the_flag(self):
-        """RainPointGenericSwitch declares its own flag; the select inherits it instead."""
+        """Neither declares the flag on its own class; the two inherit it from different roots.
+
+        RainPointGenericSwitch inherits it from RainPointGenericControlBase,
+        which shares no base with RainPointSubDeviceEntity; the select
+        inherits it from RainPointSubDeviceEntity. Two roots is the reason
+        both are constructed here rather than one standing in for the other.
+        """
         sensor_info = _socket_sensor_info("Outlet 1")
         coordinator = _mock_coordinator()
         coordinator.data = {"sensors": {"100_200_1": sensor_info}}
         entities = build_generic_switch_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
         select = RainPointSubDevicePowerSelect(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"))
 
-        assert entities[0]._attr_has_entity_name is True
-        assert select._attr_has_entity_name is True
+        assert entities[0].has_entity_name is True
+        assert select.has_entity_name is True
+        assert "_attr_has_entity_name" not in type(entities[0]).__dict__
         assert "_attr_has_entity_name" not in type(select).__dict__
 
     def test_sensor_tree_platforms_carry_the_flag_by_inheritance(self):
-        """None of these three declares the flag on its own class (checked by
+        """None of these three declares the flag on its own class.
 
-        source grep in this plan's acceptance criteria); each inherits it from
-        RainPointSubDeviceEntity or RainPointSensorBase.
+        Each inherits it from RainPointSubDeviceEntity or RainPointSensorBase,
+        which the three __dict__ assertions below prove directly rather than
+        deferring the claim anywhere else.
         """
         sensor_info = _sensor_info("HCS026FRF")
         coordinator = _mock_coordinator()
@@ -388,9 +409,9 @@ class TestEveryConvertedPlatformSetsHasEntityName:
         battery = RainPointBatterySensor(coordinator, "100_200_1", sensor_info, "100_200_1")
         zone_state = RainPointZoneStateSensor(coordinator, "100_200_1", sensor_info, "100_200_1", 1)
 
-        assert moisture._attr_has_entity_name is True
-        assert battery._attr_has_entity_name is True
-        assert zone_state._attr_has_entity_name is True
+        assert moisture.has_entity_name is True
+        assert battery.has_entity_name is True
+        assert zone_state.has_entity_name is True
         assert "_attr_has_entity_name" not in RainPointMoisturePercentSensor.__dict__
         assert "_attr_has_entity_name" not in RainPointBatterySensor.__dict__
         assert "_attr_has_entity_name" not in RainPointZoneStateSensor.__dict__
@@ -404,11 +425,13 @@ class TestUserOverrideWins:
         device = _make_renamed_device(hass, device_registry, entry, sub_name="HTV210B", display_name="HTV210B (Hub paired)")
         valve = RainPointValveEntity(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
 
+        # Not routed through _compose: the point of this case is the `name`
+        # argument, which _compose deliberately pins to None.
         composed = er._async_get_full_entity_name(
             hass,
             device_id=device.id,
             fallback="unnamed",
-            has_entity_name=getattr(valve, "_attr_has_entity_name", False),
+            has_entity_name=valve.has_entity_name,
             name="My Custom Zone Name",
             original_name=valve._attr_name,
         )
