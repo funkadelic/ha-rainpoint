@@ -523,6 +523,7 @@ class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
     """
 
     _attr_should_poll = False
+    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -549,11 +550,10 @@ class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
             f"{UNIQUE_ID_PREFIX}{base_slug}{GENERIC_CONTROL_UNIQUE_ID_MARKER}{identity.lower()}_p{datapoint.dp_port}"
         )
 
-        sub_name = sensor_info.get("sub_name") or "Device"
         zone = ""
         if port_number is not None and port_number > 1 and datapoint.dp_port >= 1:
-            zone = f" Zone {datapoint.dp_port}"
-        self._attr_name = f"{sub_name}{zone} {identity} (unverified)"
+            zone = f"Zone {datapoint.dp_port} "
+        self._attr_name = f"{zone}{identity} (unverified)"
 
         # Assigned last so the marker always wins over any domain default icon.
         self._attr_icon = GENERIC_CONTROL_MARKER_ICON

@@ -29,9 +29,19 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.rainpoint.const import DOMAIN
 from custom_components.rainpoint.diagnostic_sensors import RainPointBatterySensor
+from custom_components.rainpoint.generic_control import RUN_STATE_IDENTITY, build_generic_switch_entities
 from custom_components.rainpoint.number import RainPointZoneDurationNumber
+from custom_components.rainpoint.select import RainPointSubDevicePowerSelect
 from custom_components.rainpoint.sensor import RainPointMoisturePercentSensor, RainPointZoneStateSensor
 from custom_components.rainpoint.valve import RainPointValveEntity
+from tests.helpers import make_sensor_entry
+
+# The one real CTL_SOCK candidate in the committed catalog with no
+# hand-written decoder, reused from tests/test_generic_control.py's own
+# anchor so this module's generic-control fixture rests on the same ground
+# truth rather than a synthetic one.
+SOCKET_MODEL = "HWG004WRF"
+SOCKET_MODEL_CODE = 34
 
 assert not isinstance(er.async_get, MagicMock), "entity_registry is stubbed; every proof here would be a no-op"
 assert not isinstance(dr.async_get, MagicMock), "device_registry is stubbed; every proof here would be a no-op"
@@ -98,6 +108,28 @@ def _mock_coordinator():
     coordinator = MagicMock()
     coordinator.data = {"sensors": {}}
     return coordinator
+
+
+def _socket_sensor_info(sub_name):
+    entry = make_sensor_entry(
+        hid=HID,
+        mid=MID,
+        addr=ADDR,
+        model=SOCKET_MODEL,
+        sub_name=sub_name,
+        data={
+            "type": "unknown",
+            "model": SOCKET_MODEL,
+            "raw_value": "11#00",
+            "generic": {
+                "decoder": "generic-tlv",
+                "fields": [{"name": RUN_STATE_IDENTITY, "index": 30, "dp_id": 30, "raw": "01", "value": 1}],
+                "field_names": [RUN_STATE_IDENTITY],
+            },
+        },
+    )
+    entry["model_code"] = SOCKET_MODEL_CODE
+    return entry
 
 
 class TestRenamedDeviceComposesShortName:
@@ -176,6 +208,39 @@ class TestRenamedDeviceComposesShortNameForTheSensorTree:
         assert _compose(hass, sensor, device) == "HCS026FRF Moisture Sensor Battery"
 
 
+class TestRenamedDeviceComposesShortNameForGenericAndSelect:
+    """The behavioural proof for the two remaining converted platforms.
+
+    RainPointGenericSwitch declares its own flag (it shares no base with
+    RainPointSubDeviceEntity); RainPointSubDevicePowerSelect needed no source
+    change at all, since it already inherits the flag and already carried a
+    short name -- this is what proves that inheritance claim rather than
+    trusting it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_generic_switch_composes_against_renamed_device(self, hass, device_registry):
+        entry = _make_entry(hass)
+        device = _make_renamed_device(hass, device_registry, entry, sub_name="Outlet 1", display_name="Outlet 1 (Garage)")
+        sensor_info = _socket_sensor_info("Outlet 1")
+        coordinator = _mock_coordinator()
+        coordinator.data = {"sensors": {"100_200_1": sensor_info}}
+
+        entities = build_generic_switch_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+
+        assert len(entities) == 1
+        switch = entities[0]
+        assert _compose(hass, switch, device) == "Outlet 1 (Garage) CTL_SOCK (unverified)"
+
+    @pytest.mark.asyncio
+    async def test_select_composes_against_renamed_device(self, hass, device_registry):
+        entry = _make_entry(hass)
+        device = _make_renamed_device(hass, device_registry, entry, sub_name="HTV210B", display_name="HTV210B (Hub paired)")
+        select = RainPointSubDevicePowerSelect(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"))
+
+        assert _compose(hass, select, device) == "HTV210B (Hub paired) Transmission Power"
+
+
 class TestEveryConvertedPlatformSetsHasEntityName:
     def test_valve_and_duration_carry_the_flag(self):
         valve = RainPointValveEntity(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
@@ -183,6 +248,18 @@ class TestEveryConvertedPlatformSetsHasEntityName:
 
         assert valve._attr_has_entity_name is True
         assert number._attr_has_entity_name is True
+
+    def test_generic_switch_and_select_carry_the_flag(self):
+        """RainPointGenericSwitch declares its own flag; the select inherits it instead."""
+        sensor_info = _socket_sensor_info("Outlet 1")
+        coordinator = _mock_coordinator()
+        coordinator.data = {"sensors": {"100_200_1": sensor_info}}
+        entities = build_generic_switch_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+        select = RainPointSubDevicePowerSelect(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"))
+
+        assert entities[0]._attr_has_entity_name is True
+        assert select._attr_has_entity_name is True
+        assert "_attr_has_entity_name" not in type(select).__dict__
 
     def test_sensor_tree_platforms_carry_the_flag_by_inheritance(self):
         """None of these three declares the flag on its own class (checked by

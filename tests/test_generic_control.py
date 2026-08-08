@@ -865,7 +865,7 @@ class TestRainPointGenericValveConstruction:
     def test_name_single_port_variant_omits_zone(self):
         entity, _, _ = _build_anchor_valve(sub_name="Garden Valve")
 
-        assert entity._attr_name == "Garden Valve CTL_WATER (unverified)"
+        assert entity._attr_name == "CTL_WATER (unverified)"
 
     def test_name_multi_port_variant_includes_zone(self):
         sensor_info = make_sensor_entry(hid=1, mid=2, addr=1, model="HTV214FRF", sub_name="Yard", data=_unknown_data("HTV214FRF"))
@@ -875,7 +875,7 @@ class TestRainPointGenericValveConstruction:
         entities = build_generic_valve_entities(coordinator, "1_2_1", sensor_info, "1_2_1")
 
         names = sorted(e._attr_name for e in entities)
-        assert names == ["Yard Zone 1 CTL_WATER (unverified)", "Yard Zone 2 CTL_WATER (unverified)"]
+        assert names == ["Zone 1 CTL_WATER (unverified)", "Zone 2 CTL_WATER (unverified)"]
 
     def test_device_info_matches_the_sub_device_card(self):
         entity, _, _ = _build_anchor_valve()
@@ -1415,7 +1415,7 @@ class TestRainPointGenericSwitchConstruction:
     def test_name_single_port_variant_omits_zone(self):
         entity, _, _ = _build_anchor_switch(sub_name="Pump Outlet")
 
-        assert entity._attr_name == "Pump Outlet CTL_SOCK (unverified)"
+        assert entity._attr_name == "CTL_SOCK (unverified)"
 
     def test_device_info_matches_the_sub_device_card(self):
         entity, _, _ = _build_anchor_switch()

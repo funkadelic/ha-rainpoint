@@ -836,22 +836,22 @@ class TestRainPointGenericSensorConstruction:
     def test_name_single_port_variant_omits_zone(self):
         dp_entry = _dp("STA_RSSI", dp_port=0)
         sensor = _make_generic_sensor(dp_entry, port_number=1)
-        assert sensor._attr_name == "Garden Sensor Signal Strength (unverified)"
+        assert sensor._attr_name == "Signal Strength (unverified)"
 
     def test_name_multi_port_variant_includes_zone(self):
         dp_entry = _dp("STA_TEM", dp_port=2, dp_code=9)
         sensor = _make_generic_sensor(dp_entry, port_number=4)
-        assert sensor._attr_name == "Garden Sensor Zone 2 Temperature (unverified)"
+        assert sensor._attr_name == "Zone 2 Temperature (unverified)"
 
     def test_zone_segment_omitted_when_port_is_zero_even_on_multi_port_variant(self):
         dp_entry = _dp("STA_TEM", dp_port=0, dp_code=9)
         sensor = _make_generic_sensor(dp_entry, port_number=4)
-        assert sensor._attr_name == "Garden Sensor Temperature (unverified)"
+        assert sensor._attr_name == "Temperature (unverified)"
 
     def test_zone_segment_omitted_when_port_number_is_none(self):
         dp_entry = _dp("STA_TEM", dp_port=2, dp_code=9)
         sensor = _make_generic_sensor(dp_entry, port_number=None)
-        assert sensor._attr_name == "Garden Sensor Temperature (unverified)"
+        assert sensor._attr_name == "Temperature (unverified)"
 
     def test_icon_wins_over_device_class_default(self):
         dp_entry = _dp("STA_TEM", dp_port=0, dp_code=9)
@@ -1348,7 +1348,7 @@ class TestEventTimeRow:
         assert sensor._attr_native_unit_of_measurement is None
         assert sensor._attr_state_class is None
         assert sensor._attr_suggested_display_precision is None
-        assert sensor._attr_name == "Garden Sensor Event Time (unverified)"
+        assert sensor._attr_name == "Event Time (unverified)"
 
     def test_a_zero_word_means_no_event_and_reads_as_no_state(self):
         """An idle zone reports zero here, which must not surface as a date."""
