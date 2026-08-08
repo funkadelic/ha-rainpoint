@@ -79,6 +79,8 @@ def build_sub_device_info(sensor_info: dict, *, name_fallback: str) -> DeviceInf
 class RainPointHubDevice(Entity):
     """Base class for RainPoint hub devices."""
 
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         hub_info: dict,
@@ -109,7 +111,6 @@ class RainPointHubDevice(Entity):
         """
         self._hub_info = hub_info
         self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info['hid']}_{hub_info['mid']}"
-        self._attr_name = hub_info.get("name") or "RainPoint Hub"
         self._attr_should_poll = False
 
     @property

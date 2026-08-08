@@ -346,7 +346,7 @@ class TestAsyncSetupEntryDispatch:
         assert len(captured) == 4
         device_id = next(e for e in captured if isinstance(e, RainPointHubDeviceIDSensor))
         assert device_id.native_value == "17053410"
-        assert device_id._attr_name == "Hub Device ID"
+        assert device_id._attr_name == "Device ID"
         assert device_id.device_info["name"] == "Hub"
 
     @pytest.mark.asyncio

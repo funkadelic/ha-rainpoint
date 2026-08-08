@@ -281,7 +281,7 @@ class TestRainPointHubConnectivityBinarySensor:
 
     def test_name_ends_with_cloud_connection(self):
         entity = self._make()
-        assert entity._attr_name.endswith("Cloud Connection")
+        assert entity._attr_name == "Cloud Connection"
 
     def test_entity_category_is_diagnostic(self):
         entity = self._make()
@@ -374,7 +374,7 @@ class TestRainPointHubRSSISensor:
     def test_name_contains_signal_strength(self):
         """name should describe signal strength."""
         sensor = self._make()
-        assert "Signal Strength" in sensor._attr_name
+        assert sensor._attr_name == "Signal Strength"
 
 
 class TestRainPointHubDeviceIDSensor:

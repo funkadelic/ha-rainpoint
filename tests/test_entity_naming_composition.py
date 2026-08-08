@@ -27,9 +27,18 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.rainpoint.const import DOMAIN
+from custom_components.rainpoint.const import DOMAIN, HUB_IDENTIFIER_PREFIX
 from custom_components.rainpoint.diagnostic_sensors import RainPointBatterySensor
 from custom_components.rainpoint.generic_control import RUN_STATE_IDENTITY, build_generic_switch_entities
+from custom_components.rainpoint.hub_entities import (
+    RainPointHubBroadcastButton,
+    RainPointHubBroadcastSwitch,
+    RainPointHubChannelSelect,
+    RainPointHubConnectivityBinarySensor,
+    RainPointHubDeviceIDSensor,
+    RainPointHubRSSISensor,
+    RainPointPushConnectedBinarySensor,
+)
 from custom_components.rainpoint.number import RainPointZoneDurationNumber
 from custom_components.rainpoint.select import RainPointSubDevicePowerSelect
 from custom_components.rainpoint.sensor import RainPointMoisturePercentSensor, RainPointZoneStateSensor
@@ -49,6 +58,8 @@ assert not isinstance(dr.async_get, MagicMock), "device_registry is stubbed; eve
 HID = 100
 MID = 200
 ADDR = 1
+HUB_HID = 100
+HUB_MID = 900
 
 
 def _make_entry(hass):
@@ -108,6 +119,36 @@ def _mock_coordinator():
     coordinator = MagicMock()
     coordinator.data = {"sensors": {}}
     return coordinator
+
+
+def _hub_info(name=None):
+    info = {"hid": HUB_HID, "mid": HUB_MID, "model": "HWG023WBRF-V2"}
+    if name is not None:
+        info["name"] = name
+    return info
+
+
+def _mock_hub_coordinator():
+    coordinator = MagicMock()
+    coordinator.data = {"hubs": []}
+    return coordinator
+
+
+def _make_renamed_hub_device(hass, device_registry, entry, *, code_name, display_name):
+    """Build a hub device registry row, then rename it the way a real user does.
+
+    Created first with the name the integration itself supplies, then updated
+    with ``name_by_user``: that is the field a real Home Assistant rename
+    writes, and the field ``_async_get_full_entity_name`` prefers over the
+    plain ``name``. Exercising this field rather than ``name`` directly is
+    what proves composition against a user-owned field the code never writes.
+    """
+    device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{HUB_HID}_{HUB_MID}")},
+        name=code_name,
+    )
+    return device_registry.async_update_device(device.id, name_by_user=display_name)
 
 
 def _socket_sensor_info(sub_name):
@@ -239,6 +280,80 @@ class TestRenamedDeviceComposesShortNameForGenericAndSelect:
         select = RainPointSubDevicePowerSelect(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"))
 
         assert _compose(hass, select, device) == "HTV210B (Hub paired) Transmission Power"
+
+
+class TestRenamedHubComposesShortName:
+    """The behavioural proof for the hub tree: a hub the user has renamed.
+
+    Mirrors TestRenamedDeviceComposesShortName's reasoning for the sub-device
+    side: a fixture whose device row name matches the hub record's own name
+    would pass whether or not the hub base ever consults the device registry.
+    """
+
+    @pytest.mark.asyncio
+    async def test_hub_rssi_composes_against_renamed_hub(self, hass, device_registry):
+        entry = _make_entry(hass)
+        device = _make_renamed_hub_device(hass, device_registry, entry, code_name="RainPoint Hub", display_name="Kitchen Hub")
+        sensor = RainPointHubRSSISensor(_mock_hub_coordinator(), _hub_info(name="RainPoint Hub"))
+
+        assert _compose(hass, sensor, device) == "Kitchen Hub Signal Strength"
+
+    @pytest.mark.asyncio
+    async def test_hub_device_id_composes_against_renamed_hub(self, hass, device_registry):
+        """The second of the two distinct hub name shapes: rebuilt from the hub
+        record rather than appended to the inherited name, and must be proven
+        separately from the RSSI case above."""
+        entry = _make_entry(hass)
+        device = _make_renamed_hub_device(hass, device_registry, entry, code_name="RainPoint Hub", display_name="Kitchen Hub")
+        sensor = RainPointHubDeviceIDSensor(_mock_hub_coordinator(), _hub_info(name="RainPoint Hub"))
+
+        assert _compose(hass, sensor, device) == "Kitchen Hub Device ID"
+
+    @pytest.mark.asyncio
+    async def test_unnamed_hub_still_yields_short_names(self, hass, device_registry):
+        """A hub record with no name at all still yields a short entity name,
+        never 'None Signal Strength' and never 'RainPoint Hub Signal Strength'
+        once the base stops appending anything to compose against."""
+        entry = _make_entry(hass)
+        device = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{HUB_HID}_{HUB_MID}")},
+            name="RainPoint Hub",
+        )
+        sensor = RainPointHubRSSISensor(_mock_hub_coordinator(), _hub_info())
+
+        assert _compose(hass, sensor, device) == "RainPoint Hub Signal Strength"
+        assert device.name == "RainPoint Hub"
+
+
+class TestEveryHubEntitySetsHasEntityName:
+    def test_all_six_hub_families_carry_the_flag(self):
+        """Constructs one instance of each of the six hub entity families that
+        root at RainPointHubDevice, rather than reading the flag off the base
+        class, so a family that stopped inheriting the base would be caught."""
+        coordinator = _mock_hub_coordinator()
+        mqtt_client = MagicMock()
+        hub_info = _hub_info(name="RainPoint Hub")
+
+        rssi = RainPointHubRSSISensor(coordinator, hub_info)
+        connectivity = RainPointHubConnectivityBinarySensor(coordinator, hub_info)
+        channel_select = RainPointHubChannelSelect(coordinator, hub_info)
+        push_connected = RainPointPushConnectedBinarySensor(mqtt_client, hub_info)
+        broadcast_switch = RainPointHubBroadcastSwitch(coordinator, hub_info)
+        broadcast_button = RainPointHubBroadcastButton(coordinator, hub_info)
+
+        for entity in (rssi, connectivity, channel_select, push_connected, broadcast_switch, broadcast_button):
+            assert entity._attr_has_entity_name is True
+
+
+class TestHubEntityUniqueIdsUnchanged:
+    def test_hub_entity_unique_ids_are_byte_identical(self):
+        """The identity half stays pinned while the name half moves."""
+        rssi = RainPointHubRSSISensor(_mock_hub_coordinator(), _hub_info(name="RainPoint Hub"))
+        device_id_sensor = RainPointHubDeviceIDSensor(_mock_hub_coordinator(), _hub_info(name="RainPoint Hub"))
+
+        assert rssi._attr_unique_id == f"rainpoint_hub_{HUB_HID}_{HUB_MID}_rssi"
+        assert device_id_sensor._attr_unique_id == f"rainpoint_hub_{HUB_HID}_{HUB_MID}_device_id"
 
 
 class TestEveryConvertedPlatformSetsHasEntityName:

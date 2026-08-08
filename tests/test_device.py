@@ -62,10 +62,23 @@ class TestRainPointHubDevice:
         hub = self._make_hub(hid=42, mid=77)
         assert hub._attr_unique_id == f"{DOMAIN}_hub_42_77"
 
-    def test_hub_name_attribute(self):
-        """_attr_name should match the hub name."""
+    def test_base_sets_no_attr_name(self):
+        """RainPointHubDevice leaves no _attr_name in the instance dict.
+
+        Written against the instance dict rather than hasattr: the test
+        conftest's stand-in for the Home Assistant base declares
+        ``_attr_name = None`` as a real class attribute, while the real base
+        only annotates it, so hasattr would answer differently under test
+        than in production. The base must supply no name at all, so no
+        subclass composing against it can double up on one.
+        """
         hub = self._make_hub(name="Test Hub")
-        assert hub._attr_name == "Test Hub"
+        assert "_attr_name" not in hub.__dict__
+
+    def test_base_sets_has_entity_name(self):
+        """The one flag site covering every hub entity family."""
+        hub = self._make_hub(name="Test Hub")
+        assert hub._attr_has_entity_name is True
 
 
 class TestBuildSubDeviceInfoIdentity:

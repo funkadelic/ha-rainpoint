@@ -119,6 +119,7 @@ _HA_STUBS = [
     "homeassistant.components.binary_sensor",
     "homeassistant.components.number",
     "homeassistant.components.switch",
+    "homeassistant.components.button",
     "homeassistant.components.repairs",
     "homeassistant.const",
     "homeassistant.data_entry_flow",
@@ -356,6 +357,12 @@ class _BinarySensorEntity:
     pass
 
 
+class _ButtonEntity:
+    """_ButtonEntity."""
+
+    pass
+
+
 # Patch the stub modules with real classes so multi-inheritance works.
 sys.modules["homeassistant.helpers.update_coordinator"].CoordinatorEntity = _CoordinatorEntity
 sys.modules["homeassistant.helpers.entity"].Entity = _HABaseEntity
@@ -373,6 +380,7 @@ sys.modules["homeassistant.components.select"].SelectEntity = _SelectEntity
 sys.modules["homeassistant.components.switch"].SwitchEntity = _SwitchEntity
 sys.modules["homeassistant.components.binary_sensor"].BinarySensorEntity = _BinarySensorEntity
 sys.modules["homeassistant.components.binary_sensor"].BinarySensorDeviceClass = MagicMock()
+sys.modules["homeassistant.components.button"].ButtonEntity = _ButtonEntity
 
 
 # issue_registry: real functions (MagicMock) so tests can assert create/delete
