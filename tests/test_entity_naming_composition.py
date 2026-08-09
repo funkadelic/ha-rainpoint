@@ -63,6 +63,8 @@ HUB_MID = 900
 
 
 def _make_entry(hass):
+    """Create and register a minimal RainPoint config entry that the fixture
+    device rows in this module attach to."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"area_code": "1", "email": "a@b.c", "password": "pw", "hids": [HID], "token": "tok"},
@@ -118,6 +120,9 @@ def _compose(hass, entity, device):
 
 
 def _sensor_info(sub_name):
+    """Build a sub-device sensor_info dict for the shared HID/MID/ADDR
+    identity, model fixed to HTV210B. sub_name is left to the caller so the
+    device registry's display name can be made to diverge from it."""
     return {
         "hid": HID,
         "mid": MID,
@@ -128,12 +133,21 @@ def _sensor_info(sub_name):
 
 
 def _mock_coordinator():
+    """A bare coordinator stand-in with an empty sensors map, enough for
+    entity constructors that never read past their own sensor_info
+    argument."""
     coordinator = MagicMock()
     coordinator.data = {"sensors": {}}
     return coordinator
 
 
 def _hub_info(name=None):
+    """Build a hub_info dict for the shared HUB_HID/HUB_MID identity.
+
+    The name key is omitted entirely rather than set to None when name is
+    None, so the unnamed-hub tests exercise a record that carries no name
+    field at all, not one carrying an explicit null.
+    """
     info = {"hid": HUB_HID, "mid": HUB_MID, "model": "HWG023WBRF-V2"}
     if name is not None:
         info["name"] = name
@@ -141,6 +155,9 @@ def _hub_info(name=None):
 
 
 def _mock_hub_coordinator():
+    """A bare hub coordinator stand-in with an empty hubs list, enough for
+    hub entity constructors that never read past their own hub_info
+    argument."""
     coordinator = MagicMock()
     coordinator.data = {"hubs": []}
     return coordinator
@@ -164,6 +181,10 @@ def _make_renamed_hub_device(hass, device_registry, entry, *, code_name, display
 
 
 def _socket_sensor_info(sub_name):
+    """Build a sensor_info entry for SOCKET_MODEL, the one real CTL_SOCK
+    candidate in the committed catalog with no hand-written decoder, carrying
+    a generic-decoded run-state field so build_generic_switch_entities has
+    something to build a switch from."""
     entry = make_sensor_entry(
         hid=HID,
         mid=MID,
@@ -197,6 +218,9 @@ class TestRenamedDeviceComposesShortName:
 
     @pytest.mark.asyncio
     async def test_valve_composes_against_renamed_device(self, hass, device_registry):
+        """Compose the valve's short name against a device row renamed away
+        from its sub_name and assert the renamed display name, not the
+        original sub_name, appears in the composed entity name."""
         entry = _make_entry(hass)
         device = _make_renamed_device(hass, device_registry, entry, sub_name="HTV210B", display_name="HTV210B (Hub paired)")
         valve = RainPointValveEntity(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
@@ -205,6 +229,9 @@ class TestRenamedDeviceComposesShortName:
 
     @pytest.mark.asyncio
     async def test_duration_composes_against_renamed_device(self, hass, device_registry):
+        """Compose the duration number's short name against the same renamed
+        device row and assert the renamed display name carries through,
+        mirroring the valve case above for the sibling platform."""
         entry = _make_entry(hass)
         device = _make_renamed_device(hass, device_registry, entry, sub_name="HTV210B", display_name="HTV210B (Hub paired)")
         number = RainPointZoneDurationNumber(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
@@ -240,6 +267,10 @@ class TestRenamedDeviceComposesShortNameForTheSensorTree:
 
     @pytest.mark.asyncio
     async def test_moisture_percent_composes_against_renamed_device(self, hass, device_registry):
+        """Compose the moisture percent sensor's short name against the
+        renamed soil-sensor device row, proving the shared
+        RainPointSubDeviceEntity base consults the device registry rather
+        than reading the sensor_info's own sub_name."""
         entry = _make_entry(hass)
         device = _make_renamed_device(
             hass, device_registry, entry, sub_name="HCS026FRF", display_name="HCS026FRF Moisture Sensor"
@@ -251,6 +282,10 @@ class TestRenamedDeviceComposesShortNameForTheSensorTree:
 
     @pytest.mark.asyncio
     async def test_battery_composes_against_renamed_device(self, hass, device_registry):
+        """Compose the battery sensor's short name against the same renamed
+        device row, the second of two sensor-tree platforms proving the
+        shared base's composition rather than trusting the moisture case to
+        stand in for it."""
         entry = _make_entry(hass)
         device = _make_renamed_device(
             hass, device_registry, entry, sub_name="HCS026FRF", display_name="HCS026FRF Moisture Sensor"
@@ -274,6 +309,11 @@ class TestRenamedDeviceComposesShortNameForGenericAndSelect:
 
     @pytest.mark.asyncio
     async def test_generic_switch_composes_against_renamed_device(self, hass, device_registry):
+        """Compose the generic switch's short name against a renamed outlet
+        device row, proving RainPointGenericSwitch's inherited flag (from
+        RainPointGenericControlBase, which shares no base with
+        RainPointSubDeviceEntity) actually drives correct composition rather
+        than merely resolving to True in isolation."""
         entry = _make_entry(hass)
         device = _make_renamed_device(hass, device_registry, entry, sub_name="Outlet 1", display_name="Outlet 1 (Garage)")
         sensor_info = _socket_sensor_info("Outlet 1")
@@ -288,6 +328,9 @@ class TestRenamedDeviceComposesShortNameForGenericAndSelect:
 
     @pytest.mark.asyncio
     async def test_select_composes_against_renamed_device(self, hass, device_registry):
+        """Compose the power select's short name against the renamed HTV210B
+        device row, the second inheritance path (RainPointSubDeviceEntity)
+        proven the same way as the generic switch above."""
         entry = _make_entry(hass)
         device = _make_renamed_device(hass, device_registry, entry, sub_name="HTV210B", display_name="HTV210B (Hub paired)")
         select = RainPointSubDevicePowerSelect(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"))
@@ -305,6 +348,10 @@ class TestRenamedHubComposesShortName:
 
     @pytest.mark.asyncio
     async def test_hub_rssi_composes_against_renamed_hub(self, hass, device_registry):
+        """Compose the hub RSSI sensor's short name against a hub device row
+        the user has renamed via name_by_user, asserting the renamed display
+        name reaches the composed string rather than the hub record's own
+        name."""
         entry = _make_entry(hass)
         device = _make_renamed_hub_device(hass, device_registry, entry, code_name="RainPoint Hub", display_name="Kitchen Hub")
         sensor = RainPointHubRSSISensor(_mock_hub_coordinator(), _hub_info(name="RainPoint Hub"))
@@ -340,6 +387,8 @@ class TestRenamedHubComposesShortName:
 
 
 class TestEveryHubEntitySetsHasEntityName:
+    """Covers the six hub entity families that root at RainPointHubDevice."""
+
     def test_all_six_hub_families_carry_the_flag(self):
         """Constructs one instance of each of the six hub entity families that
         root at RainPointHubDevice, rather than reading the flag off the base
@@ -360,6 +409,10 @@ class TestEveryHubEntitySetsHasEntityName:
 
 
 class TestHubEntityUniqueIdsUnchanged:
+    """The unique_id side of the hub naming conversion: proves the
+    identifiers used for registry entries did not move even though the
+    display-name composition did."""
+
     def test_hub_entity_unique_ids_are_byte_identical(self):
         """The identity half stays pinned while the name half moves."""
         rssi = RainPointHubRSSISensor(_mock_hub_coordinator(), _hub_info(name="RainPoint Hub"))
@@ -370,7 +423,13 @@ class TestHubEntityUniqueIdsUnchanged:
 
 
 class TestEveryConvertedPlatformSetsHasEntityName:
+    """Covers has_entity_name across every platform this branch converted,
+    split by which shared base each inherits the flag from."""
+
     def test_valve_and_duration_carry_the_flag(self):
+        """Assert the valve and duration number, the two platforms with
+        their own __init__ rather than a shared sensor-tree base, both
+        resolve has_entity_name to True."""
         valve = RainPointValveEntity(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
         number = RainPointZoneDurationNumber(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
 
@@ -418,6 +477,9 @@ class TestEveryConvertedPlatformSetsHasEntityName:
 
 
 class TestUserOverrideWins:
+    """Covers the case _compose deliberately does not: a user-set name
+    override in the entity registry must survive composition unchanged."""
+
     @pytest.mark.asyncio
     async def test_user_set_name_override_composes_unchanged(self, hass, device_registry):
         """An entity registry row that already carries a user override keeps it."""
@@ -440,7 +502,13 @@ class TestUserOverrideWins:
 
 
 class TestUniqueIdUnchanged:
+    """The unique_id counterpart to TestEveryConvertedPlatformSetsHasEntityName:
+    proves the naming conversion touched only the display name, not entity
+    identity."""
+
     def test_valve_and_duration_unique_ids_are_byte_identical(self):
+        """Assert the valve and duration number's unique_id strings are
+        unchanged from before the naming conversion, byte for byte."""
         valve = RainPointValveEntity(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
         number = RainPointZoneDurationNumber(_mock_coordinator(), "100_200_1", _sensor_info("HTV210B"), 1)
 

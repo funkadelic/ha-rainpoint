@@ -207,6 +207,11 @@ class TestUnnamedSubDeviceNameAgreesAcrossPlatforms:
     inline literals."""
 
     def test_all_four_platforms_agree_on_the_unnamed_device_name(self):
+        """Build one entity from each of the four converted platforms against
+        the same cloud-unnamed sub-device and assert their device_info names
+        agree, proving the platforms delegate to the shared
+        build_sub_device_info call rather than each carrying its own inline
+        fallback literal."""
         from custom_components.rainpoint.generic_control import ControlDatapoint, RainPointGenericControlBase
         from custom_components.rainpoint.number import RainPointZoneDurationNumber
         from custom_components.rainpoint.sensor import RainPointMoisturePercentSensor

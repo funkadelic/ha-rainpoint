@@ -258,6 +258,9 @@ class TestNoAttrNameCarriesADeviceName:
     """The scan over the real package."""
 
     def test_no_module_interpolates_a_device_name(self):
+        """Run the violation scan over every module the package walk reaches
+        and fail with a per-line report if any _attr_name assignment still
+        interpolates a device name."""
         violations = []
         for path in _all_package_modules():
             violations.extend(_scan_module_for_device_name_violations(path))
@@ -294,6 +297,9 @@ class TestTheScanItselfHasTeeth:
         ],
     )
     def test_violating_sources_are_flagged(self, source):
+        """Each parametrized source is an _attr_name assignment that reads as
+        a device name in one of the recognised shapes; assert the predicate
+        catches every one of them."""
         assignments = list(_iter_attr_name_assignments(source))
         assert len(assignments) == 1
         assert _interpolates_a_device_name(assignments[0]) is not None
@@ -312,6 +318,11 @@ class TestTheScanItselfHasTeeth:
         ],
     )
     def test_clean_sources_are_not_flagged(self, source):
+        """Each parametrized source assigns _attr_name from something that is
+        not a device name -- a zone number, a rain window, a model string, a
+        raw reading key; assert the predicate leaves all of them unflagged,
+        the companion direction that keeps the scan from just flagging
+        everything it sees."""
         assignments = list(_iter_attr_name_assignments(source))
         assert len(assignments) == 1
         assert _interpolates_a_device_name(assignments[0]) is None
@@ -331,6 +342,9 @@ class TestEveryEntityClassResolvesHasEntityName:
     """
 
     def test_no_entity_class_leaves_the_flag_unresolved(self):
+        """Assert the child-interpreter sweep, run against the real Home
+        Assistant base classes, found no entity class in the package that
+        resolves has_entity_name to anything other than True."""
         offenders = _real_ha_flag_sweep()["offenders"]
         assert not offenders, "\n".join(
             [
@@ -404,6 +418,9 @@ class TestScanCarriesNoBypassMechanism:
     existence, so its absence is the check that the conversion was total."""
 
     def test_entry_points_take_no_skip_list_parameter(self):
+        """Assert both scan entry points accept only their one
+        file-identifying parameter, so no caller can thread in a skip list
+        to exempt a module or class from the scan."""
         assert list(inspect.signature(_iter_attr_name_assignments).parameters) == ["source"]
         assert list(inspect.signature(_scan_module_for_device_name_violations).parameters) == ["path"]
 
