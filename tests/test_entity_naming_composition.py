@@ -75,18 +75,26 @@ def _make_entry(hass):
 
 
 def _make_renamed_device(hass, device_registry, entry, *, sub_name, display_name):
-    """Build a device registry row whose display name may diverge from sub_name.
+    """Build a sub-device registry row, then rename it the way a real user does.
 
-    ``sub_name`` is accepted for readability at the call site (it is what the
-    entity being tested was built from) even though only ``display_name`` feeds
-    the created row; the two are compared by the caller, not by this helper.
+    Created first with ``sub_name``, the name the integration itself supplies,
+    then updated with ``name_by_user``: that is the field a real Home Assistant
+    rename writes, and the field ``_async_get_full_entity_name`` prefers over
+    the plain ``name``. Exercising this field rather than ``name`` directly is
+    what proves composition against a user-owned field the code never writes,
+    and it is the shape a renamed device actually has in a live registry.
+
+    Mirrors ``_make_renamed_hub_device``. Setting ``name`` to the display name
+    instead would still compose correctly, because Home Assistant falls back to
+    ``name`` when ``name_by_user`` is unset, so the assertions would pass while
+    never touching the user-rename path that motivated this whole module.
     """
-    del sub_name
-    return device_registry.async_get_or_create(
+    device = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
-        name=display_name,
+        name=sub_name,
     )
+    return device_registry.async_update_device(device.id, name_by_user=display_name)
 
 
 def _compose(hass, entity, device):
