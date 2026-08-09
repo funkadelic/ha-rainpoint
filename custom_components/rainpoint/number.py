@@ -101,12 +101,12 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
     datapoint. Everything here was duplicated between them verbatim.
     """
 
+    _attr_has_entity_name = True
     _attr_native_min_value = DURATION_MIN_MINUTES
     _attr_native_max_value = DURATION_MAX_MINUTES
     _attr_native_step = DURATION_STEP_MINUTES
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_mode = NumberMode.BOX
-    _device_name_prefix = "Valve Hub"
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -138,10 +138,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
 
     @property
     def device_info(self) -> DeviceInfo:
-        return build_sub_device_info(
-            self._sensor_info,
-            name_fallback=f"{self._device_name_prefix} {self._sensor_info['addr']}",
-        )
+        return build_sub_device_info(self._sensor_info)
 
 
 class RainPointZoneDurationNumber(_RainPointDurationNumberBase):
@@ -170,10 +167,9 @@ class RainPointZoneDurationNumber(_RainPointDurationNumberBase):
         hid = sensor_info["hid"]
         mid = sensor_info["mid"]
         addr = sensor_info["addr"]
-        sub_name = sensor_info.get("sub_name") or f"{self._device_name_prefix} {addr}"
 
         self._attr_unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{zone_num}_duration"
-        self._attr_name = f"{sub_name} Zone {zone_num} Duration"
+        self._attr_name = f"Zone {zone_num} Duration"
 
 
 def build_generic_duration_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
@@ -215,8 +211,6 @@ class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
     the way the trusted valve resolves its own duration companion.
     """
 
-    _device_name_prefix = "Device"
-
     def __init__(
         self,
         coordinator: RainPointCoordinator,
@@ -239,11 +233,10 @@ class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
             f"{identity.lower()}_p{datapoint.dp_port}{GENERIC_CONTROL_DURATION_SUFFIX}"
         )
 
-        sub_name = sensor_info.get("sub_name") or self._device_name_prefix
         zone = ""
         if port_number is not None and port_number > 1 and datapoint.dp_port >= 1:
-            zone = f" Zone {datapoint.dp_port}"
-        self._attr_name = f"{sub_name}{zone} {identity} Duration (unverified)"
+            zone = f"Zone {datapoint.dp_port} "
+        self._attr_name = f"{zone}{identity} Duration (unverified)"
 
         # Assigned last so the marker always wins over any domain default icon.
         self._attr_icon = GENERIC_CONTROL_MARKER_ICON

@@ -133,7 +133,7 @@ class RainPointHubRSSISensor(RainPointHubSensorBase):
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"{self._attr_unique_id}_rssi"
-        self._attr_name = f"{self._attr_name} Signal Strength"
+        self._attr_name = "Signal Strength"
 
     @property
     def native_value(self) -> int | None:
@@ -153,7 +153,7 @@ class RainPointHubDeviceIDSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:identifier"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
-        """Name the entity after the hub and key the entity to its home id and mid."""
+        """Key the entity to its home id and mid."""
         super().__init__(coordinator, hub_info)
         # The five inline ids in this file keep the defaulted mid lookup so the
         # file carries one spelling of the segment. It cannot actually default:
@@ -162,7 +162,7 @@ class RainPointHubDeviceIDSensor(RainPointHubSensorBase):
         self._attr_unique_id = (
             f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_device_id"
         )
-        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Device ID"
+        self._attr_name = "Device ID"
 
     @property
     def native_value(self) -> str | int | None:
@@ -177,10 +177,10 @@ class RainPointHubFirmwareSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:chip"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
-        """Name the entity after the hub and key the entity to its home id and mid."""
+        """Key the entity to its home id and mid."""
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_firmware"
-        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Firmware Version"
+        self._attr_name = "Firmware Version"
 
     @property
     def native_value(self) -> str | None:
@@ -193,10 +193,10 @@ class RainPointHubMACSensor(RainPointHubSensorBase):
     _attr_icon = "mdi:network-outline"
 
     def __init__(self, coordinator: RainPointCoordinator, hub_info: dict):
-        """Name the entity after the hub and key the entity to its home id and mid."""
+        """Key the entity to its home id and mid."""
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_mac"
-        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} MAC Address"
+        self._attr_name = "MAC Address"
 
     @property
     def native_value(self) -> str | None:
@@ -231,7 +231,7 @@ class RainPointHubConnectivityBinarySensor(CoordinatorEntity, BinarySensorEntity
         self._attr_unique_id = (
             f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_connectivity"
         )
-        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Cloud Connection"
+        self._attr_name = "Cloud Connection"
 
     @property
     def _record(self) -> dict:
@@ -364,7 +364,7 @@ class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDev
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_channel"
-        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} RF Communication Channel"
+        self._attr_name = "RF Communication Channel"
         self._attr_options = _hub_rf_channel_options(hub_info)
         # Current channel comes from the hub record; None renders as unknown when
         # the field is absent. Selecting a channel is still unsupported (below).
@@ -429,7 +429,7 @@ class RainPointPushConnectedBinarySensor(_RainPointPushDiagnosticBase, BinarySen
         """Build the connection-state entity with a stable per-hub unique id."""
         super().__init__(mqtt_client, hub_info)
         self._attr_unique_id = f"{self._attr_unique_id}_{PUSH_CONNECTED_UNIQUE_ID_SUFFIX}"
-        self._attr_name = f"{self._attr_name} Push Connected"
+        self._attr_name = "Push Connected"
 
     @property
     def is_on(self) -> bool:
@@ -454,7 +454,7 @@ class RainPointPushLastMessageSensor(_RainPointPushDiagnosticBase, SensorEntity)
         super().__init__(mqtt_client, hub_info)
         self._time_source = time_source
         self._attr_unique_id = f"{self._attr_unique_id}_{PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX}"
-        self._attr_name = f"{self._attr_name} Push Last Message"
+        self._attr_name = "Push Last Message"
 
     @property
     def native_value(self) -> datetime | None:
@@ -488,7 +488,7 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
         self._attr_unique_id = (
             f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_broadcast"
         )
-        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Automatic Broadcast Time"
+        self._attr_name = "Automatic Broadcast Time"
         # The post-write override: set only after a write's cloud
         # acknowledgment, cleared by the next real poll so a poll that
         # contradicts the command always wins.
@@ -606,7 +606,7 @@ class RainPointHubBroadcastButton(CoordinatorEntity, ButtonEntity, RainPointHubD
         self._attr_unique_id = (
             f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_broadcast_now"
         )
-        self._attr_name = f"{hub_info.get('name') or 'RainPoint Hub'} Broadcast Time Now"
+        self._attr_name = "Broadcast Time Now"
 
     @property
     def available(self) -> bool:

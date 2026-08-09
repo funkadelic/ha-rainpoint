@@ -75,7 +75,7 @@ def _make_number(current_value=10.0, firmware_version="1.0"):
     num._zone_num = 1
     num._current_value = current_value
     num._attr_unique_id = "rainpoint_100_200_1_zone1_duration"
-    num._attr_name = "Valve Hub 1 Zone 1 Duration"
+    num._attr_name = "Zone 1 Duration"
     num.hass = MagicMock()
     num.async_write_ha_state = MagicMock()
     return num
@@ -250,10 +250,15 @@ class TestNumberConstructor:
         assert inst._zone_num == 2
         assert inst._current_value == num_mod.DURATION_DEFAULT_MINUTES
         assert inst._attr_unique_id == "rainpoint_100_200_1_zone2_duration"
-        assert inst._attr_name == "Front Yard Zone 2 Duration"
+        assert inst._attr_name == "Zone 2 Duration"
 
     def test_constructor_fallback_sub_name(self):
-        """Missing sub_name falls back to 'Valve Hub {addr}'."""
+        """Missing sub_name leaves the entity name unaffected.
+
+        The device page falls back to '{model} {addr}' instead, since the
+        display name is now composed by Home Assistant from device_info
+        rather than interpolated here.
+        """
         import custom_components.rainpoint.number as num_mod
 
         real_init = num_mod.RainPointZoneDurationNumber.__dict__["__init__"]
@@ -263,7 +268,8 @@ class TestNumberConstructor:
         coord = MagicMock()
         real_init(inst, coord, "9_8_7", sensor_info, 1)
 
-        assert "Valve Hub 7" in inst._attr_name
+        assert inst._attr_name == "Zone 1 Duration"
+        assert inst.device_info["name"] == "M 7"
 
 
 class TestNumberAsyncAddedToHass:
@@ -551,7 +557,7 @@ class TestGenericZoneDurationNumberConstruction:
 
         entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
 
-        assert entities[0]._attr_name == "Garden Valve CTL_WATER Duration (unverified)"
+        assert entities[0]._attr_name == "CTL_WATER Duration (unverified)"
 
     def test_two_zone_names_include_the_zone_segment(self):
         sensor_info = _generic_control_sensor_info(TWO_ZONE_MODEL, TWO_ZONE_MODEL_CODE, sub_name="Yard")
@@ -561,8 +567,8 @@ class TestGenericZoneDurationNumberConstruction:
 
         names = sorted(e._attr_name for e in entities)
         assert names == [
-            "Yard Zone 1 CTL_WATER Duration (unverified)",
-            "Yard Zone 2 CTL_WATER Duration (unverified)",
+            "Zone 1 CTL_WATER Duration (unverified)",
+            "Zone 2 CTL_WATER Duration (unverified)",
         ]
 
     def test_icon_is_the_generic_control_marker_icon(self):

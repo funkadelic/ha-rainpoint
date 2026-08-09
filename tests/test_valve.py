@@ -66,7 +66,7 @@ def _make_valve(zone_data=None, hub_online=True, model="HTV245FRF"):
     valve._zone_num = 1
     valve.hass = MagicMock()
     valve._attr_unique_id = "rainpoint_100_200_1_zone1"
-    valve._attr_name = "Valve Hub 1 Zone 1"
+    valve._attr_name = "Zone 1"
     return valve
 
 
@@ -492,10 +492,15 @@ class TestValveInit:
         assert valve._sensor_key == "10_20_3"
         assert valve._zone_num == 2
         assert valve._attr_unique_id == "rainpoint_10_20_3_zone2"
-        assert valve._attr_name == "Backyard Zone 2"
+        assert valve._attr_name == "Zone 2"
 
     def test_init_defaults_sub_name_when_missing(self):
-        """Missing sub_name falls back to 'Valve Hub {addr}'."""
+        """Missing sub_name leaves the entity name unaffected.
+
+        The device page falls back to '{model} {addr}' instead, since the
+        display name is now composed by Home Assistant from device_info
+        rather than interpolated here.
+        """
         from custom_components.rainpoint.valve import RainPointValveEntity
 
         mock_coordinator = MagicMock()
@@ -504,7 +509,8 @@ class TestValveInit:
 
         valve = RainPointValveEntity(mock_coordinator, "1_2_7", sensor_info, 1)
 
-        assert valve._attr_name == "Valve Hub 7 Zone 1"
+        assert valve._attr_name == "Zone 1"
+        assert valve.device_info["name"] == "HTV245FRF 7"
 
 
 class TestValveSetupEntry:
@@ -1436,7 +1442,7 @@ def _make_dp_valve(zone_data=None, hub_online=True):
     valve._zone_num = 1
     valve.hass = MagicMock()
     valve._attr_unique_id = "rainpoint_100_200_1_zone1"
-    valve._attr_name = "BT Valve Zone 1"
+    valve._attr_name = "Zone 1"
     return valve
 
 

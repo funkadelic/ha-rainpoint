@@ -320,16 +320,17 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
     """
     raw_model = info.get("model")
     model = _SENSOR_MODEL_ALIASES.get(raw_model, raw_model)
-    sub_name = info.get("sub_name") or f"Sensor {info['addr']}"
     hid = info.get("hid", "")
     mid = info.get("mid", "")
     addr = info.get("addr", "")
     base_slug = f"{hid}_{mid}_{addr}"
+    # Keys and the numeric model code only. The model string and the cloud's
+    # own name for the device are free text the cloud supplies, and this
+    # integration's logging rule keeps both out of every cloud-record path.
     _LOGGER.debug(
-        "Creating sensor entity: key=%s, model=%s, sub_name=%s, base_slug=%s",
+        "Creating sensor entity: key=%s, model_code=%s, base_slug=%s",
         key,
-        model,
-        sub_name,
+        info.get("model_code"),
         base_slug,
     )
 
@@ -518,8 +519,6 @@ async def async_setup_entry(
 class RainPointSensorBase(RainPointSubDeviceEntity, SensorEntity):
     """Base class for RainPoint sensors."""
 
-    _device_name_prefix = "Sensor"
-
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self._sensor_data or {}
@@ -574,9 +573,8 @@ class RainPointMoisturePercentSensor(RainPointSensorBase):
     ) -> None:
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._simple = simple
-        sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_moisture_percent"
-        self._attr_name = f"{sub_name} Moisture Percent"
+        self._attr_name = "Moisture Percent"
 
     @property
     def native_value(self) -> float | None:
@@ -601,9 +599,8 @@ class RainPointTemperatureSensor(RainPointSensorBase):
         base_slug: str,
     ) -> None:
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_temperature"
-        self._attr_name = f"{sub_name} Temperature"
+        self._attr_name = "Temperature"
 
     @property
     def native_value(self) -> float | None:
@@ -629,9 +626,8 @@ class RainPointIlluminanceSensor(RainPointSensorBase):
         base_slug: str,
     ) -> None:
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_illuminance"
-        self._attr_name = f"{sub_name} Illuminance"
+        self._attr_name = "Illuminance"
 
     @property
     def native_value(self) -> float | None:
@@ -660,7 +656,6 @@ class RainPointRainSensor(RainPointSensorBase):
     ) -> None:
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._data_key = data_key
-        sub_name = sensor_info.get("sub_name") or "Rain Sensor"
         slug_suffix = data_key
         self._attr_unique_id = f"rainpoint_{base_slug}_{slug_suffix}"
         # Format rain labels: convert to "Rain (Last X)" style
@@ -672,7 +667,7 @@ class RainPointRainSensor(RainPointSensorBase):
             "total": "Total",
         }
         window_fmt = window_map.get(window, window.title())
-        self._attr_name = f"{sub_name} Rain ({window_fmt})"
+        self._attr_name = f"Rain ({window_fmt})"
 
     @property
     def native_value(self) -> float | None:
@@ -695,8 +690,7 @@ class DisplayHubReadingSensor(RainPointSensorBase):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._reading_key = reading_key
         self._attr_unique_id = f"rainpoint_{base_slug}_displayhub_{reading_key}"
-        sub_name = sensor_info.get("sub_name") or "Display Hub"
-        self._attr_name = f"{sub_name} {reading_key}"
+        self._attr_name = str(reading_key)
 
     @property
     def native_value(self):
@@ -720,7 +714,7 @@ class RainPointTempHumCurrentSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_temphum_current"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Current Temperature"
+        self._attr_name = "Current Temperature"
 
     @property
     def native_value(self):
@@ -736,7 +730,7 @@ class RainPointTempHumHighSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_temphum_high"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} High Temperature"
+        self._attr_name = "High Temperature"
 
     @property
     def native_value(self):
@@ -752,7 +746,7 @@ class RainPointTempHumLowSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_temphum_low"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Low Temperature"
+        self._attr_name = "Low Temperature"
 
     @property
     def native_value(self):
@@ -768,7 +762,7 @@ class RainPointTempHumHumidityCurrentSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_temphum_humidity_current"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Current Humidity"
+        self._attr_name = "Current Humidity"
 
     @property
     def native_value(self):
@@ -784,7 +778,7 @@ class RainPointTempHumHumidityHighSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_temphum_humidity_high"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} High Humidity"
+        self._attr_name = "High Humidity"
 
     @property
     def native_value(self):
@@ -800,7 +794,7 @@ class RainPointTempHumHumidityLowSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_temphum_humidity_low"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Low Humidity"
+        self._attr_name = "Low Humidity"
 
     @property
     def native_value(self):
@@ -816,7 +810,7 @@ class RainPointFlowCurrentUsedSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_flow_current_used"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Flow Current Used"
+        self._attr_name = "Flow Current Used"
 
     @property
     def native_value(self):
@@ -831,7 +825,7 @@ class RainPointFlowCurrentDurationSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_flow_current_duration"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Flow Current Duration"
+        self._attr_name = "Flow Current Duration"
 
     @property
     def native_value(self):
@@ -846,7 +840,7 @@ class RainPointFlowLastUsedSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_flow_last_used"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Flow Last Used"
+        self._attr_name = "Flow Last Used"
 
     @property
     def native_value(self):
@@ -861,7 +855,7 @@ class RainPointFlowLastUsedDurationSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_flow_last_used_duration"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Flow Last Used Duration"
+        self._attr_name = "Flow Last Used Duration"
 
     @property
     def native_value(self):
@@ -876,7 +870,7 @@ class RainPointFlowTotalTodaySensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_flow_total_today"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Flow Total Today"
+        self._attr_name = "Flow Total Today"
 
     @property
     def native_value(self):
@@ -891,7 +885,7 @@ class RainPointFlowTotalSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_flow_total"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Flow Total"
+        self._attr_name = "Flow Total"
 
     @property
     def native_value(self):
@@ -907,7 +901,7 @@ class RainPointFlowBatterySensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_flow_battery"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Flow Battery"
+        self._attr_name = "Flow Battery"
 
     @property
     def native_value(self):
@@ -924,7 +918,7 @@ class RainPointCO2Sensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_co2"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} CO2"
+        self._attr_name = "CO2"
 
     @property
     def native_value(self):
@@ -940,7 +934,7 @@ class RainPointCO2LowSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_co2_low"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} CO2 Low"
+        self._attr_name = "CO2 Low"
 
     @property
     def native_value(self):
@@ -956,7 +950,7 @@ class RainPointCO2HighSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_co2_high"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} CO2 High"
+        self._attr_name = "CO2 High"
 
     @property
     def native_value(self):
@@ -972,7 +966,7 @@ class RainPointCO2TempSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_co2_temp"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} CO2 Temperature"
+        self._attr_name = "CO2 Temperature"
 
     @property
     def native_value(self):
@@ -988,7 +982,7 @@ class RainPointCO2HumiditySensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_co2_humidity"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} CO2 Humidity"
+        self._attr_name = "CO2 Humidity"
 
     @property
     def native_value(self):
@@ -1004,7 +998,7 @@ class RainPointCO2BatterySensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_co2_battery"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} CO2 Battery"
+        self._attr_name = "CO2 Battery"
 
     @property
     def native_value(self):
@@ -1021,7 +1015,7 @@ class RainPointPoolCurrentTempSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_current_temp"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Pool Current Temperature"
+        self._attr_name = "Pool Current Temperature"
 
     @property
     def native_value(self):
@@ -1037,7 +1031,7 @@ class RainPointPoolHighTempSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_high_temp"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Pool High Temperature"
+        self._attr_name = "Pool High Temperature"
 
     @property
     def native_value(self):
@@ -1053,7 +1047,7 @@ class RainPointPoolLowTempSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_low_temp"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Pool Low Temperature"
+        self._attr_name = "Pool Low Temperature"
 
     @property
     def native_value(self):
@@ -1069,7 +1063,7 @@ class RainPointPoolBatterySensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_battery"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Pool Battery"
+        self._attr_name = "Pool Battery"
 
     @property
     def native_value(self):
@@ -1086,7 +1080,7 @@ class RainPointPoolPlusPoolCurrentTempSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_plus_pool_current_temp"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Pool Temperature"
+        self._attr_name = "Pool Temperature"
 
     @property
     def native_value(self):
@@ -1102,7 +1096,7 @@ class RainPointPoolPlusPoolHighTempSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_plus_pool_high_temp"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Pool High Temperature"
+        self._attr_name = "Pool High Temperature"
 
     @property
     def native_value(self):
@@ -1118,7 +1112,7 @@ class RainPointPoolPlusPoolLowTempSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_plus_pool_low_temp"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Pool Low Temperature"
+        self._attr_name = "Pool Low Temperature"
 
     @property
     def native_value(self):
@@ -1134,7 +1128,7 @@ class RainPointPoolPlusAmbientCurrentTempSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_plus_ambient_current_temp"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Ambient Temperature"
+        self._attr_name = "Ambient Temperature"
 
     @property
     def native_value(self):
@@ -1150,7 +1144,7 @@ class RainPointPoolPlusAmbientHighTempSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_plus_ambient_high_temp"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Ambient High Temperature"
+        self._attr_name = "Ambient High Temperature"
 
     @property
     def native_value(self):
@@ -1166,7 +1160,7 @@ class RainPointPoolPlusAmbientLowTempSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_plus_ambient_low_temp"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Ambient Low Temperature"
+        self._attr_name = "Ambient Low Temperature"
 
     @property
     def native_value(self):
@@ -1182,7 +1176,7 @@ class RainPointPoolPlusHumidityCurrentSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_plus_humidity_current"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Ambient Humidity"
+        self._attr_name = "Ambient Humidity"
 
     @property
     def native_value(self):
@@ -1198,7 +1192,7 @@ class RainPointPoolPlusHumidityHighSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_plus_humidity_high"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Ambient High Humidity"
+        self._attr_name = "Ambient High Humidity"
 
     @property
     def native_value(self):
@@ -1214,7 +1208,7 @@ class RainPointPoolPlusHumidityLowSensor(RainPointSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_pool_plus_humidity_low"
-        self._attr_name = f"{sensor_info.get('sub_name', 'Sensor')} Ambient Low Humidity"
+        self._attr_name = "Ambient Low Humidity"
 
     @property
     def native_value(self):
@@ -1246,8 +1240,7 @@ class RainPointUnknownSensor(RainPointSensorBase):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         model = sensor_info.get("model", "unknown")
         self._attr_unique_id = f"rainpoint_{base_slug}_unknown_{model}"
-        sub_name = sensor_info.get("sub_name") or "Sensor"
-        self._attr_name = f"{sub_name} Unsupported ({model})"
+        self._attr_name = f"Unsupported ({model})"
 
     @property
     def native_value(self) -> str:
@@ -1337,15 +1330,19 @@ class RainPointNotReportingSensor(RainPointSensorBase):
     _report_url: str | None = None
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
-        """Name the entity after the sub-device the hub lists, not the model.
+        """Carry the entity's own short label and let the device page identify the device.
 
-        A silent device has no reading to identify it by, so the hub's own
-        name for it is the only label a user will recognise.
+        A silent device has no reading to identify it by, so the label a user
+        recognises has to come from somewhere other than this entity's own
+        name. It now comes from the device page this entity sits under, which
+        Home Assistant composes in front of the short name. Do not restore a
+        device-name prefix here on the strength of the older argument: an
+        inlined prefix survives verbatim the moment a user renames the
+        device, which is the display defect the short names removed.
         """
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_not_reporting"
-        sub_name = sensor_info.get("sub_name") or "Device"
-        self._attr_name = f"{sub_name} Not Reporting"
+        self._attr_name = "Not Reporting"
 
     @property
     def available(self) -> bool:
@@ -1404,9 +1401,8 @@ class RainPointRawPayloadSensor(RainPointSensorBase):
         base_slug: str,
     ) -> None:
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_raw_payload"
-        self._attr_name = f"{sub_name} Raw Payload"
+        self._attr_name = "Raw Payload"
 
     @property
     def native_value(self) -> str | None:
@@ -1483,9 +1479,8 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
     ) -> None:
         """Name and key the water-usage sensor for one zone."""
         super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
-        sub_name = sensor_info.get("sub_name") or "Valve Hub"
         self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_water_used"
-        self._attr_name = f"{sub_name} Zone {zone_num} Water Used"
+        self._attr_name = f"Zone {zone_num} Water Used"
 
     @property
     def native_value(self) -> float | None:
@@ -1531,9 +1526,8 @@ class RainPointZoneStateSensor(RainPointZoneSensorBase):
     ) -> None:
         """Name and key the state sensor for one zone."""
         super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
-        sub_name = sensor_info.get("sub_name") or "Valve"
         self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_state"
-        self._attr_name = f"{sub_name} Zone {zone_num} State"
+        self._attr_name = f"Zone {zone_num} State"
 
     @property
     def native_value(self) -> str | None:

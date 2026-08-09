@@ -153,6 +153,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
     """Represents a single irrigation zone on a RainPoint valve hub."""
 
     _attr_should_poll = False
+    _attr_has_entity_name = True
     _attr_reports_position = False
     _attr_supported_features = ValveEntityFeature.OPEN | ValveEntityFeature.CLOSE
 
@@ -171,10 +172,9 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
         hid = sensor_info["hid"]
         mid = sensor_info["mid"]
         addr = sensor_info["addr"]
-        sub_name = sensor_info.get("sub_name") or f"Valve Hub {addr}"
 
         self._attr_unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{zone_num}"
-        self._attr_name = f"{sub_name} Zone {zone_num}"
+        self._attr_name = f"Zone {zone_num}"
 
     # ------------------------------------------------------------------
     # Coordinator data helpers
@@ -253,7 +253,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
 
     @property
     def device_info(self) -> DeviceInfo:
-        return build_sub_device_info(self._sensor_info, name_fallback=f"Valve Hub {self._sensor_info['addr']}")
+        return build_sub_device_info(self._sensor_info)
 
     # ------------------------------------------------------------------
     # Control

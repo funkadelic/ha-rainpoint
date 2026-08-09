@@ -84,7 +84,6 @@ class RainPointDiagnosticSensorBase(RainPointSubDeviceEntity, SensorEntity):
     """Base class for RainPoint diagnostic sensors."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _device_name_prefix = "Sensor"
 
 
 class RainPointDeviceIDSensor(RainPointDiagnosticSensorBase):
@@ -94,9 +93,8 @@ class RainPointDeviceIDSensor(RainPointDiagnosticSensorBase):
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_device_id"
-        self._attr_name = f"{sub_name} Device ID"
+        self._attr_name = "Device ID"
 
     @property
     def native_value(self) -> str | int | None:
@@ -136,9 +134,8 @@ class RainPointRSSISensor(RainPointDiagnosticSensorBase):
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_rssi"
-        self._attr_name = f"{sub_name} Signal Strength"
+        self._attr_name = "Signal Strength"
 
     @property
     def native_value(self) -> int | None:
@@ -158,9 +155,8 @@ class RainPointBatterySensor(RainPointDiagnosticSensorBase):
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_battery"
-        self._attr_name = f"{sub_name} Battery"
+        self._attr_name = "Battery"
 
     @property
     def native_value(self) -> int | None:
@@ -177,9 +173,8 @@ class RainPointFirmwareVersionSensor(RainPointDiagnosticSensorBase):
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_firmware_version"
-        self._attr_name = f"{sub_name} Firmware Version"
+        self._attr_name = "Firmware Version"
 
     @property
     def native_value(self) -> str | None:
@@ -198,9 +193,8 @@ class RainPointLastUpdatedSensor(RainPointDiagnosticSensorBase):
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        sub_name = sensor_info.get("sub_name") or "Sensor"
         self._attr_unique_id = f"rainpoint_{base_slug}_last_updated"
-        self._attr_name = f"{sub_name} Last Updated"
+        self._attr_name = "Last Updated"
 
     @property
     def native_value(self) -> datetime | None:

@@ -119,6 +119,7 @@ _HA_STUBS = [
     "homeassistant.components.binary_sensor",
     "homeassistant.components.number",
     "homeassistant.components.switch",
+    "homeassistant.components.button",
     "homeassistant.components.repairs",
     "homeassistant.const",
     "homeassistant.data_entry_flow",
@@ -249,6 +250,29 @@ class _HABaseEntity:
     _attr_unique_id = None
     _attr_name = None
 
+    # _attr_has_entity_name is deliberately absent, matching Entity, which
+    # only annotates it. The property below branches on whether a subclass
+    # supplied one, so giving the stub a default here would make that branch
+    # unreachable and let a class that never sets the flag read as if it had.
+
+    @property
+    def has_entity_name(self) -> bool:
+        """Mirror Entity.has_entity_name, the surface Home Assistant reads.
+
+        Home Assistant resolves the display-name rule through this property
+        and never through the _attr_ backing attribute, so a test asserting
+        on the backing attribute exercises a surface production does not
+        consult. Real Entity generates this through a metaclass; a plain
+        property is close enough for a stub as long as the resolution order
+        matches, which is why the entity-description fallback is carried too.
+        """
+        if hasattr(self, "_attr_has_entity_name"):
+            return self._attr_has_entity_name
+        description = getattr(self, "entity_description", None)
+        if description is not None:
+            return description.has_entity_name
+        return False
+
     async def async_will_remove_from_hass(self):
         """No-op teardown hook, matching Entity's awaitable base implementation."""
 
@@ -356,6 +380,21 @@ class _BinarySensorEntity:
     pass
 
 
+class _ButtonEntity:
+    """Flat stand-in for homeassistant.components.button.ButtonEntity.
+
+    Button was the one platform base this harness left resolving to the real
+    Home Assistant class while the other six were stubbed, so the hub's button
+    entity carried a different root from every one of its siblings. Stubbing
+    it puts all seven platform bases on the same footing, which is what the
+    flat-class scheme above depends on. The shipped hierarchy is proven
+    elsewhere: tests/test_entity_naming.py sweeps every entity class in a
+    child interpreter where the real bases are in play.
+    """
+
+    pass
+
+
 # Patch the stub modules with real classes so multi-inheritance works.
 sys.modules["homeassistant.helpers.update_coordinator"].CoordinatorEntity = _CoordinatorEntity
 sys.modules["homeassistant.helpers.entity"].Entity = _HABaseEntity
@@ -373,6 +412,7 @@ sys.modules["homeassistant.components.select"].SelectEntity = _SelectEntity
 sys.modules["homeassistant.components.switch"].SwitchEntity = _SwitchEntity
 sys.modules["homeassistant.components.binary_sensor"].BinarySensorEntity = _BinarySensorEntity
 sys.modules["homeassistant.components.binary_sensor"].BinarySensorDeviceClass = MagicMock()
+sys.modules["homeassistant.components.button"].ButtonEntity = _ButtonEntity
 
 
 # issue_registry: real functions (MagicMock) so tests can assert create/delete

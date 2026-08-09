@@ -24,6 +24,12 @@ _LOGGER = logging.getLogger(__name__)
 class RainPointDebugSwitchEntity(SwitchEntity):
     """Switch for submitting RainPoint debug data."""
 
+    # This module is dead in shipped builds, so the flag changes nothing that
+    # renders today. It is set anyway so the package-wide sweep needs no
+    # carve-out: a single exempted class is what turns that sweep into a list
+    # of things it is allowed to miss.
+    _attr_has_entity_name = True
+
     def __init__(self, hass: HomeAssistant, coordinator, integration_entry):
         """Initialize the debug switch."""
         self.hass = hass

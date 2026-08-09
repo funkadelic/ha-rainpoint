@@ -120,6 +120,15 @@ For each device the coordinator discovers, the integration creates:
 
 All entities are grouped under their parent hub device in the Home Assistant device registry.
 
+### Display names on the device page
+
+Entity display names carry only the entity's own label ("Zone 1", "Battery", "Moisture Percent"), and Home Assistant composes the device name in front of it wherever the device is not already obvious. On a device page that means the device name is dropped, so a name no longer truncates in the narrow Controls column. In the entity list, in automations and to voice assistants the full "device plus entity" name still reads as before.
+
+Two upgrade notes, both display only. No entity ID changes and no automation, script or dashboard that refers to an entity by its ID is affected.
+
+- A device the RainPoint cloud never gave a name to is now shown as `{model} {address}` on its device page, replacing whichever of several older spellings it happened to register under. If you renamed the device yourself, your name is kept. If you referred to such a device by name in a template or a `device_attr` lookup, update it to the new name.
+- The **Transmission Power** entity now shows with its device in front of it in the entity list, so two of the same model are no longer both called just "Transmission Power".
+
 ---
 
 ## Transmission power control

@@ -844,11 +844,10 @@ class RainPointGenericSensor(RainPointSensorBase):
         # port count cannot silently change an existing entity's unique_id.
         self._attr_unique_id = f"{UNIQUE_ID_PREFIX}{base_slug}{GENERIC_UNIQUE_ID_MARKER}{identity.lower()}_p{self._dp_port}"
 
-        sub_name = sensor_info.get("sub_name") or "Sensor"
         zone = ""
         if port_number is not None and port_number > 1 and self._dp_port >= 1:
-            zone = f" Zone {self._dp_port}"
-        self._attr_name = f"{sub_name}{zone} {spec.label} (unverified)"
+            zone = f"Zone {self._dp_port} "
+        self._attr_name = f"{zone}{spec.label} (unverified)"
 
         self._attr_device_class = spec.device_class
         self._attr_native_unit_of_measurement = spec.unit
