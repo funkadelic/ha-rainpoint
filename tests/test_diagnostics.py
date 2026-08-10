@@ -703,8 +703,8 @@ class TestTheDeviceIsNamedTheWayItsOwnerNamesIt:
     async def test_a_renamed_device_carries_both_names(self):
         """Both, not the resolved one.
 
-        Which of the two Home Assistant is showing is the question ENTNAME-03
-        exists to answer, and a dump carrying only the winner cannot answer it.
+        Which of the two Home Assistant is showing is the question a rename
+        raises, and a dump carrying only the winner cannot answer it.
         """
         hass, entry = _make_hass(coordinator=_make_coordinator())
         device = _device("182509_236547_1", name="HTV245FRF", name_by_user="Front Lawn Valve")

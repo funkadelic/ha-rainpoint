@@ -87,14 +87,17 @@ body:
     attributes:
       label: Raw payload (idle / resting state)
       description: >
-        Paste the raw payload from the "Raw Payload" diagnostic sensor with the device
-        idle - valve closed, or the sensor sitting at a normal reading. Include the
-        `10#` or `11#` prefix exactly as shown. If this arrived pre-filled saying the
-        device returns no status, leave it exactly as it is.
+        Leave this empty if you attached a diagnostics file below, which already
+        carries the payload.
+
+        Otherwise paste the raw payload from the "Raw Payload" diagnostic sensor with
+        the device idle - valve closed, or the sensor sitting at a normal reading.
+        Include the `10#` or `11#` prefix exactly as shown. If this arrived pre-filled
+        saying the device returns no status, leave it exactly as it is.
       placeholder: "10#E1BC00DC01D80020B700000000AD00009F95110000FF0F5D81D019"
       render: text
     validations:
-      required: true
+      required: false
   - type: textarea
     id: auto_decoded
     attributes:
