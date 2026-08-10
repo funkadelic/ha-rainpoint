@@ -54,7 +54,7 @@ Every action in `.github/workflows/` is pinned to a full commit SHA with the ver
 
 Follow the pattern in `custom_components/rainpoint/api/decoders.py`:
 
-1. Capture a raw payload. The disabled-by-default "Raw Payload" diagnostic sensor exposes it; see `DEBUG_VALVE_PAYLOAD.md` for the full capture procedure.
+1. Capture a raw payload. The quickest source is the device's **Download diagnostics** file, which carries the payload and the integration's decode of it with no setup. The disabled-by-default "Raw Payload" diagnostic sensor exposes the same string; see `DEBUG_VALVE_PAYLOAD.md` for the full capture procedure and for capturing the same device in several states.
 2. Add `MODEL_XXX` to `const.py`.
 3. Write `decode_xxx(raw: str) -> dict` in `api/decoders.py` and re-export from `api/__init__.py`.
 4. Register `MODEL_XXX: decode_xxx` in `DECODER_REGISTRY` in `coordinator.py`.
