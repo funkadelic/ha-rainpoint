@@ -3,8 +3,10 @@
 import asyncio
 import json
 import logging
+import re
 import types
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs
@@ -5987,3 +5989,81 @@ class TestMalformedCloudRecordsAreSkipped:
             await coordinator.async_refresh()
 
         assert key not in coordinator._silent_poll_counts
+
+
+class TestReportLinkMatchesTheIssueForm:
+    """The pre-filled link and the form it targets have to agree on field names.
+
+    GitHub matches a prefill query parameter to a form field by the field's
+    `id`, and silently drops a parameter that matches nothing. So a rename on
+    either side does not fail loudly: the link still opens, the form is just
+    blank, and the reporter is asked to type what the integration already knew.
+    Nothing else in this suite reads the template file, so nothing else would
+    notice.
+    """
+
+    TEMPLATE: ClassVar[Path] = Path(__file__).resolve().parents[1] / ".github" / "ISSUE_TEMPLATE" / "new_device.yml"
+
+    # Set by GitHub itself rather than by a form field.
+    RESERVED = frozenset({"template", "title", "labels", "assignees", "projects", "milestone", "body"})
+
+    def _field_ids(self):
+        """Return every field id the issue form declares."""
+        return set(re.findall(r"^\s+id:\s*([A-Za-z0-9_]+)\s*$", self.TEMPLATE.read_text(), re.M))
+
+    def _params_of(self, url):
+        """Return the prefill parameters of a report URL."""
+        return {k: v[0] for k, v in parse_qs(url.split("?", 1)[1]).items()}
+
+    def test_the_template_file_is_where_the_link_says_it_is(self):
+        """Guards the rest of this class against passing vacuously."""
+        assert self.TEMPLATE.is_file()
+        assert self.TEMPLATE.name == _coord_module.NEW_DEVICE_ISSUE_TEMPLATE
+
+    def test_every_prefilled_parameter_names_a_real_field(self):
+        """Driven through the real builder, so it covers whatever it emits today."""
+        url = _coord_module._build_new_device_issue_url(
+            "HTV245FRF",
+            "11#17E1DF0018DC0119D8001AD8001D201E2021B70000000022B70000000025A",
+            model_code=303,
+        )
+
+        unknown = sorted(k for k in self._params_of(url) if k not in self._field_ids() | self.RESERVED)
+
+        assert unknown == []
+
+    def test_the_silent_device_link_also_names_only_real_fields(self):
+        """Its payload field carries prose rather than a payload, by a different route."""
+        url = _coord_module._build_new_device_issue_url(
+            "HTV210B",
+            None,
+            payload_note=_coord_module.NO_STATUS_PAYLOAD_MARKER,
+        )
+
+        unknown = sorted(k for k in self._params_of(url) if k not in self._field_ids() | self.RESERVED)
+
+        assert unknown == []
+        assert self._params_of(url)["primary_payload"] == _coord_module.NO_STATUS_PAYLOAD_MARKER
+
+    def test_only_fields_the_reporter_can_answer_are_required(self):
+        """A required field the link cannot fill is a wall in front of the reporter.
+
+        The link exists so a report can be filed from a notification in one
+        click, and `model` is the only required field it prefills. `category` is
+        a dropdown the reporter picks; anything else appearing here means
+        somebody made a field mandatory that the reporter may have no way to
+        answer, which is how a form starts turning reports away.
+
+        Only `validations.required` counts. A checkbox's per-option `required`
+        is a different thing, an acknowledgement the reporter ticks rather than
+        data they have to supply, so the confirmations block is out of scope.
+        """
+        blocks = self.TEMPLATE.read_text().split("\n  - type: ")
+        required = set()
+        for block in blocks:
+            found = re.search(r"^\s+id:\s*([A-Za-z0-9_]+)\s*$", block, re.M)
+            validations = block.split("validations:")
+            if found and len(validations) > 1 and re.search(r"^\s+required:\s*true\s*$", validations[1], re.M):
+                required.add(found.group(1))
+
+        assert required == {"model", "category"}
