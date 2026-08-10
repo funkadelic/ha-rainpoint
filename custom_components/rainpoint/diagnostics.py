@@ -23,6 +23,19 @@ than as an unreviewed disclosure.
 the identity fields that are allow-listed deliberately (they are worth seeing
 as present) but must not be readable. It matches on key name only, which is
 exactly why it cannot be the whole story on its own.
+
+The names a user chose are kept, and that is a decision rather than a field
+nobody got to. A dump is read by a person working out which device misbehaved,
+and a name like "Front Lawn Valve" is the only thing in the structure tying a
+record to what its owner sees on screen; an addr and a mid do not. So the rule
+here is narrower than the one the logs follow: redact what identifies (a MAC,
+an iotId, a productKey, the MAC-derived `deviceName`, a barCode), keep what a
+human wrote (the hub and sub-device `name`, the coordinator entry's `hub_name`
+and `sub_name`, and the home's `homeName`). The logging house style is stricter
+on purpose, because a log line is emitted without anyone asking for it, where a
+dump is downloaded deliberately by someone who can open the file before sending
+it. `tests/test_diagnostics.py::TestUserChosenNamesSurvive` pins this so the
+next edit to `TO_REDACT` has to mean it.
 """
 
 from __future__ import annotations
@@ -48,13 +61,17 @@ from .const import (
 
 # Values replaced with a redaction marker wherever they appear, at any depth.
 #
-# Two groups, and both are here for the same reason rather than for the same
-# risk. Credentials (the first group) authenticate; disclosing one is the
-# serious case. The rest address rather than authenticate, and are redacted to
-# follow the decision already taken for the command logs, where the DEBUG line
-# was narrowed to keys and integers precisely so deviceName and productKey stop
-# travelling with support output. A dump a user pastes into a public issue is
-# the same disclosure surface as a log they paste into one.
+# Two groups, and they are here for different reasons. Credentials (the first
+# group) authenticate; disclosing one is the serious case. The rest identify:
+# a MAC, an iotId, a productKey, the MAC-derived `deviceName`, a barCode. They
+# address a device rather than describe it, they are worth something to somebody
+# with no business on this account, and they read as noise to the person
+# actually diagnosing the problem. This follows the decision already taken for
+# the command logs, where the DEBUG line was narrowed precisely so deviceName
+# and productKey stop travelling with support output.
+#
+# The names a user chose are deliberately absent from this set, which is the
+# one place a reader is likely to expect them. The module docstring says why.
 #
 # Both spellings of the fields that appear camelCase in a cloud record and
 # snake_case in a coordinator sensor entry are listed, because the redactor
@@ -70,8 +87,6 @@ TO_REDACT = {
     "deviceSecret",
     "device_secret",
     "email",
-    "homeName",
-    "home_name",
     "iotId",
     "mac",
     "mac1",
