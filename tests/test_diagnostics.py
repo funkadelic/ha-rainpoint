@@ -157,10 +157,17 @@ def _walk_values(payload):
         yield payload
 
 
-def _device(identifier):
-    """Return a device registry row carrying one DOMAIN identifier."""
+def _device(identifier, name="HTV245FRF", name_by_user=None):
+    """Return a device registry row carrying one DOMAIN identifier.
+
+    `name_by_user` defaults to None, which is the registry's own default for a
+    device nobody has renamed, so a test opts in to the renamed case rather than
+    inheriting it.
+    """
     device = MagicMock()
     device.identifiers = {(DOMAIN, identifier)}
+    device.name = name
+    device.name_by_user = name_by_user
     return device
 
 
@@ -493,11 +500,18 @@ class TestDeviceRouting:
         """An empty dump would read as 'nothing wrong here', which is a different claim."""
         device = MagicMock()
         device.identifiers = {("other_integration", "whatever")}
+        device.name = "Something Else"
+        device.name_by_user = None
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_device_diagnostics(hass, entry, device)
 
-        assert result["device"] == {"identifier": None, "kind": "unrecognised"}
+        assert result["device"] == {
+            "identifier": None,
+            "kind": "unrecognised",
+            "name": "Something Else",
+            "name_by_user": None,
+        }
         assert "sensors" not in result
 
     @pytest.mark.asyncio
@@ -665,3 +679,48 @@ class TestUserChosenNamesSurvive:
         assert hub["name"] == HUB_LABEL
         assert hub["deviceName"] == REDACTED
         assert hub["subDevices"][0]["name"] == SUB_LABEL
+
+
+class TestTheDeviceIsNamedTheWayItsOwnerNamesIt:
+    """The registry names, which are the dump's only tie to what is on screen.
+
+    Measured on the maintainer's hardware at 1.15.0rc2: every cloud `name` in a
+    real dump read as the model string ("HTV245FRF", "Hub"), so before this the
+    only way to tell which device a record described was to already know the
+    `{hid}_{mid}_{addr}` key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_unrenamed_device_carries_its_integration_name_and_a_null_override(self):
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))
+
+        assert result["device"]["name"] == "HTV245FRF"
+        assert result["device"]["name_by_user"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_device_carries_both_names(self):
+        """Both, not the resolved one.
+
+        Which of the two Home Assistant is showing is the question ENTNAME-03
+        exists to answer, and a dump carrying only the winner cannot answer it.
+        """
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+        device = _device("182509_236547_1", name="HTV245FRF", name_by_user="Front Lawn Valve")
+
+        result = await async_get_device_diagnostics(hass, entry, device)
+
+        assert result["device"]["name"] == "HTV245FRF"
+        assert result["device"]["name_by_user"] == "Front Lawn Valve"
+
+    @pytest.mark.asyncio
+    async def test_a_registry_name_is_not_redacted(self):
+        """It is a user-chosen label, so it follows the same rule as the rest."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+        device = _device("182509_236547_1", name_by_user=SUB_LABEL)
+
+        result = await async_get_device_diagnostics(hass, entry, device)
+
+        assert result["device"]["name_by_user"] == SUB_LABEL
+        assert SUB_LABEL in list(_walk_values(result))

@@ -357,6 +357,11 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, config_entry: 
 async def async_get_device_diagnostics(hass: HomeAssistant, config_entry: ConfigEntry, device: DeviceEntry) -> dict[str, Any]:
     """Return diagnostics scoped to one device page.
 
+    The registry's `name` and `name_by_user` are carried because nothing else in
+    either dump ties a record to what the owner sees. The cloud `name` that the
+    hub and sensor sections carry is the vendor's, and on real hardware it reads
+    as the model string.
+
     The device's own DOMAIN identifier is what routes this: a hub row carries a
     `hub_`-prefixed identity and a sub-device row carries its `{hid}_{mid}_{addr}`
     sensor key, which is the same round trip `_domain_sensor_key` already
@@ -377,7 +382,18 @@ async def async_get_device_diagnostics(hass: HomeAssistant, config_entry: Config
 
     payload: dict[str, Any] = {
         "integration": {"domain": DOMAIN, "version": VERSION},
-        "device": {"identifier": identifier, "kind": None},
+        "device": {
+            "identifier": identifier,
+            "kind": None,
+            # Home Assistant's own two names, and the only fields in either dump
+            # that say what the owner of this device actually calls it. The
+            # cloud's `name` is not that: it reads as the model string on real
+            # hardware, and a device the user renamed carries the new name here
+            # and the old one nowhere. `name_by_user` is null until they rename
+            # something, so the pair also says which of the two is on screen.
+            "name": device.name,
+            "name_by_user": device.name_by_user,
+        },
     }
 
     if identifier is None:
