@@ -5,6 +5,26 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.15.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.14.0...v1.15.0) (2026-08-10)
 
 
+### What's new
+
+**Entity names no longer repeat the device name**
+
+- On a device page, entities now read **Zone 1**, **Battery** and **Moisture Percent** rather than **HTV245FRF Valve Zone 1**, **HTV245FRF Valve Battery** and **HCS026FRF Moisture Percent**. The device name was already at the top of the page, so it was being shown twice and the longer names were getting cut off. Home Assistant still puts the device name in front wherever the device is not obvious, such as the entity list, automations and voice assistants, so nothing is lost anywhere else.
+- This is a display change only. No entity ID changes, so automations, scripts and dashboards that refer to an entity by its ID keep working. If you renamed an entity yourself, your name is kept.
+- Two smaller effects worth knowing about on upgrade. A device the RainPoint cloud never gave a name to is now shown as `{model} {address}` on its device page, replacing whichever older spelling it happened to register under; if you renamed it yourself, your name is kept. And the **Transmission Power** entity now shows with its device in front of it in the entity list, so two of the same model are no longer both called just "Transmission Power".
+
+**A diagnostics file you can attach to a bug report**
+
+- **Settings → Devices & Services → RainPoint** has a new **Download diagnostics** option in its three-dot menu, and so does every device page. The file describes what the integration last received from RainPoint and what it made of it, including the raw readings and how they were decoded.
+- Removed before the file is written: your password, your login tokens, your email address, your hardware's MAC addresses, and the cloud's own device credentials and product keys.
+- Kept on purpose: the names of your devices, your hub and your home, the name you gave a device in Home Assistant, and the account-internal numbers that say which device is which. Without those the file cannot tell you which device a section describes. Read it before attaching it to a public issue if any of that is something you would rather not post.
+- Only Home Assistant administrators can download it.
+
+**Also in this release**
+
+- **Reporting a problem takes less setup.** There is now a bug report form alongside the existing new-device request, and both lead with the diagnostics file. Filing a useful report no longer means enabling a hidden sensor or turning on debug logging first, and the new-device form no longer insists on a hand-copied payload when you attach a file instead.
+
+
 ### Added
 
 * add a diagnostics download for the config entry and each device ([#158](https://github.com/funkadelic/ha-rainpoint/issues/158)) ([618cf5f](https://github.com/funkadelic/ha-rainpoint/commit/618cf5f8ed1214c3d207e82995af0d1ca929c2e9))
