@@ -116,6 +116,13 @@ _HUB_RECORD_FIELDS = frozenset(
         "function",
         "hardwareVersion",
         "hid",
+        # Allow-listed alongside "name" so the two paths agree. The coordinator
+        # already reads it off this record (`hub.get("homeName")` feeding a
+        # sensor entry's allow-listed "home_name"), so leaving it out here meant
+        # the same value could reach one section of a dump and not the other.
+        # It is empty on the maintainer's account at 1.15.0rc2, so this is a
+        # consistency fix rather than a new disclosure.
+        "homeName",
         "iotId",
         "mac",
         "mac1",
@@ -208,14 +215,29 @@ _STATUS_ENTRY_FIELDS = frozenset({"id", "time", "value"})
 # anything a past version wrote and stopped using.
 _OPTION_FIELDS = frozenset({CONF_GENERIC_CONTROL_ENABLED, CONF_GENERIC_ENTITIES_ENABLED, CONF_PUSH_ENABLED})
 
+# Kept out of _HUB_RECORD_FIELDS on purpose, because `_hub_dump` walks each
+# child through its own allow-list rather than letting the list ride along
+# unreviewed. Naming it here is what stops that deliberate omission reading as
+# an unreviewed field in every dump.
+_HUB_FIELDS_WALKED_SEPARATELY = frozenset({"subDevices"})
 
-def _select_allowed(record: Any, allowed: frozenset[str]) -> dict:
+
+def _select_allowed(record: Any, allowed: frozenset[str], handled_elsewhere: frozenset[str] = frozenset()) -> dict:
     """Return the allow-listed fields of one record, naming the rest.
 
     A field outside `allowed` contributes its name to `unlisted_keys` and never
     its value. That list is the whole point of the function: it is how a vendor
     field nobody has reviewed becomes visible as a question instead of shipping
     as an answer.
+
+    `handled_elsewhere` names the fields the caller walks itself, and they are
+    neither copied nor reported. Without it a field deliberately kept out of
+    `allowed` so the caller can process it, `subDevices` being the only one
+    today, is indistinguishable from a field nobody has looked at, and every
+    dump ever produced carries a permanent false entry in the one list a reader
+    is supposed to act on. Observed on a real dump at 1.15.0rc2, where every hub
+    record read `"unlisted_keys": ["subDevices"]` directly above its own fully
+    walked `subDevices` section.
 
     A record that is not a dict yields a shape-typed placeholder rather than
     raising, matching the coordinator's standing position that a cloud record is
@@ -225,7 +247,7 @@ def _select_allowed(record: Any, allowed: frozenset[str]) -> dict:
     if not isinstance(record, dict):
         return {"unexpected_type": type(record).__name__}
     selected = {key: value for key, value in record.items() if key in allowed}
-    unlisted = sorted(str(key) for key in record if key not in allowed)
+    unlisted = sorted(str(key) for key in record if key not in allowed and key not in handled_elsewhere)
     if unlisted:
         selected["unlisted_keys"] = unlisted
     return selected
@@ -233,7 +255,7 @@ def _select_allowed(record: Any, allowed: frozenset[str]) -> dict:
 
 def _hub_dump(hub: Any) -> dict:
     """Return one top-level record with its sub-device list walked separately."""
-    dumped = _select_allowed(hub, _HUB_RECORD_FIELDS)
+    dumped = _select_allowed(hub, _HUB_RECORD_FIELDS, _HUB_FIELDS_WALKED_SEPARATELY)
     sub_devices = hub.get("subDevices") if isinstance(hub, dict) else None
     if isinstance(sub_devices, list):
         dumped["subDevices"] = [_select_allowed(sub, _SUB_DEVICE_FIELDS) for sub in sub_devices]

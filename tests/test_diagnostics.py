@@ -193,13 +193,34 @@ class TestUnlistedKeys:
 
     @pytest.mark.asyncio
     async def test_a_new_hub_field_is_named_and_its_value_is_absent(self):
+        """Asserted as the whole list, not as membership.
+
+        Membership was what let `subDevices` sit in here unnoticed through a
+        real dump: the field the test added was present, so the assertion
+        passed, and the permanent false entry beside it was invisible.
+        """
         hubs = [_hub_record(extra={"newVendorField": "unreviewed-payload-value"})]
         hass, entry = _make_hass(coordinator=_make_coordinator(hubs=hubs))
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert "newVendorField" in result["hubs"][0]["unlisted_keys"]
+        assert result["hubs"][0]["unlisted_keys"] == ["newVendorField"]
         assert "unreviewed-payload-value" not in list(_walk_values(result))
+
+    @pytest.mark.asyncio
+    async def test_a_hub_carrying_only_known_fields_reports_nothing_unlisted(self):
+        """The signal is worthless if every dump raises it.
+
+        `subDevices` is deliberately outside the hub allow-list because
+        `_hub_dump` walks each child through its own; that omission must not
+        read as a field nobody reviewed.
+        """
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert "unlisted_keys" not in result["hubs"][0]
+        assert len(result["hubs"][0]["subDevices"]) == 1
 
     @pytest.mark.asyncio
     async def test_a_new_status_entry_field_is_named_and_its_value_is_absent(self):
