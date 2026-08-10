@@ -1,0 +1,124 @@
+name: Bug report
+description: Something in the integration behaves incorrectly
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The single most useful thing you can attach is a
+        **diagnostics file**, and there is a box for it below.
+
+        Settings → Devices & Services → RainPoint, three-dot menu, **Download
+        diagnostics**. Use the menu on the RainPoint entry itself when you are not
+        sure which device is involved, or the one on a device page when only that
+        device is misbehaving. Your password, tokens, email and network addresses are
+        removed before the file is written. Device and home names are kept so the file
+        can say which device is which, so read it first if that matters to you.
+
+        A diagnostics file usually answers the questions a maintainer would otherwise
+        have to ask you one at a time, so attaching it tends to be the difference
+        between a fix and a week of back and forth.
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+      description: What you saw, in as much detail as you have.
+      placeholder: The valve entity shows as unavailable a few minutes after every restart.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: If it happens on its own rather than in response to something you do, say that instead.
+      placeholder: |
+        1. Restart Home Assistant
+        2. Wait about five minutes
+        3. Open the device page
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the integration
+      description: A rough guess is fine, and "not sure" is a real answer.
+      options:
+        - Not sure
+        - Setting up or signing in
+        - Devices or entities missing, duplicated or left behind
+        - Readings wrong or not updating
+        - Valve, duration or other controls
+        - Push updates
+        - Repairs or notifications
+        - Something else
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostics_file
+    attributes:
+      label: Diagnostics file
+      description: >
+        Drag the JSON file into this box and GitHub will attach it. If the problem
+        involves one device, the file from that device's page is the more useful one.
+        If you cannot attach it, say why here and we will work from the rest.
+    validations:
+      required: false
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      description: >
+        Shown on the RainPoint entry under Settings → Devices & Services, and also in
+        the diagnostics file. Include the beta suffix if you are on one.
+      placeholder: 1.15.0
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Settings → About.
+      placeholder: 2026.2.3
+    validations:
+      required: true
+  - type: input
+    id: models
+    attributes:
+      label: Device models involved
+      description: The exact models as printed on the device or shown in the RainPoint app.
+      placeholder: HTV245FRF, HWG023WBRF-V2
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt
+      description: >
+        Only if the diagnostics file does not cover it, for example a crash or an error
+        you saw at a particular moment. Enable debug logging for the integration, then
+        paste the lines around the problem.
+
+        Before posting: this is a public issue, so remove account identifiers, tokens,
+        credentials and any unrelated personal data. The integration's own log lines
+        are written to avoid carrying those, but nothing else in your log is.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not already reported.
+          required: true
+        - label: I am on the latest release, or I checked its release notes and the problem is not already fixed there.
+          required: true
+        - label: I read anything I attached, and I am willing for it to be public.
+          required: true
