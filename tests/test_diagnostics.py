@@ -40,7 +40,13 @@ ACCOUNT_EMAIL = "someone@example.invalid"
 HUB_MAC = "A8:46:74:BB:91:F0"
 PRODUCT_KEY = "a3QrDxYPTM2"
 IOT_ID = "jDQNeV92iFixCU42PDtUk0k0d4"
+
+# The names a user chose, which the dump keeps on purpose. Distinctive for the
+# same reason the secrets above are: a survival assertion made by walking every
+# scalar is only worth something if the literal cannot match by accident.
 HOME_NAME = "Richmond"
+HUB_LABEL = "Garden Hub"
+SUB_LABEL = "Front Lawn Valve"
 
 
 def _hub_record(hid=182509, mid=236547, extra=None):
@@ -49,7 +55,7 @@ def _hub_record(hid=182509, mid=236547, extra=None):
         "hid": hid,
         "mid": mid,
         "brand": "RainPoint",
-        "name": "Hub",
+        "name": HUB_LABEL,
         "model": "HWG023WBRF-V2",
         "modelCode": "34",
         "softVer": "1.2.3",
@@ -67,7 +73,7 @@ def _hub_record(hid=182509, mid=236547, extra=None):
                 "mid": mid,
                 "sid": 341550,
                 "model": "HTV245FRF",
-                "name": "Valve",
+                "name": SUB_LABEL,
                 "mac": "A4:C1:38:FF:88:E7",
                 "softVer": "2.0.1",
                 "param": "5=02,11=58020a001e000000000000000000",
@@ -86,8 +92,8 @@ def _sensor_entry(hid=182509, mid=236547, addr=1):
         "mid": mid,
         "addr": addr,
         "home_name": HOME_NAME,
-        "hub_name": "Hub",
-        "sub_name": "Valve",
+        "hub_name": HUB_LABEL,
+        "sub_name": SUB_LABEL,
         "model": "HTV245FRF",
         "model_code": "303",
         "firmware_version": "2.0.1",
@@ -151,10 +157,17 @@ def _walk_values(payload):
         yield payload
 
 
-def _device(identifier):
-    """Return a device registry row carrying one DOMAIN identifier."""
+def _device(identifier, name="HTV245FRF", name_by_user=None):
+    """Return a device registry row carrying one DOMAIN identifier.
+
+    `name_by_user` defaults to None, which is the registry's own default for a
+    device nobody has renamed, so a test opts in to the renamed case rather than
+    inheriting it.
+    """
     device = MagicMock()
     device.identifiers = {(DOMAIN, identifier)}
+    device.name = name
+    device.name_by_user = name_by_user
     return device
 
 
@@ -187,13 +200,34 @@ class TestUnlistedKeys:
 
     @pytest.mark.asyncio
     async def test_a_new_hub_field_is_named_and_its_value_is_absent(self):
+        """Asserted as the whole list, not as membership.
+
+        Membership was what let `subDevices` sit in here unnoticed through a
+        real dump: the field the test added was present, so the assertion
+        passed, and the permanent false entry beside it was invisible.
+        """
         hubs = [_hub_record(extra={"newVendorField": "unreviewed-payload-value"})]
         hass, entry = _make_hass(coordinator=_make_coordinator(hubs=hubs))
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert "newVendorField" in result["hubs"][0]["unlisted_keys"]
+        assert result["hubs"][0]["unlisted_keys"] == ["newVendorField"]
         assert "unreviewed-payload-value" not in list(_walk_values(result))
+
+    @pytest.mark.asyncio
+    async def test_a_hub_carrying_only_known_fields_reports_nothing_unlisted(self):
+        """The signal is worthless if every dump raises it.
+
+        `subDevices` is deliberately outside the hub allow-list because
+        `_hub_dump` walks each child through its own; that omission must not
+        read as a field nobody reviewed.
+        """
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert "unlisted_keys" not in result["hubs"][0]
+        assert len(result["hubs"][0]["subDevices"]) == 1
 
     @pytest.mark.asyncio
     async def test_a_new_status_entry_field_is_named_and_its_value_is_absent(self):
@@ -255,13 +289,18 @@ class TestNothingSensitiveSurvives:
 
     @pytest.mark.asyncio
     async def test_no_account_identity_reaches_the_config_entry_dump(self):
-        """The email is the single most harmful field here, per the logging review."""
+        """The email is the single most harmful field here, per the logging review.
+
+        The MAC, productKey and iotId are the identity half of the same rule:
+        they address a device rather than describe it. What a user *named* their
+        hardware is a separate question, settled the other way and pinned by
+        `TestUserChosenNamesSurvive`.
+        """
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         values = list(_walk_values(await async_get_config_entry_diagnostics(hass, entry)))
 
         assert ACCOUNT_EMAIL not in values
-        assert HOME_NAME not in values
         assert HUB_MAC not in values
         assert PRODUCT_KEY not in values
         assert IOT_ID not in values
@@ -461,11 +500,18 @@ class TestDeviceRouting:
         """An empty dump would read as 'nothing wrong here', which is a different claim."""
         device = MagicMock()
         device.identifiers = {("other_integration", "whatever")}
+        device.name = "Something Else"
+        device.name_by_user = None
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_device_diagnostics(hass, entry, device)
 
-        assert result["device"] == {"identifier": None, "kind": "unrecognised"}
+        assert result["device"] == {
+            "identifier": None,
+            "kind": "unrecognised",
+            "name": "Something Else",
+            "name_by_user": None,
+        }
         assert "sensors" not in result
 
     @pytest.mark.asyncio
@@ -570,8 +616,111 @@ class TestRedactionKeySet:
         for camel, snake in (
             ("deviceName", "device_name"),
             ("productKey", "product_key"),
-            ("homeName", "home_name"),
             ("deviceSecret", "device_secret"),
         ):
             assert camel in TO_REDACT
             assert snake in TO_REDACT
+
+    def test_no_user_chosen_name_key_is_in_the_redaction_set(self):
+        """Adding one back is a policy change, so it has to fail here first.
+
+        `deviceName` is the MAC-derived cloud identifier and stays redacted; the
+        near-miss with `name` is exactly why this is pinned by key rather than
+        left to a reader to infer from the set.
+        """
+        for key in ("name", "homeName", "home_name", "hub_name", "sub_name"):
+            assert key not in TO_REDACT
+
+
+class TestUserChosenNamesSurvive:
+    """The names a user chose reach the dump, and that is the point of it.
+
+    The mirror of `TestNothingSensitiveSurvives`: same walk, opposite verdict.
+    Both halves are asserted from one dump in each test, because the property
+    that matters is not "labels survive" or "identifiers do not" on their own,
+    it is that the two are separated within the same payload.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_config_entry_dump_keeps_every_name_a_user_reads(self):
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        values = list(_walk_values(await async_get_config_entry_diagnostics(hass, entry)))
+
+        assert HUB_LABEL in values
+        assert SUB_LABEL in values
+        assert HOME_NAME in values
+        assert HUB_MAC not in values
+
+    @pytest.mark.asyncio
+    async def test_a_device_dump_keeps_them_too(self):
+        """The device path builds its own payload, so it needs its own proof."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        values = list(_walk_values(await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))))
+
+        assert SUB_LABEL in values
+        assert HUB_LABEL in values
+        assert HUB_MAC not in values
+
+    @pytest.mark.asyncio
+    async def test_the_label_and_the_identifier_are_told_apart_on_one_record(self):
+        """`name` and `deviceName` sit side by side on a hub record.
+
+        Separating them is the whole decision: one is what the owner typed and
+        the other is derived from the MAC, and a redactor matching key names has
+        no way to know that. If a later edit collapses the two, this is where it
+        shows up.
+        """
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        hub = (await async_get_config_entry_diagnostics(hass, entry))["hubs"][0]
+
+        assert hub["name"] == HUB_LABEL
+        assert hub["deviceName"] == REDACTED
+        assert hub["subDevices"][0]["name"] == SUB_LABEL
+
+
+class TestTheDeviceIsNamedTheWayItsOwnerNamesIt:
+    """The registry names, which are the dump's only tie to what is on screen.
+
+    Measured on the maintainer's hardware at 1.15.0rc2: every cloud `name` in a
+    real dump read as the model string ("HTV245FRF", "Hub"), so before this the
+    only way to tell which device a record described was to already know the
+    `{hid}_{mid}_{addr}` key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_unrenamed_device_carries_its_integration_name_and_a_null_override(self):
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))
+
+        assert result["device"]["name"] == "HTV245FRF"
+        assert result["device"]["name_by_user"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_device_carries_both_names(self):
+        """Both, not the resolved one.
+
+        Which of the two Home Assistant is showing is the question a rename
+        raises, and a dump carrying only the winner cannot answer it.
+        """
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+        device = _device("182509_236547_1", name="HTV245FRF", name_by_user="Front Lawn Valve")
+
+        result = await async_get_device_diagnostics(hass, entry, device)
+
+        assert result["device"]["name"] == "HTV245FRF"
+        assert result["device"]["name_by_user"] == "Front Lawn Valve"
+
+    @pytest.mark.asyncio
+    async def test_a_registry_name_is_not_redacted(self):
+        """It is a user-chosen label, so it follows the same rule as the rest."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+        device = _device("182509_236547_1", name_by_user=SUB_LABEL)
+
+        result = await async_get_device_diagnostics(hass, entry, device)
+
+        assert result["device"]["name_by_user"] == SUB_LABEL
+        assert SUB_LABEL in list(_walk_values(result))

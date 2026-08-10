@@ -12,9 +12,20 @@ body:
         states (valve closed vs open, a sensor at a known reading) are what let us
         map bytes to values.
 
-        See `DEBUG_VALVE_PAYLOAD.md` for how to capture payloads. The short version:
-        enable the per-device **"Raw Payload"** diagnostic sensor (disabled by default),
-        then read its value from the entity's attributes or the logs.
+        **The easiest way to send us a payload is a diagnostics file.** Go to
+        **Settings → Devices & Services → RainPoint**, open the three-dot menu on the
+        device and choose **Download diagnostics**. That file carries the raw payload,
+        what the integration made of it, and the model and firmware details, with your
+        password, tokens, email and network addresses already removed. Nothing to
+        enable and nothing to copy by hand. Device and home names are kept in the file
+        so we can tell which device is which, so read it before attaching if that
+        matters to you.
+
+        For a second and third capture in different states, take one diagnostics file
+        per state. If you would rather not attach files, `DEBUG_VALVE_PAYLOAD.md` has
+        the manual route: enable the per-device **"Raw Payload"** diagnostic sensor
+        (disabled by default), then read its value from the entity's attributes or the
+        logs.
 
         **Device returning no readings at all?** If you got here from a **"Not Reporting"**
         entity, there is no payload to capture and the payload field below is already
@@ -76,14 +87,17 @@ body:
     attributes:
       label: Raw payload (idle / resting state)
       description: >
-        Paste the raw payload from the "Raw Payload" diagnostic sensor with the device
-        idle - valve closed, or the sensor sitting at a normal reading. Include the
-        `10#` or `11#` prefix exactly as shown. If this arrived pre-filled saying the
-        device returns no status, leave it exactly as it is.
+        Leave this empty if you attached a diagnostics file below, which already
+        carries the payload.
+
+        Otherwise paste the raw payload from the "Raw Payload" diagnostic sensor with
+        the device idle - valve closed, or the sensor sitting at a normal reading.
+        Include the `10#` or `11#` prefix exactly as shown. If this arrived pre-filled
+        saying the device returns no status, leave it exactly as it is.
       placeholder: "10#E1BC00DC01D80020B700000000AD00009F95110000FF0F5D81D019"
       render: text
     validations:
-      required: true
+      required: false
   - type: textarea
     id: auto_decoded
     attributes:
@@ -111,15 +125,32 @@ body:
     validations:
       required: false
   - type: textarea
+    id: diagnostics_file
+    attributes:
+      label: Diagnostics file (the most useful thing you can attach)
+      description: >
+        Drag the JSON file from **Download diagnostics** into this box and GitHub will
+        attach it. Settings → Devices & Services → RainPoint, three-dot menu on the
+        device, Download diagnostics. One file per state if you can manage more than
+        one, and say which state each was taken in.
+
+        This is worth more than everything above put together: it carries the payload
+        in the exact form the code sees it, alongside what the integration decoded,
+        so there are no transcription errors and no follow-up questions. Credentials,
+        tokens, your email and network addresses are already removed. Device and home
+        names are kept, so read the file first if that matters to you.
+    validations:
+      required: false
+  - type: textarea
     id: debug_log
     attributes:
-      label: Debug log excerpt (preferred over hand-copied payloads)
+      label: Debug log excerpt (only worth doing if you did not attach a diagnostics file)
       description: >
-        If you can, paste the integration's own log line for this device instead of
-        (or as well as) the payload above. Enable debug logging for the integration,
-        then copy the `unsupported model` warning plus a few surrounding lines. The
-        log carries the model, product key, raw payload, and internal ids in the exact
-        form the code sees - no transcription errors on the long hex string.
+        The manual alternative to the diagnostics file above. Enable debug logging for
+        the integration, then copy the `unsupported model` warning plus a few
+        surrounding lines. The log carries the model, product key, raw payload, and
+        internal ids in the exact form the code sees - no transcription errors on the
+        long hex string.
 
         Before posting: this is a public issue, so remove account and device
         identifiers, tokens, credentials, and any unrelated personal data. Keep the
@@ -184,7 +215,7 @@ body:
     attributes:
       label: Before submitting
       options:
-        - label: I captured the payload(s) above from the disabled-by-default "Raw Payload" diagnostic sensor, or this device returns no status and I described what the RainPoint app shows.
+        - label: I attached a diagnostics file, or captured the payload(s) above from the disabled-by-default "Raw Payload" diagnostic sensor, or this device returns no status and I described what the RainPoint app shows.
           required: true
         - label: I searched existing issues and this model is not already requested or supported.
           required: true

@@ -2,6 +2,12 @@
 
 To help add support for your valve device, we need to capture the raw payload data.
 
+## Easiest: download a diagnostics file
+
+Settings → Devices & Services → RainPoint, open the three-dot menu on the device and choose **Download diagnostics**. The file carries the raw payload and what the integration made of it, with your password, tokens, email and network addresses already removed. Nothing to enable and nothing to copy by hand, and it is enough on its own for most reports.
+
+The methods below are still worth knowing for two cases: you want several captures of the same device in different states without downloading a file each time, or you are watching what arrives as it arrives.
+
 ## Method 1: Enable Debug Logging in Home Assistant
 
 1. **Add to your `configuration.yaml`:**

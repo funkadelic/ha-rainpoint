@@ -23,6 +23,19 @@ than as an unreviewed disclosure.
 the identity fields that are allow-listed deliberately (they are worth seeing
 as present) but must not be readable. It matches on key name only, which is
 exactly why it cannot be the whole story on its own.
+
+The names a user chose are kept, and that is a decision rather than a field
+nobody got to. A dump is read by a person working out which device misbehaved,
+and a name like "Front Lawn Valve" is the only thing in the structure tying a
+record to what its owner sees on screen; an addr and a mid do not. So the rule
+here is narrower than the one the logs follow: redact what identifies (a MAC,
+an iotId, a productKey, the MAC-derived `deviceName`, a barCode), keep what a
+human wrote (the hub and sub-device `name`, the coordinator entry's `hub_name`
+and `sub_name`, and the home's `homeName`). The logging house style is stricter
+on purpose, because a log line is emitted without anyone asking for it, where a
+dump is downloaded deliberately by someone who can open the file before sending
+it. `tests/test_diagnostics.py::TestUserChosenNamesSurvive` pins this so the
+next edit to `TO_REDACT` has to mean it.
 """
 
 from __future__ import annotations
@@ -48,13 +61,17 @@ from .const import (
 
 # Values replaced with a redaction marker wherever they appear, at any depth.
 #
-# Two groups, and both are here for the same reason rather than for the same
-# risk. Credentials (the first group) authenticate; disclosing one is the
-# serious case. The rest address rather than authenticate, and are redacted to
-# follow the decision already taken for the command logs, where the DEBUG line
-# was narrowed to keys and integers precisely so deviceName and productKey stop
-# travelling with support output. A dump a user pastes into a public issue is
-# the same disclosure surface as a log they paste into one.
+# Two groups, and they are here for different reasons. Credentials (the first
+# group) authenticate; disclosing one is the serious case. The rest identify:
+# a MAC, an iotId, a productKey, the MAC-derived `deviceName`, a barCode. They
+# address a device rather than describe it, they are worth something to somebody
+# with no business on this account, and they read as noise to the person
+# actually diagnosing the problem. This follows the decision already taken for
+# the command logs, where the DEBUG line was narrowed precisely so deviceName
+# and productKey stop travelling with support output.
+#
+# The names a user chose are deliberately absent from this set, which is the
+# one place a reader is likely to expect them. The module docstring says why.
 #
 # Both spellings of the fields that appear camelCase in a cloud record and
 # snake_case in a coordinator sensor entry are listed, because the redactor
@@ -70,8 +87,6 @@ TO_REDACT = {
     "deviceSecret",
     "device_secret",
     "email",
-    "homeName",
-    "home_name",
     "iotId",
     "mac",
     "mac1",
@@ -101,6 +116,13 @@ _HUB_RECORD_FIELDS = frozenset(
         "function",
         "hardwareVersion",
         "hid",
+        # Allow-listed alongside "name" so the two paths agree. The coordinator
+        # already reads it off this record (`hub.get("homeName")` feeding a
+        # sensor entry's allow-listed "home_name"), so leaving it out here meant
+        # the same value could reach one section of a dump and not the other.
+        # It is empty on the maintainer's account at 1.15.0rc2, so this is a
+        # consistency fix rather than a new disclosure.
+        "homeName",
         "iotId",
         "mac",
         "mac1",
@@ -193,14 +215,29 @@ _STATUS_ENTRY_FIELDS = frozenset({"id", "time", "value"})
 # anything a past version wrote and stopped using.
 _OPTION_FIELDS = frozenset({CONF_GENERIC_CONTROL_ENABLED, CONF_GENERIC_ENTITIES_ENABLED, CONF_PUSH_ENABLED})
 
+# Kept out of _HUB_RECORD_FIELDS on purpose, because `_hub_dump` walks each
+# child through its own allow-list rather than letting the list ride along
+# unreviewed. Naming it here is what stops that deliberate omission reading as
+# an unreviewed field in every dump.
+_HUB_FIELDS_WALKED_SEPARATELY = frozenset({"subDevices"})
 
-def _select_allowed(record: Any, allowed: frozenset[str]) -> dict:
+
+def _select_allowed(record: Any, allowed: frozenset[str], handled_elsewhere: frozenset[str] = frozenset()) -> dict:
     """Return the allow-listed fields of one record, naming the rest.
 
     A field outside `allowed` contributes its name to `unlisted_keys` and never
     its value. That list is the whole point of the function: it is how a vendor
     field nobody has reviewed becomes visible as a question instead of shipping
     as an answer.
+
+    `handled_elsewhere` names the fields the caller walks itself, and they are
+    neither copied nor reported. Without it a field deliberately kept out of
+    `allowed` so the caller can process it, `subDevices` being the only one
+    today, is indistinguishable from a field nobody has looked at, and every
+    dump ever produced carries a permanent false entry in the one list a reader
+    is supposed to act on. Observed on a real dump at 1.15.0rc2, where every hub
+    record read `"unlisted_keys": ["subDevices"]` directly above its own fully
+    walked `subDevices` section.
 
     A record that is not a dict yields a shape-typed placeholder rather than
     raising, matching the coordinator's standing position that a cloud record is
@@ -210,7 +247,7 @@ def _select_allowed(record: Any, allowed: frozenset[str]) -> dict:
     if not isinstance(record, dict):
         return {"unexpected_type": type(record).__name__}
     selected = {key: value for key, value in record.items() if key in allowed}
-    unlisted = sorted(str(key) for key in record if key not in allowed)
+    unlisted = sorted(str(key) for key in record if key not in allowed and key not in handled_elsewhere)
     if unlisted:
         selected["unlisted_keys"] = unlisted
     return selected
@@ -218,7 +255,7 @@ def _select_allowed(record: Any, allowed: frozenset[str]) -> dict:
 
 def _hub_dump(hub: Any) -> dict:
     """Return one top-level record with its sub-device list walked separately."""
-    dumped = _select_allowed(hub, _HUB_RECORD_FIELDS)
+    dumped = _select_allowed(hub, _HUB_RECORD_FIELDS, _HUB_FIELDS_WALKED_SEPARATELY)
     sub_devices = hub.get("subDevices") if isinstance(hub, dict) else None
     if isinstance(sub_devices, list):
         dumped["subDevices"] = [_select_allowed(sub, _SUB_DEVICE_FIELDS) for sub in sub_devices]
@@ -320,6 +357,11 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, config_entry: 
 async def async_get_device_diagnostics(hass: HomeAssistant, config_entry: ConfigEntry, device: DeviceEntry) -> dict[str, Any]:
     """Return diagnostics scoped to one device page.
 
+    The registry's `name` and `name_by_user` are carried because nothing else in
+    either dump ties a record to what the owner sees. The cloud `name` that the
+    hub and sensor sections carry is the vendor's, and on real hardware it reads
+    as the model string.
+
     The device's own DOMAIN identifier is what routes this: a hub row carries a
     `hub_`-prefixed identity and a sub-device row carries its `{hid}_{mid}_{addr}`
     sensor key, which is the same round trip `_domain_sensor_key` already
@@ -340,7 +382,18 @@ async def async_get_device_diagnostics(hass: HomeAssistant, config_entry: Config
 
     payload: dict[str, Any] = {
         "integration": {"domain": DOMAIN, "version": VERSION},
-        "device": {"identifier": identifier, "kind": None},
+        "device": {
+            "identifier": identifier,
+            "kind": None,
+            # Home Assistant's own two names, and the only fields in either dump
+            # that say what the owner of this device actually calls it. The
+            # cloud's `name` is not that: it reads as the model string on real
+            # hardware, and a device the user renamed carries the new name here
+            # and the old one nowhere. `name_by_user` is null until they rename
+            # something, so the pair also says which of the two is on screen.
+            "name": device.name,
+            "name_by_user": device.name_by_user,
+        },
     }
 
     if identifier is None:
