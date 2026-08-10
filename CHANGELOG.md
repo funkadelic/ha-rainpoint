@@ -2,6 +2,15 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.15.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.14.0...v1.15.0) (2026-08-10)
+
+
+### Added
+
+* add a diagnostics download for the config entry and each device ([#158](https://github.com/funkadelic/ha-rainpoint/issues/158)) ([618cf5f](https://github.com/funkadelic/ha-rainpoint/commit/618cf5f8ed1214c3d207e82995af0d1ca929c2e9))
+* **diagnostics:** name each device in the diagnostics download ([#162](https://github.com/funkadelic/ha-rainpoint/issues/162)) ([72a63f1](https://github.com/funkadelic/ha-rainpoint/commit/72a63f159a478e1f81951b18eefcd3fcfe5a3945))
+* name entities without repeating their device name ([#160](https://github.com/funkadelic/ha-rainpoint/issues/160)) ([a78570c](https://github.com/funkadelic/ha-rainpoint/commit/a78570c38b51801d6be727ce99cd55fa43fb4321))
+
 ## [1.14.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.13.1...v1.14.0) (2026-08-07)
 
 
