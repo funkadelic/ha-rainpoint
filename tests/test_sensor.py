@@ -2072,10 +2072,16 @@ class TestRenderStationList:
     def test_multiple_stations_join_ascending_comma_space(self):
         assert _render_station_list([1, 2, 3, 4]) == "1, 2, 3, 4"
 
-    def test_rendering_the_same_mask_twice_yields_the_identical_string(self):
-        """The HIC-07 ordering property stated as an assertion, not left to
-        the implementation's loop order."""
-        assert _render_station_list([2, 5, 8]) == _render_station_list([2, 5, 8])
+    def test_rendering_preserves_the_order_it_is_given(self):
+        """The renderer joins in the order it receives and never sorts.
+
+        The ascending guarantee belongs to _hic801w_stations_from_mask and is
+        pinned there directly. This pins the other half of that seam: a sort
+        added here would hide a regression in the decoder's ordering behind a
+        renderer that quietly corrects it, so the two tests together are what
+        prove a station list reaches the entity in ascending order.
+        """
+        assert _render_station_list([8, 2, 5]) == "8, 2, 5"
 
 
 class TestHicProgramStationSensors:
