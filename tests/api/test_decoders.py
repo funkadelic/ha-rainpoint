@@ -1955,6 +1955,26 @@ class TestDecodeHic801w:
         for forbidden in ("Test Home", "Test Hub", "Test Sensor"):
             assert forbidden not in message
 
+    def test_water_zones_b3_rejection_logs_nothing_above_warning(self, caplog):
+        """The b3 rejection is a diagnosed, expected condition, so the one
+        sanitized WARNING is the whole log record for it.
+
+        Returning the envelope rather than raising into the shared handler is
+        what keeps this true. Raising logged the same event a second time at
+        ERROR with a full traceback, and a device that persistently sends a
+        non-zero b3 repeats that on every poll, which reads as a recurring
+        crash rather than the handled rejection it is.
+        """
+        mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
+        assert mutated != SAMPLE_HIC801W_STATION3_PAYLOAD
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.decoders"):
+            result = decode_hic801w(mutated)
+
+        assert result["decoder"] == "hic801w_error"
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+        assert not any(r.exc_info for r in caplog.records)
+
     def test_sta_ts_det_width_mismatch_never_rejects_a_real_frame(self):
         """D-11: STA_TS_DET arrives 2 bytes wide against a declared 4 in
         every one of the 22 captures. The shape check must never reject on

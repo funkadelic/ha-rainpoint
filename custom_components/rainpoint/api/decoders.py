@@ -743,6 +743,28 @@ def _hic801w_stations_from_mask(mask: int) -> list[int]:
     return [n for n in range(1, 9) if mask & (1 << (n - 1))]
 
 
+def _hic801w_error_envelope(message: str) -> dict:
+    """Return the HIC801W error envelope carrying `message` as its error.
+
+    Shared by the two rejection routes so they cannot drift: the b3 check,
+    which returns directly because it has already logged its own sanitized
+    WARNING, and the outer handler, which catches everything else. Both carry
+    the same keys as the happy path with every decoded field None (D-09).
+    """
+    return {
+        "type": "irrigation_controller",
+        "rssi_dbm": None,
+        "raw_bytes": [],
+        "current_station": None,
+        "program_stations": None,
+        "program_stations_completed": None,
+        "run_duration_seconds": None,
+        "run_ends_at": None,
+        "decoder": "hic801w_error",
+        "error": message,
+    }
+
+
 def decode_hic801w(raw: str) -> dict:
     """Decode an HIC801W 8-station irrigation controller status frame (10# prefix).
 
@@ -799,8 +821,13 @@ def decode_hic801w(raw: str) -> dict:
 
         b0, b1, b2, b3 = water_zones_bytes[0], water_zones_bytes[1], water_zones_bytes[2], water_zones_bytes[3]
         if b3 != 0x00:
+            # Returned rather than raised: this rejection is a diagnosed,
+            # expected condition with its own sanitized one-line WARNING, so
+            # falling into the outer handler would log the same event a
+            # second time at ERROR with a full traceback, on every poll of an
+            # affected device, making it read as a recurring crash.
             _LOGGER.warning("HIC801W: STA_WATER_ZONES b3 unexpected non-zero value 0x%02X; rejecting frame", b3)
-            raise ValueError(f"HIC801W: STA_WATER_ZONES b3 unexpected non-zero value: 0x{b3:02X}")
+            return _hic801w_error_envelope(f"HIC801W: STA_WATER_ZONES b3 unexpected non-zero value: 0x{b3:02X}")
 
         current_station = b0
         program_stations = _hic801w_stations_from_mask(b1)
@@ -834,18 +861,7 @@ def decode_hic801w(raw: str) -> dict:
         }
     except Exception as e:
         _LOGGER.exception("HIC801W decoder error for payload %r", raw)
-        return {
-            "type": "irrigation_controller",
-            "rssi_dbm": None,
-            "raw_bytes": [],
-            "current_station": None,
-            "program_stations": None,
-            "program_stations_completed": None,
-            "run_duration_seconds": None,
-            "run_ends_at": None,
-            "decoder": "hic801w_error",
-            "error": str(e),
-        }
+        return _hic801w_error_envelope(str(e))
 
 
 def _scan_htv145_markers(b: bytes) -> dict[int, int]:
