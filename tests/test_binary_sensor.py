@@ -1,18 +1,28 @@
-"""Tests for the binary_sensor platform setup, the connectivity entity, and the push connection entity."""
+"""Tests for the binary_sensor platform setup, the connectivity entity, the push
+connection entity, and the HIC801W per-station watering entities."""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
-from custom_components.rainpoint.binary_sensor import async_setup_entry
-from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, PUSH_CONNECTED_UNIQUE_ID_SUFFIX
-from custom_components.rainpoint.coordinator import RainPointCoordinator
+from custom_components.rainpoint.api import decode_hic801w
+from custom_components.rainpoint.binary_sensor import (
+    RainPointHicStationWateringBinarySensor,
+    _build_hic801w_station_entities,
+    async_setup_entry,
+)
+from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_HIC801W, PUSH_CONNECTED_UNIQUE_ID_SUFFIX
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS, RainPointCoordinator
+from custom_components.rainpoint.entity import late_adders
 from custom_components.rainpoint.hub_entities import (
     RainPointHubConnectivityBinarySensor,
     RainPointPushConnectedBinarySensor,
 )
+from tests.helpers import make_coordinator_data, make_sensor_entry
+from tests.payload_samples import SAMPLE_HIC801W_IDLE_PAYLOAD, SAMPLE_HIC801W_STATION3_PAYLOAD
 
 _UNSET = object()
 
@@ -107,6 +117,21 @@ class TestBinarySensorSetupEntry:
         connectivity_entities = [e for e in entities if isinstance(e, RainPointHubConnectivityBinarySensor)]
         assert len(connectivity_entities) == 1
 
+    @pytest.mark.asyncio
+    async def test_setup_entry_skips_non_dict_sensor_records(self):
+        """A malformed sub-device record must not abort setup and drop the
+        connectivity entity built from real hubs, matching the defensive
+        filter valve.py and sensor.py already apply at setup."""
+        hass, entry, coord = _make_hass(hubs=[_hub()], mqtt_client=None)
+        coord.data["sensors"] = {"bad": "not-a-dict"}
+        add = MagicMock()
+
+        await async_setup_entry(hass, entry, add)
+
+        entities = add.call_args[0][0]
+        assert [e for e in entities if isinstance(e, RainPointHicStationWateringBinarySensor)] == []
+        assert len([e for e in entities if isinstance(e, RainPointHubConnectivityBinarySensor)]) == 1
+
 
 class TestConnectivityRealTimeline:
     """Drives the real coordinator/platform-setup sequence rather than an injected snapshot."""
@@ -199,3 +224,228 @@ class TestRainPointPushConnectedBinarySensor:
         entity.async_write_ha_state = MagicMock()
         entity._handle_client_state()
         entity.async_write_ha_state.assert_called_once_with()
+
+
+class TestHicStationWateringEntities:
+    """Per-entity behaviour for RainPointHicStationWateringBinarySensor,
+    driven through decode_hic801w on the real committed frames rather than a
+    hand-built data dict."""
+
+    @staticmethod
+    def _stations(raw_payload):
+        """Decode one raw HIC801W frame and build all eight station entities for it."""
+        sensor_key = "100_200_3"
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HIC801W,
+            sub_name="Irrigation Controller",
+            data=decode_hic801w(raw_payload),
+        )
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+        return _build_hic801w_station_entities(coordinator, sensor_key, entry)
+
+    def test_exactly_eight_entities_with_the_locked_unique_ids_and_names(self):
+        stations = self._stations(SAMPLE_HIC801W_STATION3_PAYLOAD)
+        assert len(stations) == 8
+        assert [e._attr_unique_id for e in stations] == [f"rainpoint_100_200_3_station{n}_watering" for n in range(1, 9)]
+        assert [e._attr_name for e in stations] == [f"Station {n} Watering" for n in range(1, 9)]
+
+    def test_all_eight_carry_the_running_device_class(self):
+        stations = self._stations(SAMPLE_HIC801W_STATION3_PAYLOAD)
+        assert all(e._attr_device_class is BinarySensorDeviceClass.RUNNING for e in stations)
+
+    def test_running_frame_is_on_for_exactly_the_running_station(self):
+        """The reporter's station-3 capture: exactly one of the 8 is on, and
+        it is the _station3_watering entity."""
+        stations = self._stations(SAMPLE_HIC801W_STATION3_PAYLOAD)
+        on_ids = [e._attr_unique_id for e in stations if e.is_on is True]
+        assert on_ids == ["rainpoint_100_200_3_station3_watering"]
+        assert all(e.is_on is False for e in stations if e._attr_unique_id != "rainpoint_100_200_3_station3_watering")
+
+    def test_idle_frame_all_eight_are_off(self):
+        stations = self._stations(SAMPLE_HIC801W_IDLE_PAYLOAD)
+        assert all(e.is_on is False for e in stations)
+
+    def test_rejected_frame_all_eight_read_none_but_stay_available(self):
+        """A b3-mutated frame decodes to the error envelope (D-10): every
+        station reads no state, and available stays True because the device
+        is reachable and it is the payload that did not parse."""
+        mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
+        assert mutated != SAMPLE_HIC801W_STATION3_PAYLOAD
+        stations = self._stations(mutated)
+        assert all(e.is_on is None for e in stations)
+        assert all(e.available is True for e in stations)
+
+    def test_missing_reading_reads_no_state(self):
+        """A sensor key with no reading at all (data is None) is the other
+        falsy-data branch is_on guards, distinct from a parsed envelope whose
+        current_station is None."""
+        sensor_key = "100_200_3"
+        entry = make_sensor_entry(hid=100, mid=200, addr=3, model=MODEL_HIC801W, data=None)
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+        station = RainPointHicStationWateringBinarySensor(coordinator, sensor_key, entry, "100_200_3", 1)
+        assert station.is_on is None
+
+
+class TestBuildHic801wStationEntitiesGuards:
+    """The two guards in _build_hic801w_station_entities: silent entries and
+    other models both yield zero entities from this platform."""
+
+    def test_returns_empty_for_a_silent_entry(self):
+        sensor_key = "100_200_3"
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HIC801W,
+            data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
+        )
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+        assert _build_hic801w_station_entities(coordinator, sensor_key, entry) == []
+
+    def test_returns_empty_for_a_non_hic801w_model(self):
+        """A sub-device of any other model produces zero station entities
+        from this platform."""
+        sensor_key = "100_200_3"
+        entry = make_sensor_entry(hid=100, mid=200, addr=3, model="HTV210B", data={"type": "valve_hub"})
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+        assert _build_hic801w_station_entities(coordinator, sensor_key, entry) == []
+
+
+def _hic801w_hub_devices(mid=200, addr=1):
+    """A getDeviceByHid hub record carrying one HIC801W sub-device."""
+    return [
+        {
+            "mid": mid,
+            "name": "Hub A",
+            "deviceName": "d",
+            "productKey": "pk",
+            "homeName": "H",
+            "subDevices": [
+                {
+                    "addr": addr,
+                    "name": "Irrigation Controller",
+                    "model": MODEL_HIC801W,
+                    "modelCode": 279,
+                    "softVer": "1.1.1026",
+                }
+            ],
+        }
+    ]
+
+
+def _hic801w_silent_status(mid=200):
+    """A multipleDeviceStatus poll that carries no entry for the HIC801W.
+
+    Matches htv210b_silent_status's shape: the hub itself is still
+    enumerated, only its sub-device's status is missing.
+    """
+    return [{"mid": mid, "subDeviceStatus": []}]
+
+
+def _hic801w_status(mid=200, payload=SAMPLE_HIC801W_STATION3_PAYLOAD):
+    """A multipleDeviceStatus poll reporting the given raw HIC801W frame."""
+    return [{"mid": mid, "subDeviceStatus": [{"id": "D01", "value": payload, "time": 1785420002247}]}]
+
+
+class TestHicStationLateAddTimeline:
+    """Drives the real construct -> first refresh -> platform setup ->
+    refresh sequence for a genuinely silent HIC801W, proving the late-add
+    path this plan gives binary_sensor.py for the first time.
+
+    Mirrors tests/test_valve.py's TestSilentUnitGuardRealTimeline shape: the
+    silent device must actually be silent (no status entry at all for its
+    addr, not an empty or malformed one), built up through the real
+    debounce rather than injected as an already-settled coordinator.data
+    snapshot.
+    """
+
+    @staticmethod
+    async def _build_silent_timeline():
+        """Construct -> first refresh -> platform setup for an HIC801W that
+        never reports. Returns (coordinator, client, hass, entry, captured)."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = _hic801w_hub_devices()
+        client.get_multiple_device_status.return_value = _hic801w_silent_status()
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [100]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        return coordinator, client, hass, entry, captured
+
+    @pytest.mark.asyncio
+    async def test_a_silent_from_the_start_hic801w_offers_no_station_entities(self):
+        """No station entity across the whole silence timeline, even once the
+        debounce elapses and the entry's model alone would have admitted it."""
+        coordinator, _client, _hass, _entry, captured = await self._build_silent_timeline()
+        key = "100_200_1"
+        assert [e for e in captured if isinstance(e, RainPointHicStationWateringBinarySensor)] == []
+
+        # Every refresh short of the debounce: the key has no trace at all yet.
+        for _ in range(SILENT_DEBOUNCE_POLLS - 2):
+            await coordinator.async_refresh()
+            assert key not in coordinator.data["sensors"]
+            assert [e for e in captured if isinstance(e, RainPointHicStationWateringBinarySensor)] == []
+
+        # The debounce elapses: a silent entry appears, and still no station
+        # entity is offered -- the build guard, not mere absence, is doing
+        # the work from here on.
+        await coordinator.async_refresh()
+        silent_entry = coordinator.data["sensors"][key]
+        assert silent_entry["data"]["type"] == SILENT_DATA_TYPE
+        assert silent_entry["model"] == MODEL_HIC801W
+        assert [e for e in captured if isinstance(e, RainPointHicStationWateringBinarySensor)] == []
+
+    @pytest.mark.asyncio
+    async def test_the_silent_hic801w_gains_all_eight_the_poll_it_starts_reporting(self):
+        """The late adder promotes the entry the moment it stops being
+        silent, through the same coordinator listener, with no reload and no
+        second async_setup_entry call. A further poll on the same frame adds
+        none, proving the add-once bookkeeping."""
+        coordinator, client, _hass, _entry, captured = await self._build_silent_timeline()
+        for _ in range(SILENT_DEBOUNCE_POLLS - 1):
+            await coordinator.async_refresh()
+        key = "100_200_1"
+        assert coordinator.data["sensors"][key]["data"]["type"] == SILENT_DATA_TYPE
+        assert [e for e in captured if isinstance(e, RainPointHicStationWateringBinarySensor)] == []
+
+        client.get_multiple_device_status.return_value = _hic801w_status()
+        await coordinator.async_refresh()
+
+        station_entities = [e for e in captured if isinstance(e, RainPointHicStationWateringBinarySensor)]
+        assert sorted(e._attr_unique_id for e in station_entities) == sorted(
+            f"rainpoint_100_200_1_station{n}_watering" for n in range(1, 9)
+        )
+
+        client.get_multiple_device_status.return_value = _hic801w_status()
+        before = len([e for e in captured if isinstance(e, RainPointHicStationWateringBinarySensor)])
+        await coordinator.async_refresh()
+        assert len([e for e in captured if isinstance(e, RainPointHicStationWateringBinarySensor)]) == before
+
+    @pytest.mark.asyncio
+    async def test_the_adder_is_published_with_the_binary_sensor_domain(self):
+        """The link the Repairs removal path depends on: the adder this
+        setup registers carries domain "binary_sensor", invisible from the
+        entity assertions alone."""
+        _coordinator, _client, hass, entry, _captured = await self._build_silent_timeline()
+        adders = late_adders(hass.data[DOMAIN][entry.entry_id])
+        assert any(a.domain == "binary_sensor" for a in adders)
