@@ -746,6 +746,17 @@ def _hic801w_stations_from_mask(mask: int) -> list[int]:
     return [n for n in range(1, 9) if mask & (1 << (n - 1))]
 
 
+def _hic801w_observed_width(value: bytes | None) -> str:
+    """Describe a field's observed width without echoing the field's bytes.
+
+    The width-check messages reach the log through the traceback that
+    _LOGGER.exception prints, so interpolating the bytes themselves would put
+    payload content on that line by the back door, the same way the missing
+    prefix check would if it echoed its input.
+    """
+    return "missing" if value is None else f"{len(value)} bytes"
+
+
 def _hic801w_error_envelope(message: str) -> dict:
     """Return the HIC801W error envelope carrying `message` as its error.
 
@@ -820,11 +831,11 @@ def decode_hic801w(raw: str) -> dict:
         evtime_bytes = fields.get(_HIC801W_FIELD_EVTIME)
         water_zones_bytes = fields.get(_HIC801W_FIELD_WATER_ZONES)
         if duration_bytes is None or len(duration_bytes) != 4:
-            raise ValueError(f"HIC801W: STA_DURATION missing or wrong width: {duration_bytes!r}")
+            raise ValueError(f"HIC801W: STA_DURATION missing or wrong width: {_hic801w_observed_width(duration_bytes)}")
         if evtime_bytes is None or len(evtime_bytes) != 4:
-            raise ValueError(f"HIC801W: STA_EVTIME missing or wrong width: {evtime_bytes!r}")
+            raise ValueError(f"HIC801W: STA_EVTIME missing or wrong width: {_hic801w_observed_width(evtime_bytes)}")
         if water_zones_bytes is None or len(water_zones_bytes) != 4:
-            raise ValueError(f"HIC801W: STA_WATER_ZONES missing or wrong width: {water_zones_bytes!r}")
+            raise ValueError(f"HIC801W: STA_WATER_ZONES missing or wrong width: {_hic801w_observed_width(water_zones_bytes)}")
 
         b0, b1, b2, b3 = water_zones_bytes[0], water_zones_bytes[1], water_zones_bytes[2], water_zones_bytes[3]
         if b3 != 0x00:

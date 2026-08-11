@@ -2002,6 +2002,37 @@ class TestDecodeHic801w:
             assert payload not in haystack
         assert "19-character blob" in rendered
 
+    @pytest.mark.parametrize(
+        ("truncate_to", "field_name"),
+        [(14, "STA_DURATION"), (24, "STA_EVTIME"), (38, "STA_WATER_ZONES")],
+    )
+    def test_width_check_reports_a_width_not_the_field_bytes(self, truncate_to, field_name, caplog):
+        """A width rejection names the field and its observed width, never the
+        bytes it read.
+
+        These three checks are reached only by a payload that clears the 10#
+        prefix check and parses as hex, which is why the prefix-check test
+        above cannot cover them. Their message travels into the traceback that
+        _LOGGER.exception prints, so interpolating the field's bytes put
+        payload content on the log line: this asserts the absence of a bytes
+        repr rather than of any particular byte, since the old form rendered
+        values such as b'\\x03\\xff\\x03' that share no text with the payload's
+        own hex.
+        """
+        truncated = "10#" + SAMPLE_HIC801W_STATION3_PAYLOAD[3:][:truncate_to]
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.decoders"):
+            result = decode_hic801w(truncated)
+
+        assert result["decoder"] == "hic801w_error"
+        assert field_name in result["error"]
+        assert result["error"].endswith("3 bytes")
+
+        everything = result["error"] + "\n".join(self._format_exc_text(r) for r in caplog.records)
+        assert "b'" not in everything
+        assert 'b"' not in everything
+        assert "\\x" not in everything
+
     @staticmethod
     def _format_exc_text(record) -> str:
         """Return a record's traceback text, or empty when it carries none."""
