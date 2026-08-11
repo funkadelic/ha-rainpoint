@@ -283,10 +283,11 @@ VALVE_MODELS = {
     MODEL_VALVE_345,
     MODEL_VALVE_405,
     MODEL_HTV210B,
-    # MODEL_HIC801W is deliberately absent: this phase is read-only, so it
-    # must not enrol in valve.py/number.py entity creation or the
+    # MODEL_HIC801W is deliberately absent: HIC801W support is read-only,
+    # so it must not enrol in valve.py/number.py entity creation or the
     # command-versus-poll staleness guard. Do not "complete the pair" with
-    # the HAND_WRITTEN_MODELS entry below.
+    # the HAND_WRITTEN_MODELS entry below. Adding it here is part of
+    # shipping station control, never a tidy-up on its own.
 }
 
 # Every model with a hand-written, fixture-validated decoder (mirrors the

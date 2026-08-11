@@ -10,13 +10,16 @@ lifecycle, matching the tests/test_hub_identity.py and
 tests/test_orphan_removal.py precedent of a feature-scoped module rather
 than living inside tests/test_sensor.py.
 
-This file also carries the phase's whole-set proof (TestHic801wWholeEntitySet):
-one HIC801W sub-device driven through both sensor.async_setup_entry and
+TestHic801wWholeEntitySet asserts the set rather than any one entity: one
+HIC801W sub-device driven through both sensor.async_setup_entry and
 binary_sensor.async_setup_entry off a single coordinator first refresh,
-asserting the emitted unique-ID set as an equality against the locked
-table, one device-registry identity across both platforms, and the whole
-set clearing together on a rejected frame and recovering together on the
-next good one -- the assertion no per-plan test could make on its own.
+yielding the five HIC801W sensors, the eight station binary sensors and
+the raw-payload diagnostic. It checks that emitted unique-ID set as an
+equality, that all fourteen resolve to one device-registry identity, and
+that they clear together on a rejected frame and recover together on the
+next good one. A test scoped to one entity or one platform cannot see an
+entity that appears for an undefined reading, a suffix that drifts, or
+two platforms resolving to two device pages.
 """
 
 from __future__ import annotations
@@ -186,7 +189,7 @@ class TestHic801wRealTimeline:
 
 
 class TestHic801wWholeEntitySet:
-    """The assertion no per-plan test could make: one HIC801W sub-device,
+    """The whole emitted set rather than any one entity: one HIC801W sub-device,
     driven through both sensor.async_setup_entry and
     binary_sensor.async_setup_entry off one coordinator's first refresh,
     yields exactly fourteen unique IDs (the thirteen entities this model
@@ -249,7 +252,7 @@ class TestHic801wWholeEntitySet:
     async def test_the_union_is_exactly_the_locked_fourteen_ids_split_by_domain(self):
         """The locked set as an equality, not a superset or a bare count: an entity
         added later for an undefined reading fails here, and a suffix that
-        drifted between plans fails here too. Registry uniqueness is per
+        drifted between the two platforms fails here too. Registry uniqueness is per
         (domain, platform, unique_id), so the domain split is asserted
         alongside the union, not folded away by it."""
         _coordinator, _client, sensor_captured, binary_captured = await self._build()
