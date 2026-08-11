@@ -1874,10 +1874,10 @@ class TestHic801wDispatch:
         assert len(captured) == 6
 
     @pytest.mark.asyncio
-    async def test_the_five_hic_entities_unique_ids_are_in_d02_order(self):
-        """_make_hic801w_entities's return order is the documented one,
-        so the emitted entity list reads in the same sequence as the
-        decision that defines it."""
+    async def test_make_hic801w_entities_emits_its_suffixes_in_declared_order(self):
+        """_make_hic801w_entities returns the five sensors in the order its
+        docstring declares, so the emitted unique-ID suffixes read in that
+        same sequence."""
         captured = await self._setup()
         hic_classes = (
             RainPointHicCurrentStationSensor,
@@ -1907,9 +1907,9 @@ class TestHic801wDispatch:
         assert [e for e in captured if isinstance(e, RainPointZoneStateSensor)] == []
 
     @pytest.mark.asyncio
-    async def test_unique_id_matches_the_locked_d02_suffix(self):
-        """The base_slug plus the locked _current_station suffix, for
-        this fixture's hid/mid/addr."""
+    async def test_current_station_unique_id_is_the_base_slug_plus_its_suffix(self):
+        """RainPointHicCurrentStationSensor's id is the base slug for this
+        fixture's hid/mid/addr followed by _current_station."""
         captured = await self._setup()
         stations = [e for e in captured if isinstance(e, RainPointHicCurrentStationSensor)]
         assert stations[0]._attr_unique_id == "rainpoint_100_200_3_current_station"
