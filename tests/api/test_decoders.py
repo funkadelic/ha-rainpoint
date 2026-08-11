@@ -9,6 +9,7 @@ from custom_components.rainpoint.api import (
     decode_display,
     decode_flow_meter,
     decode_flowmeter,
+    decode_generic,
     decode_hcs005frf,
     decode_hic801w,
     decode_htv145frf,
@@ -27,6 +28,8 @@ from custom_components.rainpoint.api import (
     decode_temphum,
     decode_unknown,
     decode_valve_hub,
+    get_catalog_entry,
+    has_bluetooth_control_identity,
     is_hand_written_model,
 )
 from custom_components.rainpoint.api.decoders import _hic801w_stations_from_mask
@@ -1985,3 +1988,74 @@ class TestDecodeHic801w:
         source = inspect.getsource(decode_hic801w)
         assert "decode_generic" not in source
         assert is_hand_written_model("HIC801W") is True
+
+
+class TestHic801wGenericLockout:
+    """The generic path is observably closed for HIC801W end to end, not
+    merely a set-membership fact (D-14). This is what the milestone's
+    recorded trade actually buys: evaluate_generic_gate("HIC801W", "279") is
+    all-or-nothing per variant and STA_RAIN and STA_TS_DET can never be
+    defined from constants on either unit's corpus, so the gate could never
+    pass -- a hand-written decoder was the only route this model ever had.
+    """
+
+    def test_decode_generic_attaches_no_catalog_annotation_for_hic801w(self):
+        """Even though the committed catalog genuinely holds variants 278 and
+        279 for this model, is_hand_written_model's lockout means
+        decode_generic never annotates a field with catalog metadata for it."""
+        result = decode_generic(SAMPLE_HIC801W_STATION3_PAYLOAD, model="HIC801W", model_code=279)
+        for field in result["fields"]:
+            assert "catalog" not in field
+
+
+class TestHic801wCatalogKeying:
+    """The variant this decoder relies on resolves through modelCode alone
+    (D-13), over the real committed catalog snapshot rather than a synthetic
+    one."""
+
+    def test_variant_279_is_the_8_port_accessory_with_ctl_water(self):
+        """279 declares 9 datapoints, an 8-port accessory, and CTL_WATER --
+        never CTL_BT_WATER -- so no DP-endpoint routing is involved."""
+        entry = get_catalog_entry("HIC801W", 279)
+        assert len(entry) == 9
+        identities = [e["identity"] for e in entry]
+        assert "CTL_WATER" in identities
+        assert "CTL_BT_WATER" not in identities
+        assert has_bluetooth_control_identity("HIC801W", 279) is False
+
+    def test_variant_278_is_the_portless_main_record(self):
+        """278 is the pairable main record the ground-truth document
+        describes: no datapoints, so nothing on this decode path reads it."""
+        assert get_catalog_entry("HIC801W", 278) == []
+
+    def test_resolution_requires_modelcode_the_committed_catalog_carries_no_disambiguator(self):
+        """The committed catalog snapshot carries no hasDistribution or
+        similar per-variant flag to fall back on (product_catalog.py trims
+        each variant record to {"portNumber", "dp"}): HIC801W has two
+        modelCode variants and no uncoded ("*") bucket, so a lookup with no
+        modelCode resolves to None rather than guessing between them. This is
+        the property D-13 rests on -- the resolution this phase relies on is
+        the modelCode one, and nothing else could stand in for it even if a
+        caller tried."""
+        assert get_catalog_entry("HIC801W", None) is None
+        assert get_catalog_entry("HIC801W", 279) is not None
+        assert get_catalog_entry("HIC801W", 278) is not None
+
+
+class TestHic801wWidthToleranceProperty:
+    """D-11, stated as a property over the whole corpus rather than a single
+    happy-path frame: the catalog's declared width and the wire's actual
+    width for STA_TS_DET disagree on every capture, and the shape check must
+    never turn that disagreement into a rejection."""
+
+    def test_declared_width_disagrees_with_every_frame_and_none_are_rejected(self):
+        declared_len = next(e["dpLen"] for e in get_catalog_entry("HIC801W", 279) if e["identity"] == "STA_TS_DET")
+        assert declared_len == 4
+
+        for label, raw in SAMPLE_HIC801W_ALL_FRAMES.items():
+            b = _parse_rainpoint_payload(raw)
+            fields = {e["field"]: e["value_bytes"] for e in _parse_entries(list(b), False)}
+            actual_len = len(fields[38])
+            assert actual_len != declared_len, label
+            assert actual_len == 2, label
+            assert decode_hic801w(raw)["decoder"] == "hic801w_hex", label

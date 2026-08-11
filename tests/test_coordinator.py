@@ -46,6 +46,7 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_CO2,
     MODEL_DISPLAY_HUB,
     MODEL_FLOWMETER,
+    MODEL_HIC801W,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
@@ -67,6 +68,8 @@ from custom_components.rainpoint.repairs import (  # noqa: E402
 from tests.payload_samples import (  # noqa: E402
     CATALOG_ANCHOR_MODEL,
     HWS019WRF_V2_PAYLOAD,
+    SAMPLE_HIC801W_ALL_FRAMES,
+    SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
@@ -4218,6 +4221,33 @@ class TestPureHelpers:
 
         assert result["type"] != "unknown"
         assert "generic" not in result
+
+    def test_decode_subdevice_payload_hic801w_takes_the_registry_branch(self):
+        """Registration means every corpus frame dispatches to decode_hic801w
+        and never reaches the unknown-model fallback, for whatever model_code
+        shape a real poll happens to pass (int, the equivalent string, or
+        omitted entirely)."""
+        for model_code in (279, "279", None):
+            result = _coord_module._decode_subdevice_payload(MODEL_HIC801W, SAMPLE_HIC801W_STATION3_PAYLOAD, model_code)
+            assert result["type"] == "irrigation_controller"
+            assert result["type"] != "unknown"
+            assert "generic" not in result
+
+    def test_decode_subdevice_payload_hic801w_every_corpus_frame_takes_the_registry_branch(self):
+        """The same absence-of-fallback proof, over every committed frame
+        rather than just the one used above."""
+        for raw in SAMPLE_HIC801W_ALL_FRAMES.values():
+            result = _coord_module._decode_subdevice_payload(MODEL_HIC801W, raw, 279)
+            assert result["type"] == "irrigation_controller"
+            assert "generic" not in result
+
+    def test_decode_subdevice_payload_unregistered_model_still_falls_back_to_unknown(self):
+        """The companion proof: an unregistered model still takes the
+        fallback branch, so the HIC801W assertions above prove a real
+        difference rather than a constant "generic" key never appearing."""
+        result = _coord_module._decode_subdevice_payload("UNKNOWN_XYZ", SAMPLE_HIC801W_STATION3_PAYLOAD, 279)
+        assert result["type"] == "unknown"
+        assert "generic" in result
 
     # _attach_device_timestamp
     def test_attach_device_timestamp_valid_ms(self):
