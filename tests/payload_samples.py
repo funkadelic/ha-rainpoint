@@ -317,3 +317,60 @@ SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO = "2026-07-31T18:37:42.039000+00:00"
 # all three giving way to read this as "hub 182509 disconnected" against a
 # real record, which is the point -- the layers are why that misread is hard.
 SAMPLE_NON_HUB_PIPE_FRAME = "#P260801054717000016822204182509||113060569563#"
+
+# HIC801W 8-station irrigation controller, 10# flat-hex frames from
+# .planning/HIC801W-DECODE-2026-08-10.md's "Capture corpus" section. Do not
+# re-derive or re-capture; that document is the settled ground truth.
+#
+# Keyed by capture label, never by frame text: the reporter's
+# "2026-08-08 all off" and "2026-08-10 idle" captures are byte-identical
+# strings (both idle, taken two days apart), so a frame-keyed structure
+# would silently collapse the corpus to 21 entries and destroy the evidence
+# that idle reads the same on two different days. The second unit's keys
+# are prefixed "unit2" so the merge below cannot collide with the
+# reporter's.
+SAMPLE_HIC801W_REPORTER_FRAMES = {
+    "2026-07-17 mid-run st1": "10#108800AF08070000B7F43DDB19D821F701030000F90000",
+    "2026-08-08 all off": "10#108800AF00000000B700204200D800F700000000F90000",
+    "2026-08-08 st1 master on": "10#108800AF2C010000B7B739111AD821F701030000F90000",
+    "2026-08-08 st2 master on": "10#108800AF2C010000B7F83A111AD821F702030100F90000",
+    "2026-08-10 st1": "10#108800AF3C000000B78246151AD821F701FF0000F90000",
+    "2026-08-10 st2": "10#108800AF3C000000B7C346151AD821F702FF0100F90000",
+    "2026-08-10 st3": "10#108800AF3C000000B70447151AD821F703FF0300F90000",
+    "2026-08-10 st4": "10#108800AF3C000000B74547151AD821F704FF0700F90000",
+    "2026-08-10 st5": "10#108800AF3C000000B78647151AD821F705FF0F00F90000",
+    "2026-08-10 st6": "10#108800AF3C000000B7C747151AD821F706FF1F00F90000",
+    "2026-08-10 st7": "10#108800AF3C000000B70848151AD821F707FF3F00F90000",
+    "2026-08-10 st8": "10#108800AF3C000000B74948151AD821F708FF7F00F90000",
+    "2026-08-10 idle": "10#108800AF00000000B700204200D800F700000000F90000",
+}
+
+# The independent second unit's captures, committed in
+# brettmeyerowitz/homeassistant-homgar at tests/fixtures/payloads/HIC801W.json.
+# This is what kills the master-valve confound the reporter's own captures
+# cannot rule out on their own: b1 takes five distinct values here, including
+# single-station masks (zone 2, 3, 4) no master-valve flag could produce.
+SAMPLE_HIC801W_SECOND_UNIT_FRAMES = {
+    "unit2 idle": "10#108800AF00000000B700204200D800F700000000F9FF00",
+    "unit2 zone 1": "10#108800AF3C000000B7F4231919D821F7010F0000F9FF00",
+    "unit2 zone 2": "10#108800AF68010000B7E0371919D821F702020000F9FF00",
+    "unit2 zone 3": "10#108800AFA08C0000B72F571A19D821F703040000F9FF00",
+    "unit2 zone 4": "10#108800AF58020000B7913A1919D821F704080000F9FF00",
+    "unit2 zone 5": "10#108800AFB4000000B7353C1919D821F705FF0F00F9FF00",
+    "unit2 zone 6": "10#108800AFB4000000B7833C1919D821F706FF1F00F9FF00",
+    "unit2 zone 7": "10#108800AFB4000000B7D53C1919D821F707FF3F00F9FF00",
+    "unit2 zone 8": "10#108800AF453D0000B7453D1919D821F708FF7F00F9FF00",
+}
+
+# 13 reporter frames + 9 second-unit frames = 22. A test asserts this count
+# directly (HIC-02's adjacency edge), so a future accidental key collision on
+# either side of the merge fails loudly instead of silently dropping a frame.
+SAMPLE_HIC801W_ALL_FRAMES = {**SAMPLE_HIC801W_REPORTER_FRAMES, **SAMPLE_HIC801W_SECOND_UNIT_FRAMES}
+
+# Named single-frame constants for tests that need one frame rather than the
+# whole table.
+SAMPLE_HIC801W_IDLE_PAYLOAD = SAMPLE_HIC801W_REPORTER_FRAMES["2026-08-10 idle"]
+# Station 3 is the capture that most clearly falsifies the literal-bitmask
+# misreading: b0 reads 03, not the 04 a bitmask read of "station 3 running"
+# would produce.
+SAMPLE_HIC801W_STATION3_PAYLOAD = SAMPLE_HIC801W_REPORTER_FRAMES["2026-08-10 st3"]

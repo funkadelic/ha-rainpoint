@@ -27,6 +27,7 @@ from .const import (
     MODEL_HCS005FRF,
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
+    MODEL_HIC801W,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
@@ -242,6 +243,29 @@ def _make_htv210b_entities(coordinator, key, info, base_slug):
     return entities
 
 
+def _make_hic801w_entities(coordinator, key, info, base_slug):
+    """The read-only entities for the HIC801W 8-station irrigation controller.
+
+    Returns RainPointHicCurrentStationSensor alone in this plan; 30-02 extends
+    this list with the run-timing and program-list sensors.
+
+    The 279 accessory record is one sub-device row parented under the 278 hub
+    by the existing sub-device parenting; there is no per-station device
+    fan-out. The wire carries one aggregate record rather than eight
+    per-station records even though the catalog's portNumber is 8 -- the
+    per-station entities this platform eventually builds are a fan-out this
+    integration invents, not one the wire hands it.
+
+    Deliberately emits no diagnostic entities: the payload carries no RSSI
+    and no battery and variant 279 declares neither, so a battery or signal
+    entity here would read available with a native_value of None while the
+    real values already exist on the 278 hub record.
+    """
+    return [
+        RainPointHicCurrentStationSensor(coordinator, key, info, base_slug),
+    ]
+
+
 def _make_hcs_moisture_only_entities(coordinator, key, info, base_slug):
     return [RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True)]
 
@@ -287,6 +311,7 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     MODEL_VALVE_345: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_405: _make_htv_valve_diagnostic_entities,
     MODEL_HTV210B: _make_htv210b_entities,
+    MODEL_HIC801W: _make_hic801w_entities,
 }
 
 
@@ -1547,3 +1572,62 @@ class RainPointZoneStateSensor(RainPointZoneSensorBase):
         attrs["event_time"] = zone.get("event_time")
         attrs["state_raw"] = zone.get("state_raw")
         return attrs
+
+
+class RainPointHic801wSensorBase(RainPointSensorBase):
+    """Shared plumbing for the HIC801W's device-level sensors.
+
+    Unlike RainPointZoneSensorBase, there is no per-station number to carry:
+    every HIC801W sensor.py entity is a singleton per device, reading one
+    aggregate record rather than a per-zone one, so the one guarded read
+    every subclass needs is a `_hic_data` property returning the decoded
+    dict (or {} when the frame is missing or failed to decode) so each
+    subclass's value property is a single `.get`.
+    """
+
+    @property
+    def _hic_data(self) -> dict:
+        return self._sensor_data or {}
+
+
+class RainPointHicCurrentStationSensor(RainPointHic801wSensorBase):
+    """The currently-watering station, as a closed-option ENUM sensor.
+
+    ENUM rather than numeric (D-05): the device class makes the idle case a
+    declared value ("none") instead of a magic zero, and a station number is
+    not a quantity worth trending. The closed option list also means a `b0`
+    outside 0 through 8 -- which the settled evidence has never shown but
+    the shape check does not itself exclude -- yields no state rather than a
+    fabricated new option string.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options: ClassVar[list[str]] = ["none", "1", "2", "3", "4", "5", "6", "7", "8"]
+    _attr_icon = "mdi:sprinkler"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+    ) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_current_station"
+        self._attr_name = "Current Station"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return "none", the station number as a string, or None.
+
+        None covers two distinct cases: a failed shape check, where
+        current_station is None (D-09), and a current_station outside 0
+        through 8, where the closed option list means no state rather than a
+        new state string (D-05).
+        """
+        value = self._hic_data.get("current_station")
+        if value == 0:
+            return "none"
+        if isinstance(value, int) and 1 <= value <= 8:
+            return str(value)
+        return None

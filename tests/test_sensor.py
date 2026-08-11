@@ -22,6 +22,7 @@ from custom_components.rainpoint.const import (
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
     MODEL_HCS0528ARF,
+    MODEL_HIC801W,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
@@ -49,6 +50,7 @@ from custom_components.rainpoint.sensor import (
     RainPointFlowLastUsedSensor,
     RainPointFlowTotalSensor,
     RainPointFlowTotalTodaySensor,
+    RainPointHicCurrentStationSensor,
     RainPointIlluminanceSensor,
     RainPointMoisturePercentSensor,
     RainPointNotReportingSensor,
@@ -1803,6 +1805,116 @@ class TestHtv210bDispatch:
         await async_setup_entry(hass, entry, async_add_entities)
         assert [e for e in captured if isinstance(e, RainPointZoneStateSensor)] == []
         assert len(captured) == 3
+
+
+class TestHic801wDispatch:
+    """The HIC801W gets exactly one Current Station sensor, no battery or
+    RSSI diagnostics (D-13, the platform has no reading for either), and no
+    generic or unsupported fallback."""
+
+    @staticmethod
+    def _entry(current_station=3):
+        """Build an HIC801W sensor entry with a decoded happy-path payload."""
+        return make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HIC801W,
+            sub_name="Irrigation Controller",
+            data={
+                "type": "irrigation_controller",
+                "rssi_dbm": None,
+                "raw_bytes": b"",
+                "current_station": current_station,
+                "program_stations": [1, 2, 3],
+                "program_stations_completed": [1],
+                "run_duration_seconds": 60,
+                "run_ends_at": "2026-08-10T20:28:04",
+                "decoder": "hic801w_hex",
+            },
+        )
+
+    async def _setup(self, current_station=3):
+        """Run sensor setup for an HIC801W entry and capture the created entities."""
+        sensor_key = "100_200_3"
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: self._entry(current_station)}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_creates_exactly_one_current_station_sensor_and_raw_payload(self):
+        """One Current Station sensor plus the unconditional raw payload
+        diagnostic, nothing else."""
+        captured = await self._setup()
+        stations = [e for e in captured if isinstance(e, RainPointHicCurrentStationSensor)]
+        assert len(stations) == 1
+        assert stations[0]._attr_unique_id == "rainpoint_100_200_3_current_station"
+        assert stations[0]._attr_name == "Current Station"
+        assert len([e for e in captured if isinstance(e, RainPointRawPayloadSensor)]) == 1
+        assert len(captured) == 2
+
+    @pytest.mark.asyncio
+    async def test_no_battery_rssi_unknown_or_zone_state_entities(self):
+        """No diagnostic pair and no fallback entity: this model has a real
+        factory, so RainPointUnknownSensor must never appear for it either."""
+        captured = await self._setup()
+        assert [e for e in captured if isinstance(e, RainPointBatterySensor)] == []
+        assert [e for e in captured if isinstance(e, RainPointRSSISensor)] == []
+        assert [e for e in captured if isinstance(e, RainPointUnknownSensor)] == []
+        assert [e for e in captured if isinstance(e, RainPointZoneStateSensor)] == []
+
+    @pytest.mark.asyncio
+    async def test_unique_id_matches_the_locked_d02_suffix(self):
+        """The base_slug plus D-02's locked _current_station suffix, for
+        this fixture's hid/mid/addr."""
+        captured = await self._setup()
+        stations = [e for e in captured if isinstance(e, RainPointHicCurrentStationSensor)]
+        assert stations[0]._attr_unique_id == "rainpoint_100_200_3_current_station"
+
+
+_HIC801W_DATA_MISSING = object()
+
+
+class TestHicCurrentStationSensor:
+    """native_value's four branches, driven directly against constructed
+    entities rather than through platform setup."""
+
+    @staticmethod
+    def _sensor(current_station):
+        sensor_key = "100_200_3"
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HIC801W,
+            sub_name="Irrigation Controller",
+            data=None
+            if current_station is _HIC801W_DATA_MISSING
+            else {"type": "irrigation_controller", "current_station": current_station},
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: entry}))
+        return RainPointHicCurrentStationSensor(coordinator, sensor_key, entry, "100_200_3")
+
+    def test_idle_reads_none_string(self):
+        """b0 == 0 reads the declared ENUM option "none", not a numeric 0."""
+        assert self._sensor(0).native_value == "none"
+
+    def test_in_range_station_reads_its_number_as_a_string(self):
+        """b0 in 1..8 reads str(b0)."""
+        assert self._sensor(5).native_value == "5"
+
+    def test_out_of_range_station_reads_no_state(self):
+        """A current_station outside the closed 0..8 option list yields no
+        state rather than a fabricated new option string (D-05)."""
+        assert self._sensor(9).native_value is None
+
+    def test_missing_data_reads_no_state(self):
+        """A failed shape check leaves current_station absent (D-09), which
+        must read as no state rather than "none"."""
+        assert self._sensor(_HIC801W_DATA_MISSING).native_value is None
 
 
 class TestSilentSensorDispatch:

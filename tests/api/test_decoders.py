@@ -1,11 +1,16 @@
 """Tests for RainPoint device decoders."""
 
+import logging
+
+import pytest
+
 from custom_components.rainpoint.api import (
     decode_co2,
     decode_display,
     decode_flow_meter,
     decode_flowmeter,
     decode_hcs005frf,
+    decode_hic801w,
     decode_htv145frf,
     decode_htv210b,
     decode_htv210b_dp_state,
@@ -22,7 +27,10 @@ from custom_components.rainpoint.api import (
     decode_temphum,
     decode_unknown,
     decode_valve_hub,
+    is_hand_written_model,
 )
+from custom_components.rainpoint.api.decoders import _hic801w_stations_from_mask
+from custom_components.rainpoint.api.utils import _parse_entries, _parse_rainpoint_payload
 from tests.payload_samples import (
     BASIC_HEX_PAYLOAD,
     HWS019WRF_V2_PAYLOAD,
@@ -31,6 +39,10 @@ from tests.payload_samples import (
     MOISTURE_SIMPLE_HEX_PAYLOAD,
     MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD,
     RAIN_HEX_PAYLOAD,
+    SAMPLE_HIC801W_ALL_FRAMES,
+    SAMPLE_HIC801W_REPORTER_FRAMES,
+    SAMPLE_HIC801W_SECOND_UNIT_FRAMES,
+    SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
@@ -1644,3 +1656,332 @@ class TestDecodeHtv210bDpState:
         must not accidentally succeed, since it carries no leading-digit comma
         form at all."""
         assert decode_htv210b_dp_state(SAMPLE_HTV210B_TLV_PAYLOAD) is None
+
+
+# Expected decode for every one of the 22 committed HIC801W frames, keyed by
+# the same capture label as tests.payload_samples.SAMPLE_HIC801W_ALL_FRAMES.
+# Derived from a hand cross-check of .planning/HIC801W-DECODE-2026-08-10.md's
+# two evidence tables against a real _parse_entries walk of each frame at
+# plan time; do not re-derive from the raw hex without cross-checking both.
+_HIC801W_EXPECTED_DECODE = {
+    "2026-07-17 mid-run st1": {
+        "current_station": 1,
+        "program_stations": [1, 2],
+        "program_stations_completed": [],
+        "run_duration_seconds": 1800,
+        "run_ends_at": "2026-07-13T19:55:52",
+    },
+    "2026-08-08 all off": {
+        "current_station": 0,
+        "program_stations": [],
+        "program_stations_completed": [],
+        "run_duration_seconds": 0,
+        "run_ends_at": None,
+    },
+    "2026-08-08 st1 master on": {
+        "current_station": 1,
+        "program_stations": [1, 2],
+        "program_stations_completed": [],
+        "run_duration_seconds": 300,
+        "run_ends_at": "2026-08-08T19:38:55",
+    },
+    "2026-08-08 st2 master on": {
+        "current_station": 2,
+        "program_stations": [1, 2],
+        "program_stations_completed": [1],
+        "run_duration_seconds": 300,
+        "run_ends_at": "2026-08-08T19:43:56",
+    },
+    "2026-08-10 st1": {
+        "current_station": 1,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [],
+        "run_duration_seconds": 60,
+        "run_ends_at": "2026-08-10T20:26:02",
+    },
+    "2026-08-10 st2": {
+        "current_station": 2,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1],
+        "run_duration_seconds": 60,
+        "run_ends_at": "2026-08-10T20:27:03",
+    },
+    "2026-08-10 st3": {
+        "current_station": 3,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1, 2],
+        "run_duration_seconds": 60,
+        "run_ends_at": "2026-08-10T20:28:04",
+    },
+    "2026-08-10 st4": {
+        "current_station": 4,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1, 2, 3],
+        "run_duration_seconds": 60,
+        "run_ends_at": "2026-08-10T20:29:05",
+    },
+    "2026-08-10 st5": {
+        "current_station": 5,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1, 2, 3, 4],
+        "run_duration_seconds": 60,
+        "run_ends_at": "2026-08-10T20:30:06",
+    },
+    "2026-08-10 st6": {
+        "current_station": 6,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1, 2, 3, 4, 5],
+        "run_duration_seconds": 60,
+        "run_ends_at": "2026-08-10T20:31:07",
+    },
+    "2026-08-10 st7": {
+        "current_station": 7,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1, 2, 3, 4, 5, 6],
+        "run_duration_seconds": 60,
+        "run_ends_at": "2026-08-10T20:32:08",
+    },
+    "2026-08-10 st8": {
+        "current_station": 8,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1, 2, 3, 4, 5, 6, 7],
+        "run_duration_seconds": 60,
+        "run_ends_at": "2026-08-10T20:33:09",
+    },
+    "2026-08-10 idle": {
+        "current_station": 0,
+        "program_stations": [],
+        "program_stations_completed": [],
+        "run_duration_seconds": 0,
+        "run_ends_at": None,
+    },
+    "unit2 idle": {
+        "current_station": 0,
+        "program_stations": [],
+        "program_stations_completed": [],
+        "run_duration_seconds": 0,
+        "run_ends_at": None,
+    },
+    "unit2 zone 1": {
+        "current_station": 1,
+        "program_stations": [1, 2, 3, 4],
+        "program_stations_completed": [],
+        "run_duration_seconds": 60,
+        "run_ends_at": "2026-04-12T18:15:52",
+    },
+    "unit2 zone 2": {
+        "current_station": 2,
+        "program_stations": [2],
+        "program_stations_completed": [],
+        "run_duration_seconds": 360,
+        "run_ends_at": "2026-04-12T19:31:32",
+    },
+    "unit2 zone 3": {
+        "current_station": 3,
+        "program_stations": [3],
+        "program_stations_completed": [],
+        "run_duration_seconds": 36000,
+        "run_ends_at": "2026-04-13T05:28:47",
+    },
+    "unit2 zone 4": {
+        "current_station": 4,
+        "program_stations": [4],
+        "program_stations_completed": [],
+        "run_duration_seconds": 600,
+        "run_ends_at": "2026-04-12T19:42:17",
+    },
+    "unit2 zone 5": {
+        "current_station": 5,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1, 2, 3, 4],
+        "run_duration_seconds": 180,
+        "run_ends_at": "2026-04-12T19:48:53",
+    },
+    "unit2 zone 6": {
+        "current_station": 6,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1, 2, 3, 4, 5],
+        "run_duration_seconds": 180,
+        "run_ends_at": "2026-04-12T19:50:03",
+    },
+    "unit2 zone 7": {
+        "current_station": 7,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1, 2, 3, 4, 5, 6],
+        "run_duration_seconds": 180,
+        "run_ends_at": "2026-04-12T19:51:21",
+    },
+    "unit2 zone 8": {
+        "current_station": 8,
+        "program_stations": [1, 2, 3, 4, 5, 6, 7, 8],
+        "program_stations_completed": [1, 2, 3, 4, 5, 6, 7],
+        "run_duration_seconds": 15685,
+        "run_ends_at": "2026-04-12T19:53:05",
+    },
+}
+
+assert set(_HIC801W_EXPECTED_DECODE) == set(SAMPLE_HIC801W_ALL_FRAMES)
+
+
+class TestDecodeHic801w:
+    """decode_hic801w against all 22 committed frames from both units, plus
+    the D-09 through D-15 edges the ground-truth document and 30-CONTEXT.md
+    settle for this decoder."""
+
+    @pytest.mark.parametrize("label", sorted(SAMPLE_HIC801W_ALL_FRAMES))
+    def test_corpus_frame_decodes_to_the_settled_reading(self, label):
+        """Every committed frame pins current_station, both station lists,
+        the run duration, and the run end time against the ground-truth
+        document's two evidence tables. This is HIC-02's teeth."""
+        result = decode_hic801w(SAMPLE_HIC801W_ALL_FRAMES[label])
+        expected = _HIC801W_EXPECTED_DECODE[label]
+        assert result["current_station"] == expected["current_station"]
+        assert result["program_stations"] == expected["program_stations"]
+        assert result["program_stations_completed"] == expected["program_stations_completed"]
+        assert result["run_duration_seconds"] == expected["run_duration_seconds"]
+        assert result["run_ends_at"] == expected["run_ends_at"]
+
+    @pytest.mark.parametrize("label", sorted(SAMPLE_HIC801W_ALL_FRAMES))
+    def test_corpus_frame_decodes_cleanly(self, label):
+        """Every frame in the corpus decodes on the happy path: no error key
+        and the hex decoder tag."""
+        result = decode_hic801w(SAMPLE_HIC801W_ALL_FRAMES[label])
+        assert result["decoder"] == "hic801w_hex"
+        assert "error" not in result
+
+    def test_corpus_is_exactly_22_frames(self):
+        """HIC-02's adjacency edge: 13 reporter frames plus 9 second-unit
+        frames, keyed by capture label so the two byte-identical reporter
+        idle captures below do not collapse into one entry."""
+        assert len(SAMPLE_HIC801W_ALL_FRAMES) == 22
+        assert len(SAMPLE_HIC801W_REPORTER_FRAMES) == 13
+        assert len(SAMPLE_HIC801W_SECOND_UNIT_FRAMES) == 9
+
+    def test_the_two_reporter_idle_captures_are_byte_identical_yet_distinct_entries(self):
+        """The "2026-08-08 all off" and "2026-08-10 idle" reporter frames are
+        the same byte string, taken two days apart, and both must survive in
+        the corpus as separate keys."""
+        assert SAMPLE_HIC801W_REPORTER_FRAMES["2026-08-08 all off"] == SAMPLE_HIC801W_REPORTER_FRAMES["2026-08-10 idle"]
+        assert "2026-08-08 all off" in SAMPLE_HIC801W_ALL_FRAMES
+        assert "2026-08-10 idle" in SAMPLE_HIC801W_ALL_FRAMES
+
+    def test_both_units_idle_frames_read_none_not_the_2020_sentinel(self):
+        """Idle must never publish the packed sentinel's naive rendering
+        2020-01-01T02:00:00 (D-07): it is a real-looking date, so it is
+        suppressed deliberately."""
+        for label in ("2026-08-10 idle", "unit2 idle"):
+            result = decode_hic801w(SAMPLE_HIC801W_ALL_FRAMES[label])
+            assert result["current_station"] == 0
+            assert result["program_stations"] == []
+            assert result["program_stations_completed"] == []
+            assert result["run_duration_seconds"] == 0
+            assert result["run_ends_at"] is None
+            assert result["run_ends_at"] != "2020-01-01T02:00:00"
+
+    @pytest.mark.parametrize("raw", ["", "10#", None, "10#ABC"])
+    def test_empty_and_malformed_input_returns_the_error_envelope_never_raises(self, raw):
+        """The empty edge: none of these four inputs may raise, and each must
+        return the error envelope with every decoded field None."""
+        result = decode_hic801w(raw)
+        assert result["decoder"] == "hic801w_error"
+        assert result["type"] == "irrigation_controller"
+        assert result["current_station"] is None
+        assert result["program_stations"] is None
+        assert result["program_stations_completed"] is None
+        assert result["run_duration_seconds"] is None
+        assert result["run_ends_at"] is None
+        assert result["raw_bytes"] == []
+        assert "error" in result
+
+    def test_truncated_frame_missing_evtime_is_rejected(self):
+        """A frame carrying STA_DURATION but truncated before STA_EVTIME
+        rejects on the missing field, distinctly from the missing-duration
+        case above."""
+        # SAMPLE_HIC801W_STATION3_PAYLOAD's body up through STA_DURATION's
+        # record alone (fields 1, 10, 19), with everything after cut off.
+        truncated = "10#108800AF3C000000"
+        result = decode_hic801w(truncated)
+        assert result["decoder"] == "hic801w_error"
+        assert "STA_EVTIME" in result["error"]
+
+    def test_truncated_frame_missing_water_zones_is_rejected(self):
+        """A frame carrying both STA_DURATION and STA_EVTIME but truncated
+        before STA_WATER_ZONES rejects on the missing field."""
+        # SAMPLE_HIC801W_STATION3_PAYLOAD's body up through STA_EVTIME's
+        # record (fields 1, 10, 19, 21), with everything after cut off.
+        truncated = "10#108800AF3C000000B70447151A"
+        result = decode_hic801w(truncated)
+        assert result["decoder"] == "hic801w_error"
+        assert "STA_WATER_ZONES" in result["error"]
+
+    def test_stations_from_mask_is_ascending_and_1_based(self):
+        """The ordering edge: a full mask yields every station in ascending
+        order, and an empty mask yields an empty list."""
+        assert _hic801w_stations_from_mask(0xFF) == [1, 2, 3, 4, 5, 6, 7, 8]
+        assert _hic801w_stations_from_mask(0) == []
+        # Bit 0 is station 1, not station 0: a single-bit mask at bit 0
+        # names station 1 alone.
+        assert _hic801w_stations_from_mask(0x01) == [1]
+        assert _hic801w_stations_from_mask(0x80) == [8]
+
+    def test_water_zones_b3_non_zero_is_rejected_with_exactly_one_sanitized_warning(self, caplog):
+        """D-10: a real capture's STA_WATER_ZONES b3 mutated to a non-zero
+        byte is rejected outright, and the rejection is exactly one WARNING
+        naming the field and the byte, carrying no cloud-supplied name."""
+        # SAMPLE_HIC801W_STATION3_PAYLOAD's STA_WATER_ZONES value is 03FF0300;
+        # flip the trailing (b3) byte from 00 to 01.
+        mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
+        assert mutated != SAMPLE_HIC801W_STATION3_PAYLOAD
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.api.decoders"):
+            result = decode_hic801w(mutated)
+
+        assert result["decoder"] == "hic801w_error"
+        assert result["current_station"] is None
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "STA_WATER_ZONES" in message
+        assert "b3" in message
+        # No cloud-supplied free text: decode_hic801w takes only the raw
+        # payload, so it structurally cannot echo a device, hub or home
+        # name into the line. "HIC801W" itself is a hardcoded literal in
+        # the log format string, the same way "HTV210B" is in
+        # decode_htv210b's own error log, not a cloud-supplied value.
+        for forbidden in ("Test Home", "Test Hub", "Test Sensor"):
+            assert forbidden not in message
+
+    def test_sta_ts_det_width_mismatch_never_rejects_a_real_frame(self):
+        """D-11: STA_TS_DET arrives 2 bytes wide against a declared 4 in
+        every one of the 22 captures. The shape check must never reject on
+        that mismatch, because doing so would reject every real frame."""
+        for label, raw in SAMPLE_HIC801W_ALL_FRAMES.items():
+            b = _parse_rainpoint_payload(raw)
+            fields = {e["field"]: e["value_bytes"] for e in _parse_entries(list(b), False)}
+            ts_det = fields.get(38)
+            assert ts_det is not None, label
+            assert len(ts_det) == 2, label
+            assert decode_hic801w(raw)["decoder"] == "hic801w_hex", label
+
+    def test_neither_envelope_carries_a_key_for_an_unverified_reading(self):
+        """D-15 / HIC-08: no key for STA_RAIN, STA_RH, STA_TS_DET or b3, in
+        either envelope, not even as an attribute, so a future field
+        addition to either branch trips this test."""
+        forbidden_substrings = ("rain", "humidity", "ts_det", "b3")
+        happy = decode_hic801w(SAMPLE_HIC801W_STATION3_PAYLOAD)
+        error = decode_hic801w("")
+        for envelope in (happy, error):
+            for key in envelope:
+                lowered = key.lower()
+                for forbidden in forbidden_substrings:
+                    assert forbidden not in lowered, f"{key!r} in {envelope['decoder']} envelope"
+
+    def test_hic801w_never_reaches_the_generic_decoder(self):
+        """The trust boundary: decode_hic801w's own source never names the
+        model-agnostic decoder, and the model is registered as hand-written."""
+        import inspect
+
+        source = inspect.getsource(decode_hic801w)
+        assert "decode_generic" not in source
+        assert is_hand_written_model("HIC801W") is True
