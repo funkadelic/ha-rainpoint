@@ -805,7 +805,10 @@ def decode_hic801w(raw: str) -> dict:
     """
     try:
         if not raw.startswith("10#"):
-            raise ValueError(f"Unexpected payload format: {raw}")
+            # The length, not the payload: this message reaches the handler
+            # below, whose traceback is logged, so echoing `raw` here would
+            # put the payload on the log line by the back door.
+            raise ValueError(f"Unexpected payload format: {len(raw)}-character payload without a 10# prefix")
         b = _parse_rainpoint_payload(raw)
         fields = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), False)}
 
@@ -860,7 +863,13 @@ def decode_hic801w(raw: str) -> dict:
             "decoder": "hic801w_hex",
         }
     except Exception as e:
-        _LOGGER.exception("HIC801W decoder error for payload %r", raw)
+        # Length only, matching decode_htv210b_dp_state: the payload itself
+        # is already retrievable through the disabled-by-default _raw_payload
+        # diagnostic and the diagnostics download, so putting an unbounded
+        # cloud-supplied string on this line adds no diagnostic reach. This
+        # handler fires precisely when the payload was not the shape we
+        # expected, which is when it is least worth trusting.
+        _LOGGER.exception("HIC801W decoder error for a %d-character blob", len(raw) if raw else 0)
         return _hic801w_error_envelope(str(e))
 
 

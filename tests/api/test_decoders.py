@@ -1,6 +1,7 @@
 """Tests for RainPoint device decoders."""
 
 import logging
+import traceback
 
 import pytest
 
@@ -1974,6 +1975,39 @@ class TestDecodeHic801w:
         assert result["decoder"] == "hic801w_error"
         assert [r.levelno for r in caplog.records] == [logging.WARNING]
         assert not any(r.exc_info for r in caplog.records)
+
+    def test_no_error_log_carries_the_payload(self, caplog):
+        """No HIC801W log record echoes the payload, by either route.
+
+        The format string is the obvious route; the ValueError message is the
+        back door, because `_LOGGER.exception` prints the traceback and the
+        message travels inside it. Both are checked here against a payload
+        distinctive enough that a substring match cannot pass by accident.
+        The payload stays reachable through the disabled-by-default
+        _raw_payload diagnostic and the diagnostics download, so nothing
+        diagnostic depends on it being on this line.
+        """
+        payload = "99#DEADBEEFCAFEBABE"
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.decoders"):
+            result = decode_hic801w(payload)
+
+        assert result["decoder"] == "hic801w_error"
+        # getMessage() is the format string applied to its args; the traceback
+        # text is separate, and the ValueError message lives there.
+        rendered = "\n".join(r.getMessage() for r in caplog.records)
+        tracebacks = "\n".join(self._format_exc_text(r) for r in caplog.records)
+        for haystack in (rendered, tracebacks):
+            assert "DEADBEEF" not in haystack
+            assert payload not in haystack
+        assert "19-character blob" in rendered
+
+    @staticmethod
+    def _format_exc_text(record) -> str:
+        """Return a record's traceback text, or empty when it carries none."""
+        if not record.exc_info:
+            return ""
+        return "".join(traceback.format_exception(*record.exc_info))
 
     def test_sta_ts_det_width_mismatch_never_rejects_a_real_frame(self):
         """D-11: STA_TS_DET arrives 2 bytes wide against a declared 4 in
