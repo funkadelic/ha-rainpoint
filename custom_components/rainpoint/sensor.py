@@ -1610,8 +1610,11 @@ class RainPointHic801wSensorBase(RainPointSensorBase):
     every HIC801W sensor.py entity is a singleton per device, reading one
     aggregate record rather than a per-zone one, so the one guarded read
     every subclass needs is a `_hic_data` property returning the decoded
-    dict (or {} when the frame is missing or failed to decode) so each
-    subclass's value property is a single `.get`.
+    dict, so each subclass's value property is a single `.get`. On a failed
+    decode that dict is the decoder's error envelope, whose every field is
+    None rather than absent; `{}` is returned only when the sensor key has
+    no reading at all. Both cases give a subclass's `.get` back None, which
+    is why callers need not tell them apart.
     """
 
     @property
