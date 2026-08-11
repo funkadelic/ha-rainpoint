@@ -53,6 +53,8 @@ from custom_components.rainpoint.sensor import (
     RainPointFlowTotalSensor,
     RainPointFlowTotalTodaySensor,
     RainPointHicCurrentStationSensor,
+    RainPointHicProgramStationsCompletedSensor,
+    RainPointHicProgramStationsSensor,
     RainPointHicRunDurationSensor,
     RainPointHicRunEndsAtSensor,
     RainPointIlluminanceSensor,
@@ -85,6 +87,7 @@ from custom_components.rainpoint.sensor import (
     RainPointZoneStateSensor,
     RainPointZoneWaterUsageSensor,
     _LateSensorEntityAdder,
+    _render_station_list,
     _slugify,
     async_setup_entry,
 )
@@ -1816,11 +1819,10 @@ class TestHtv210bDispatch:
 
 
 class TestHic801wDispatch:
-    """The HIC801W gets exactly one Current Station sensor plus this task's
-    two run-timing sensors, no battery or RSSI diagnostics (D-13, the
-    platform has no reading for either), and no generic or unsupported
-    fallback. Extended to the full five-entity set by this plan's second
-    task."""
+    """The HIC801W gets exactly the five sensor.py entities D-02 locks
+    (Current Station, Run Duration, Run Ends At, Program Stations, Program
+    Stations Completed), no battery or RSSI diagnostics (D-13, the platform
+    has no reading for either), and no generic or unsupported fallback."""
 
     @staticmethod
     def _entry(current_station=3):
@@ -1855,10 +1857,10 @@ class TestHic801wDispatch:
         return captured
 
     @pytest.mark.asyncio
-    async def test_creates_exactly_one_current_station_sensor_and_raw_payload(self):
-        """One Current Station sensor, one of each run-timing sensor, plus
-        the unconditional raw payload diagnostic, nothing else at this point
-        in the phase."""
+    async def test_creates_exactly_one_of_each_locked_sensor_plus_raw_payload(self):
+        """One of each of the five D-02 sensor.py entities, in the locked
+        unique-ID order, plus the unconditional raw payload diagnostic,
+        nothing else."""
         captured = await self._setup()
         stations = [e for e in captured if isinstance(e, RainPointHicCurrentStationSensor)]
         assert len(stations) == 1
@@ -1866,8 +1868,33 @@ class TestHic801wDispatch:
         assert stations[0]._attr_name == "Current Station"
         assert len([e for e in captured if isinstance(e, RainPointHicRunDurationSensor)]) == 1
         assert len([e for e in captured if isinstance(e, RainPointHicRunEndsAtSensor)]) == 1
+        assert len([e for e in captured if isinstance(e, RainPointHicProgramStationsSensor)]) == 1
+        assert len([e for e in captured if isinstance(e, RainPointHicProgramStationsCompletedSensor)]) == 1
         assert len([e for e in captured if isinstance(e, RainPointRawPayloadSensor)]) == 1
-        assert len(captured) == 4
+        assert len(captured) == 6
+
+    @pytest.mark.asyncio
+    async def test_the_five_hic_entities_unique_ids_are_in_d02_order(self):
+        """_make_hic801w_entities's return order matches D-02's table order,
+        so the emitted entity list reads in the same sequence as the
+        decision that defines it."""
+        captured = await self._setup()
+        hic_classes = (
+            RainPointHicCurrentStationSensor,
+            RainPointHicRunDurationSensor,
+            RainPointHicRunEndsAtSensor,
+            RainPointHicProgramStationsSensor,
+            RainPointHicProgramStationsCompletedSensor,
+        )
+        hic_entities = [e for e in captured if isinstance(e, hic_classes)]
+        hic_suffixes = [e._attr_unique_id.removeprefix("rainpoint_100_200_3_") for e in hic_entities]
+        assert hic_suffixes == [
+            "current_station",
+            "run_duration",
+            "run_ends_at",
+            "program_stations",
+            "program_stations_completed",
+        ]
 
     @pytest.mark.asyncio
     async def test_no_battery_rssi_unknown_or_zone_state_entities(self):
@@ -2019,11 +2046,99 @@ class TestHicRunTimingSensors:
     def test_run_ends_at_device_class(self):
         assert RainPointHicRunEndsAtSensor._attr_device_class == SensorDeviceClass.TIMESTAMP
 
-    def test_run_duration_state_class_is_measurement(self):
-        """Scoped to the duration sensor alone at this point in the phase;
-        the program-list sensors' None state class is asserted alongside it
-        once this plan's second task adds them."""
+    def test_run_duration_state_class_is_measurement_and_program_sensors_are_none(self):
+        """The one deliberate state-class divergence in the HIC801W entity
+        set: Run Duration is a real quantity and takes MEASUREMENT, while
+        both program-list sensors carry a string state and take None."""
         assert RainPointHicRunDurationSensor._attr_state_class is SensorStateClass.MEASUREMENT
+        assert RainPointHicProgramStationsSensor._attr_state_class is None
+        assert RainPointHicProgramStationsCompletedSensor._attr_state_class is None
+
+
+class TestRenderStationList:
+    """The three-way distinction _render_station_list guarantees, pinned in
+    one place: None in, None out; [] in, "none" out; a populated list joins
+    ascending and comma-space separated."""
+
+    def test_none_in_none_out(self):
+        assert _render_station_list(None) is None
+
+    def test_empty_list_in_none_string_out(self):
+        assert _render_station_list([]) == "none"
+
+    def test_single_station_in_bare_number_out(self):
+        assert _render_station_list([1]) == "1"
+
+    def test_multiple_stations_join_ascending_comma_space(self):
+        assert _render_station_list([1, 2, 3, 4]) == "1, 2, 3, 4"
+
+    def test_rendering_the_same_mask_twice_yields_the_identical_string(self):
+        """The HIC-07 ordering property stated as an assertion, not left to
+        the implementation's loop order."""
+        assert _render_station_list([2, 5, 8]) == _render_station_list([2, 5, 8])
+
+
+class TestHicProgramStationSensors:
+    """RainPointHicProgramStationsSensor and RainPointHicProgramStationsCompletedSensor,
+    driven through decode_hic801w on the real committed frames so a change to
+    either mask's reading fails here too, not just in test_decoders.py."""
+
+    @staticmethod
+    def _entities(raw_payload):
+        """Decode one raw HIC801W frame and build both program-list sensors for it."""
+        sensor_key = "100_200_3"
+        decoded = decode_hic801w(raw_payload)
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HIC801W,
+            sub_name="Irrigation Controller",
+            data=decoded,
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: entry}))
+        stations = RainPointHicProgramStationsSensor(coordinator, sensor_key, entry, "100_200_3")
+        completed = RainPointHicProgramStationsCompletedSensor(coordinator, sensor_key, entry, "100_200_3")
+        return decoded, stations, completed
+
+    def test_program_stations_on_the_second_units_zone_1_frame(self):
+        """b1 0F: a 4-station program, station 1 running, none done."""
+        _, stations, _ = self._entities(SAMPLE_HIC801W_SECOND_UNIT_FRAMES["unit2 zone 1"])
+        assert stations.native_value == "1, 2, 3, 4"
+
+    def test_program_stations_on_the_second_units_zone_2_frame_is_a_single_station_run(self):
+        """b1 02: a single-station run of station 2, no master-valve mask could produce this."""
+        _, stations, _ = self._entities(SAMPLE_HIC801W_SECOND_UNIT_FRAMES["unit2 zone 2"])
+        assert stations.native_value == "2"
+
+    def test_program_stations_completed_on_the_reporters_st8_frame(self):
+        """b2 7F: stations 1 through 7 already completed by the time station 8 runs."""
+        _, _, completed = self._entities(SAMPLE_HIC801W_REPORTER_FRAMES["2026-08-10 st8"])
+        assert completed.native_value == "1, 2, 3, 4, 5, 6, 7"
+
+    def test_program_stations_completed_on_the_reporters_st1_frame_reads_none(self):
+        """b2 00: the first station of a fresh program has completed nothing yet."""
+        _, _, completed = self._entities(SAMPLE_HIC801W_REPORTER_FRAMES["2026-08-10 st1"])
+        assert completed.native_value == "none"
+
+    def test_idle_frame_reads_none_on_both_sensors(self):
+        """An idle controller's program lists are empty (not absent), so
+        both sensors read the literal "none"."""
+        _, stations, completed = self._entities(SAMPLE_HIC801W_IDLE_PAYLOAD)
+        assert stations.native_value == "none"
+        assert completed.native_value == "none"
+
+    def test_rejected_frame_reads_no_state_on_either_sensor(self):
+        """D-09: a failed shape check yields None (not "none") on both sensors."""
+        mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
+        decoded, stations, completed = self._entities(mutated)
+        assert decoded["decoder"] == "hic801w_error"
+        assert stations.native_value is None
+        assert completed.native_value is None
+
+    def test_neither_program_class_defines_a_device_class(self):
+        assert getattr(RainPointHicProgramStationsSensor, "_attr_device_class", None) is None
+        assert getattr(RainPointHicProgramStationsCompletedSensor, "_attr_device_class", None) is None
 
 
 class TestSilentSensorDispatch:
