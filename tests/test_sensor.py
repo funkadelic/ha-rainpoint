@@ -1819,9 +1819,9 @@ class TestHtv210bDispatch:
 
 
 class TestHic801wDispatch:
-    """The HIC801W gets exactly the five sensor.py entities D-02 locks
+    """The HIC801W gets exactly the five sensor.py entities the factory names
     (Current Station, Run Duration, Run Ends At, Program Stations, Program
-    Stations Completed), no battery or RSSI diagnostics (D-13, the platform
+    Stations Completed), no battery or RSSI diagnostics (the platform
     has no reading for either), and no generic or unsupported fallback."""
 
     @staticmethod
@@ -1858,7 +1858,7 @@ class TestHic801wDispatch:
 
     @pytest.mark.asyncio
     async def test_creates_exactly_one_of_each_locked_sensor_plus_raw_payload(self):
-        """One of each of the five D-02 sensor.py entities, in the locked
+        """One of each of the five sensor.py entities, in the locked
         unique-ID order, plus the unconditional raw payload diagnostic,
         nothing else."""
         captured = await self._setup()
@@ -1875,7 +1875,7 @@ class TestHic801wDispatch:
 
     @pytest.mark.asyncio
     async def test_the_five_hic_entities_unique_ids_are_in_d02_order(self):
-        """_make_hic801w_entities's return order matches D-02's table order,
+        """_make_hic801w_entities's return order is the documented one,
         so the emitted entity list reads in the same sequence as the
         decision that defines it."""
         captured = await self._setup()
@@ -1908,7 +1908,7 @@ class TestHic801wDispatch:
 
     @pytest.mark.asyncio
     async def test_unique_id_matches_the_locked_d02_suffix(self):
-        """The base_slug plus D-02's locked _current_station suffix, for
+        """The base_slug plus the locked _current_station suffix, for
         this fixture's hid/mid/addr."""
         captured = await self._setup()
         stations = [e for e in captured if isinstance(e, RainPointHicCurrentStationSensor)]
@@ -1948,11 +1948,11 @@ class TestHicCurrentStationSensor:
 
     def test_out_of_range_station_reads_no_state(self):
         """A current_station outside the closed 0..8 option list yields no
-        state rather than a fabricated new option string (D-05)."""
+        state rather than a fabricated new option string."""
         assert self._sensor(9).native_value is None
 
     def test_missing_data_reads_no_state(self):
-        """A failed shape check leaves current_station absent (D-09), which
+        """A failed shape check leaves current_station absent, which
         must read as no state rather than "none"."""
         assert self._sensor(_HIC801W_DATA_MISSING).native_value is None
 
@@ -2012,10 +2012,11 @@ class TestHicRunTimingSensors:
         assert ends_at.native_value is None
 
     def test_rejected_frame_reads_no_state_on_both_sensors_but_stays_available(self):
-        """D-09: a failed shape check (STA_WATER_ZONES b3 mutated non-zero)
+        """A failed shape check (STA_WATER_ZONES b3 mutated non-zero)
         yields no state on either sensor, and both stay available because the
         error envelope keeps type == "irrigation_controller"."""
         mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
+        assert mutated != SAMPLE_HIC801W_STATION3_PAYLOAD
         decoded, duration, ends_at = self._entities(mutated)
         assert decoded["decoder"] == "hic801w_error"
         assert duration.native_value is None
@@ -2135,8 +2136,9 @@ class TestHicProgramStationSensors:
         assert completed.native_value == "none"
 
     def test_rejected_frame_reads_no_state_on_either_sensor(self):
-        """D-09: a failed shape check yields None (not "none") on both sensors."""
+        """A failed shape check yields None (not "none") on both sensors."""
         mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
+        assert mutated != SAMPLE_HIC801W_STATION3_PAYLOAD
         decoded, stations, completed = self._entities(mutated)
         assert decoded["decoder"] == "hic801w_error"
         assert stations.native_value is None
