@@ -70,12 +70,20 @@ class RainPointHicStationWateringBinarySensor(RainPointSubDeviceEntity, BinarySe
         because the device is reachable and still polling and it is the
         payload that did not parse, so `unavailable` would misreport the
         cause.
+
+        A `current_station` outside 0 through 8 is treated the same way, for
+        the same reason and on the same evidence as
+        RainPointHicCurrentStationSensor's closed option list (D-05): the
+        decoder's shape check rejects only on a non-zero b3 and does not
+        itself exclude an out-of-range b0, so without this guard a single
+        corrupt byte would make all eight stations report a confident False
+        rather than no state.
         """
         data = self._sensor_data
         if not data:
             return None
         current_station = data.get("current_station")
-        if current_station is None:
+        if not isinstance(current_station, int) or not (0 <= current_station <= 8):
             return None
         return current_station == self._station_num
 

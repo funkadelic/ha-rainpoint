@@ -290,6 +290,34 @@ class TestHicStationWateringEntities:
         station = RainPointHicStationWateringBinarySensor(coordinator, sensor_key, entry, "100_200_3", 1)
         assert station.is_on is None
 
+    def test_out_of_range_station_reads_no_state_on_all_eight(self):
+        """A frame that clears the shape check but carries a b0 outside 0
+        through 8 yields no state on every station, never a confident False.
+
+        The shape check rejects only on a non-zero b3, so an out-of-range b0
+        reaches the entity inside an otherwise-valid envelope. Reporting
+        False for all eight there would let an automation read `not is_on` as
+        evidence that a station is off on the strength of a corrupt byte,
+        which is the wrong-state-instead-of-no-state failure HIC-05 forbids.
+        RainPointHicCurrentStationSensor guards the same case through its
+        closed option list (D-05); this is the binary_sensor half of it.
+        """
+        # SAMPLE_HIC801W_STATION3_PAYLOAD's STA_WATER_ZONES value is
+        # 03FF0300; raise b0 from 03 to 09 while leaving b3 at 00, so the
+        # frame still passes the shape check.
+        mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F709FF0300F9")
+        assert mutated != SAMPLE_HIC801W_STATION3_PAYLOAD
+
+        decoded = decode_hic801w(mutated)
+        # The decoder itself reports the byte it read: the range judgement
+        # belongs to the entities, not to the decode.
+        assert decoded["decoder"] == "hic801w_hex"
+        assert decoded["current_station"] == 9
+
+        stations = self._stations(mutated)
+        assert all(e.is_on is None for e in stations)
+        assert all(e.available is True for e in stations)
+
 
 class TestBuildHic801wStationEntitiesGuards:
     """The two guards in _build_hic801w_station_entities: silent entries and
