@@ -384,8 +384,14 @@ def _hic801w_status(mid=200, payload=SAMPLE_HIC801W_STATION3_PAYLOAD):
 
 class TestHicStationLateAddTimeline:
     """Drives the real construct -> first refresh -> platform setup ->
-    refresh sequence for a genuinely silent HIC801W, proving the late-add
-    path this plan gives binary_sensor.py for the first time.
+    refresh sequence for a genuinely silent HIC801W, exercising
+    binary_sensor.py's LateEntityAdder.
+
+    A device that reports nothing at setup gets no station entities, and
+    gains all eight on the poll it starts reporting, with no reload. Entity
+    creation on this platform is otherwise one-shot off the post-first-refresh
+    snapshot, so without the adder those entities could never appear inside a
+    running session.
 
     Mirrors tests/test_valve.py's TestSilentUnitGuardRealTimeline shape: the
     silent device must actually be silent (no status entry at all for its
