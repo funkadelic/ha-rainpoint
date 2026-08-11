@@ -1836,7 +1836,7 @@ class TestDecodeHic801w:
     def test_corpus_frame_decodes_to_the_settled_reading(self, label):
         """Every committed frame pins current_station, both station lists,
         the run duration, and the run end time against the ground-truth
-        captures. This is what makes the committed corpus load bearing."""
+        captures. This is what gives the committed corpus its teeth."""
         result = decode_hic801w(SAMPLE_HIC801W_ALL_FRAMES[label])
         expected = _HIC801W_EXPECTED_DECODE[label]
         assert result["current_station"] == expected["current_station"]

@@ -430,7 +430,7 @@ sys.modules["homeassistant.components.button"].ButtonEntity = _ButtonEntity
 # something to create and bind) -- and a MagicMock stand-in for as_local
 # would return a MagicMock rather than a datetime, so a test asserting a
 # timezone-aware result would pass while proving nothing. Both halves are
-# load bearing, the same two-part fix the
+# required, the same two-part fix the
 # homeassistant.components.repairs stub already needed.
 #
 # The behaviour mirrors the installed Home Assistant version (util/dt.py):
