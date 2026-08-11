@@ -270,7 +270,7 @@ class TestHicStationWateringEntities:
         assert all(e.is_on is False for e in stations)
 
     def test_rejected_frame_all_eight_read_none_but_stay_available(self):
-        """A b3-mutated frame decodes to the error envelope (D-10): every
+        """A b3-mutated frame decodes to the error envelope: every
         station reads no state, and available stays True because the device
         is reachable and it is the payload that did not parse."""
         mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
@@ -298,9 +298,9 @@ class TestHicStationWateringEntities:
         reaches the entity inside an otherwise-valid envelope. Reporting
         False for all eight there would let an automation read `not is_on` as
         evidence that a station is off on the strength of a corrupt byte,
-        which is the wrong-state-instead-of-no-state failure HIC-05 forbids.
-        RainPointHicCurrentStationSensor guards the same case through its
-        closed option list (D-05); this is the binary_sensor half of it.
+        which is the wrong-state-instead-of-no-state failure this entity
+        exists to avoid. RainPointHicCurrentStationSensor guards the same case
+        through its closed option list; this is the binary_sensor half of it.
         """
         # SAMPLE_HIC801W_STATION3_PAYLOAD's STA_WATER_ZONES value is
         # 03FF0300; raise b0 from 03 to 09 while leaving b3 at 00, so the

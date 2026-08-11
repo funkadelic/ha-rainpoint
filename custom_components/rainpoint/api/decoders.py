@@ -710,12 +710,14 @@ def decode_htv210b_dp_state(raw: str) -> dict | None:
 # Structural field indices for the HIC801W 8-station irrigation controller,
 # equal to catalog variant 279's dpCode for the same datapoint. 279 is the
 # accessory record carrying the stations (accessoryFlag true, portNumber 8);
-# 278 is the portless main record and is not read here (D-13). Deliberately
+# 278 is the portless main record and is not read here. Deliberately
 # no constant for STA_RAIN (1), STA_RH (10), STA_TS_DET (38) or STA_WKSTATE
 # (30): the decoder must not read any of them. The first three are constant
-# or unpinned across both capture corpora and their meaning is unverified
-# (D-15, HIC-08); STA_WKSTATE's curated row is Phase 31's subject, and D-12
-# keeps this decoder's idle rule independent of it.
+# or unpinned across both capture corpora, so their meaning is unverified and
+# publishing them would be a guess. STA_WKSTATE is omitted for a different
+# reason: its curated catalog row is evidenced against other model families,
+# so decode_hic801w derives idle from STA_WATER_ZONES b0 instead, which keeps
+# this decoder independent of that row.
 _HIC801W_FIELD_DURATION = 19
 _HIC801W_FIELD_EVTIME = 21
 _HIC801W_FIELD_WATER_ZONES = 37
@@ -723,8 +725,9 @@ _HIC801W_FIELD_WATER_ZONES = 37
 # The little-endian STA_EVTIME word every idle HIC801W frame carries.
 # _decode_packed_timestamp renders it as the naive ISO string
 # "2020-01-01T02:00:00", a real-looking date, so it is suppressed
-# deliberately rather than filtered by accident (D-07): a 2020 timestamp in
-# a TIMESTAMP entity is wrong state, not absent state.
+# deliberately rather than filtered by accident: a 2020 timestamp in a
+# TIMESTAMP entity is wrong state, not absent state, so decode_hic801w
+# returns None for run_ends_at whenever it sees this word.
 _HIC801W_EVTIME_IDLE_SENTINEL = 0x00422000
 
 
@@ -749,7 +752,8 @@ def _hic801w_error_envelope(message: str) -> dict:
     Shared by the two rejection routes so they cannot drift: the b3 check,
     which returns directly because it has already logged its own sanitized
     WARNING, and the outer handler, which catches everything else. Both carry
-    the same keys as the happy path with every decoded field None (D-09).
+    the same keys as the happy path with every decoded field None, so a frame
+    that did not parse yields no state rather than a stale or invented one.
     """
     return {
         "type": "irrigation_controller",
@@ -780,28 +784,28 @@ def decode_hic801w(raw: str) -> dict:
     station 3 reads 03 not 04), b1 is the bitmask of stations enrolled in the
     running program, b2 is the bitmask of stations already completed, and b3
     is 00 in all 22 captures across both units with an unknown meaning. A
-    non-zero b3 is rejected outright (D-10): it means the per-byte reading is
-    not the one the evidence covers, most likely a >8-station sibling or a
+    non-zero b3 is rejected outright: it means the per-byte reading is not
+    the one the evidence covers, most likely a >8-station sibling or a
     firmware using the high half, and this is the one decision that can make
     a real device go dark, which is why the rejection is a WARNING rather
     than a silent failure.
 
     STA_TS_DET (field 38) arrives 2 bytes wide against a declared 4 in every
-    capture from both units, so it is never width-checked and never read
-    (D-11): a width check there would reject every real frame, and its
-    meaning is unpinned regardless.
+    capture from both units, so it is never width-checked and never read: a
+    width check there would reject every real frame, and its meaning is
+    unpinned regardless.
 
     Both the happy and error envelopes carry the same {"type", "rssi_dbm",
     "raw_bytes", "current_station", "program_stations",
     "program_stations_completed", "run_duration_seconds", "run_ends_at",
-    "decoder"} keys (D-09): `type` stays "irrigation_controller" on both
-    branches, which is what keeps RainPointSubDeviceEntity.available True on
-    a failed decode, and every decoded field is None (never 0 or []) on the
-    error branch, since a 0 or an empty list would render as real state
-    ("none", or an empty program) rather than the "did not parse" HIC-03
-    exists to signal. No key is ever added for STA_RAIN, STA_RH, STA_TS_DET
-    or b3, not even as an attribute, so no downstream surface can pick them
-    up (D-15, HIC-08).
+    "decoder"} keys, built by _hic801w_error_envelope on the failure side:
+    `type` stays "irrigation_controller" on both branches, which is what
+    keeps RainPointSubDeviceEntity.available True on a failed decode, and
+    every decoded field is None (never 0 or []) on the error branch, since a
+    0 or an empty list would render as real state ("none", or an empty
+    program) rather than as "did not parse". No key is ever added for
+    STA_RAIN, STA_RH, STA_TS_DET or b3, not even as an attribute, so no
+    downstream surface can pick up a reading whose meaning is unverified.
     """
     try:
         if not raw.startswith("10#"):
@@ -842,7 +846,7 @@ def decode_hic801w(raw: str) -> dict:
             # Both guards are kept deliberately: the sentinel guard alone
             # would not cover a hypothetical idle frame carrying a different
             # word, and the b0 guard alone would not cover a frame that is
-            # somehow non-idle while still carrying the sentinel (D-12).
+            # somehow non-idle while still carrying the sentinel.
             run_ends_at = None
         else:
             run_ends_at = _decode_packed_timestamp(evtime_word)

@@ -21,14 +21,14 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class RainPointHicStationWateringBinarySensor(RainPointSubDeviceEntity, BinarySensorEntity):
-    """One HIC801W station's watering state (HIC-05, D-01, D-02, D-03, D-04).
+    """One HIC801W station's watering state, as a boolean per station.
 
     A plain ``binary_sensor`` with ``device_class`` RUNNING, not an ENUM
     open/closed sensor mirroring ``RainPointZoneStateSensor``: that precedent
     exists to hold valve vocabulary in reserve for a model whose control half
     was unproven, and it models an irrigation station as a valve it is not.
-    HIC-05 is literally a boolean per station. When station control ships in
-    a later milestone, valve entities are added alongside these rather than
+    Whether a station is watering is literally a boolean. When station control
+    ships in a later milestone, valve entities are added alongside these rather than
     replacing them, the same way the HTV210B keeps its read-only per-zone
     state sensor even after gaining a valve entity: deleting these would
     strand persisted registry rows rather than remove them.
@@ -49,14 +49,14 @@ class RainPointHicStationWateringBinarySensor(RainPointSubDeviceEntity, BinarySe
         base_slug: str,
         station_num: int,
     ) -> None:
-        """Bind to one station number on an HIC801W sensor key (D-02, D-03)."""
+        """Bind to one station number on an HIC801W sensor key."""
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._station_num = station_num
         self._attr_unique_id = f"rainpoint_{base_slug}_station{station_num}_watering"
-        # Per D-03 the name is the bare label, never prefixed with a device
-        # name: Home Assistant's device page strips an exact device-name
-        # prefix, and a device rename breaks that match. The only value
-        # interpolated is the integer station number.
+        # The name is the bare label, never prefixed with a device name:
+        # Home Assistant's device page strips an exact device-name prefix,
+        # and a device rename breaks that match. The only value interpolated
+        # is the integer station number.
         self._attr_name = f"Station {station_num} Watering"
 
     @property
@@ -64,7 +64,7 @@ class RainPointHicStationWateringBinarySensor(RainPointSubDeviceEntity, BinarySe
         """Return whether this station is the one currently running.
 
         None whenever the reading is missing or the frame failed its shape
-        check (HIC-03, D-09): an automation must not be able to read a
+        check: an automation must not be able to read a
         definite False as evidence that a station is off when the frame did
         not parse at all. `available` deliberately stays True on that path,
         because the device is reachable and still polling and it is the
@@ -73,7 +73,7 @@ class RainPointHicStationWateringBinarySensor(RainPointSubDeviceEntity, BinarySe
 
         A `current_station` outside 0 through 8 is treated the same way, for
         the same reason and on the same evidence as
-        RainPointHicCurrentStationSensor's closed option list (D-05): the
+        RainPointHicCurrentStationSensor's closed option list: the
         decoder's shape check rejects only on a non-zero b3 and does not
         itself exclude an out-of-range b0, so without this guard a single
         corrupt byte would make all eight stations report a confident False

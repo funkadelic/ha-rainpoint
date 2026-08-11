@@ -19,12 +19,12 @@ from tests.payload_samples import (
 )
 
 # custom_components/rainpoint/api/decoders.py is the trusted reference the
-# ASCII framing work (Phase 25) reads and must never edit. Pinned by
+# generic ASCII-framing decoder reads and must never edit. Pinned by
 # whole-file digest rather than a per-function comparison. Legitimate
-# hand-written decoder additions (most recently decode_hic801w, Phase 30)
-# move this hash forward on purpose; the guard exists to catch the ASCII
-# generic-decode path reaching back into this file, not to freeze it.
-_DECODERS_PY_PRE_PHASE_SHA256 = "9bbe91827e231047213d21a3b5138d5f505d75e5505ba6a9b34cf579aae62a60"
+# hand-written decoder additions (most recently decode_hic801w) move this
+# hash forward on purpose; the guard exists to catch decode_generic and its
+# helpers reaching back into this file, not to freeze it.
+_DECODERS_PY_PRE_PHASE_SHA256 = "a59c86983a4e2233ea227ca4079e852a2cbe3405ad7738bdf533f6a81f46ce6e"
 
 
 class TestDecodeGenericTLV:

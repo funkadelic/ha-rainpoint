@@ -1664,9 +1664,9 @@ class TestDecodeHtv210bDpState:
 
 # Expected decode for every one of the 22 committed HIC801W frames, keyed by
 # the same capture label as tests.payload_samples.SAMPLE_HIC801W_ALL_FRAMES.
-# Derived from a hand cross-check of .planning/HIC801W-DECODE-2026-08-10.md's
-# two evidence tables against a real _parse_entries walk of each frame at
-# plan time; do not re-derive from the raw hex without cross-checking both.
+# Derived by hand-walking each committed frame through _parse_entries and
+# cross-checking the result against both capture corpora; do not re-derive
+# from the raw hex without redoing that cross-check.
 _HIC801W_EXPECTED_DECODE = {
     "2026-07-17 mid-run st1": {
         "current_station": 1,
@@ -1829,14 +1829,14 @@ assert set(_HIC801W_EXPECTED_DECODE) == set(SAMPLE_HIC801W_ALL_FRAMES)
 
 class TestDecodeHic801w:
     """decode_hic801w against all 22 committed frames from both units, plus
-    the D-09 through D-15 edges the ground-truth document and 30-CONTEXT.md
-    settle for this decoder."""
+    the rejection, ordering and unverified-field edges the captures settle
+    for this decoder."""
 
     @pytest.mark.parametrize("label", sorted(SAMPLE_HIC801W_ALL_FRAMES))
     def test_corpus_frame_decodes_to_the_settled_reading(self, label):
         """Every committed frame pins current_station, both station lists,
         the run duration, and the run end time against the ground-truth
-        document's two evidence tables. This is HIC-02's teeth."""
+        captures. This is what makes the committed corpus load bearing."""
         result = decode_hic801w(SAMPLE_HIC801W_ALL_FRAMES[label])
         expected = _HIC801W_EXPECTED_DECODE[label]
         assert result["current_station"] == expected["current_station"]
@@ -1854,7 +1854,7 @@ class TestDecodeHic801w:
         assert "error" not in result
 
     def test_corpus_is_exactly_22_frames(self):
-        """HIC-02's adjacency edge: 13 reporter frames plus 9 second-unit
+        """13 reporter frames plus 9 second-unit
         frames, keyed by capture label so the two byte-identical reporter
         idle captures below do not collapse into one entry."""
         assert len(SAMPLE_HIC801W_ALL_FRAMES) == 22
@@ -1871,7 +1871,7 @@ class TestDecodeHic801w:
 
     def test_both_units_idle_frames_read_none_not_the_2020_sentinel(self):
         """Idle must never publish the packed sentinel's naive rendering
-        2020-01-01T02:00:00 (D-07): it is a real-looking date, so it is
+        2020-01-01T02:00:00: it is a real-looking date, so it is
         suppressed deliberately."""
         for label in ("2026-08-10 idle", "unit2 idle"):
             result = decode_hic801w(SAMPLE_HIC801W_ALL_FRAMES[label])
@@ -1929,7 +1929,7 @@ class TestDecodeHic801w:
         assert _hic801w_stations_from_mask(0x80) == [8]
 
     def test_water_zones_b3_non_zero_is_rejected_with_exactly_one_sanitized_warning(self, caplog):
-        """D-10: a real capture's STA_WATER_ZONES b3 mutated to a non-zero
+        """A real capture's STA_WATER_ZONES b3 mutated to a non-zero
         byte is rejected outright, and the rejection is exactly one WARNING
         naming the field and the byte, carrying no cloud-supplied name."""
         # SAMPLE_HIC801W_STATION3_PAYLOAD's STA_WATER_ZONES value is 03FF0300;
@@ -2010,7 +2010,7 @@ class TestDecodeHic801w:
         return "".join(traceback.format_exception(*record.exc_info))
 
     def test_sta_ts_det_width_mismatch_never_rejects_a_real_frame(self):
-        """D-11: STA_TS_DET arrives 2 bytes wide against a declared 4 in
+        """STA_TS_DET arrives 2 bytes wide against a declared 4 in
         every one of the 22 captures. The shape check must never reject on
         that mismatch, because doing so would reject every real frame."""
         for label, raw in SAMPLE_HIC801W_ALL_FRAMES.items():
@@ -2022,7 +2022,7 @@ class TestDecodeHic801w:
             assert decode_hic801w(raw)["decoder"] == "hic801w_hex", label
 
     def test_neither_envelope_carries_a_key_for_an_unverified_reading(self):
-        """D-15 / HIC-08: no key for STA_RAIN, STA_RH, STA_TS_DET or b3, in
+        """No key for STA_RAIN, STA_RH, STA_TS_DET or b3, in
         either envelope, not even as an attribute, so a future field
         addition to either branch trips this test."""
         forbidden_substrings = ("rain", "humidity", "ts_det", "b3")
@@ -2046,7 +2046,7 @@ class TestDecodeHic801w:
 
 class TestHic801wGenericLockout:
     """The generic path is observably closed for HIC801W end to end, not
-    merely a set-membership fact (D-14). This is what the milestone's
+    merely a set-membership fact. This is what the milestone's
     recorded trade actually buys: evaluate_generic_gate("HIC801W", "279") is
     all-or-nothing per variant and STA_RAIN and STA_TS_DET can never be
     defined from constants on either unit's corpus, so the gate could never
@@ -2064,7 +2064,7 @@ class TestHic801wGenericLockout:
 
 class TestHic801wCatalogKeying:
     """The variant this decoder relies on resolves through modelCode alone
-    (D-13), over the real committed catalog snapshot rather than a synthetic
+    keyed by modelCode, over the real committed catalog snapshot rather than a synthetic
     one."""
 
     def test_variant_279_is_the_8_port_accessory_with_ctl_water(self):
@@ -2088,7 +2088,7 @@ class TestHic801wCatalogKeying:
         each variant record to {"portNumber", "dp"}): HIC801W has two
         modelCode variants and no uncoded ("*") bucket, so a lookup with no
         modelCode resolves to None rather than guessing between them. This is
-        the property D-13 rests on -- the resolution this phase relies on is
+        the property this rests on -- the resolution the decoder relies on is
         the modelCode one, and nothing else could stand in for it even if a
         caller tried."""
         assert get_catalog_entry("HIC801W", None) is None
@@ -2097,7 +2097,7 @@ class TestHic801wCatalogKeying:
 
 
 class TestHic801wWidthToleranceProperty:
-    """D-11, stated as a property over the whole corpus rather than a single
+    """The STA_TS_DET width tolerance, stated as a property over the whole corpus rather than a single
     happy-path frame: the catalog's declared width and the wire's actual
     width for STA_TS_DET disagree on every capture, and the shape check must
     never turn that disagreement into a rejection."""

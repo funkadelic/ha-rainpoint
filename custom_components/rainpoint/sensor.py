@@ -246,15 +246,18 @@ def _make_htv210b_entities(coordinator, key, info, base_slug):
 
 def _render_station_list(stations: list[int] | None) -> str | None:
     """Render a decoded HIC801W station list for RainPointHicProgramStationsSensor
-    and its completed-stations sibling (D-08).
+    and RainPointHicProgramStationsCompletedSensor.
 
     The three-way return is the whole point: None means the frame did not
-    parse and the entity has no state at all (D-09), "none" means the frame
+    parse and the entity has no state at all, "none" means the frame
     parsed and the answer is genuinely no stations (an idle controller), and
     a non-empty list joins as "1, 2, 3". These are different facts a user
     templating against the entity has to be able to tell apart; collapsing
-    them is the wrong-state-rather-than-no-state failure HIC-03 exists to
-    prevent, seen from the entity side rather than the decoder side.
+    them would publish wrong state where there should be no state, seen from
+    the entity side rather than the decoder side.
+
+    The order is the caller's: this joins what it is given and never sorts.
+    The ascending guarantee belongs to _hic801w_stations_from_mask.
     """
     if stations is None:
         return None
@@ -268,7 +271,7 @@ def _make_hic801w_entities(coordinator, key, info, base_slug):
 
     Five entities, the complete sensor.py set for this model: the
     current-station ENUM, the two run-timing sensors, and the two
-    program-list sensors, in D-02's table order. D-02's remaining rows (the
+    program-list sensors. The model's remaining entities (the
     eight per-station binary sensors) live in binary_sensor.py, a different
     platform, since registry uniqueness is per (domain, platform,
     unique_id) and a binary_sensor row is a distinct identity from a sensor
@@ -1625,7 +1628,7 @@ class RainPointHic801wSensorBase(RainPointSensorBase):
 class RainPointHicCurrentStationSensor(RainPointHic801wSensorBase):
     """The currently-watering station, as a closed-option ENUM sensor.
 
-    ENUM rather than numeric (D-05): the device class makes the idle case a
+    ENUM rather than numeric: the device class makes the idle case a
     declared value ("none") instead of a magic zero, and a station number is
     not a quantity worth trending. The closed option list also means a `b0`
     outside 0 through 8 -- which the settled evidence has never shown but
@@ -1653,9 +1656,10 @@ class RainPointHicCurrentStationSensor(RainPointHic801wSensorBase):
         """Return "none", the station number as a string, or None.
 
         None covers two distinct cases: a failed shape check, where
-        current_station is None (D-09), and a current_station outside 0
+        current_station is None, and a current_station outside 0
         through 8, where the closed option list means no state rather than a
-        new state string (D-05).
+        new state string. RainPointHicStationWateringBinarySensor.is_on
+        applies the same range guard to the same field.
         """
         value = self._hic_data.get("current_station")
         if value == 0:
@@ -1666,7 +1670,7 @@ class RainPointHicCurrentStationSensor(RainPointHic801wSensorBase):
 
 
 class RainPointHicRunDurationSensor(RainPointHic801wSensorBase):
-    """The commanded length, in seconds, of the run as a whole (D-06).
+    """The commanded length, in seconds, of the run as a whole.
 
     Not per station: the wire carries one aggregate STA_DURATION record
     rather than eight per-station records, so this is the run's total
@@ -1680,7 +1684,7 @@ class RainPointHicRunDurationSensor(RainPointHic801wSensorBase):
     statistics does not corrupt a meter the way a per-run total that resets
     mid-cycle would. A genuinely idle controller reads 0, a real reading
     (STA_DURATION genuinely reads 0 when idle), and a failed shape check
-    reads no state at all (D-09), never a substituted 0.
+    reads no state at all, never a substituted 0.
     """
 
     _attr_device_class = SensorDeviceClass.DURATION
@@ -1706,7 +1710,7 @@ class RainPointHicRunDurationSensor(RainPointHic801wSensorBase):
 
 
 class RainPointHicRunEndsAtSensor(RainPointHic801wSensorBase):
-    """The wall-clock time the current run ends (D-06, D-07).
+    """The wall-clock time the current run ends.
 
     Three facts make this entity correct, and each is a trap:
 
@@ -1732,7 +1736,7 @@ class RainPointHicRunEndsAtSensor(RainPointHic801wSensorBase):
     system timezone instead, which can differ from Home Assistant's
     configured one.
 
-    D-07: the decoder already returns None for an idle controller and for
+    The decoder already returns None for an idle controller and for
     the idle STA_EVTIME sentinel, so this entity never has to recognise the
     sentinel itself, and a 2020 timestamp in a TIMESTAMP entity would be
     wrong state rather than absent state. A run_ends_at that fails to parse
@@ -1775,7 +1779,7 @@ class RainPointHicRunEndsAtSensor(RainPointHic801wSensorBase):
 
 
 class RainPointHicProgramStationsSensor(RainPointHic801wSensorBase):
-    """Which stations the currently running program covers (D-08, HIC-07).
+    """Which stations the currently running program covers.
 
     STA_WATER_ZONES b1 is the bitmask of stations enrolled in the running
     program, bit 0 meaning station 1, established across 22 captures on two
@@ -1824,7 +1828,7 @@ class RainPointHicProgramStationsSensor(RainPointHic801wSensorBase):
 
 
 class RainPointHicProgramStationsCompletedSensor(RainPointHic801wSensorBase):
-    """Which stations the currently running program has already completed (D-08, HIC-07).
+    """Which stations the currently running program has already completed.
 
     STA_WATER_ZONES b2 is the bitmask of stations already completed in the
     running program, bit 0 meaning station 1, established on the same

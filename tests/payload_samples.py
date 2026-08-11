@@ -318,9 +318,9 @@ SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO = "2026-07-31T18:37:42.039000+00:00"
 # real record, which is the point -- the layers are why that misread is hard.
 SAMPLE_NON_HUB_PIPE_FRAME = "#P260801054717000016822204182509||113060569563#"
 
-# HIC801W 8-station irrigation controller, 10# flat-hex frames from
-# .planning/HIC801W-DECODE-2026-08-10.md's "Capture corpus" section. Do not
-# re-derive or re-capture; that document is the settled ground truth.
+# HIC801W 8-station irrigation controller, 10# flat-hex frames. These are
+# committed captures from two independent units, contributed by owners. They
+# are the settled ground truth for this model: do not re-derive or edit them.
 #
 # Keyed by capture label, never by frame text: the reporter's
 # "2026-08-08 all off" and "2026-08-10 idle" captures are byte-identical
@@ -363,7 +363,7 @@ SAMPLE_HIC801W_SECOND_UNIT_FRAMES = {
 }
 
 # 13 reporter frames + 9 second-unit frames = 22. A test asserts this count
-# directly (HIC-02's adjacency edge), so a future accidental key collision on
+# directly, so a future accidental key collision on
 # either side of the merge fails loudly instead of silently dropping a frame.
 SAMPLE_HIC801W_ALL_FRAMES = {**SAMPLE_HIC801W_REPORTER_FRAMES, **SAMPLE_HIC801W_SECOND_UNIT_FRAMES}
 
