@@ -1,5 +1,6 @@
 """End-to-end HIC801W timeline: a real coordinator poll through the real
-sensor platform, proving HIC-01 and D-09/HIC-03 on a live entity object
+sensor platform, proving the unsupported-device notification stops firing
+and that a rejected frame yields no state, both on a live entity object
 rather than on a constructed envelope or an injected coordinator.data
 snapshot.
 
@@ -12,7 +13,7 @@ than living inside tests/test_sensor.py.
 This file also carries the phase's whole-set proof (TestHic801wWholeEntitySet):
 one HIC801W sub-device driven through both sensor.async_setup_entry and
 binary_sensor.async_setup_entry off a single coordinator first refresh,
-asserting the emitted unique-ID set as an equality against the D-02-locked
+asserting the emitted unique-ID set as an equality against the locked
 table, one device-registry identity across both platforms, and the whole
 set clearing together on a rejected frame and recovering together on the
 next good one -- the assertion no per-plan test could make on its own.
@@ -46,7 +47,7 @@ _SUB_ADDR = 1
 _SENSOR_KEY = f"100_{_HUB_MID}_{_SUB_ADDR}"
 
 # The station-3 capture's STA_WATER_ZONES b3 mutated from 00 to a non-zero
-# byte, so the shape check rejects it (D-10) without needing a second real
+# byte, so the shape check rejects it without needing a second real
 # capture.
 _B3_MUTATED_PAYLOAD = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
 assert _B3_MUTATED_PAYLOAD != SAMPLE_HIC801W_STATION3_PAYLOAD
@@ -84,17 +85,19 @@ def _status(payload: str):
     ]
 
 
-async def _build_hic801w_timeline():
-    """Drive construct -> first refresh -> platform setup with the station-3
-    capture, patching persistent_notification.async_create for the whole
-    sequence so HIC-01 (no notification fires) is asserted rather than
-    assumed.
+def _build_coordinator(payload: str = SAMPLE_HIC801W_STATION3_PAYLOAD):
+    """Construct the client, entry, hass and coordinator for one HIC801W poll.
 
-    Returns (coordinator, client, entity, mock_notify).
+    Shared by the two timelines below, which differ only in which platforms
+    they set up after the first refresh. Nothing is started here: the caller
+    owns the async_create patch and the first refresh, because both timelines
+    assert on that seam and the patch has to span it.
+
+    Returns (coordinator, client, hass, entry).
     """
     client = AsyncMock()
     client.get_devices_by_hid.return_value = _hub_devices()
-    client.get_multiple_device_status.return_value = _status(SAMPLE_HIC801W_STATION3_PAYLOAD)
+    client.get_multiple_device_status.return_value = _status(payload)
 
     entry = MagicMock()
     entry.entry_id = "e1"
@@ -105,6 +108,18 @@ async def _build_hic801w_timeline():
 
     coordinator = RainPointCoordinator(hass, client, entry)
     hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+    return coordinator, client, hass, entry
+
+
+async def _build_hic801w_timeline():
+    """Drive construct -> first refresh -> platform setup with the station-3
+    capture, patching persistent_notification.async_create for the whole
+    sequence so "no notification fires" is asserted rather than
+    assumed.
+
+    Returns (coordinator, client, entity, mock_notify).
+    """
+    coordinator, client, hass, entry = _build_coordinator()
 
     with patch.object(coordinator_module, "async_create") as mock_notify:
         await coordinator.async_config_entry_first_refresh()
@@ -124,7 +139,8 @@ class TestHic801wRealTimeline:
 
     @pytest.mark.asyncio
     async def test_registration_stops_the_unknown_model_notification(self):
-        """HIC-01, proven on the async_create seam coordinator.py imports,
+        """No unsupported-device notification, proven on the async_create
+        seam coordinator.py imports,
         not inferred from registry membership alone."""
         coordinator, _client, _entity, mock_notify = await _build_hic801w_timeline()
 
@@ -156,7 +172,7 @@ class TestHic801wRealTimeline:
 
     @pytest.mark.asyncio
     async def test_rejected_frame_yields_no_state_but_stays_available(self):
-        """D-09 / HIC-03 on a live object: a b3-mutated frame decodes to the
+        """On a live object: a b3-mutated frame decodes to the
         error envelope, the same entity object reads no state, and it stays
         available because the device is reachable and still polling -- it is
         the payload that did not parse."""
@@ -173,8 +189,8 @@ class TestHic801wWholeEntitySet:
     """The assertion no per-plan test could make: one HIC801W sub-device,
     driven through both sensor.async_setup_entry and
     binary_sensor.async_setup_entry off one coordinator's first refresh,
-    yields exactly the D-02-locked fourteen unique IDs (the thirteen
-    entities D-02 names plus the sensor platform's unconditional
+    yields exactly fourteen unique IDs (the thirteen entities this model
+    publishes plus the sensor platform's unconditional
     disabled-by-default raw-payload diagnostic), all resolving to one
     device-registry identity, and the whole set clears to no state
     together on a rejected frame -- while every entity stays available --
@@ -198,7 +214,7 @@ class TestHic801wWholeEntitySet:
     async def _build(self):
         """Drive construct -> first refresh -> both platforms' setup on the
         station-3 capture, patching persistent_notification.async_create for
-        the whole sequence so HIC-01's "no notification fires" holds at the
+        the whole sequence so "no notification fires" holds at the
         whole-set level too, not just for the sensor platform alone.
 
         Returns (coordinator, client, sensor_entities, binary_entities), the
@@ -207,19 +223,7 @@ class TestHic801wWholeEntitySet:
         also emits entities on both platforms and the set assertion must not
         silently pass because a hub entity happened to pad out a count.
         """
-        client = AsyncMock()
-        client.get_devices_by_hid.return_value = _hub_devices()
-        client.get_multiple_device_status.return_value = _status(SAMPLE_HIC801W_STATION3_PAYLOAD)
-
-        entry = MagicMock()
-        entry.entry_id = "e1"
-        entry.data = {CONF_HIDS: [100]}
-        entry.options = {}
-        hass = MagicMock()
-        hass.data = {DOMAIN: {"e1": {}}}
-
-        coordinator = RainPointCoordinator(hass, client, entry)
-        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+        coordinator, client, hass, entry = _build_coordinator()
 
         with patch.object(coordinator_module, "async_create") as mock_notify:
             await coordinator.async_config_entry_first_refresh()
@@ -243,7 +247,7 @@ class TestHic801wWholeEntitySet:
 
     @pytest.mark.asyncio
     async def test_the_union_is_exactly_the_locked_fourteen_ids_split_by_domain(self):
-        """D-02 as a set equality, not a superset or a bare count: an entity
+        """The locked set as an equality, not a superset or a bare count: an entity
         added later for an undefined reading fails here, and a suffix that
         drifted between plans fails here too. Registry uniqueness is per
         (domain, platform, unique_id), so the domain split is asserted
@@ -264,7 +268,7 @@ class TestHic801wWholeEntitySet:
 
     @pytest.mark.asyncio
     async def test_no_id_carries_a_substring_for_an_unverified_reading(self):
-        """The whole-set half of D-15's guarantee: the decoder half is
+        """The whole-set half of the unverified-field guarantee: the decoder half is
         asserted on the envelope keys in test_decoders.py
         (test_neither_envelope_carries_a_key_for_an_unverified_reading), and
         neither implies the other, so both are kept rather than one deleted
@@ -287,7 +291,7 @@ class TestHic801wWholeEntitySet:
         """No per-sub-device battery, RSSI, firmware or last-updated
         diagnostic, and no generic-fallback Unsupported sensor, exists
         anywhere in the union. HIC801W is registered in HAND_WRITTEN_MODELS
-        (D-14), which locks it out of the generic and Unsupported-fallback
+        which locks it out of the generic and Unsupported-fallback
         paths entirely, and variant 279 declares neither STA_BAT nor
         STA_RSSI, so a diagnostic entity here would read available with no
         value while the real readings already exist on the 278 hub
@@ -322,7 +326,7 @@ class TestHic801wWholeEntitySet:
         """One continuous timeline on the same fourteen entity objects: the
         station-3 capture's running state across the whole set, then a
         b3-mutated refresh that must clear every one of them to no state at
-        the same moment while every one stays available (D-09, HIC-03 at
+        the same moment while every one stays available (at
         the whole-set level -- compared individually against None so a
         single stale entity names itself in the failure rather than hiding
         inside a summary), then an idle refresh that must move the same
@@ -349,7 +353,7 @@ class TestHic801wWholeEntitySet:
             if n != 3:
                 assert stations_by_num[n].is_on is False
 
-        # Step 2: a b3-mutated refresh clears the thirteen D-02 entities to
+        # Step 2: a b3-mutated refresh clears the thirteen entities to
         # no state at once, on the same objects, while every one stays
         # available. The Raw Payload diagnostic is deliberately excluded
         # here: it is the platform's unconditional fourteenth entity, not
