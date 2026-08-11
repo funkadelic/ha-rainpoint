@@ -12,9 +12,10 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfVolume
+from homeassistant.const import EntityCategory, UnitOfTime, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .api import _USAGE_GALLONS_PER_COUNT
 from .const import (
@@ -246,8 +247,14 @@ def _make_htv210b_entities(coordinator, key, info, base_slug):
 def _make_hic801w_entities(coordinator, key, info, base_slug):
     """The read-only entities for the HIC801W 8-station irrigation controller.
 
-    Returns RainPointHicCurrentStationSensor alone in this plan; 30-02 extends
-    this list with the run-timing and program-list sensors.
+    Three entities as of this task: the current-station ENUM plus the two
+    run-timing sensors this task adds. The remaining two program-list
+    sensors are added by this plan's second task, which extends this list to
+    its final five and is the complete sensor.py set for the HIC801W --
+    D-02's remaining rows (the eight per-station binary sensors) live in
+    binary_sensor.py, a different platform, since registry uniqueness is per
+    (domain, platform, unique_id) and a binary_sensor row is a distinct
+    identity from a sensor row even when both wrap the same station number.
 
     The 279 accessory record is one sub-device row parented under the 278 hub
     by the existing sub-device parenting; there is no per-station device
@@ -263,6 +270,8 @@ def _make_hic801w_entities(coordinator, key, info, base_slug):
     """
     return [
         RainPointHicCurrentStationSensor(coordinator, key, info, base_slug),
+        RainPointHicRunDurationSensor(coordinator, key, info, base_slug),
+        RainPointHicRunEndsAtSensor(coordinator, key, info, base_slug),
     ]
 
 
@@ -1631,3 +1640,112 @@ class RainPointHicCurrentStationSensor(RainPointHic801wSensorBase):
         if isinstance(value, int) and 1 <= value <= 8:
             return str(value)
         return None
+
+
+class RainPointHicRunDurationSensor(RainPointHic801wSensorBase):
+    """The commanded length, in seconds, of the run as a whole (D-06).
+
+    Not per station: the wire carries one aggregate STA_DURATION record
+    rather than eight per-station records, so this is the run's total
+    commanded length, not any one station's share of it.
+
+    This is the one reading in the phase that takes SensorStateClass.
+    MEASUREMENT (contrast RainPointHicProgramStationsSensor and its sibling,
+    which deliberately take None). It is a real quantity sampled over time,
+    and unlike RainPointZoneWaterUsageSensor's per-run total it is not being
+    asked to accumulate across runs, so recording it into long-term
+    statistics does not corrupt a meter the way a per-run total that resets
+    mid-cycle would. A genuinely idle controller reads 0, a real reading
+    (STA_DURATION genuinely reads 0 when idle), and a failed shape check
+    reads no state at all (D-09), never a substituted 0.
+    """
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:timer-outline"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+    ) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_run_duration"
+        self._attr_name = "Run Duration"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the run's commanded length in seconds, or None when the frame did not parse."""
+        return self._hic_data.get("run_duration_seconds")
+
+
+class RainPointHicRunEndsAtSensor(RainPointHic801wSensorBase):
+    """The wall-clock time the current run ends (D-06, D-07).
+
+    Three facts make this entity correct, and each is a trap:
+
+    STA_EVTIME is the run's END time, not its start. Every station in the
+    reporter's 2026-08-10 sweep decodes to that frame's own log timestamp
+    plus its 60 second duration, and _decode_packed_timestamp's docstring
+    already records the same meaning for the HTV213 and HTV210B families.
+    Remaining run time is therefore this entity's value minus now, not this
+    entity's value minus STA_DURATION.
+
+    It is a packed wall clock, not epoch seconds, so a raw delta between two
+    STA_EVTIME words is not a second delta. STA_DURATION alongside it *is*
+    plain little-endian seconds. The two fields encode time in different
+    ways and must never be arithmetic on each other's terms.
+
+    The decoder's run_ends_at is a deliberately naive local wall-clock ISO
+    string (api/decoders.py's _decode_packed_timestamp docstring), and Home
+    Assistant raises ValueError on a naive datetime for a TIMESTAMP sensor
+    (homeassistant/components/sensor/__init__.py:620-624). dt_util.as_local
+    attaches Home Assistant's own configured timezone to a naive input
+    rather than converting from UTC, which is exactly right for a
+    device-reported local clock; datetime.astimezone() would attach the
+    system timezone instead, which can differ from Home Assistant's
+    configured one.
+
+    D-07: the decoder already returns None for an idle controller and for
+    the idle STA_EVTIME sentinel, so this entity never has to recognise the
+    sentinel itself, and a 2020 timestamp in a TIMESTAMP entity would be
+    wrong state rather than absent state. A run_ends_at that fails to parse
+    (should the decoder's contract ever change) degrades to None rather than
+    raising out of a state write.
+    """
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:timer-sand-complete"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+    ) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_run_ends_at"
+        self._attr_name = "Run Ends At"
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Return the run's end time as a tz-aware datetime, or None.
+
+        None covers an idle controller, a failed shape check (both already
+        collapsed to None by the decoder), and the defensive case of a
+        run_ends_at string fromisoformat cannot parse, so this property never
+        raises out of a state write.
+        """
+        value = self._hic_data.get("run_ends_at")
+        if not value:
+            return None
+        try:
+            naive = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            _LOGGER.debug("HIC801W run_ends_at failed to parse: %r", value)
+            return None
+        return dt_util.as_local(naive)
