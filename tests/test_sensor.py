@@ -1707,6 +1707,14 @@ class TestZoneWaterUsageSensor:
         usage.coordinator.data["sensors"]["100_200_1"]["data"]["zones"] = ["not", "a", "dict"]
         assert usage.native_value is None
 
+    @pytest.mark.asyncio
+    async def test_malformed_zone_record_reads_unknown(self):
+        """A zones mapping whose record for this zone is not a dict degrades to unknown, not an AttributeError."""
+        zones = {1: {"open": False, "last_usage_counts": 421, "last_usage_gallons": 0.842}}
+        usage = self._first_usage(await self._setup(zones))
+        usage.coordinator.data["sensors"]["100_200_1"]["data"]["zones"] = {1: "not a dict"}
+        assert usage.native_value is None
+
 
 class TestZoneRunDurationSensor:
     """One run-duration entity per reported zone on the HTV213/245 valve family.
@@ -2098,6 +2106,8 @@ class TestTheStubsFailedPollContract:
 
         assert coordinator.last_update_success is True
         assert coordinator.data is not failed_data
+        zones = coordinator.data["sensors"]["100_200_1"]["data"]["zones"]
+        assert zones[2]["duration_seconds"] == 2940
 
     @pytest.mark.asyncio
     async def test_a_non_update_failed_exception_still_propagates(self):
@@ -2140,9 +2150,10 @@ class TestRunDurationUniqueIdDisjointness:
     """No unique_id collides across the platforms that build entities for one HTV245 key.
 
     binary_sensor.py builds nothing for the valve family (it is HIC801W
-    station-only), so sensor, number and valve are the whole set for this
-    model. The expected set is written out explicitly rather than only
-    counted, so a future rename of any one id fails here.
+    station-only), and switch.py builds only hub-level switches here because
+    entry.options leaves generic controls off, so sensor, number and valve are
+    the whole set for this model. The expected set is written out explicitly
+    rather than only counted, so a future rename of any one id fails here.
     """
 
     _SENSOR_KEY = "100_200_1"
@@ -2214,7 +2225,7 @@ class TestZoneRunDurationLateArrival:
     """
 
     _ONE_ZONE_TLV_PAYLOAD = "11#18dc0119d80025ad3c00"
-    """Hand-built HTV245 TLV frame reporting zone 1 open (60s) and no zone 2 record at all."""
+    """Hand-built HTV245 TLV frame reporting zone 1 closed with a 60 second run duration, and no zone 2 record at all."""
 
     @staticmethod
     def _hub_record(mid=200, addr=1):
@@ -2257,11 +2268,14 @@ class TestZoneRunDurationLateArrival:
 
         first_durations = [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)]
         assert len(first_durations) == 1
+        assert first_durations[0]._attr_unique_id == "rainpoint_100_200_1_zone1_run_duration"
+        assert first_durations[0].native_value == 60
 
         client.get_multiple_device_status.return_value = self._status(SAMPLE_HTV245_TLV_PAYLOAD)
         await coordinator.async_refresh()
 
         assert [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)] == first_durations
+        assert first_durations[0].native_value == 60
 
 
 class TestHtv210bDispatch:

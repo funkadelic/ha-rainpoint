@@ -187,7 +187,7 @@ def _make_pool_plus_entities(coordinator, key, info, base_slug):
 
 
 def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
-    """Battery, signal, and per-zone water usage for the HTV213/245/345/405 valve family.
+    """Battery, signal, and per-zone water usage and run duration for the HTV213/245/345/405 valve family.
 
     All four models share decode_htv213frf_valve and declare the same catalog
     identities, differing only in port count, so they share this factory too.
@@ -1495,12 +1495,18 @@ class RainPointZoneSensorBase(RainPointSensorBase):
 
     @property
     def _zone_data(self) -> dict | None:
-        """Return this zone's decoded record, or None when the frame omits it."""
+        """Return this zone's decoded record, or None when the frame omits it.
+
+        A zone entry that is present but not a mapping is treated as absent,
+        so a malformed record reads unknown instead of raising out of the
+        state machine on every subclass that calls .get on it.
+        """
         data = self._sensor_data or {}
         zones = data.get("zones")
         if not isinstance(zones, dict):
             return None
-        return zones.get(self._zone_num)
+        zone = zones.get(self._zone_num)
+        return zone if isinstance(zone, dict) else None
 
 
 class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
