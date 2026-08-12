@@ -24,7 +24,30 @@ def _make_stub(name: str) -> ModuleType:
 # Real stubs for update_coordinator: must be real classes so that
 # RainPointCoordinator can inherit from DataUpdateCoordinator and be
 # instantiated as a normal Python object.
+#
+# HomeAssistantError and ConfigEntryNotReady are defined here rather than with
+# the rest of the homeassistant.exceptions stubs further down, because
+# DataUpdateCoordinator.async_config_entry_first_refresh raises the latter.
+# Their sys.modules registration still happens down there, once the stub
+# modules exist to hang them on.
 # ---------------------------------------------------------------------------
+
+
+# HomeAssistantError must be a real exception class so `raise HomeAssistantError(...)` works.
+class _HomeAssistantError(Exception):
+    """_HomeAssistantError."""
+
+    pass
+
+
+class ConfigEntryNotReady(_HomeAssistantError):
+    """Real ConfigEntryNotReady stub, raised by a failed first refresh.
+
+    A subclass of the same HomeAssistantError stub the real exception
+    derives from, so a test catching the base class still works.
+    """
+
+    pass
 
 
 class DataUpdateCoordinator:
@@ -35,11 +58,14 @@ class DataUpdateCoordinator:
 
         Mirrors the real signature closely enough that a drift like a missing
         config_entry kwarg fails here instead of at runtime in Home Assistant.
+        last_update_success starts True, matching the real class, which is
+        optimistic until the first refresh proves otherwise.
         """
         self.hass = hass
         self.logger = logger
         self.config_entry = config_entry
         self.data = None
+        self.last_update_success = True
         self._listeners = []
 
     def async_add_listener(self, update_callback, context=None):
@@ -61,15 +87,40 @@ class DataUpdateCoordinator:
     async def async_refresh(self):
         """Run one update cycle and notify listeners, as the real class does.
 
-        Deliberately has no retry, no last_update_success bookkeeping and no
-        ConfigEntryNotReady: a failure propagating is what a test wants.
+        Mirrors the real coordinator's failure handling: on success, data is
+        replaced and last_update_success set True; on UpdateFailed,
+        last_update_success is set False and data is left at its previous
+        value rather than being cleared. Listeners are notified either way,
+        unconditionally, matching the real class.
+
+        The one deliberate narrowing: only UpdateFailed is caught here, where
+        the real coordinator catches more broadly. RainPointCoordinator's own
+        _async_update_data already funnels every error it can raise into
+        UpdateFailed (coordinator.py's RainPointApiError and bare Exception
+        except clauses both re-raise as UpdateFailed), so anything else
+        escaping this stub is a harness bug in a test double or fixture and
+        should stay loud rather than be swallowed into a false green.
         """
-        self.data = await self._async_update_data()
+        try:
+            self.data = await self._async_update_data()
+        except UpdateFailed:
+            self.last_update_success = False
+        else:
+            self.last_update_success = True
         self.async_update_listeners()
 
     async def async_config_entry_first_refresh(self):
-        """Perform the first refresh of a config entry setup."""
+        """Perform the first refresh of a config entry setup.
+
+        Mirrors the real class's raise_on_entry_error path: a first refresh
+        that fails raises ConfigEntryNotReady rather than leaving the config
+        entry set up with no data. Checked via last_update_success rather
+        than by re-catching UpdateFailed, since async_refresh above already
+        swallows it before this method ever sees it.
+        """
         await self.async_refresh()
+        if not self.last_update_success:
+            raise ConfigEntryNotReady("initial refresh failed")
 
     def async_set_updated_data(self, data) -> None:
         """Push data outside the poll cycle and notify listeners, as the real
@@ -490,14 +541,10 @@ class _DeviceInfo(dict):
 sys.modules["homeassistant.helpers.device_registry"].DeviceInfo = _DeviceInfo
 
 
-# HomeAssistantError must be a real exception class so `raise HomeAssistantError(...)` works.
-class _HomeAssistantError(Exception):
-    """_HomeAssistantError."""
-
-    pass
-
-
+# Both classes are defined at the top of this file, next to the
+# DataUpdateCoordinator stub that raises ConfigEntryNotReady.
 sys.modules["homeassistant.exceptions"].HomeAssistantError = _HomeAssistantError
+sys.modules["homeassistant.exceptions"].ConfigEntryNotReady = ConfigEntryNotReady
 
 
 # EntityCategory is accessed as EntityCategory.DIAGNOSTIC / .CONFIG: use a simple namespace.
