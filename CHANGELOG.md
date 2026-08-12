@@ -2,6 +2,26 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.16.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.15.0...v1.16.0) (2026-08-12)
+
+
+### Added
+
+* add read-only support for the HIC801W irrigation controller ([#163](https://github.com/funkadelic/ha-rainpoint/issues/163)) ([4cd6d68](https://github.com/funkadelic/ha-rainpoint/commit/4cd6d68386dc4c32d0db8e735e7fe13462559cd8))
+* **sensor:** surface per-zone run duration on the valve family ([#169](https://github.com/funkadelic/ha-rainpoint/issues/169)) ([c470b3d](https://github.com/funkadelic/ha-rainpoint/commit/c470b3da6478c2534fc2d531c6d568631baac4f5))
+
+
+### Fixed
+
+* **device:** report the hub MAC as a connection, not a serial number ([#165](https://github.com/funkadelic/ha-rainpoint/issues/165)) ([80e0bd0](https://github.com/funkadelic/ha-rainpoint/commit/80e0bd0ff792773ca1e58e850d557b79331cc2bd))
+* recover automatically when another login displaces the session ([b28f4b9](https://github.com/funkadelic/ha-rainpoint/commit/b28f4b991389b784846d9a1c27b5543a92ce2c3c))
+
+
+### Other Changes
+
+* **catalog:** refresh the product catalog snapshot ([#168](https://github.com/funkadelic/ha-rainpoint/issues/168)) ([6c94dd0](https://github.com/funkadelic/ha-rainpoint/commit/6c94dd07a4a50931d0cd9e794802bc7b640b671d))
+* record what the run-state reading is evidenced against ([#167](https://github.com/funkadelic/ha-rainpoint/issues/167)) ([2aae0ba](https://github.com/funkadelic/ha-rainpoint/commit/2aae0ba5d0bc02c53ebbc6a1a1aa7701dd325daa))
+
 ## [1.15.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.14.0...v1.15.0) (2026-08-10)
 
 
