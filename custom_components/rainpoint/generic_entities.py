@@ -419,9 +419,14 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         # by symbol. Line numbers are deliberately omitted: the two this note
         # used to carry both drifted onto unrelated code, a symbol does not,
         # and TestRunStateEvidenceNoteDriftGuard below checks the symbol.
-        # - decode_htv213frf_valve, the ASCII HTV213FRF/HTV245FRF path,
-        #   masking through _extract_htv213_zones, device reporting 0x21 and
-        #   0x20 rather than 0x01 and 0x00.
+        # - decode_htv213frf_valve, the HTV213FRF/HTV245FRF datapoint-map
+        #   branch, masking through _extract_htv213_zones, device reporting
+        #   0x21 and 0x20 rather than 0x01 and 0x00. Its sibling branch,
+        #   _decode_htv213frf_ascii, is deliberately not evidence for this
+        #   row: it reads a decimal field out of a comma-separated payload,
+        #   not this status byte, and calls a zone open on any non-zero value
+        #   rather than on bit zero. The two readings disagree on 0x20, which
+        #   is why only the datapoint-map branch is cited here.
         # - decode_valve_hub, the TLV valve-hub path, through
         #   _extract_valve_hub_zone, comparing the raw byte against 0x01 on
         #   hardware that reports plain 0x01 and 0x00.
@@ -440,8 +445,8 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         #   HIC801W comes from its capture corpus rather than from a byte the
         #   decoder reads, and the decoder stays independent of this row.
         #
-        # These five paths span RainPoint's framings (ASCII, TLV, the flat
-        # marker stream and the structural record walk) and both raw
+        # These five paths span RainPoint's framings (the datapoint map, TLV,
+        # the flat marker stream and the structural record walk) and both raw
         # encodings, and masking bit zero is the single reading that
         # satisfies all of them at once. No capture in either corpus
         # contradicts it. That is the reasoning, not a headcount: a count of
