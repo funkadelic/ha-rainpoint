@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo, format_mac
 from homeassistant.helpers.entity import Entity
 
 from .const import DOMAIN, HUB_IDENTIFIER_PREFIX, HUB_UNIQUE_ID_PREFIX
@@ -138,7 +138,36 @@ class RainPointHubDevice(Entity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device registry information for this hub."""
+        """Return device registry information for this hub.
+
+        The hub's MAC is reported through connections rather than as a
+        serial_number. It used to fill serial_number, which put a MAC address
+        behind a "Serial number:" label on the device page while the MAC
+        diagnostic sensor displayed the identical value one card away. The
+        cloud carries no manufacturer serial for a hub, so no value replaces
+        it and the field is simply absent.
+
+        Only identifiers keys the device registry entry here, and it is
+        unchanged, so an install upgrading into this keeps its device row,
+        its entities and their history. connections is an additional matching
+        key rather than a replacement one: Home Assistant merges a device that
+        another integration registers under the same MAC into this row, which
+        is what the field is for.
+
+        connections is omitted rather than passed empty when the record has no
+        usable mac, following via_device in build_sub_device_info. format_mac
+        normalises to the lowercase colon-separated spelling the registry
+        compares on, so a cloud record's uppercase mac still matches another
+        integration's lowercase one. It returns its input unchanged when that
+        input is not MAC-shaped, so the truthiness check is on the formatted
+        value: an empty or whitespace mac yields no connection at all rather
+        than a connection to the empty string, which would match every other
+        hub in the same state and merge them into one device row.
+        """
+        optional: dict = {}
+        mac = format_mac(self._hub_info.get("mac") or "").strip()
+        if mac:
+            optional["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
         return DeviceInfo(
             identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{self._hub_info['hid']}_{self._hub_info['mid']}")},
             name=self._hub_info.get("name") or "RainPoint Hub",
@@ -146,7 +175,7 @@ class RainPointHubDevice(Entity):
             model=self._hub_info.get("model") or "Unknown",
             sw_version=self._hub_info.get("softVer"),
             hw_version=self._hub_info.get("hardwareVersion"),
-            serial_number=self._hub_info.get("mac"),
+            **optional,
         )
 
     @property

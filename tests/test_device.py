@@ -14,8 +14,13 @@ from tests.helpers import VALVE_ZONES_TLV_PAYLOAD
 class TestRainPointHubDevice:
     """Tests for RainPointHubDevice."""
 
-    def _make_hub(self, hid=100, name="My Hub", model="HTV0540FRF", mid=1001):
-        """Create a RainPointHubDevice with a mock coordinator via __new__."""
+    def _make_hub(self, hid=100, name="My Hub", model="HTV0540FRF", mid=1001, mac="AA:BB:CC:DD:EE:FF"):
+        """Create a RainPointHubDevice with a mock coordinator via __new__.
+
+        mac defaults to a well-formed address; pass None to build a record
+        that carries no mac key at all, which is how a cloud record missing
+        the field arrives.
+        """
         hub_info = {
             "hid": hid,
             "mid": mid,
@@ -23,8 +28,9 @@ class TestRainPointHubDevice:
             "model": model,
             "softVer": "2.0",
             "hardwareVersion": "1.0",
-            "mac": "AA:BB:CC:DD:EE:FF",
         }
+        if mac is not None:
+            hub_info["mac"] = mac
         # RainPointHubDevice inherits from Entity stub, so use __new__ to bypass
         # any super().__init__ that might call into MagicMock internals.
         hub = RainPointHubDevice.__new__(RainPointHubDevice)
@@ -51,6 +57,52 @@ class TestRainPointHubDevice:
         """device_info model should match hub_info model."""
         hub = self._make_hub(model="HTV0540FRF")
         assert hub.device_info["model"] == "HTV0540FRF"
+
+    def test_hub_mac_is_a_connection_and_not_a_serial_number(self):
+        """The MAC reaches the registry as a connection, leaving no serial.
+
+        Both halves are asserted together because the point of the pair is
+        that one replaced the other: asserting only the connection would
+        still pass while a MAC sat behind the "Serial number" label as well.
+        The cloud carries no manufacturer serial for a hub, so the key is
+        absent rather than holding some other value.
+        """
+        info = self._make_hub(mac="A0:A3:B3:7C:AF:FC").device_info
+        assert info["connections"] == {("mac", "a0:a3:b3:7c:af:fc")}
+        assert "serial_number" not in info
+
+    def test_hub_mac_is_normalised_to_the_spelling_the_registry_matches_on(self):
+        """An uppercase cloud mac is stored lowercase.
+
+        Home Assistant merges devices by comparing connection tuples
+        literally, so a hub registered under the cloud's uppercase spelling
+        would never match the same hardware another integration registered
+        in lowercase.
+        """
+        info = self._make_hub(mac="AA:BB:CC:DD:EE:FF").device_info
+        assert info["connections"] == {("mac", "aa:bb:cc:dd:ee:ff")}
+
+    @pytest.mark.parametrize("mac", [None, "", "   "])
+    def test_hub_without_a_usable_mac_declares_no_connections(self, mac):
+        """A missing, empty or whitespace mac yields no connection at all.
+
+        The empty spellings matter more than the missing one: a connection to
+        the empty string would be identical across every hub in that state,
+        and Home Assistant would merge them into a single device row.
+        """
+        info = self._make_hub(mac=mac).device_info
+        assert "connections" not in info
+
+    def test_hub_registry_identity_does_not_depend_on_the_mac(self):
+        """identifiers is the same with and without a mac.
+
+        identifiers alone keys the device registry entry, so an install
+        upgrading into the connections change keeps its existing device row,
+        its entities and their history.
+        """
+        with_mac = self._make_hub(hid=100, mid=1001).device_info
+        without_mac = self._make_hub(hid=100, mid=1001, mac=None).device_info
+        assert with_mac["identifiers"] == without_mac["identifiers"] == {(DOMAIN, "hub_100_1001")}
 
     def test_hub_available_always_true(self):
         """Hub is always available if config exists."""
