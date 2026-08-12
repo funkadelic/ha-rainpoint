@@ -314,7 +314,7 @@ class TestHic801wWholeEntitySet:
     async def test_the_whole_set_resolves_to_one_device_identity(self):
         """Every entity in the union, across both platforms, points at the
         same device-registry identity: one device page carrying all
-        thirteen, not two. No per-station device fan-out either, even
+        fourteen, not two. No per-station device fan-out either, even
         though the catalog's portNumber is 8 -- the wire carries one
         aggregate record, not eight per-station ones."""
         _coordinator, _client, sensor_captured, binary_captured = await self._build()
