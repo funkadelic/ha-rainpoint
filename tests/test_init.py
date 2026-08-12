@@ -135,7 +135,76 @@ class TestAsyncSetupEntry:
         mock_client_cls.assert_not_called()
         existing_client.restore_tokens.assert_not_called()
         existing_client.register_relogin_listener.assert_not_called()
+        existing_client.register_token_invalidated_listener.assert_not_called()
         assert hass.data[DOMAIN][entry.entry_id]["client"] is existing_client
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_registers_token_invalidated_listener(self):
+        """A newly constructed client registers exactly one token-invalidated listener.
+
+        Separate from the relogin listener: an invalidation is not a rotation.
+        """
+        hass = _make_hass()
+        entry = _make_entry()
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            result = await async_setup_entry(hass, entry)
+
+        assert result is True
+        mock_client.register_token_invalidated_listener.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_setup_entry_token_invalidated_callback_persists_tokens(self):
+        """The callback registered on the invalidation hook writes the entry data.
+
+        Proves the wire reaches _persist_tokens rather than merely being
+        registered: a reload builds a new client from entry.data, so the
+        callback has to actually write for the recovery to survive one.
+        """
+        hass = _make_hass()
+        entry = _make_entry()
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_client.export_tokens.return_value = {
+            "token": "still-there-but-dead",
+            "refresh_token": "ref",
+            "token_expires_at": None,
+        }
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            await async_setup_entry(hass, entry)
+
+        hass.config_entries.async_update_entry.reset_mock()
+
+        invalidated_callback = mock_client.register_token_invalidated_listener.call_args[0][0]
+        invalidated_callback()
+
+        hass.config_entries.async_update_entry.assert_called_once()
+        _, kwargs = hass.config_entries.async_update_entry.call_args
+        assert kwargs["data"]["token"] == "still-there-but-dead"
+        assert kwargs["data"]["token_expires_at"] is None
 
     @pytest.mark.asyncio
     async def test_async_setup_entry_registers_reload_listener(self):

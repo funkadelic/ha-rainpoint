@@ -1448,6 +1448,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # token rather than logging in again. Registered once on the client we
         # keep; retries reuse it without re-registering.
         client.register_relogin_listener(lambda: _persist_tokens(hass, entry, client))
+        # A reload builds a new client from the entry data, so an expiry the
+        # running client knows is dead has to reach that data, or the reload
+        # replays the dead token and the user is told setup failed.
+        client.register_token_invalidated_listener(lambda: _persist_tokens(hass, entry, client))
         entry_store["client"] = client
 
     # Simple: one coordinator per config entry

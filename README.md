@@ -87,7 +87,7 @@ The config flow asks for three fields:
 
 After authenticating, select the **home** to monitor. There is no app-type selection; this integration uses the RainPoint app API only.
 
-> **Heads up on API sessions.** The RainPoint cloud allows only one active session per account. Logging in here will sign you out of the RainPoint mobile app on your phone, and vice versa. To avoid that ping-pong, [create a dedicated account for Home Assistant](#use-a-dedicated-home-assistant-account-recommended) and share your home with it.
+> **Heads up on API sessions.** The RainPoint cloud allows only one active session per account. Logging in here will sign you out of the RainPoint mobile app on your phone, and vice versa. To avoid that ping-pong, [create a dedicated account for Home Assistant](#use-a-dedicated-home-assistant-account-recommended) and share your home with it. If your phone does sign the integration out, it signs itself back in within a few minutes and carries on, with nothing for you to do.
 
 ---
 
