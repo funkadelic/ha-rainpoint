@@ -2,17 +2,34 @@
 
 from __future__ import annotations
 
+import ast
 import collections
+import pathlib
 from datetime import datetime
 from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import get_catalog_variant_codes
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
-from custom_components.rainpoint.api.decoders import _decode_packed_timestamp, decode_moisture_simple
+from custom_components.rainpoint.api.decoders import (
+    _decode_packed_timestamp,
+    decode_co2,
+    decode_flow_meter,
+    decode_hcs005frf,
+    decode_hcs015arf,
+    decode_hcs024frf_v1,
+    decode_hcs0528arf,
+    decode_hws019wrf_v2,
+    decode_moisture_full,
+    decode_moisture_simple,
+    decode_pool_plus,
+    decode_rain,
+    decode_temphum,
+)
 from custom_components.rainpoint.api.generic_decoder import _STATUS_FIELDS, decode_generic
 from custom_components.rainpoint.api.trust import is_hand_written_model
 from custom_components.rainpoint.api.utils import _decode_packed_report_time
@@ -26,6 +43,7 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_145,
     MODEL_VALVE_245,
 )
+from custom_components.rainpoint.coordinator import DECODER_REGISTRY
 from custom_components.rainpoint.generic_entities import (
     _IDENTITY_SPECS,
     GENERIC_MARKER_ICON,
@@ -46,6 +64,207 @@ from tests.payload_samples import SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD
 FAKE_MODEL = "FAKE_GENERIC_MODEL"
 
 _SENTINEL = object()
+
+# Every decoder DECODER_REGISTRY (plus the display-hub special case, added
+# below) actually dispatches that reports no run or open state at all: soil
+# moisture, rain, temp/humidity, CO2, pool and weather-display readings carry
+# no work-state datapoint to mask. Built from imported function objects, never
+# from typed strings, so a rename or an alias cannot silently drift the set --
+# the flow-meter registry entry is decode_flowmeter, an alias for
+# decode_flow_meter, whose __name__ differs from the registry key, and a
+# hand-typed string would encode that mismatch rather than survive it.
+# decode_pool is deliberately absent: MODEL_POOL and MODEL_HCS0528ARF are the
+# same string, so the registry dict literal's later MODEL_HCS0528ARF entry
+# overwrites the earlier MODEL_POOL one, and DECODER_REGISTRY never actually
+# dispatches decode_pool. decode_hcs0528arf already covers that key. A wrong
+# entry here is a written false statement about what that decoder reports: if
+# this set ever names a decoder that does report a run state, it is silencing
+# a real failure of TestRunStateEvidenceNoteDriftGuard below rather than
+# documenting a real exemption.
+_DECODERS_WITHOUT_RUN_STATE = frozenset(
+    fn.__name__
+    for fn in (
+        decode_moisture_simple,
+        decode_moisture_full,
+        decode_rain,
+        decode_temphum,
+        decode_flow_meter,
+        decode_co2,
+        decode_pool_plus,
+        decode_hcs005frf,
+        decode_hcs015arf,
+        decode_hcs024frf_v1,
+        decode_hcs0528arf,
+        decode_hws019wrf_v2,
+    )
+)
+
+
+def _wkstate_row_source() -> str:
+    """Return the source text of the STA_WKSTATE row's GenericSensorSpec call.
+
+    Parses generic_entities.py's own file, finds the module-level
+    _IDENTITY_SPECS dict assignment, locates the entry keyed "STA_WKSTATE",
+    and slices the raw source lines from that call's first line through its
+    last. The trailing Width and Evidence comments sit between the call's
+    last keyword argument and its closing parenthesis, so they fall inside
+    that line span even though comments carry no AST node of their own. The
+    anchor is the Call node's position, not any comment text, so rewording
+    the note never breaks this slice and moving the note outside the
+    GenericSensorSpec call correctly does.
+    """
+    source_path = pathlib.Path(generic_entities_module.__file__)
+    source_text = source_path.read_text()
+    lines = source_text.splitlines(keepends=True)
+    tree = ast.parse(source_text)
+    for node in ast.walk(tree):
+        # _IDENTITY_SPECS carries a type annotation in source
+        # (``_IDENTITY_SPECS: dict[str, GenericSensorSpec] = {...}``), so the
+        # assignment is an AnnAssign with a single ``target``, not an Assign
+        # with a ``targets`` list.
+        if not (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "_IDENTITY_SPECS"):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            continue
+        for key, value in zip(node.value.keys, node.value.values, strict=True):
+            if isinstance(key, ast.Constant) and key.value == "STA_WKSTATE":
+                return "".join(lines[value.lineno - 1 : value.end_lineno])
+    raise AssertionError("STA_WKSTATE row not found in _IDENTITY_SPECS")
+
+
+def _registered_decoder_names(registry: dict) -> set[str]:
+    """Return the __name__s of every decoder the integration dispatches.
+
+    The display-hub decoder is unioned in because it is dispatched as a
+    special case outside DECODER_REGISTRY entirely (the same "registry plus
+    display hub" shape HAND_WRITTEN_MODELS itself follows). Both the run-state
+    filter below and the phantom-exemption test read this one definition, so a
+    second special case added here reaches both rather than only whichever
+    call site its author happened to be looking at.
+    """
+    return {fn.__name__ for fn in registry.values()} | {decode_hws019wrf_v2.__name__}
+
+
+def _run_state_decoder_names(registry: dict) -> set[str]:
+    """Return the __name__s of every registered decoder reporting a run/open state.
+
+    _DECODERS_WITHOUT_RUN_STATE is subtracted from the dispatched set, leaving
+    the decoders whose provenance the STA_WKSTATE row's Evidence note must
+    name.
+    """
+    return _registered_decoder_names(registry) - _DECODERS_WITHOUT_RUN_STATE
+
+
+def _unnamed_run_state_decoders(registry: dict) -> set[str]:
+    """Return run-state decoder names absent from the STA_WKSTATE row's source."""
+    row_source = _wkstate_row_source()
+    return {name for name in _run_state_decoder_names(registry) if name not in row_source}
+
+
+def _fake_run_state_decoder(raw: str) -> dict:
+    """Synthetic decoder standing in for a fourth run-state decoder, for the teeth test."""
+    return {}
+
+
+class TestRunStateEvidenceNoteDriftGuard:
+    """Keeps the STA_WKSTATE row's provenance list in lockstep with DECODER_REGISTRY.
+
+    Going stale means a decoder that reports a run or open state was
+    registered without being named in the row's Evidence note. A failure
+    here asks the reader to do one of two things: name the new decoder in
+    the row's note, because it does mask a work-state bit, or add it to
+    _DECODERS_WITHOUT_RUN_STATE, because it genuinely reports no run state.
+    Never relax the assertions below to make a failure disappear.
+    """
+
+    def test_every_run_state_decoder_is_named_in_the_row(self):
+        """Every real run-state decoder must appear by name in the row's source."""
+        assert _unnamed_run_state_decoders(DECODER_REGISTRY) == set()
+
+    def test_an_unnamed_run_state_decoder_fails_the_guard(self):
+        """A synthetic fourth decoder is reported as unnamed.
+
+        Stands in for the real act of registering a fourth run-state decoder
+        without updating the row, which is the failure this guard exists to
+        catch.
+        """
+        registry_with_extra = dict(DECODER_REGISTRY) | {"HTVZZZFRF": _fake_run_state_decoder}
+        assert _unnamed_run_state_decoders(registry_with_extra) == {"_fake_run_state_decoder"}
+
+    def test_exemption_names_no_decoder_absent_from_the_registry(self):
+        """A decoder removed from DECODER_REGISTRY cannot linger as a phantom exemption."""
+        assert _registered_decoder_names(DECODER_REGISTRY) >= _DECODERS_WITHOUT_RUN_STATE
+
+
+class TestRunStateRowShapeClaimHasItsMechanism:
+    """The row's record-shape claim is only as good as the width that enforces it.
+
+    Kept out of TestRunStateEvidenceNoteDriftGuard above, whose subject is
+    keeping the provenance list in lockstep with DECODER_REGISTRY. This
+    class has a different subject: the declared width the note names as the
+    mechanism behind its claim.
+    """
+
+    def test_wkstate_widths_are_exactly_one_byte(self):
+        """The row's Evidence note rests on a mechanism, and this pins that mechanism.
+
+        The note states the claim as a record-shape claim ("a single-byte
+        STA_WKSTATE record whose bit 0 is the running flag") and says
+        ``widths=frozenset({1})`` on the same row is what enforces that
+        shape. Nothing else in the suite asserts the row's widths equal
+        exactly ``{1}``: the generic width-refusal test only checks that
+        *some* undeclared width is rejected, and a row widened to
+        ``frozenset({1, 2})`` would leave every other test green while
+        making the note's central claim false. This assertion is that
+        missing pin.
+        """
+        assert _IDENTITY_SPECS["STA_WKSTATE"].widths == frozenset({1})
+
+
+class TestRunStateEvidenceNoteCarriesDecisionAndCorrection:
+    """The row's Decision, reversal condition and Correction sections cannot be deleted silently.
+
+    TestRunStateEvidenceNoteDriftGuard above only checks that decoder symbol
+    names appear in the row's source; it says nothing about the Decision
+    paragraph, the reversal condition or the Correction paragraph, all three
+    of which could be deleted outright with every other test in the suite
+    still green. This class is that missing guard.
+
+    What is pinned: the smallest anchors that survive a rewording of the
+    row's prose -- the literal section labels ``Decision:`` and
+    ``Correction:``, the date the correction voids (``2026-07-17``), and the
+    stem ``revers`` for the reversal condition. What is NOT pinned: any full
+    sentence, any exact phrasing around those anchors, or the order the
+    sections appear in. A rewording of the note that keeps all three
+    sections intact, in whatever words, must keep passing this test; only
+    deleting a section (or the fact it voids the 2026-07-17 claim, or the
+    fact something reverses it) may fail it. Never relax these anchors down
+    to nothing to make a failure disappear; that defeats the purpose of the
+    guard.
+    """
+
+    def test_row_names_the_decision_section(self):
+        """The row's source still contains a Decision section."""
+        assert "Decision:" in _wkstate_row_source()
+
+    def test_row_names_the_reversal_condition(self):
+        """The row's source still states that something reverses the decision.
+
+        Matched case-insensitively on the stem ``revers`` so a reword to
+        "reversal", "reverses" or "reversed" keeps passing, which is this
+        class's stated design goal; only deleting the clause fails it. An
+        earlier draft also required the word "running", which was dropped:
+        the row uses that word three times outside this clause, so it
+        survived the clause's deletion and could never be the half of the
+        assertion that fired.
+        """
+        assert "revers" in _wkstate_row_source().lower()
+
+    def test_row_names_the_correction_section_and_its_date(self):
+        """The row's source still carries a Correction section voiding the 2026-07-17 claim."""
+        source = _wkstate_row_source()
+        assert "Correction:" in source
+        assert "2026-07-17" in source
 
 
 def _dp(identity: str, dp_port=0, dp_code: int = 10, data_type: str = "U8") -> dict:
@@ -1696,3 +1915,32 @@ class TestRssiTransformWidths:
     def test_a_positive_reading_is_still_suppressed(self):
         """A non-negative result stays out of range rather than being shown."""
         assert self._displayed(0x0A) is None
+
+
+class TestRunStateSpecHasOneSource:
+    """generic_control's run-state readback and the opt-in sensor resolve one object.
+
+    Structural verification, not a reconciliation test: generic_control
+    imports _IDENTITY_SPECS from generic_entities rather than keeping a
+    second table of its own, so the two paths cannot disagree about
+    run-state semantics because there is only one object to read, not
+    because a test compares two copies for equality. A failure here means
+    someone introduced a second copy of the semantics somewhere in the
+    module graph.
+    """
+
+    def test_generic_control_reads_the_same_identity_specs_object(self):
+        """An identity assertion, not an equality assertion.
+
+        A copied dict would compare equal and would be exactly the second
+        table generic_control's module docstring says must not exist.
+        """
+        assert generic_control_module._IDENTITY_SPECS is generic_entities_module._IDENTITY_SPECS
+
+    def test_run_state_identity_is_a_curated_row(self):
+        """RUN_STATE_IDENTITY resolves through _IDENTITY_SPECS to one spec object with a callable transform."""
+        identity = generic_control_module.RUN_STATE_IDENTITY
+        assert identity in generic_entities_module._IDENTITY_SPECS
+        spec = generic_entities_module._IDENTITY_SPECS[identity]
+        assert generic_control_module._IDENTITY_SPECS[identity] is spec
+        assert callable(spec.transform)

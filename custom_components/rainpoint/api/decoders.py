@@ -715,9 +715,12 @@ def decode_htv210b_dp_state(raw: str) -> dict | None:
 # (30): the decoder must not read any of them. The first three are constant
 # or unpinned across both capture corpora, so their meaning is unverified and
 # publishing them would be a guess. STA_WKSTATE is omitted for a different
-# reason: its curated catalog row is evidenced against other model families,
-# so decode_hic801w derives idle from STA_WATER_ZONES b0 instead, which keeps
-# this decoder independent of that row.
+# reason: decode_hic801w derives idle from STA_WATER_ZONES b0 instead of
+# reading a work-state byte, which keeps this decoder independent of the
+# curated catalog row that identity feeds. HIC801W is one of the decoder
+# paths that row's evidence note now cites, with the evidence coming from
+# the capture corpus documented there rather than from any byte this decoder
+# reads.
 _HIC801W_FIELD_DURATION = 19
 _HIC801W_FIELD_EVTIME = 21
 _HIC801W_FIELD_WATER_ZONES = 37
