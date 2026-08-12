@@ -556,6 +556,12 @@ class _EntityCategory:
 
 
 sys.modules["homeassistant.const"].EntityCategory = _EntityCategory
+# The literal Home Assistant writes onto the state of a registry row that no
+# live entity object holds. Pinned to its real value rather than left as a
+# MagicMock attribute because the leftover-row liveness gate compares the
+# attribute this names against an exact True, and a MagicMock key would never
+# match the one a test double puts in its attributes mapping.
+sys.modules["homeassistant.const"].ATTR_RESTORED = "restored"
 sys.modules["homeassistant.const"].PERCENTAGE = "%"
 sys.modules["homeassistant.const"].SIGNAL_STRENGTH_DECIBELS_MILLIWATT = "dBm"
 sys.modules["homeassistant.const"].UnitOfTime = MagicMock()
