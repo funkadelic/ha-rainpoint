@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import get_catalog_variant_codes
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
@@ -1834,3 +1835,32 @@ class TestRssiTransformWidths:
     def test_a_positive_reading_is_still_suppressed(self):
         """A non-negative result stays out of range rather than being shown."""
         assert self._displayed(0x0A) is None
+
+
+class TestRunStateSpecHasOneSource:
+    """generic_control's run-state readback and the opt-in sensor resolve one object.
+
+    Structural verification, not a reconciliation test: generic_control
+    imports _IDENTITY_SPECS from generic_entities rather than keeping a
+    second table of its own, so the two paths cannot disagree about
+    run-state semantics because there is only one object to read, not
+    because a test compares two copies for equality. A failure here means
+    someone introduced a second copy of the semantics somewhere in the
+    module graph.
+    """
+
+    def test_generic_control_reads_the_same_identity_specs_object(self):
+        """An identity assertion, not an equality assertion.
+
+        A copied dict would compare equal and would be exactly the second
+        table generic_control's module docstring says must not exist.
+        """
+        assert generic_control_module._IDENTITY_SPECS is generic_entities_module._IDENTITY_SPECS
+
+    def test_run_state_identity_is_a_curated_row(self):
+        """RUN_STATE_IDENTITY resolves through _IDENTITY_SPECS to one spec object with a callable transform."""
+        identity = generic_control_module.RUN_STATE_IDENTITY
+        assert identity in generic_entities_module._IDENTITY_SPECS
+        spec = generic_entities_module._IDENTITY_SPECS[identity]
+        assert generic_control_module._IDENTITY_SPECS[identity] is spec
+        assert callable(spec.transform)
