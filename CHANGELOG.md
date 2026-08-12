@@ -2,6 +2,51 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.16.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.15.0...v1.16.0) (2026-08-12)
+
+
+### What's new
+
+**Every zone now tells you how long it is set to run**
+
+- Each zone on a RainPoint valve hub has a new **Run Duration** reading. While the zone is watering it shows the length of the run, and it drops to zero once the zone closes.
+- It is recorded in history like any other sensor, so you can chart how long each zone ran, or use the value in an automation.
+- Works on the HTV213, HTV245, HTV345 and HTV405 valve hubs. Nothing about your existing zone entities changes, so no history is lost.
+
+**Support for the HIC801W irrigation controller**
+
+- An HIC801W on your account now appears in Home Assistant and reports what it is doing: which station is watering, how long the run is set for, when it ends, and how many stations the program has finished out of the total.
+- Each station also gets its own watering indicator, so you can see at a glance which one is on.
+- This release reads the controller only. Starting and stopping it from Home Assistant is not supported yet.
+
+**Also in this release**
+
+- **Sharing one login with the RainPoint app no longer leaves the integration signed out.** RainPoint allows only one active session per account, so if Home Assistant and your phone are using the same credentials, opening the app signs the integration out. Previously it stayed signed out until you stepped in. It now notices and signs itself back in within a few minutes. Setting up a dedicated Home Assistant account, as the README recommends, avoids the situation in the first place and is still the better arrangement.
+- **Hub details are filed correctly.** A hub's MAC address now appears as its network connection rather than as a serial number, which is where Home Assistant expects to find it.
+
+### Thanks
+
+Thanks to **@fredclappen** for the HIC801W payload captures and for confirming how the controller behaved during each run, which made this release's support for it possible.
+
+
+
+### Added
+
+* add read-only support for the HIC801W irrigation controller ([#163](https://github.com/funkadelic/ha-rainpoint/issues/163)) ([4cd6d68](https://github.com/funkadelic/ha-rainpoint/commit/4cd6d68386dc4c32d0db8e735e7fe13462559cd8))
+* **sensor:** surface per-zone run duration on the valve family ([#169](https://github.com/funkadelic/ha-rainpoint/issues/169)) ([c470b3d](https://github.com/funkadelic/ha-rainpoint/commit/c470b3da6478c2534fc2d531c6d568631baac4f5))
+
+
+### Fixed
+
+* **device:** report the hub MAC as a connection, not a serial number ([#165](https://github.com/funkadelic/ha-rainpoint/issues/165)) ([80e0bd0](https://github.com/funkadelic/ha-rainpoint/commit/80e0bd0ff792773ca1e58e850d557b79331cc2bd))
+* recover automatically when another login displaces the session ([b28f4b9](https://github.com/funkadelic/ha-rainpoint/commit/b28f4b991389b784846d9a1c27b5543a92ce2c3c))
+
+
+### Other Changes
+
+* **catalog:** refresh the product catalog snapshot ([#168](https://github.com/funkadelic/ha-rainpoint/issues/168)) ([6c94dd0](https://github.com/funkadelic/ha-rainpoint/commit/6c94dd07a4a50931d0cd9e794802bc7b640b671d))
+* record what the run-state reading is evidenced against ([#167](https://github.com/funkadelic/ha-rainpoint/issues/167)) ([2aae0ba](https://github.com/funkadelic/ha-rainpoint/commit/2aae0ba5d0bc02c53ebbc6a1a1aa7701dd325daa))
+
 ## [1.15.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.14.0...v1.15.0) (2026-08-10)
 
 
