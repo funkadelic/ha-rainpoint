@@ -47,12 +47,18 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # RAINPOINT_AREA_CODE is a repository variable, not a secret. It is a phone
+      # dial code (1 for the US), which is not sensitive, and holding it as a secret
+      # made the runner redact every occurrence of that digit in the log: the drift
+      # report came back reading "Fetched ***04 model entries" and listing models as
+      # "HTV2***3FRF", which is ambiguous and defeats the point of the report. An
+      # unset variable is an empty string, and the script already falls back to 1.
       - name: Run catalog freshness check
         if: steps.creds.outputs.skip == 'false' && !inputs.regenerate
         env:
           RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
           RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
-          RAINPOINT_AREA_CODE: ${{ secrets.RAINPOINT_AREA_CODE }}
+          RAINPOINT_AREA_CODE: ${{ vars.RAINPOINT_AREA_CODE }}
         run: python scripts/refresh_product_catalog.py --check
 
       # Regenerate-and-upload exists because the RainPoint endpoint is not reliably
@@ -64,7 +70,7 @@ jobs:
         env:
           RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
           RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
-          RAINPOINT_AREA_CODE: ${{ secrets.RAINPOINT_AREA_CODE }}
+          RAINPOINT_AREA_CODE: ${{ vars.RAINPOINT_AREA_CODE }}
         run: |
           python scripts/refresh_product_catalog.py
           git --no-pager diff --stat -- custom_components/rainpoint/api/data/product_catalog.json

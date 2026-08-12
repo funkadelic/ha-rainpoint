@@ -1275,8 +1275,8 @@ class TestCatalogEligibilityIsPinned:
     """
 
     EXPECTED: ClassVar[dict[tuple[str, str], tuple[str, ...]]] = {
-        ("HCS003FRF", "35"): ("STA_EVTIME", "STA_RSSI", "STA_WKSTATE"),
-        ("HCS024FRF", "295"): ("STA_BAT", "STA_RH", "STA_RSSI"),
+        ("HCS003FRF", "35"): ("STA_EVTIME", "STA_REPTIME", "STA_RSSI", "STA_WKSTATE"),
+        ("HCS024FRF", "295"): ("STA_BAT", "STA_REPTIME", "STA_RH", "STA_RSSI"),
         ("HWG004WRF", "34"): ("STA_EVTIME", "STA_RSSI", "STA_WKSTATE"),
     }
 
