@@ -194,17 +194,18 @@ def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
 
     Zone control lives on the valve/number platforms; the sensor platform
     surfaces the battery status word and RSSI these hubs carry in their status
-    frame, plus one water-usage entity per zone the frame actually reports.
-    The decoder leaves battery_percent/rssi_dbm absent when the frame lacks
-    them, so the entities read unknown rather than a false value.
+    frame, plus one water-usage entity and one run-duration entity per zone
+    the frame actually reports. The decoder leaves battery_percent/rssi_dbm
+    absent when the frame lacks them, so the entities read unknown rather
+    than a false value.
 
     Zones come from the decoded payload rather than the model name, mirroring
     valve.py and number.py, so a hub that reports fewer zones than its model
     implies grows no phantom entities. A zone the frame reports but carries no
-    usage record for still gets its entity, reading unknown: the only captured
-    HTV405FRF frame omits the usage records entirely, and an entity that reads
-    unknown states that plainly, where a missing entity would look like the
-    zone itself was not reported.
+    usage record for still gets its entities, reading unknown: the only
+    captured HTV405FRF frame omits the usage records entirely, and an entity
+    that reads unknown states that plainly, where a missing entity would look
+    like the zone itself was not reported.
     """
     entities = [
         RainPointBatterySensor(coordinator, key, info, base_slug),
@@ -213,6 +214,7 @@ def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
     zones = (info.get("data") or {}).get("zones")
     if isinstance(zones, dict):
         entities.extend(RainPointZoneWaterUsageSensor(coordinator, key, info, base_slug, zone_num) for zone_num in sorted(zones))
+        entities.extend(RainPointZoneRunDurationSensor(coordinator, key, info, base_slug, zone_num) for zone_num in sorted(zones))
     return entities
 
 
@@ -1555,6 +1557,59 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
         attrs["last_usage_counts"] = zone.get("last_usage_counts")
         attrs["gallons_per_count"] = _USAGE_GALLONS_PER_COUNT
         return attrs
+
+
+class RainPointZoneRunDurationSensor(RainPointZoneSensorBase):
+    """The current run's length, in seconds, for one valve zone.
+
+    This is not a memory of the previous run. Every captured frame from both
+    the HTV245FRF and HTV345FRF/HTV405FRF reporters decodes the same way: an
+    open zone carries a non-zero duration_seconds and a closed zone carries
+    0, so the value returns to 0 the moment the zone closes rather than
+    holding the last run's length. A user wanting "how long did this zone
+    last run" answers it from this entity's own recorder history, not from
+    its live state.
+
+    SensorStateClass.MEASUREMENT is correct here for the same reason it is
+    correct on RainPointHicRunDurationSensor and wrong on
+    RainPointZoneWaterUsageSensor: this is a real quantity sampled over time,
+    not a per-run total that resets mid-cycle and would corrupt a meter if
+    recorded into long-term statistics.
+
+    A 0 reading is ambiguous by construction and that ambiguity is inherited
+    rather than fixable here: _extract_htv213_zones defaults a missing or
+    wrongly-typed duration datapoint to 0 rather than to absent, so a 0 read
+    from a live device cannot be told apart from a duration the frame never
+    reported. What this entity can and does guarantee is the absent case: a
+    missing zone record, or a frame whose decode produced no zones dict at
+    all, reads no state rather than a substituted 0.
+    """
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:timer-outline"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+        zone_num: int,
+    ) -> None:
+        """Name and key the run-duration sensor for one zone."""
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
+        self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_run_duration"
+        self._attr_name = f"Zone {zone_num} Run Duration"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the zone's current run length in seconds, or None when the frame omits the zone."""
+        zone = self._zone_data
+        if not zone:
+            return None
+        return zone.get("duration_seconds")
 
 
 class RainPointZoneStateSensor(RainPointZoneSensorBase):

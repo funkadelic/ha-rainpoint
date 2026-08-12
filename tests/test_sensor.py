@@ -12,7 +12,7 @@ from homeassistant.const import UnitOfTime
 
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
-from custom_components.rainpoint.api import decode_hic801w, decode_htv213frf_valve
+from custom_components.rainpoint.api import RainPointApiError, decode_hic801w, decode_htv213frf_valve
 from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
@@ -84,6 +84,7 @@ from custom_components.rainpoint.sensor import (
     RainPointTempHumHumidityLowSensor,
     RainPointTempHumLowSensor,
     RainPointUnknownSensor,
+    RainPointZoneRunDurationSensor,
     RainPointZoneStateSensor,
     RainPointZoneWaterUsageSensor,
     _LateSensorEntityAdder,
@@ -99,6 +100,7 @@ from tests.payload_samples import (
     SAMPLE_HIC801W_SECOND_UNIT_FRAMES,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
+    SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD,
     SAMPLE_HTV345_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
 )
@@ -1746,6 +1748,93 @@ class TestWiderValveFamilyUsageEntities:
         assert len(usage) == 4
         assert all(e.native_value is None for e in usage)
         assert all(e.extra_state_attributes["last_usage_counts"] is None for e in usage)
+
+
+class TestZoneRunDurationAcrossAFailedPoll:
+    """The new run-duration entity, proven end to end across a failed poll.
+
+    Drives the real construct-then-first-refresh-then-setup-then-refresh
+    order rather than injecting a coordinator.data snapshot, the same
+    discipline TestSilentEntityAppearsWithinTheSession uses and for the same
+    reason: a snapshot pre-set past whatever threshold matters can certify
+    behaviour a live sequence never reaches.
+    """
+
+    _MID = 200
+    _ADDR = 1
+    _SENSOR_KEY = "100_200_1"
+
+    @classmethod
+    def _hub_record(cls):
+        """One real HTV245 hub record listing its single zone-bearing child."""
+        return {
+            "mid": cls._MID,
+            "name": "Hub A",
+            "deviceName": "d",
+            "productKey": "pk",
+            "homeName": "H",
+            "subDevices": [{"addr": cls._ADDR, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"}],
+        }
+
+    @classmethod
+    def _status(cls):
+        """A multipleDeviceStatus reading for the hub: zone 1 closed, zone 2 mid-run."""
+        return [
+            {
+                "mid": cls._MID,
+                "subDeviceStatus": [{"id": "D01", "value": SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD, "time": 1785420002247}],
+            }
+        ]
+
+    @classmethod
+    def _build(cls):
+        """Return (coordinator, hass, entry, client) for one real HTV245 hub."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [cls._hub_record()]
+        client.get_multiple_device_status.return_value = cls._status()
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+        entry.options = {}
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"test_entry": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["test_entry"]["coordinator"] = coordinator
+        return coordinator, hass, entry, client
+
+    @staticmethod
+    def _durations(captured):
+        """Return every RainPointZoneRunDurationSensor offered so far, in capture order."""
+        return [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)]
+
+    @pytest.mark.asyncio
+    async def test_run_duration_survives_a_failed_poll(self):
+        """Construct, first refresh, setup, then a failing refresh, asserted between every step."""
+        coordinator, hass, entry, client = self._build()
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+        await coordinator.async_config_entry_first_refresh()
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        durations = self._durations(captured)
+        assert len(durations) == 2
+        assert [e.native_value for e in durations] == [0, 2940]
+        assert durations[0]._attr_unique_id == "rainpoint_100_200_1_zone1_run_duration"
+        assert durations[0]._attr_name == "Zone 1 Run Duration"
+
+        data_before = coordinator.data
+        client.get_multiple_device_status.side_effect = RainPointApiError("boom")
+
+        await coordinator.async_refresh()
+
+        assert coordinator.last_update_success is False
+        assert coordinator.data is data_before
+        assert [e.native_value for e in durations] == [0, 2940]
+        assert all(entity.available for entity in durations)
 
 
 class TestHtv210bDispatch:
