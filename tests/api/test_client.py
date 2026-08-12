@@ -1381,31 +1381,100 @@ class TestEverySessionRejectionIsRouted:
 
     _CLIENT_PATH = Path(__file__).resolve().parent.parent.parent / "custom_components" / "rainpoint" / "api" / "client.py"
 
+    # Stand-in sources for the negative cases below. They exist so the scan's
+    # ability to FAIL is proven by the suite rather than by a one-time manual
+    # check: a guard nobody has watched go red is a guard nobody knows works.
+    _FORGETFUL_SOURCE = '''
+class RainPointClient:
+    """A stand-in client whose second method forgets the predicate."""
+
+    async def compliant(self):
+        """Raise on a non-zero code and route it through the predicate."""
+        if data["code"] != 0:
+            self._maybe_invalidate_token(data["code"], request_token)
+            raise RainPointApiError("failed")
+
+    async def forgetful(self):
+        """Raise on a non-zero code without routing it through the predicate."""
+        if data["code"] != 0:
+            raise RainPointApiError("failed")
+'''
+
+    _REVERSED_GUARD_SOURCE = '''
+class RainPointClient:
+    """A stand-in client whose guard is written with the constant on the left."""
+
+    async def reversed_guard(self):
+        """Raise on a non-zero code written as 0 != code, without the predicate."""
+        if 0 != data["code"]:
+            raise RainPointApiError("failed")
+'''
+
     @classmethod
-    def _client_class_node(cls) -> ast.ClassDef:
-        """Return the RainPointClient ClassDef node from the client module's source."""
-        tree = ast.parse(cls._CLIENT_PATH.read_text())
+    def _client_class_node(cls, source: str | None = None) -> ast.ClassDef:
+        """Return the RainPointClient ClassDef node from a client source.
+
+        Passing None reads the real api/client.py. Passing a source string is
+        what lets the negative tests below drive fabricated methods through the
+        same scan the real one uses.
+        """
+        tree = ast.parse(cls._CLIENT_PATH.read_text() if source is None else source)
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and node.name == "RainPointClient":
                 return node
-        raise AssertionError("RainPointClient class not found in api/client.py")
+        raise AssertionError("RainPointClient class not found in the scanned source")
 
     @staticmethod
     def _compares_to_zero(test: ast.expr) -> bool:
-        """True when test is a bare "... != 0" comparison.
+        """True when test is a bare inequality against 0, in either orientation.
 
         Distinguishes a response-code guard from an HTTP-status guard
         structurally (the wire test each method actually branches on) rather
         than by the raised message's wording, which the set_device_state
         method already shows is not uniform: its message names data.get('msg')
         rather than the word "code".
+
+        Matches both "code != 0" and the reversed "0 != code". The reversed
+        form is unconventional, but recognizing only one orientation would drop
+        a method out of the scan silently instead of flagging it, turning the
+        guard's own blind spot into the unrecoverable session it exists to
+        prevent.
         """
         if not isinstance(test, ast.Compare):
             return False
-        return any(
+        if any(
             isinstance(op, ast.NotEq) and isinstance(comparator, ast.Constant) and comparator.value == 0
             for op, comparator in zip(test.ops, test.comparators, strict=True)
+        ):
+            return True
+        return (
+            len(test.ops) == 1
+            and isinstance(test.ops[0], ast.NotEq)
+            and isinstance(test.left, ast.Constant)
+            and test.left.value == 0
         )
+
+    @classmethod
+    def _scan(cls, source: str | None = None) -> tuple[list[str], list[str]]:
+        """Return the in-scope method names and those missing the predicate.
+
+        One helper so the real scan and the negative cases below cannot drift
+        apart: a fabricated omission is only evidence if the code that catches
+        it is the same code that guards api/client.py.
+        """
+        class_node = cls._client_class_node(source)
+        methods = [
+            node
+            for node in class_node.body
+            if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
+            # A login response is not token-gated -- there is no existing
+            # session to invalidate on a login failure -- so _login is
+            # deliberately excluded from this scan rather than routed.
+            and node.name != "_login"
+        ]
+        in_scope = [method for method in methods if cls._raises_on_nonzero_code(method)]
+        missing = [method.name for method in in_scope if not cls._calls_maybe_invalidate_token(method)]
+        return [method.name for method in in_scope], missing
 
     @classmethod
     def _raises_on_nonzero_code(cls, func: ast.AsyncFunctionDef | ast.FunctionDef) -> bool:
@@ -1427,24 +1496,35 @@ class TestEverySessionRejectionIsRouted:
 
     def test_every_code_based_raise_routes_through_the_predicate(self):
         """A method that raises on a non-zero code without invalidating the token fails here."""
-        class_node = self._client_class_node()
-        methods = [
-            node
-            for node in class_node.body
-            if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
-            # A login response is not token-gated -- there is no existing
-            # session to invalidate on a login failure -- so _login is
-            # deliberately excluded from this scan rather than routed.
-            and node.name != "_login"
-        ]
+        in_scope, missing = self._scan()
 
-        in_scope = [method for method in methods if self._raises_on_nonzero_code(method)]
         # Guards against a parsing change making this vacuously green: the
         # scan must actually have found the eleven methods it exists to cover.
         assert len(in_scope) >= 11
-
-        missing = [method.name for method in in_scope if not self._calls_maybe_invalidate_token(method)]
         assert missing == []
+
+    def test_the_scan_flags_a_method_that_omits_the_predicate(self):
+        """The scan goes red on an omission, proven against a fabricated client rather than by hand.
+
+        Without this, the guard above is only known to pass. A scan that could
+        never fail would report the same green on a client where every call
+        site had been deleted.
+        """
+        in_scope, missing = self._scan(self._FORGETFUL_SOURCE)
+
+        assert in_scope == ["compliant", "forgetful"]
+        assert missing == ["forgetful"]
+
+    def test_the_scan_flags_an_omission_written_with_the_constant_on_the_left(self):
+        """A guard spelled 0 != code is scanned, not skipped.
+
+        An unrecognized orientation would drop the method out of the scan
+        entirely, so the omission would read as green rather than as a finding.
+        """
+        in_scope, missing = self._scan(self._REVERSED_GUARD_SOURCE)
+
+        assert in_scope == ["reversed_guard"]
+        assert missing == ["reversed_guard"]
 
 
 class TestAuthHeaders:
