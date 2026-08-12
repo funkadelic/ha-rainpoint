@@ -82,16 +82,58 @@ class TestRainPointHubDevice:
         info = self._make_hub(mac="AA:BB:CC:DD:EE:FF").device_info
         assert info["connections"] == {("mac", "aa:bb:cc:dd:ee:ff")}
 
-    @pytest.mark.parametrize("mac", [None, "", "   "])
+    @pytest.mark.parametrize(
+        "mac",
+        [None, "", "   ", "N/A", "not-a-mac", "unknown", "AA:BB:CC:DD:EE", "zz:zz:zz:zz:zz:zz"],
+    )
     def test_hub_without_a_usable_mac_declares_no_connections(self, mac):
-        """A missing, empty or whitespace mac yields no connection at all.
+        """Anything that is not a real address yields no connection at all.
 
-        The empty spellings matter more than the missing one: a connection to
-        the empty string would be identical across every hub in that state,
-        and Home Assistant would merge them into a single device row.
+        The nonempty junk matters more than the missing key. format_mac hands
+        back whatever it cannot parse, so "N/A" survives the call looking
+        exactly like a formatted address to a truthiness check, and the
+        truncated and non-hex spellings are here because format_mac's own
+        recognition is by length and separator count rather than by content.
         """
         info = self._make_hub(mac=mac).device_info
         assert "connections" not in info
+
+    @pytest.mark.parametrize("placeholder", ["", "N/A", "unknown"])
+    def test_two_hubs_sharing_a_placeholder_mac_are_not_merged(self, placeholder):
+        """The same placeholder on two hubs produces no shared connection.
+
+        This is the consequence the guard above exists for, asserted on the
+        real pair rather than on one record at a time. A connection tuple is
+        Home Assistant's instruction to treat two device entries as one
+        device, so two hubs registering ("mac", "N/A") would collapse into a
+        single row and one of them would lose its entities. Their
+        identifiers still differ, which is what keeps them apart once no
+        connection is emitted.
+        """
+        first = self._make_hub(hid=100, mid=1001, mac=placeholder).device_info
+        second = self._make_hub(hid=100, mid=2002, mac=placeholder).device_info
+        assert "connections" not in first
+        assert "connections" not in second
+        assert first["identifiers"] != second["identifiers"]
+
+    @pytest.mark.parametrize(
+        ("mac", "expected"),
+        [
+            ("a0:a3:b3:7c:af:fc", "a0:a3:b3:7c:af:fc"),
+            ("A0:A3:B3:7C:AF:FC", "a0:a3:b3:7c:af:fc"),
+            ("A0-A3-B3-7C-AF-FC", "a0:a3:b3:7c:af:fc"),
+            ("A0A3B37CAFFC", "a0:a3:b3:7c:af:fc"),
+        ],
+    )
+    def test_every_spelling_of_one_address_reaches_the_registry_identically(self, mac, expected):
+        """The four spellings format_mac accepts all land on one tuple.
+
+        Guarding the tightened check against over-rejection: the separator
+        and case variants are real cloud spellings, and each has to survive
+        as a connection rather than be discarded alongside the junk.
+        """
+        info = self._make_hub(mac=mac).device_info
+        assert info["connections"] == {("mac", expected)}
 
     def test_hub_registry_identity_does_not_depend_on_the_mac(self):
         """identifiers is the same with and without a mac.

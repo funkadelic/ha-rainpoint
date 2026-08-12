@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import re
+
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo, format_mac
 from homeassistant.helpers.entity import Entity
 
 from .const import DOMAIN, HUB_IDENTIFIER_PREFIX, HUB_UNIQUE_ID_PREFIX
+
+# What format_mac emits for an address it recognised: six lowercase hex pairs,
+# colon separated. It is matched against rather than trusted because format_mac
+# returns its input unchanged for anything it cannot parse, so a cloud record
+# carrying "N/A" or an empty string arrives back looking like a MAC to any
+# check that only asks whether the call returned something.
+_NORMALISED_MAC_RE = re.compile(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}")
 
 
 def build_sub_device_info(sensor_info: dict) -> DeviceInfo:
@@ -158,15 +167,20 @@ class RainPointHubDevice(Entity):
         usable mac, following via_device in build_sub_device_info. format_mac
         normalises to the lowercase colon-separated spelling the registry
         compares on, so a cloud record's uppercase mac still matches another
-        integration's lowercase one. It returns its input unchanged when that
-        input is not MAC-shaped, so the truthiness check is on the formatted
-        value: an empty or whitespace mac yields no connection at all rather
-        than a connection to the empty string, which would match every other
-        hub in the same state and merge them into one device row.
+        integration's lowercase one.
+
+        The result is then matched against _NORMALISED_MAC_RE rather than
+        merely tested for truthiness, because format_mac returns its input
+        unchanged for anything it does not recognise. A record carrying "",
+        "   " or "N/A" would otherwise register a connection to that literal
+        string, and every hub whose record carries the same placeholder would
+        share one connection tuple, which is Home Assistant's instruction to
+        merge them all into a single device row. A junk mac must therefore
+        produce no connection at all, exactly as a missing one does.
         """
         optional: dict = {}
-        mac = format_mac(self._hub_info.get("mac") or "").strip()
-        if mac:
+        mac = format_mac(self._hub_info.get("mac") or "")
+        if _NORMALISED_MAC_RE.fullmatch(mac):
             optional["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
         return DeviceInfo(
             identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{self._hub_info['hid']}_{self._hub_info['mid']}")},
