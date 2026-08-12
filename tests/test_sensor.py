@@ -1781,10 +1781,9 @@ class TestZoneRunDurationSensor:
     async def test_duration_is_reported_in_seconds_and_displayed_in_minutes(self):
         """The native reading stays in the device's own unit while the default display matches how a run is set.
 
-        The wire is second-resolution and a run commanded outside Home
-        Assistant need not land on a whole minute, so seconds is what gets
-        recorded. Minutes is only the suggested display, which a user can
-        override per entity, so nothing is lost by presenting it that way.
+        The wire is second-resolution, so seconds is what gets recorded and
+        history holds the reported number rather than a derived one. Minutes
+        is only the suggested display, which a user can override per entity.
         """
         zones = {1: {"open": False, "duration_seconds": 0}}
         duration = next(e for e in await self._setup(zones) if isinstance(e, RainPointZoneRunDurationSensor))

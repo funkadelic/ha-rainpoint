@@ -1568,12 +1568,15 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
 class RainPointZoneRunDurationSensor(RainPointZoneSensorBase):
     """The current run's length for one valve zone, recorded in seconds and shown in minutes.
 
-    Seconds is the device's own resolution and is what gets stored: the TLV
-    duration values are second-resolution, and a run started from the
-    RainPoint app or the hub's own schedule is under no obligation to land
-    on a whole minute, so rounding on the way in would discard a reading the
-    device actually reported. Minutes is only the suggested display, chosen
-    to match how a run is set here, and any user can override it per entity.
+    Seconds is what the wire reports and so is what gets stored: the TLV
+    duration values are second-resolution, and converting on the way in
+    would put a derived number into recorder history in place of the
+    reported one. No commanding surface known today can produce a value
+    that is not a whole number of minutes, since the RainPoint app offers
+    only minutes and hours and this integration's own duration number is
+    fixed to whole minutes, so the minute display is exact rather than
+    rounded. Minutes is only the suggested display and any user can
+    override it per entity.
 
     This is not a memory of the previous run. Every captured frame from both
     the HTV245FRF and HTV345FRF/HTV405FRF reporters decodes the same way: an
