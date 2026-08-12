@@ -36,6 +36,20 @@ def _mock_response(json_data: dict, status: int = 200) -> AsyncMock:
     return mock_json_response(json_data, status)
 
 
+def _login_json_body(token: str = "rotated-token", refresh: str = "rotated-refresh") -> dict:
+    """Return a well-formed successful login response body.
+
+    One implementation so the classes that mock a login cannot drift apart on
+    the shape of the body they hand back. The token values are arguments
+    because the callers assert on them.
+    """
+    return {
+        "code": 0,
+        "data": {"token": token, "refreshToken": refresh, "tokenExpired": 3600},
+        "ts": 1700000000000,
+    }
+
+
 class TestControlWorkModeCode4:
     """controlWorkMode must treat response code 4 as success, not error.
 
@@ -839,14 +853,6 @@ class TestLoginThrottling:
 class TestReloginListeners:
     """Re-login notifies registered listeners; initial login does not."""
 
-    @staticmethod
-    def _login_json_body() -> dict:
-        return {
-            "code": 0,
-            "data": {"token": "tok", "refreshToken": "ref", "tokenExpired": 3600},
-            "ts": 1700000000000,
-        }
-
     @pytest.mark.asyncio
     async def test_initial_login_does_not_fire_listener(self):
         """The first _login() of a session (no prior token) does not invoke listeners."""
@@ -856,7 +862,7 @@ class TestReloginListeners:
         listener = MagicMock()
         client.register_relogin_listener(listener)
 
-        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+        client._session.post = MagicMock(return_value=_mock_response(_login_json_body("tok", "ref")))
 
         await client._login()
 
@@ -872,7 +878,7 @@ class TestReloginListeners:
         listener = MagicMock()
         client.register_relogin_listener(listener)
 
-        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+        client._session.post = MagicMock(return_value=_mock_response(_login_json_body("tok", "ref")))
 
         await client._login()
 
@@ -889,7 +895,7 @@ class TestReloginListeners:
         client.register_relogin_listener(listener_one)
         client.register_relogin_listener(listener_two)
 
-        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+        client._session.post = MagicMock(return_value=_mock_response(_login_json_body("tok", "ref")))
 
         await client._login()
 
@@ -908,7 +914,7 @@ class TestReloginListeners:
         client.register_relogin_listener(raising)
         client.register_relogin_listener(after)
 
-        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+        client._session.post = MagicMock(return_value=_mock_response(_login_json_body("tok", "ref")))
 
         with caplog.at_level(logging.ERROR):
             await client._login()  # must not raise despite the raising listener
@@ -1106,14 +1112,6 @@ class TestDisplacedSessionRecovery:
     second time after the rejection, logs back in on its own and succeeds.
     """
 
-    @staticmethod
-    def _login_json_body() -> dict:
-        return {
-            "code": 0,
-            "data": {"token": "rotated-token", "refreshToken": "rotated-refresh", "tokenExpired": 3600},
-            "ts": 1700000000000,
-        }
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize("code", sorted(_SESSION_REJECTED_CODES))
     async def test_recovers_on_the_next_call(self, code):
@@ -1132,7 +1130,7 @@ class TestDisplacedSessionRecovery:
         rejection = _mock_response({"code": code, "msg": "session rejected"})
         success = _mock_response({"code": 0, "data": [{"mid": 100, "model": "HTV245FRF", "subDevices": []}]})
         client._session.get = MagicMock(side_effect=[rejection, success])
-        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+        client._session.post = MagicMock(return_value=_mock_response(_login_json_body()))
 
         with pytest.raises(RainPointApiError, match=f"getDeviceByHid failed: code {code}"):
             await client.get_devices_by_hid(hid=42)
@@ -1206,7 +1204,7 @@ class TestDisplacedSessionRecovery:
 
         client.ensure_logged_in = real_ensure_logged_in
         client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": []}))
-        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+        client._session.post = MagicMock(return_value=_mock_response(_login_json_body()))
 
         await client.get_devices_by_hid(hid=42)
 
@@ -1328,14 +1326,6 @@ class TestDisplacedSessionSurvivesReload:
     persisted dict, not a fresh assertion on the first client's own state.
     """
 
-    @staticmethod
-    def _login_json_body() -> dict:
-        return {
-            "code": 0,
-            "data": {"token": "rotated-token", "refreshToken": "rotated-refresh", "tokenExpired": 3600},
-            "ts": 1700000000000,
-        }
-
     @pytest.mark.asyncio
     async def test_survives_reload(self):
         """A second client built from the invalidation-updated persisted dict re-authenticates."""
@@ -1360,7 +1350,7 @@ class TestDisplacedSessionSurvivesReload:
         assert second_client._token_valid() is False
 
         second_client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": []}))
-        second_client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+        second_client._session.post = MagicMock(return_value=_mock_response(_login_json_body()))
 
         await second_client.get_devices_by_hid(hid=42)
 
