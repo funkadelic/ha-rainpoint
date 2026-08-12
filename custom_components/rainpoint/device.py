@@ -16,6 +16,33 @@ from .const import DOMAIN, HUB_IDENTIFIER_PREFIX, HUB_UNIQUE_ID_PREFIX
 # check that only asks whether the call returned something.
 _NORMALISED_MAC_RE = re.compile(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}")
 
+# The all-zero address, and the broadcast and multicast addresses it shares a
+# shape with, are the placeholders that survive the syntax check. No network
+# interface owns one, so several hubs can report the same value.
+_ZERO_MAC = "00:00:00:00:00:00"
+
+# Bit 0 of the first octet is the multicast bit. Bit 1 marks a locally
+# administered address, which a real interface can legitimately carry and
+# which stays acceptable.
+_MULTICAST_BIT = 0b1
+
+
+def _identifies_one_hub(mac: str) -> bool:
+    """Return whether a normalised mac can stand for exactly one hub.
+
+    A connection tuple is Home Assistant's instruction to treat two device
+    entries as the same device, so the value behind it has to be unique to a
+    single piece of hardware. Passing the syntax check is not enough for
+    that: the all-zero address and the multicast range are well formed and
+    still belong to no interface, so two hubs reporting either would be
+    merged into one device row and one of them would lose its entities.
+    """
+    if not _NORMALISED_MAC_RE.fullmatch(mac):
+        return False
+    if mac == _ZERO_MAC:
+        return False
+    return not int(mac[:2], 16) & _MULTICAST_BIT
+
 
 def build_sub_device_info(sensor_info: dict) -> DeviceInfo:
     """Return the device registry entry for one sub-device.
@@ -169,18 +196,20 @@ class RainPointHubDevice(Entity):
         compares on, so a cloud record's uppercase mac still matches another
         integration's lowercase one.
 
-        The result is then matched against _NORMALISED_MAC_RE rather than
-        merely tested for truthiness, because format_mac returns its input
-        unchanged for anything it does not recognise. A record carrying "",
-        "   " or "N/A" would otherwise register a connection to that literal
-        string, and every hub whose record carries the same placeholder would
-        share one connection tuple, which is Home Assistant's instruction to
-        merge them all into a single device row. A junk mac must therefore
-        produce no connection at all, exactly as a missing one does.
+        The result is then put through _identifies_one_hub rather than merely
+        tested for truthiness, because format_mac returns its input unchanged
+        for anything it does not recognise. A record carrying "", "   " or
+        "N/A" would otherwise register a connection to that literal string,
+        and every hub whose record carries the same placeholder would share
+        one connection tuple, which is Home Assistant's instruction to merge
+        them all into a single device row. The same is true of the well formed
+        placeholders, the all-zero and broadcast addresses, which is why
+        matching the syntax is not on its own enough to qualify. A junk mac
+        must produce no connection at all, exactly as a missing one does.
         """
         optional: dict = {}
         mac = format_mac(self._hub_info.get("mac") or "")
-        if _NORMALISED_MAC_RE.fullmatch(mac):
+        if _identifies_one_hub(mac):
             optional["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
         return DeviceInfo(
             identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{self._hub_info['hid']}_{self._hub_info['mid']}")},

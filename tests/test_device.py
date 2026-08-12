@@ -84,7 +84,19 @@ class TestRainPointHubDevice:
 
     @pytest.mark.parametrize(
         "mac",
-        [None, "", "   ", "N/A", "not-a-mac", "unknown", "AA:BB:CC:DD:EE", "zz:zz:zz:zz:zz:zz"],
+        [
+            None,
+            "",
+            "   ",
+            "N/A",
+            "not-a-mac",
+            "unknown",
+            "AA:BB:CC:DD:EE",
+            "zz:zz:zz:zz:zz:zz",
+            "00:00:00:00:00:00",
+            "FF:FF:FF:FF:FF:FF",
+            "01:00:5e:00:00:fb",
+        ],
     )
     def test_hub_without_a_usable_mac_declares_no_connections(self, mac):
         """Anything that is not a real address yields no connection at all.
@@ -94,11 +106,16 @@ class TestRainPointHubDevice:
         exactly like a formatted address to a truthiness check, and the
         truncated and non-hex spellings are here because format_mac's own
         recognition is by length and separator count rather than by content.
+
+        The last three are the ones a syntax check alone lets through. The
+        all-zero address is a placeholder, and the broadcast and multicast
+        addresses are addressed to a group rather than to an interface, so
+        none of them belongs to a single hub either.
         """
         info = self._make_hub(mac=mac).device_info
         assert "connections" not in info
 
-    @pytest.mark.parametrize("placeholder", ["", "N/A", "unknown"])
+    @pytest.mark.parametrize("placeholder", ["", "N/A", "unknown", "00:00:00:00:00:00"])
     def test_two_hubs_sharing_a_placeholder_mac_are_not_merged(self, placeholder):
         """The same placeholder on two hubs produces no shared connection.
 
@@ -123,14 +140,20 @@ class TestRainPointHubDevice:
             ("A0:A3:B3:7C:AF:FC", "a0:a3:b3:7c:af:fc"),
             ("A0-A3-B3-7C-AF-FC", "a0:a3:b3:7c:af:fc"),
             ("A0A3B37CAFFC", "a0:a3:b3:7c:af:fc"),
+            ("02:1a:2b:3c:4d:5e", "02:1a:2b:3c:4d:5e"),
+            ("06:1a:2b:3c:4d:5e", "06:1a:2b:3c:4d:5e"),
         ],
     )
     def test_every_spelling_of_one_address_reaches_the_registry_identically(self, mac, expected):
-        """The four spellings format_mac accepts all land on one tuple.
+        """Every acceptable address reaches the registry unchanged in meaning.
 
         Guarding the tightened check against over-rejection: the separator
         and case variants are real cloud spellings, and each has to survive
         as a connection rather than be discarded alongside the junk.
+
+        The last two are locally administered addresses, which an interface
+        can legitimately carry. They sit one bit away from the multicast
+        addresses the guard rejects, so they are here to hold that line.
         """
         info = self._make_hub(mac=mac).device_info
         assert info["connections"] == {("mac", expected)}
