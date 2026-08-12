@@ -12,7 +12,7 @@ import pytest
 
 import custom_components.rainpoint.api.product_catalog as product_catalog
 from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointThrottledError
-from custom_components.rainpoint.api.client import _USER_AGENT, _redact_secret
+from custom_components.rainpoint.api.client import _SESSION_REJECTED_CODES, _USER_AGENT, _redact_secret
 from tests.helpers import make_mock_session_client, mock_json_response
 
 # scripts/ is not a package (it's a standalone maintainer-tool directory, not
@@ -1094,6 +1094,71 @@ class TestNotTokenInvalidation:
 
         assert client._token == "T1"
         assert client._token_expires_at == expiry
+
+
+class TestDisplacedSessionRecovery:
+    """A displaced session recovers on its own next call, end to end.
+
+    Drives a session rejection through a real client method rather than
+    asserting on the constant: the proof is that get_devices_by_hid, called a
+    second time after the rejection, logs back in on its own and succeeds.
+    """
+
+    @staticmethod
+    def _login_json_body() -> dict:
+        return {
+            "code": 0,
+            "data": {"token": "rotated-token", "refreshToken": "rotated-refresh", "tokenExpired": 3600},
+            "ts": 1700000000000,
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("code", sorted(_SESSION_REJECTED_CODES))
+    async def test_recovers_on_the_next_call(self, code):
+        """Every recognized code re-authenticates on the call after the rejection.
+
+        Parametrized over the set itself, not over two literals, so a member
+        added later without a working recovery path fails this test.
+        """
+        client = _make_client()
+        client._token = "stale-token"
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        relogin_calls: list[None] = []
+        client.register_relogin_listener(lambda: relogin_calls.append(None))
+
+        rejection = _mock_response({"code": code, "msg": "session rejected"})
+        success = _mock_response({"code": 0, "data": [{"mid": 100, "model": "HTV245FRF", "subDevices": []}]})
+        client._session.get = MagicMock(side_effect=[rejection, success])
+        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        with pytest.raises(RainPointApiError, match=f"getDeviceByHid failed: code {code}"):
+            await client.get_devices_by_hid(hid=42)
+
+        assert client._token == "stale-token"
+        assert client._token_expires_at is None
+        assert client._token_valid() is False
+
+        result = await client.get_devices_by_hid(hid=42)
+
+        assert client._session.post.call_count == 1
+        assert len(relogin_calls) == 1
+        assert client._token == "rotated-token"
+        assert result == [{"mid": 100, "model": "HTV245FRF", "subDevices": []}]
+
+    @pytest.mark.asyncio
+    async def test_unrecognized_code_leaves_token_and_expiry_untouched(self):
+        """A code outside the recognized set raises without touching the token or expiry."""
+        client = _make_client()
+        client._token = "stale-token"
+        expires_at = client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client._session.get = MagicMock(return_value=_mock_response({"code": 3, "msg": "unrelated error"}))
+
+        with pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 3"):
+            await client.get_devices_by_hid(hid=42)
+
+        assert client._token == "stale-token"
+        assert client._token_expires_at == expires_at
 
 
 class TestAuthHeaders:

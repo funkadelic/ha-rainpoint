@@ -33,11 +33,17 @@ _LOGIN_COOLDOWN_SECONDS = 120
 # to a captured app version.
 _USER_AGENT = "okhttp/4.9.3"
 
-# The cloud returns this application code ("NOT_TOKEN") when the auth token is
-# missing or has been invalidated server-side -- which can happen before its
-# advertised local expiry, e.g. a login elsewhere under the same deviceId. It
-# means "re-authenticate", not "credentials are wrong".
-_NOT_TOKEN_CODE = 1001
+# Application codes the cloud returns when it is rejecting the session rather
+# than the request. 1001 ("NOT_TOKEN") means the auth token is missing or has
+# been invalidated server-side -- which can happen before its advertised local
+# expiry, e.g. a login elsewhere under the same deviceId. 1004 has been
+# observed carrying the same meaning when a concurrent login on the same
+# account displaces this session. Neither code's meaning is treated as a
+# settled fact here; recognition does not depend on knowing which numeric code
+# carries which case. The set is applied unconditionally to every endpoint
+# rather than gated per endpoint, and that is safe because the predicate below
+# acts only on the token that is still current.
+_SESSION_REJECTED_CODES = frozenset({1001, 1004})
 
 # The datapoint code controlWorkModeDP carries for a Bluetooth-backed valve
 # command. Every committed catalog variant declaring the CTL_BT_WATER control
@@ -158,7 +164,7 @@ class RainPointClient:
         return datetime.now(UTC) < (self._token_expires_at - timedelta(minutes=5))
 
     def _maybe_invalidate_token(self, code, request_token) -> None:
-        """Force a re-login when the server rejects the auth token (code 1001).
+        """Force a re-login when the server rejects the session (a recognized code).
 
         The local expiry is only advisory: a persisted token can be invalidated
         server-side before it expires. Expire -- but keep -- the cached token so
@@ -168,11 +174,11 @@ class RainPointClient:
         initial login would skip.
 
         Only act when the rejected request carried the token that is still
-        current: under concurrent requests a slow 1001 for an already-replaced
-        token must not invalidate the fresh one.
+        current: under concurrent requests a slow rejection for an
+        already-replaced token must not invalidate the fresh one.
         """
-        if code == _NOT_TOKEN_CODE and request_token is not None and request_token == self._token:
-            _LOGGER.info("RainPoint token rejected (NOT_TOKEN); forcing re-login on the next call")
+        if code in _SESSION_REJECTED_CODES and request_token is not None and request_token == self._token:
+            _LOGGER.info("RainPoint session rejected (code %s); forcing re-login on the next call", code)
             self._token_expires_at = None
 
     # --- login / auth ---
