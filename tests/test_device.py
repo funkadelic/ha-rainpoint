@@ -14,8 +14,13 @@ from tests.helpers import VALVE_ZONES_TLV_PAYLOAD
 class TestRainPointHubDevice:
     """Tests for RainPointHubDevice."""
 
-    def _make_hub(self, hid=100, name="My Hub", model="HTV0540FRF", mid=1001):
-        """Create a RainPointHubDevice with a mock coordinator via __new__."""
+    def _make_hub(self, hid=100, name="My Hub", model="HTV0540FRF", mid=1001, mac="AA:BB:CC:DD:EE:FF"):
+        """Create a RainPointHubDevice with a mock coordinator via __new__.
+
+        mac defaults to a well-formed address; pass None to build a record
+        that carries no mac key at all, which is how a cloud record missing
+        the field arrives.
+        """
         hub_info = {
             "hid": hid,
             "mid": mid,
@@ -23,8 +28,9 @@ class TestRainPointHubDevice:
             "model": model,
             "softVer": "2.0",
             "hardwareVersion": "1.0",
-            "mac": "AA:BB:CC:DD:EE:FF",
         }
+        if mac is not None:
+            hub_info["mac"] = mac
         # RainPointHubDevice inherits from Entity stub, so use __new__ to bypass
         # any super().__init__ that might call into MagicMock internals.
         hub = RainPointHubDevice.__new__(RainPointHubDevice)
@@ -51,6 +57,117 @@ class TestRainPointHubDevice:
         """device_info model should match hub_info model."""
         hub = self._make_hub(model="HTV0540FRF")
         assert hub.device_info["model"] == "HTV0540FRF"
+
+    def test_hub_mac_is_a_connection_and_not_a_serial_number(self):
+        """The MAC reaches the registry as a connection, leaving no serial.
+
+        Both halves are asserted together because the point of the pair is
+        that one replaced the other: asserting only the connection would
+        still pass while a MAC sat behind the "Serial number" label as well.
+        The cloud carries no manufacturer serial for a hub, so the key is
+        absent rather than holding some other value.
+        """
+        info = self._make_hub(mac="A0:A3:B3:7C:AF:FC").device_info
+        assert info["connections"] == {("mac", "a0:a3:b3:7c:af:fc")}
+        assert "serial_number" not in info
+
+    def test_hub_mac_is_normalised_to_the_spelling_the_registry_matches_on(self):
+        """An uppercase cloud mac is stored lowercase.
+
+        Home Assistant merges devices by comparing connection tuples
+        literally, so a hub registered under the cloud's uppercase spelling
+        would never match the same hardware another integration registered
+        in lowercase.
+        """
+        info = self._make_hub(mac="AA:BB:CC:DD:EE:FF").device_info
+        assert info["connections"] == {("mac", "aa:bb:cc:dd:ee:ff")}
+
+    @pytest.mark.parametrize(
+        "mac",
+        [
+            None,
+            "",
+            "   ",
+            "N/A",
+            "not-a-mac",
+            "unknown",
+            "AA:BB:CC:DD:EE",
+            "zz:zz:zz:zz:zz:zz",
+            "00:00:00:00:00:00",
+            "FF:FF:FF:FF:FF:FF",
+            "01:00:5e:00:00:fb",
+        ],
+    )
+    def test_hub_without_a_usable_mac_declares_no_connections(self, mac):
+        """Anything that is not a real address yields no connection at all.
+
+        The nonempty junk matters more than the missing key. format_mac hands
+        back whatever it cannot parse, so "N/A" survives the call looking
+        exactly like a formatted address to a truthiness check, and the
+        truncated and non-hex spellings are here because format_mac's own
+        recognition is by length and separator count rather than by content.
+
+        The last three are the ones a syntax check alone lets through. The
+        all-zero address is a placeholder, and the broadcast and multicast
+        addresses are addressed to a group rather than to an interface, so
+        none of them belongs to a single hub either.
+        """
+        info = self._make_hub(mac=mac).device_info
+        assert "connections" not in info
+
+    @pytest.mark.parametrize("placeholder", ["", "N/A", "unknown", "00:00:00:00:00:00"])
+    def test_two_hubs_sharing_a_placeholder_mac_are_not_merged(self, placeholder):
+        """The same placeholder on two hubs produces no shared connection.
+
+        This is the consequence the guard above exists for, asserted on the
+        real pair rather than on one record at a time. A connection tuple is
+        Home Assistant's instruction to treat two device entries as one
+        device, so two hubs registering ("mac", "N/A") would collapse into a
+        single row and one of them would lose its entities. Their
+        identifiers still differ, which is what keeps them apart once no
+        connection is emitted.
+        """
+        first = self._make_hub(hid=100, mid=1001, mac=placeholder).device_info
+        second = self._make_hub(hid=100, mid=2002, mac=placeholder).device_info
+        assert "connections" not in first
+        assert "connections" not in second
+        assert first["identifiers"] != second["identifiers"]
+
+    @pytest.mark.parametrize(
+        ("mac", "expected"),
+        [
+            ("a0:a3:b3:7c:af:fc", "a0:a3:b3:7c:af:fc"),
+            ("A0:A3:B3:7C:AF:FC", "a0:a3:b3:7c:af:fc"),
+            ("A0-A3-B3-7C-AF-FC", "a0:a3:b3:7c:af:fc"),
+            ("A0A3B37CAFFC", "a0:a3:b3:7c:af:fc"),
+            ("02:1a:2b:3c:4d:5e", "02:1a:2b:3c:4d:5e"),
+            ("06:1a:2b:3c:4d:5e", "06:1a:2b:3c:4d:5e"),
+        ],
+    )
+    def test_every_spelling_of_one_address_reaches_the_registry_identically(self, mac, expected):
+        """Every acceptable address reaches the registry unchanged in meaning.
+
+        Guarding the tightened check against over-rejection: the separator
+        and case variants are real cloud spellings, and each has to survive
+        as a connection rather than be discarded alongside the junk.
+
+        The last two are locally administered addresses, which an interface
+        can legitimately carry. They sit one bit away from the multicast
+        addresses the guard rejects, so they are here to hold that line.
+        """
+        info = self._make_hub(mac=mac).device_info
+        assert info["connections"] == {("mac", expected)}
+
+    def test_hub_registry_identity_does_not_depend_on_the_mac(self):
+        """identifiers is the same with and without a mac.
+
+        identifiers alone keys the device registry entry, so an install
+        upgrading into the connections change keeps its existing device row,
+        its entities and their history.
+        """
+        with_mac = self._make_hub(hid=100, mid=1001).device_info
+        without_mac = self._make_hub(hid=100, mid=1001, mac=None).device_info
+        assert with_mac["identifiers"] == without_mac["identifiers"] == {(DOMAIN, "hub_100_1001")}
 
     def test_hub_available_always_true(self):
         """Hub is always available if config exists."""
