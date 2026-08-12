@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from homeassistant.components.sensor import SensorDeviceClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+from homeassistant.const import UnitOfTime
 
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
-from custom_components.rainpoint.api import decode_htv213frf_valve
+from custom_components.rainpoint.api import decode_hic801w, decode_htv213frf_valve
 from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
@@ -22,6 +24,7 @@ from custom_components.rainpoint.const import (
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
     MODEL_HCS0528ARF,
+    MODEL_HIC801W,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
@@ -49,6 +52,11 @@ from custom_components.rainpoint.sensor import (
     RainPointFlowLastUsedSensor,
     RainPointFlowTotalSensor,
     RainPointFlowTotalTodaySensor,
+    RainPointHicCurrentStationSensor,
+    RainPointHicProgramStationsCompletedSensor,
+    RainPointHicProgramStationsSensor,
+    RainPointHicRunDurationSensor,
+    RainPointHicRunEndsAtSensor,
     RainPointIlluminanceSensor,
     RainPointMoisturePercentSensor,
     RainPointNotReportingSensor,
@@ -79,12 +87,17 @@ from custom_components.rainpoint.sensor import (
     RainPointZoneStateSensor,
     RainPointZoneWaterUsageSensor,
     _LateSensorEntityAdder,
+    _render_station_list,
     _slugify,
     async_setup_entry,
 )
 from tests.helpers import make_coordinator_data, make_hub_info, make_sensor_entry, make_silent_wrapper_hub_record
 from tests.payload_samples import (
     HWS019WRF_V2_PAYLOAD,
+    SAMPLE_HIC801W_IDLE_PAYLOAD,
+    SAMPLE_HIC801W_REPORTER_FRAMES,
+    SAMPLE_HIC801W_SECOND_UNIT_FRAMES,
+    SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV345_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
@@ -1803,6 +1816,337 @@ class TestHtv210bDispatch:
         await async_setup_entry(hass, entry, async_add_entities)
         assert [e for e in captured if isinstance(e, RainPointZoneStateSensor)] == []
         assert len(captured) == 3
+
+
+class TestHic801wDispatch:
+    """The HIC801W gets exactly the five sensor.py entities the factory names
+    (Current Station, Run Duration, Run Ends At, Program Stations, Program
+    Stations Completed), no battery or RSSI diagnostics (the platform
+    has no reading for either), and no generic or unsupported fallback."""
+
+    @staticmethod
+    def _entry(current_station=3):
+        """Build an HIC801W sensor entry with a decoded happy-path payload."""
+        return make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HIC801W,
+            sub_name="Irrigation Controller",
+            data={
+                "type": "irrigation_controller",
+                "rssi_dbm": None,
+                "raw_bytes": b"",
+                "current_station": current_station,
+                "program_stations": [1, 2, 3],
+                "program_stations_completed": [1],
+                "run_duration_seconds": 60,
+                "run_ends_at": "2026-08-10T20:28:04",
+                "decoder": "hic801w_hex",
+            },
+        )
+
+    async def _setup(self, current_station=3):
+        """Run sensor setup for an HIC801W entry and capture the created entities."""
+        sensor_key = "100_200_3"
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: self._entry(current_station)}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_creates_exactly_one_of_each_locked_sensor_plus_raw_payload(self):
+        """One of each of the five sensor.py entities, in the locked
+        unique-ID order, plus the unconditional raw payload diagnostic,
+        nothing else."""
+        captured = await self._setup()
+        stations = [e for e in captured if isinstance(e, RainPointHicCurrentStationSensor)]
+        assert len(stations) == 1
+        assert stations[0]._attr_unique_id == "rainpoint_100_200_3_current_station"
+        assert stations[0]._attr_name == "Current Station"
+        assert len([e for e in captured if isinstance(e, RainPointHicRunDurationSensor)]) == 1
+        assert len([e for e in captured if isinstance(e, RainPointHicRunEndsAtSensor)]) == 1
+        assert len([e for e in captured if isinstance(e, RainPointHicProgramStationsSensor)]) == 1
+        assert len([e for e in captured if isinstance(e, RainPointHicProgramStationsCompletedSensor)]) == 1
+        assert len([e for e in captured if isinstance(e, RainPointRawPayloadSensor)]) == 1
+        assert len(captured) == 6
+
+    @pytest.mark.asyncio
+    async def test_make_hic801w_entities_emits_its_suffixes_in_declared_order(self):
+        """_make_hic801w_entities returns the five sensors in the order its
+        docstring declares, so the emitted unique-ID suffixes read in that
+        same sequence."""
+        captured = await self._setup()
+        hic_classes = (
+            RainPointHicCurrentStationSensor,
+            RainPointHicRunDurationSensor,
+            RainPointHicRunEndsAtSensor,
+            RainPointHicProgramStationsSensor,
+            RainPointHicProgramStationsCompletedSensor,
+        )
+        hic_entities = [e for e in captured if isinstance(e, hic_classes)]
+        hic_suffixes = [e._attr_unique_id.removeprefix("rainpoint_100_200_3_") for e in hic_entities]
+        assert hic_suffixes == [
+            "current_station",
+            "run_duration",
+            "run_ends_at",
+            "program_stations",
+            "program_stations_completed",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_no_battery_rssi_unknown_or_zone_state_entities(self):
+        """No diagnostic pair and no fallback entity: this model has a real
+        factory, so RainPointUnknownSensor must never appear for it either."""
+        captured = await self._setup()
+        assert [e for e in captured if isinstance(e, RainPointBatterySensor)] == []
+        assert [e for e in captured if isinstance(e, RainPointRSSISensor)] == []
+        assert [e for e in captured if isinstance(e, RainPointUnknownSensor)] == []
+        assert [e for e in captured if isinstance(e, RainPointZoneStateSensor)] == []
+
+    @pytest.mark.asyncio
+    async def test_current_station_unique_id_is_the_base_slug_plus_its_suffix(self):
+        """RainPointHicCurrentStationSensor's id is the base slug for this
+        fixture's hid/mid/addr followed by _current_station."""
+        captured = await self._setup()
+        stations = [e for e in captured if isinstance(e, RainPointHicCurrentStationSensor)]
+        assert stations[0]._attr_unique_id == "rainpoint_100_200_3_current_station"
+
+
+_HIC801W_DATA_MISSING = object()
+
+
+class TestHicCurrentStationSensor:
+    """native_value's four branches, driven directly against constructed
+    entities rather than through platform setup."""
+
+    @staticmethod
+    def _sensor(current_station):
+        sensor_key = "100_200_3"
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HIC801W,
+            sub_name="Irrigation Controller",
+            data=None
+            if current_station is _HIC801W_DATA_MISSING
+            else {"type": "irrigation_controller", "current_station": current_station},
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: entry}))
+        return RainPointHicCurrentStationSensor(coordinator, sensor_key, entry, "100_200_3")
+
+    def test_idle_reads_none_string(self):
+        """b0 == 0 reads the declared ENUM option "none", not a numeric 0."""
+        assert self._sensor(0).native_value == "none"
+
+    def test_in_range_station_reads_its_number_as_a_string(self):
+        """b0 in 1..8 reads str(b0)."""
+        assert self._sensor(5).native_value == "5"
+
+    def test_out_of_range_station_reads_no_state(self):
+        """A current_station outside the closed 0..8 option list yields no
+        state rather than a fabricated new option string."""
+        assert self._sensor(9).native_value is None
+
+    def test_missing_data_reads_no_state(self):
+        """A failed shape check leaves current_station absent, which
+        must read as no state rather than "none"."""
+        assert self._sensor(_HIC801W_DATA_MISSING).native_value is None
+
+
+class TestHicRunTimingSensors:
+    """RainPointHicRunDurationSensor and RainPointHicRunEndsAtSensor, driven
+    through decode_hic801w on the real committed frames so a change to
+    either field's reading fails here too, not just in test_decoders.py."""
+
+    @staticmethod
+    def _entities(raw_payload):
+        """Decode one raw HIC801W frame and build both run-timing sensors for it."""
+        sensor_key = "100_200_3"
+        decoded = decode_hic801w(raw_payload)
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HIC801W,
+            sub_name="Irrigation Controller",
+            data=decoded,
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: entry}))
+        duration = RainPointHicRunDurationSensor(coordinator, sensor_key, entry, "100_200_3")
+        ends_at = RainPointHicRunEndsAtSensor(coordinator, sensor_key, entry, "100_200_3")
+        return decoded, duration, ends_at
+
+    def test_run_duration_on_the_reporters_st3_frame(self):
+        """STA_DURATION 0x3C little-endian is 60 seconds."""
+        _, duration, _ = self._entities(SAMPLE_HIC801W_REPORTER_FRAMES["2026-08-10 st3"])
+        assert duration.native_value == 60
+
+    def test_run_duration_on_the_second_units_zone_3_frame(self):
+        """A longer real-world duration than the reporter's one-minute sweep."""
+        _, duration, _ = self._entities(SAMPLE_HIC801W_SECOND_UNIT_FRAMES["unit2 zone 3"])
+        assert duration.native_value == 36000
+
+    def test_run_ends_at_on_the_reporters_st3_frame_is_tz_aware_and_matches_the_wall_clock(self):
+        """The comparison strips tzinfo before comparing so the test does not
+        encode the harness's default timezone as a contract: only that a
+        timezone is attached, and that the naive wall-clock fields are the
+        ones the ground-truth document records."""
+        _, _, ends_at = self._entities(SAMPLE_HIC801W_REPORTER_FRAMES["2026-08-10 st3"])
+        result = ends_at.native_value
+        assert result is not None
+        assert result.tzinfo is not None
+        assert result.replace(tzinfo=None) == datetime(2026, 8, 10, 20, 28, 4)
+
+    def test_idle_frame_reads_zero_duration_and_no_run_ends_at(self):
+        """Also asserts the decoder's own run_ends_at is None for this frame,
+        so the test would still fail if a future change moved the sentinel
+        suppression out of the decoder and into the entity, where a second
+        code path could miss it."""
+        decoded, duration, ends_at = self._entities(SAMPLE_HIC801W_IDLE_PAYLOAD)
+        assert decoded["run_ends_at"] is None
+        assert duration.native_value == 0
+        assert ends_at.native_value is None
+
+    def test_rejected_frame_reads_no_state_on_both_sensors_but_stays_available(self):
+        """A failed shape check (STA_WATER_ZONES b3 mutated non-zero)
+        yields no state on either sensor, and both stay available because the
+        error envelope keeps type == "irrigation_controller"."""
+        mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
+        assert mutated != SAMPLE_HIC801W_STATION3_PAYLOAD
+        decoded, duration, ends_at = self._entities(mutated)
+        assert decoded["decoder"] == "hic801w_error"
+        assert duration.native_value is None
+        assert ends_at.native_value is None
+        assert duration.available is True
+        assert ends_at.available is True
+
+    def test_run_ends_at_degrades_to_none_on_a_string_fromisoformat_cannot_parse(self):
+        """Defensive guard: not a shape decode_hic801w can currently produce,
+        but native_value must degrade rather than raise out of a state write."""
+        sensor_key = "100_200_3"
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HIC801W,
+            sub_name="Irrigation Controller",
+            data={"type": "irrigation_controller", "run_ends_at": "not-a-timestamp"},
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: entry}))
+        ends_at = RainPointHicRunEndsAtSensor(coordinator, sensor_key, entry, "100_200_3")
+        assert ends_at.native_value is None
+
+    def test_run_duration_device_class_and_unit(self):
+        assert RainPointHicRunDurationSensor._attr_device_class == SensorDeviceClass.DURATION
+        assert RainPointHicRunDurationSensor._attr_native_unit_of_measurement == UnitOfTime.SECONDS
+
+    def test_run_ends_at_device_class(self):
+        assert RainPointHicRunEndsAtSensor._attr_device_class == SensorDeviceClass.TIMESTAMP
+
+    def test_run_duration_state_class_is_measurement_and_program_sensors_are_none(self):
+        """The one deliberate state-class divergence in the HIC801W entity
+        set: Run Duration is a real quantity and takes MEASUREMENT, while
+        both program-list sensors carry a string state and take None."""
+        assert RainPointHicRunDurationSensor._attr_state_class is SensorStateClass.MEASUREMENT
+        assert RainPointHicProgramStationsSensor._attr_state_class is None
+        assert RainPointHicProgramStationsCompletedSensor._attr_state_class is None
+
+
+class TestRenderStationList:
+    """The three-way distinction _render_station_list guarantees, pinned in
+    one place: None in, None out; [] in, "none" out; a populated list joins
+    ascending and comma-space separated."""
+
+    def test_none_in_none_out(self):
+        assert _render_station_list(None) is None
+
+    def test_empty_list_in_none_string_out(self):
+        assert _render_station_list([]) == "none"
+
+    def test_single_station_in_bare_number_out(self):
+        assert _render_station_list([1]) == "1"
+
+    def test_multiple_stations_join_ascending_comma_space(self):
+        assert _render_station_list([1, 2, 3, 4]) == "1, 2, 3, 4"
+
+    def test_rendering_preserves_the_order_it_is_given(self):
+        """The renderer joins in the order it receives and never sorts.
+
+        The ascending guarantee belongs to _hic801w_stations_from_mask and is
+        pinned there directly. This pins the other half of that seam: a sort
+        added here would hide a regression in the decoder's ordering behind a
+        renderer that quietly corrects it, so the two tests together are what
+        prove a station list reaches the entity in ascending order.
+        """
+        assert _render_station_list([8, 2, 5]) == "8, 2, 5"
+
+
+class TestHicProgramStationSensors:
+    """RainPointHicProgramStationsSensor and RainPointHicProgramStationsCompletedSensor,
+    driven through decode_hic801w on the real committed frames so a change to
+    either mask's reading fails here too, not just in test_decoders.py."""
+
+    @staticmethod
+    def _entities(raw_payload):
+        """Decode one raw HIC801W frame and build both program-list sensors for it."""
+        sensor_key = "100_200_3"
+        decoded = decode_hic801w(raw_payload)
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HIC801W,
+            sub_name="Irrigation Controller",
+            data=decoded,
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: entry}))
+        stations = RainPointHicProgramStationsSensor(coordinator, sensor_key, entry, "100_200_3")
+        completed = RainPointHicProgramStationsCompletedSensor(coordinator, sensor_key, entry, "100_200_3")
+        return decoded, stations, completed
+
+    def test_program_stations_on_the_second_units_zone_1_frame(self):
+        """b1 0F: a 4-station program, station 1 running, none done."""
+        _, stations, _ = self._entities(SAMPLE_HIC801W_SECOND_UNIT_FRAMES["unit2 zone 1"])
+        assert stations.native_value == "1, 2, 3, 4"
+
+    def test_program_stations_on_the_second_units_zone_2_frame_is_a_single_station_run(self):
+        """b1 02: a single-station run of station 2, no master-valve mask could produce this."""
+        _, stations, _ = self._entities(SAMPLE_HIC801W_SECOND_UNIT_FRAMES["unit2 zone 2"])
+        assert stations.native_value == "2"
+
+    def test_program_stations_completed_on_the_reporters_st8_frame(self):
+        """b2 7F: stations 1 through 7 already completed by the time station 8 runs."""
+        _, _, completed = self._entities(SAMPLE_HIC801W_REPORTER_FRAMES["2026-08-10 st8"])
+        assert completed.native_value == "1, 2, 3, 4, 5, 6, 7"
+
+    def test_program_stations_completed_on_the_reporters_st1_frame_reads_none(self):
+        """b2 00: the first station of a fresh program has completed nothing yet."""
+        _, _, completed = self._entities(SAMPLE_HIC801W_REPORTER_FRAMES["2026-08-10 st1"])
+        assert completed.native_value == "none"
+
+    def test_idle_frame_reads_none_on_both_sensors(self):
+        """An idle controller's program lists are empty (not absent), so
+        both sensors read the literal "none"."""
+        _, stations, completed = self._entities(SAMPLE_HIC801W_IDLE_PAYLOAD)
+        assert stations.native_value == "none"
+        assert completed.native_value == "none"
+
+    def test_rejected_frame_reads_no_state_on_either_sensor(self):
+        """A failed shape check yields None (not "none") on both sensors."""
+        mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
+        assert mutated != SAMPLE_HIC801W_STATION3_PAYLOAD
+        decoded, stations, completed = self._entities(mutated)
+        assert decoded["decoder"] == "hic801w_error"
+        assert stations.native_value is None
+        assert completed.native_value is None
+
+    def test_neither_program_class_defines_a_device_class(self):
+        assert getattr(RainPointHicProgramStationsSensor, "_attr_device_class", None) is None
+        assert getattr(RainPointHicProgramStationsCompletedSensor, "_attr_device_class", None) is None
 
 
 class TestSilentSensorDispatch:

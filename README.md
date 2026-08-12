@@ -25,6 +25,7 @@ This integration supports RainPoint Smart+ device families, including:
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
 | Flow meters | HCS008FRF | Flow reading |
 | Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
+| Irrigation controllers | HIC801W | Current watering station, a watering sensor per station, current run length and end time, program stations and stations completed |
 
 The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B** Bluetooth valve are the maintainer's own hardware and are the models tested against real devices. Other models are supported opportunistically from captured payloads.
 
@@ -34,7 +35,11 @@ While it is hub-paired, its zones open and close from Home Assistant like any ot
 
 If you ran an earlier release, the read-only zone state sensors it created stay where they are, so each zone now has both a state sensor and a valve control. Nothing is deleted for you, because automations and dashboard cards may already point at those sensors. If you would rather see only the valve, disable the zone state sensors from the device page.
 
-Every model listed above has a decoder written against a real payload. A model that is absent is not necessarily unusable: the [opt-in generic entities](#unverified-generic-entities-opt-in) can often surface readings for it from the product catalog, clearly labeled unverified.
+The **HIC801W** irrigation controller is read-only in this integration: it reports what the controller is doing, and it does not start or stop a station. The way to command a station has not been confirmed against real hardware, and this integration does not ship a control it cannot prove reaches the device. Adding station control needs a recording of the commands the RainPoint app sends when it starts and stops a station, because the status payloads contributed so far describe only what the controller reports, never what it is told. The larger controllers in the same family, HIC1200W, HIC1204W, HIC819W and HIC406B, are not supported, because no payloads have been captured from them.
+
+Every model listed above has a decoder written against a real payload, and each capability is listed only once it has been confirmed to do what it claims. Support is not claimed optimistically: a control that has not been shown to reach the hardware is not shipped, even where RainPoint's own product data says the device should accept one. If a controller or valve you own is missing here, or is listed without the control you want, contributed payloads are what move it forward. See [My device isn't listed](#my-device-isnt-listed).
+
+A model that is absent is not necessarily unusable: the [opt-in generic entities](#unverified-generic-entities-opt-in) can often surface readings for it from the product catalog, clearly labeled unverified.
 
 All devices communicate via the RainPoint cloud backend. There is no local LAN protocol.
 
@@ -110,6 +115,7 @@ You can still reach every device and zone the original account can. Invited memb
 For each device the coordinator discovers, the integration creates:
 
 - **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API. A device that returns no readings at all gets a single **Not Reporting** diagnostic entity instead, and no Raw Payload sensor, because there is no payload to show.
+- **Station watering sensors**: one per station on the HIC801W irrigation controller, showing whether that station is currently watering. See [Supported devices](#supported-devices) for the rest of what it reports.
 - **Valve entities**: one per irrigation zone, for the valve models listed in the table above, including the HTV210B while it is hub-paired. A device the integration cannot currently reach gets no valve entity, as described under [Supported devices](#supported-devices).
 - **Number entities**: one per zone for configuring zone run duration (1 to 60 minutes), on those same valve models. The duration applies to the next run: changing it while a zone is already open does not shorten or extend the run in progress.
 - **Hub diagnostic sensors**: RSSI, battery, firmware version, last-updated timestamp.

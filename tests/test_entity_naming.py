@@ -52,7 +52,8 @@ _PACKAGE_ROOT = _REPO_ROOT / "custom_components" / "rainpoint"
 # Every module that composes an entity display name. Used by two independent
 # checks: that the file walk reaches each of them, and that each still
 # contributes at least one _attr_name assignment, so the scan cannot quietly
-# come to sweep an empty population from either direction.
+# come to sweep an empty population from either direction. A platform joins
+# this list the day it gains its first _attr_name assignment.
 _NAMING_MODULES = (
     "sensor.py",
     "hub_entities.py",
@@ -62,6 +63,7 @@ _NAMING_MODULES = (
     "select.py",
     "generic_entities.py",
     "generic_control.py",
+    "binary_sensor.py",
 )
 
 _BARE_DEVICE_NAMES = frozenset({"sub_name", "device_name", "hub_name"})

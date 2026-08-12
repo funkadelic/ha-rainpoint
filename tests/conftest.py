@@ -6,6 +6,7 @@ Home Assistant instance.
 """
 
 import sys
+from datetime import UTC
 from types import ModuleType
 from unittest.mock import MagicMock
 
@@ -129,6 +130,8 @@ _HA_STUBS = [
     "homeassistant.helpers.restore_state",
     "homeassistant.helpers.issue_registry",
     "homeassistant.helpers.event",
+    "homeassistant.util",
+    "homeassistant.util.dt",
     "aiohttp",
 ]
 
@@ -413,6 +416,42 @@ sys.modules["homeassistant.components.switch"].SwitchEntity = _SwitchEntity
 sys.modules["homeassistant.components.binary_sensor"].BinarySensorEntity = _BinarySensorEntity
 sys.modules["homeassistant.components.binary_sensor"].BinarySensorDeviceClass = MagicMock()
 sys.modules["homeassistant.components.button"].ButtonEntity = _ButtonEntity
+
+
+# ---------------------------------------------------------------------------
+# homeassistant.util.dt: real as_local, not a MagicMock.
+#
+# "homeassistant.util" is absent from the stub loop everywhere else in this
+# package, and its parent "homeassistant" is a MagicMock, which refuses
+# dunder attributes and so exposes no __path__ for the import machinery to
+# walk. That means `from homeassistant.util import dt as dt_util` fails with
+# ModuleNotFoundError unless "homeassistant.util" and "homeassistant.util.dt"
+# are both named in _HA_STUBS above (giving the ancestor-package pass
+# something to create and bind) -- and a MagicMock stand-in for as_local
+# would return a MagicMock rather than a datetime, so a test asserting a
+# timezone-aware result would pass while proving nothing. Both halves are
+# required, the same two-part fix the
+# homeassistant.components.repairs stub already needed.
+#
+# The behaviour mirrors the installed Home Assistant version (util/dt.py):
+# a naive input gets DEFAULT_TIME_ZONE attached (never converted from UTC,
+# since a naive value carries no "UTC" claim to convert from), an
+# already-matching-zone input is returned unchanged, and anything else is
+# converted with astimezone().
+DEFAULT_TIME_ZONE = UTC
+
+
+def _as_local(dattim):
+    """Real stand-in for homeassistant.util.dt.as_local."""
+    if dattim.tzinfo == DEFAULT_TIME_ZONE:
+        return dattim
+    if dattim.tzinfo is None:
+        return dattim.replace(tzinfo=DEFAULT_TIME_ZONE)
+    return dattim.astimezone(DEFAULT_TIME_ZONE)
+
+
+sys.modules["homeassistant.util.dt"].DEFAULT_TIME_ZONE = DEFAULT_TIME_ZONE
+sys.modules["homeassistant.util.dt"].as_local = _as_local
 
 
 # issue_registry: real functions (MagicMock) so tests can assert create/delete

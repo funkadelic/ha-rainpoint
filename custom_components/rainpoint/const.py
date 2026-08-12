@@ -256,6 +256,8 @@ MODEL_HTV345FRF = "HTV345FRF"  # Irrigation valve variant (similar to HTV245FRF)
 MODEL_HTV405FRF = "HTV405FRF"  # 4-zone irrigation valve variant (similar to HTV245FRF)
 MODEL_HTV0540FRF = "HTV0540FRF"  # Multi-zone valve hub (fully supported)
 MODEL_HTV210B = "HTV210B"  # Bluetooth valve; reports over RF as a normal hub sub-device once hub-paired
+MODEL_HIC801W = "HIC801W"  # 8-station irrigation controller; catalog variant 279 is the accessory
+# record carrying the stations, while 278 is the pairable main record with no ports.
 
 # Legacy valve aliases
 MODEL_VALVE_113 = MODEL_HTV113FRF
@@ -281,6 +283,11 @@ VALVE_MODELS = {
     MODEL_VALVE_345,
     MODEL_VALVE_405,
     MODEL_HTV210B,
+    # MODEL_HIC801W is deliberately absent: HIC801W support is read-only,
+    # so it must not enrol in valve.py/number.py entity creation or the
+    # command-versus-poll staleness guard. Do not "complete the pair" with
+    # the HAND_WRITTEN_MODELS entry below. Adding it here is part of
+    # shipping station control, never a tidy-up on its own.
 }
 
 # Every model with a hand-written, fixture-validated decoder (mirrors the
@@ -309,6 +316,7 @@ HAND_WRITTEN_MODELS: frozenset[str] = frozenset(
         MODEL_VALVE_345,
         MODEL_VALVE_405,
         MODEL_HTV210B,
+        MODEL_HIC801W,
         MODEL_HCS005FRF,
         MODEL_HCS024FRF_V1,
         MODEL_HCS015ARF,

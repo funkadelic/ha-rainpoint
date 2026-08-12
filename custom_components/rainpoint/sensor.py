@@ -12,9 +12,10 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfVolume
+from homeassistant.const import EntityCategory, UnitOfTime, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .api import _USAGE_GALLONS_PER_COUNT
 from .const import (
@@ -27,6 +28,7 @@ from .const import (
     MODEL_HCS005FRF,
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
+    MODEL_HIC801W,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
@@ -242,6 +244,60 @@ def _make_htv210b_entities(coordinator, key, info, base_slug):
     return entities
 
 
+def _render_station_list(stations: list[int] | None) -> str | None:
+    """Render a decoded HIC801W station list for RainPointHicProgramStationsSensor
+    and RainPointHicProgramStationsCompletedSensor.
+
+    The three-way return is the whole point: None means the frame did not
+    parse and the entity has no state at all, "none" means the frame
+    parsed and the answer is genuinely no stations (an idle controller), and
+    a non-empty list joins as "1, 2, 3". These are different facts a user
+    templating against the entity has to be able to tell apart; collapsing
+    them would publish wrong state where there should be no state, seen from
+    the entity side rather than the decoder side.
+
+    The order is the caller's: this joins what it is given and never sorts.
+    The ascending guarantee belongs to _hic801w_stations_from_mask.
+    """
+    if stations is None:
+        return None
+    if not stations:
+        return "none"
+    return ", ".join(str(n) for n in stations)
+
+
+def _make_hic801w_entities(coordinator, key, info, base_slug):
+    """The read-only entities for the HIC801W 8-station irrigation controller.
+
+    Five entities, the complete sensor.py set for this model: the
+    current-station ENUM, the two run-timing sensors, and the two
+    program-list sensors. The model's remaining entities (the
+    eight per-station binary sensors) live in binary_sensor.py, a different
+    platform, since registry uniqueness is per (domain, platform,
+    unique_id) and a binary_sensor row is a distinct identity from a sensor
+    row even when both wrap the same station number.
+
+    The 279 accessory record is one sub-device row parented under the 278 hub
+    by the existing sub-device parenting; there is no per-station device
+    fan-out. The wire carries one aggregate record rather than eight
+    per-station records even though the catalog's portNumber is 8 -- the
+    per-station entities this platform eventually builds are a fan-out this
+    integration invents, not one the wire hands it.
+
+    Deliberately emits no diagnostic entities: the payload carries no RSSI
+    and no battery and variant 279 declares neither, so a battery or signal
+    entity here would read available with a native_value of None while the
+    real values already exist on the 278 hub record.
+    """
+    return [
+        RainPointHicCurrentStationSensor(coordinator, key, info, base_slug),
+        RainPointHicRunDurationSensor(coordinator, key, info, base_slug),
+        RainPointHicRunEndsAtSensor(coordinator, key, info, base_slug),
+        RainPointHicProgramStationsSensor(coordinator, key, info, base_slug),
+        RainPointHicProgramStationsCompletedSensor(coordinator, key, info, base_slug),
+    ]
+
+
 def _make_hcs_moisture_only_entities(coordinator, key, info, base_slug):
     return [RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True)]
 
@@ -287,6 +343,7 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     MODEL_VALVE_345: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_405: _make_htv_valve_diagnostic_entities,
     MODEL_HTV210B: _make_htv210b_entities,
+    MODEL_HIC801W: _make_hic801w_entities,
 }
 
 
@@ -1547,3 +1604,255 @@ class RainPointZoneStateSensor(RainPointZoneSensorBase):
         attrs["event_time"] = zone.get("event_time")
         attrs["state_raw"] = zone.get("state_raw")
         return attrs
+
+
+class RainPointHic801wSensorBase(RainPointSensorBase):
+    """Shared plumbing for the HIC801W's device-level sensors.
+
+    Unlike RainPointZoneSensorBase, there is no per-station number to carry:
+    every HIC801W sensor.py entity is a singleton per device, reading one
+    aggregate record rather than a per-zone one, so the one guarded read
+    every subclass needs is a `_hic_data` property returning the decoded
+    dict, so each subclass's value property is a single `.get`. On a failed
+    decode that dict is the decoder's error envelope, whose every field is
+    None rather than absent; `{}` is returned only when the sensor key has
+    no reading at all. Both cases give a subclass's `.get` back None, which
+    is why callers need not tell them apart.
+    """
+
+    @property
+    def _hic_data(self) -> dict:
+        return self._sensor_data or {}
+
+
+class RainPointHicCurrentStationSensor(RainPointHic801wSensorBase):
+    """The currently-watering station, as a closed-option ENUM sensor.
+
+    ENUM rather than numeric: the device class makes the idle case a
+    declared value ("none") instead of a magic zero, and a station number is
+    not a quantity worth trending. The closed option list also means a `b0`
+    outside 0 through 8 -- which the settled evidence has never shown but
+    the shape check does not itself exclude -- yields no state rather than a
+    fabricated new option string.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options: ClassVar[list[str]] = ["none", "1", "2", "3", "4", "5", "6", "7", "8"]
+    _attr_icon = "mdi:sprinkler"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+    ) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_current_station"
+        self._attr_name = "Current Station"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return "none", the station number as a string, or None.
+
+        None covers two distinct cases: a failed shape check, where
+        current_station is None, and a current_station outside 0
+        through 8, where the closed option list means no state rather than a
+        new state string. RainPointHicStationWateringBinarySensor.is_on
+        applies the same range guard to the same field.
+        """
+        value = self._hic_data.get("current_station")
+        if value == 0:
+            return "none"
+        if isinstance(value, int) and 1 <= value <= 8:
+            return str(value)
+        return None
+
+
+class RainPointHicRunDurationSensor(RainPointHic801wSensorBase):
+    """The commanded length, in seconds, of the run as a whole.
+
+    Not per station: the wire carries one aggregate STA_DURATION record
+    rather than eight per-station records, so this is the run's total
+    commanded length, not any one station's share of it.
+
+    This is the one reading in the phase that takes SensorStateClass.
+    MEASUREMENT (contrast RainPointHicProgramStationsSensor and its sibling,
+    which deliberately take None). It is a real quantity sampled over time,
+    and unlike RainPointZoneWaterUsageSensor's per-run total it is not being
+    asked to accumulate across runs, so recording it into long-term
+    statistics does not corrupt a meter the way a per-run total that resets
+    mid-cycle would. A genuinely idle controller reads 0, a real reading
+    (STA_DURATION genuinely reads 0 when idle), and a failed shape check
+    reads no state at all, never a substituted 0.
+    """
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:timer-outline"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+    ) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_run_duration"
+        self._attr_name = "Run Duration"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the run's commanded length in seconds, or None when the frame did not parse."""
+        return self._hic_data.get("run_duration_seconds")
+
+
+class RainPointHicRunEndsAtSensor(RainPointHic801wSensorBase):
+    """The wall-clock time the current run ends.
+
+    Three facts make this entity correct, and each is a trap:
+
+    STA_EVTIME is the run's END time, not its start. Every station in the
+    reporter's 2026-08-10 sweep decodes to that frame's own log timestamp
+    plus its 60 second duration, and _decode_packed_timestamp's docstring
+    already records the same meaning for the HTV213 and HTV210B families.
+    Remaining run time is therefore this entity's value minus now, not this
+    entity's value minus STA_DURATION.
+
+    It is a packed wall clock, not epoch seconds, so a raw delta between two
+    STA_EVTIME words is not a second delta. STA_DURATION alongside it *is*
+    plain little-endian seconds. The two fields encode time in different
+    ways and must never be arithmetic on each other's terms.
+
+    The decoder's run_ends_at is a deliberately naive local wall-clock ISO
+    string (api/decoders.py's _decode_packed_timestamp docstring), and Home
+    Assistant raises ValueError on a naive datetime for a TIMESTAMP sensor
+    (homeassistant/components/sensor/__init__.py:620-624). dt_util.as_local
+    attaches Home Assistant's own configured timezone to a naive input
+    rather than converting from UTC, which is exactly right for a
+    device-reported local clock; datetime.astimezone() would attach the
+    system timezone instead, which can differ from Home Assistant's
+    configured one.
+
+    The decoder already returns None for an idle controller and for
+    the idle STA_EVTIME sentinel, so this entity never has to recognise the
+    sentinel itself, and a 2020 timestamp in a TIMESTAMP entity would be
+    wrong state rather than absent state. A run_ends_at that fails to parse
+    (should the decoder's contract ever change) degrades to None rather than
+    raising out of a state write.
+    """
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:timer-sand-complete"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+    ) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_run_ends_at"
+        self._attr_name = "Run Ends At"
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Return the run's end time as a tz-aware datetime, or None.
+
+        None covers an idle controller, a failed shape check (both already
+        collapsed to None by the decoder), and the defensive case of a
+        run_ends_at string fromisoformat cannot parse, so this property never
+        raises out of a state write.
+        """
+        value = self._hic_data.get("run_ends_at")
+        if not value:
+            return None
+        try:
+            naive = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            _LOGGER.debug("HIC801W run_ends_at failed to parse: %r", value)
+            return None
+        return dt_util.as_local(naive)
+
+
+class RainPointHicProgramStationsSensor(RainPointHic801wSensorBase):
+    """Which stations the currently running program covers.
+
+    STA_WATER_ZONES b1 is the bitmask of stations enrolled in the running
+    program, bit 0 meaning station 1, established across 22 captures on two
+    units. The second unit's evidence is what kills the master-valve
+    confound: b1 takes five distinct values across its captures, including
+    single-station masks (0x02, 0x04, 0x08) no master-valve flag could
+    produce.
+
+    The state is the station list rendered as a string, not a count with the
+    list in an attribute: this answers "which stations" at a glance with no
+    attribute drilling, and an attribute has no history graph and is
+    second-class in automations. Two alternatives were rejected at context
+    time: 16 binary sensors (registry rows only meaningful mid-program) and
+    attributes only.
+
+    No device_class and _attr_state_class is None: this state is a string,
+    not a quantity, and long-term statistics over a station list are
+    meaningless. Contrast RainPointHicRunDurationSensor, which does take
+    MEASUREMENT, so the divergence between the two reads as deliberate
+    rather than an oversight.
+
+    b0 and b1 are consistent in all 22 captures, in the sense that bit
+    b0 - 1 of b1 is set whenever a station is running, but this is
+    deliberately not enforced anywhere: no frame in the corpus violates it,
+    so rejecting on it would add a failure mode the evidence cannot justify.
+    """
+
+    _attr_state_class = None
+    _attr_icon = "mdi:format-list-numbered"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+    ) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_program_stations"
+        self._attr_name = "Program Stations"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the enrolled stations as "1, 2, 3", "none", or None. See _render_station_list."""
+        return _render_station_list(self._hic_data.get("program_stations"))
+
+
+class RainPointHicProgramStationsCompletedSensor(RainPointHic801wSensorBase):
+    """Which stations the currently running program has already completed.
+
+    STA_WATER_ZONES b2 is the bitmask of stations already completed in the
+    running program, bit 0 meaning station 1, established on the same
+    22-capture corpus as RainPointHicProgramStationsSensor. See that class's
+    docstring for the full reasoning behind the string state, the state-class
+    divergence from RainPointHicRunDurationSensor, and the deliberately
+    unenforced b0/b1 consistency note, none of which is repeated here.
+    """
+
+    _attr_state_class = None
+    _attr_icon = "mdi:format-list-checks"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+    ) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_program_stations_completed"
+        self._attr_name = "Program Stations Completed"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the completed stations as "1, 2, 3", "none", or None. See _render_station_list."""
+        return _render_station_list(self._hic_data.get("program_stations_completed"))

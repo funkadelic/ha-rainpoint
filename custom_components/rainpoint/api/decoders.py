@@ -707,6 +707,187 @@ def decode_htv210b_dp_state(raw: str) -> dict | None:
         return None
 
 
+# Structural field indices for the HIC801W 8-station irrigation controller,
+# equal to catalog variant 279's dpCode for the same datapoint. 279 is the
+# accessory record carrying the stations (accessoryFlag true, portNumber 8);
+# 278 is the portless main record and is not read here. Deliberately
+# no constant for STA_RAIN (1), STA_RH (10), STA_TS_DET (38) or STA_WKSTATE
+# (30): the decoder must not read any of them. The first three are constant
+# or unpinned across both capture corpora, so their meaning is unverified and
+# publishing them would be a guess. STA_WKSTATE is omitted for a different
+# reason: its curated catalog row is evidenced against other model families,
+# so decode_hic801w derives idle from STA_WATER_ZONES b0 instead, which keeps
+# this decoder independent of that row.
+_HIC801W_FIELD_DURATION = 19
+_HIC801W_FIELD_EVTIME = 21
+_HIC801W_FIELD_WATER_ZONES = 37
+
+# The little-endian STA_EVTIME word every idle HIC801W frame carries.
+# _decode_packed_timestamp renders it as the naive ISO string
+# "2020-01-01T02:00:00", a real-looking date, so it is suppressed
+# deliberately rather than filtered by accident: a 2020 timestamp in a
+# TIMESTAMP entity is wrong state, not absent state, so decode_hic801w
+# returns None for run_ends_at whenever it sees this word.
+_HIC801W_EVTIME_IDLE_SENTINEL = 0x00422000
+
+
+def _hic801w_stations_from_mask(mask: int) -> list[int]:
+    """Return the ascending, 1-based station numbers whose bit is set in mask.
+
+    This is the settled reading of STA_WATER_ZONES b1 (stations enrolled in
+    the running program) and b2 (stations already completed), bit 0 meaning
+    station 1. The second unit's captures rule out a master-valve confound:
+    b1 takes five distinct values across its captures, including
+    single-station masks (0x02, 0x04, 0x08) no master-valve flag could
+    produce. Ascending order is the contract this function guarantees, not
+    an accident of the loop, because it is what makes two masks of equal
+    value render in one stable order.
+    """
+    return [n for n in range(1, 9) if mask & (1 << (n - 1))]
+
+
+def _hic801w_observed_width(value: bytes | None) -> str:
+    """Describe a field's observed width without echoing the field's bytes.
+
+    The width-check messages reach the log through the traceback that
+    _LOGGER.exception prints, so interpolating the bytes themselves would put
+    payload content on that line by the back door, the same way the missing
+    prefix check would if it echoed its input.
+    """
+    return "missing" if value is None else f"{len(value)} bytes"
+
+
+def _hic801w_error_envelope(message: str) -> dict:
+    """Return the HIC801W error envelope carrying `message` as its error.
+
+    Shared by the two rejection routes so they cannot drift: the b3 check,
+    which returns directly because it has already logged its own sanitized
+    WARNING, and the outer handler, which catches everything else. Both carry
+    the same keys as the happy path with every decoded field None, so a frame
+    that did not parse yields no state rather than a stale or invented one.
+    """
+    return {
+        "type": "irrigation_controller",
+        "rssi_dbm": None,
+        "raw_bytes": [],
+        "current_station": None,
+        "program_stations": None,
+        "program_stations_completed": None,
+        "run_duration_seconds": None,
+        "run_ends_at": None,
+        "decoder": "hic801w_error",
+        "error": message,
+    }
+
+
+def decode_hic801w(raw: str) -> dict:
+    """Decode an HIC801W 8-station irrigation controller status frame (10# prefix).
+
+    Fields are located structurally with _parse_entries, the same primitive
+    the model-agnostic decoder itself calls, rather than a hand-rolled
+    byte-offset walk: registering this model in HAND_WRITTEN_MODELS locks it
+    out of the model-agnostic path by construction, so reaching for that
+    decoder from inside this one would blur the boundary that set exists to
+    draw.
+
+    STA_WATER_ZONES is read per byte, never as its declared S32: b0 is the
+    running station number (1-based, 0 meaning none, never a bitmask -
+    station 3 reads 03 not 04), b1 is the bitmask of stations enrolled in the
+    running program, b2 is the bitmask of stations already completed, and b3
+    is 00 in all 22 captures across both units with an unknown meaning. A
+    non-zero b3 is rejected outright: it means the per-byte reading is not
+    the one the evidence covers, most likely a >8-station sibling or a
+    firmware using the high half, and this is the one decision that can make
+    a real device go dark, which is why the rejection is a WARNING rather
+    than a silent failure.
+
+    STA_TS_DET (field 38) arrives 2 bytes wide against a declared 4 in every
+    capture from both units, so it is never width-checked and never read: a
+    width check there would reject every real frame, and its meaning is
+    unpinned regardless.
+
+    Both the happy and error envelopes carry the same {"type", "rssi_dbm",
+    "raw_bytes", "current_station", "program_stations",
+    "program_stations_completed", "run_duration_seconds", "run_ends_at",
+    "decoder"} keys, built by _hic801w_error_envelope on the failure side:
+    `type` stays "irrigation_controller" on both branches, which is what
+    keeps RainPointSubDeviceEntity.available True on a failed decode, and
+    every decoded field is None (never 0 or []) on the error branch, since a
+    0 or an empty list would render as real state ("none", or an empty
+    program) rather than as "did not parse". No key is ever added for
+    STA_RAIN, STA_RH, STA_TS_DET or b3, not even as an attribute, so no
+    downstream surface can pick up a reading whose meaning is unverified.
+    """
+    try:
+        if not raw.startswith("10#"):
+            # The length, not the payload: this message reaches the handler
+            # below, whose traceback is logged, so echoing `raw` here would
+            # put the payload on the log line by the back door.
+            raise ValueError(f"Unexpected payload format: {len(raw)}-character payload without a 10# prefix")
+        b = _parse_rainpoint_payload(raw)
+        fields = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), False)}
+
+        duration_bytes = fields.get(_HIC801W_FIELD_DURATION)
+        evtime_bytes = fields.get(_HIC801W_FIELD_EVTIME)
+        water_zones_bytes = fields.get(_HIC801W_FIELD_WATER_ZONES)
+        if duration_bytes is None or len(duration_bytes) != 4:
+            raise ValueError(f"HIC801W: STA_DURATION missing or wrong width: {_hic801w_observed_width(duration_bytes)}")
+        if evtime_bytes is None or len(evtime_bytes) != 4:
+            raise ValueError(f"HIC801W: STA_EVTIME missing or wrong width: {_hic801w_observed_width(evtime_bytes)}")
+        if water_zones_bytes is None or len(water_zones_bytes) != 4:
+            raise ValueError(f"HIC801W: STA_WATER_ZONES missing or wrong width: {_hic801w_observed_width(water_zones_bytes)}")
+
+        b0, b1, b2, b3 = water_zones_bytes[0], water_zones_bytes[1], water_zones_bytes[2], water_zones_bytes[3]
+        if b3 != 0x00:
+            # Returned rather than raised: this rejection is a diagnosed,
+            # expected condition with its own sanitized one-line WARNING, so
+            # falling into the outer handler would log the same event a
+            # second time at ERROR with a full traceback, on every poll of an
+            # affected device, making it read as a recurring crash.
+            _LOGGER.warning("HIC801W: STA_WATER_ZONES b3 unexpected non-zero value 0x%02X; rejecting frame", b3)
+            return _hic801w_error_envelope(f"HIC801W: STA_WATER_ZONES b3 unexpected non-zero value: 0x{b3:02X}")
+
+        current_station = b0
+        program_stations = _hic801w_stations_from_mask(b1)
+        program_stations_completed = _hic801w_stations_from_mask(b2)
+        run_duration_seconds = int.from_bytes(duration_bytes, "little")
+
+        evtime_word = int.from_bytes(evtime_bytes, "little")
+        if current_station == 0 or evtime_word == _HIC801W_EVTIME_IDLE_SENTINEL:
+            # Both guards are kept deliberately: the sentinel guard alone
+            # would not cover a hypothetical idle frame carrying a different
+            # word, and the b0 guard alone would not cover a frame that is
+            # somehow non-idle while still carrying the sentinel.
+            run_ends_at = None
+        else:
+            run_ends_at = _decode_packed_timestamp(evtime_word)
+
+        return {
+            "type": "irrigation_controller",
+            # None, not a number: the payload carries no RSSI and no battery,
+            # and variant 279 declares neither STA_BAT nor STA_RSSI,
+            # consistent with a mains-powered device with no backup battery.
+            # The signal values this owner sees come from the 278 hub record.
+            "rssi_dbm": None,
+            "raw_bytes": b,
+            "current_station": current_station,
+            "program_stations": program_stations,
+            "program_stations_completed": program_stations_completed,
+            "run_duration_seconds": run_duration_seconds,
+            "run_ends_at": run_ends_at,
+            "decoder": "hic801w_hex",
+        }
+    except Exception as e:
+        # Length only, matching decode_htv210b_dp_state: the payload itself
+        # is already retrievable through the disabled-by-default _raw_payload
+        # diagnostic and the diagnostics download, so putting an unbounded
+        # cloud-supplied string on this line adds no diagnostic reach. This
+        # handler fires precisely when the payload was not the shape we
+        # expected, which is when it is least worth trusting.
+        _LOGGER.exception("HIC801W decoder error for a %d-character blob", len(raw) if raw else 0)
+        return _hic801w_error_envelope(str(e))
+
+
 def _scan_htv145_markers(b: bytes) -> dict[int, int]:
     """Scan the HTV145FRF [type_byte][value...] stream into {type_byte: value_int}.
 

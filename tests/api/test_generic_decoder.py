@@ -18,11 +18,13 @@ from tests.payload_samples import (
     SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
 )
 
-# custom_components/rainpoint/api/decoders.py is the trusted reference this
-# phase reads and must never edit. Pinned by whole-file digest rather than a
-# per-function comparison, computed against the file as it stood at the
-# start of this phase's work.
-_DECODERS_PY_PRE_PHASE_SHA256 = "fb4115b5fab5c1378795668d836dc69083d52ef1ad6d1e38184fd864a726ab4a"
+# custom_components/rainpoint/api/decoders.py is the trusted reference the
+# generic ASCII-framing decoder reads and must never edit. Pinned by
+# whole-file digest rather than a per-function comparison. Legitimate
+# hand-written decoder additions (most recently decode_hic801w) move this
+# hash forward on purpose; the guard exists to catch decode_generic and its
+# helpers reaching back into this file, not to freeze it.
+_DECODERS_PY_PRE_PHASE_SHA256 = "878d27d9171a20f3d3605724c6034b4ffaef29c18ac11bdd9df5e317be333439"
 
 
 class TestDecodeGenericTLV:
