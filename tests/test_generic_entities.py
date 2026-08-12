@@ -132,17 +132,27 @@ def _wkstate_row_source() -> str:
     raise AssertionError("STA_WKSTATE row not found in _IDENTITY_SPECS")
 
 
-def _run_state_decoder_names(registry: dict) -> set[str]:
-    """Return the __name__s of every registered decoder reporting a run/open state.
+def _registered_decoder_names(registry: dict) -> set[str]:
+    """Return the __name__s of every decoder the integration dispatches.
 
     The display-hub decoder is unioned in because it is dispatched as a
     special case outside DECODER_REGISTRY entirely (the same "registry plus
-    display hub" shape HAND_WRITTEN_MODELS itself follows).
-    _DECODERS_WITHOUT_RUN_STATE is then subtracted, leaving the decoders whose
-    provenance the STA_WKSTATE row's Evidence note must name.
+    display hub" shape HAND_WRITTEN_MODELS itself follows). Both the run-state
+    filter below and the phantom-exemption test read this one definition, so a
+    second special case added here reaches both rather than only whichever
+    call site its author happened to be looking at.
     """
-    registered = {fn.__name__ for fn in registry.values()} | {decode_hws019wrf_v2.__name__}
-    return registered - _DECODERS_WITHOUT_RUN_STATE
+    return {fn.__name__ for fn in registry.values()} | {decode_hws019wrf_v2.__name__}
+
+
+def _run_state_decoder_names(registry: dict) -> set[str]:
+    """Return the __name__s of every registered decoder reporting a run/open state.
+
+    _DECODERS_WITHOUT_RUN_STATE is subtracted from the dispatched set, leaving
+    the decoders whose provenance the STA_WKSTATE row's Evidence note must
+    name.
+    """
+    return _registered_decoder_names(registry) - _DECODERS_WITHOUT_RUN_STATE
 
 
 def _unnamed_run_state_decoders(registry: dict) -> set[str]:
@@ -183,8 +193,7 @@ class TestRunStateEvidenceNoteDriftGuard:
 
     def test_exemption_names_no_decoder_absent_from_the_registry(self):
         """A decoder removed from DECODER_REGISTRY cannot linger as a phantom exemption."""
-        registered_names = {fn.__name__ for fn in DECODER_REGISTRY.values()} | {decode_hws019wrf_v2.__name__}
-        assert registered_names >= _DECODERS_WITHOUT_RUN_STATE
+        assert _registered_decoder_names(DECODER_REGISTRY) >= _DECODERS_WITHOUT_RUN_STATE
 
 
 def _dp(identity: str, dp_port=0, dp_code: int = 10, data_type: str = "U8") -> dict:
