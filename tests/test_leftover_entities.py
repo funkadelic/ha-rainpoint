@@ -254,7 +254,6 @@ class TestLeftoverRowEndToEnd:
         with _patched_issue_registry() as (create, delete):
             coordinator, hass, _entry, _client = await _armed_install(harness)
             harness.add_leftover_row()
-            emitted_before = sorted(row.entity_id for row in harness.entity_rows)
             ledger_before = _ledger_snapshot(hass)
 
             with harness.patched():
@@ -283,12 +282,14 @@ class TestLeftoverRowEndToEnd:
                 # Opening the card removes nothing.
                 assert harness.removed == []
 
+                registered = sorted(row.entity_id for row in harness.entity_rows)
                 result = await flow.async_step_confirm({})
                 assert result["type"] == "create_entry"
 
                 # Exactly the dead row, and every live row still standing.
                 assert harness.removed == [LEFTOVER_ENTITY_ID]
-                assert emitted_before == sorted([*harness.removed, *(row.entity_id for row in harness.entity_rows)])
+                surviving = sorted(row.entity_id for row in harness.entity_rows if row.entity_id not in harness.removed)
+                assert surviving == [entity_id for entity_id in registered if entity_id != LEFTOVER_ENTITY_ID]
                 # The device is still present, so its device row stays.
                 assert harness.released == []
                 # No adder's ledger moved: none of these pairs was ever in one.

@@ -30,6 +30,17 @@
           }
         }
       }
+    },
+    "leftover_device_entities": {
+      "title": "A device has entities that nothing is behind",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Remove the unused entities",
+            "description": "RainPoint still lists this device on your account and it is reporting normally, but the entities below have had nothing behind them for the last {missed_polls} checks, which run a couple of minutes apart.\n\n- **Device:** {sub_name}\n- **Model:** {model}\n- **Address:** {address}\n- **Hub:** {hub_name}\n- **Entities left over:** {entity_count}\n\nThis usually means the device once reported something it no longer sends, or that a newer version of this integration replaced these entities with better ones.\n\nOne thing to check before you confirm: a reading that simply has not arrived since the last restart looks the same from here, and it will come back on its own once the device sends it again. If that is what this is, select Cancel and leave it alone. Watering zones are never offered here, so a zone you have not used yet is safe either way.\n\nSelect **Submit** to remove these entities, along with the history recorded against them. That cannot be undone."
+          }
+        }
+      }
     }
   },
   "config": {

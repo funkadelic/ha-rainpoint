@@ -75,6 +75,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from .const import (
     DOMAIN,
     HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
+    LEFTOVER_ENTITIES_TRANSLATION_KEY,
     ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
     PUSH_HUB_IDENTITY_ISSUE_ID,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
@@ -536,6 +537,13 @@ class OrphanedEntitiesRecord:
     # reads it. False is the Bluetooth wrapper record's child, which never had
     # a hub for the card to name.
     hub_paired: bool = True
+    # Which of the two shapes produced this record, and therefore which body
+    # the card renders. False is the departed-key shape: RainPoint has stopped
+    # listing the device. True is the still-present shape: the device is on the
+    # account and reporting, and these rows have had nothing behind them.
+    # Defaulted so every existing construction stays valid, and because the
+    # departed shape is the one that shipped first.
+    leftover: bool = False
 
 
 def orphaned_entities_issue_id(sensor_key: str, entry_id: str) -> str:
@@ -669,6 +677,15 @@ class RainPointOrphanedEntityIssues:
         the UI while this set still holds its id. Deduping on the set alone
         would then suppress every later attempt and strand the user with
         leftover entities and no surface left to act on.
+
+        The translation key is chosen from the record's shape while the issue
+        id is not, and both halves of that are deliberate. The card has to
+        describe the shape that raised it, because "RainPoint has stopped
+        listing this device" and "this device is on your account and reporting"
+        are opposite statements to the user reading them. The id stays one per
+        key because the two shapes are mutually exclusive for one key: the
+        leftover derivation requires the key to be in the current poll, and an
+        aged-out key is by definition absent from it.
         """
         if issue_id in self._active:
             if self._issue_still_registered(issue_id):
@@ -678,6 +695,12 @@ class RainPointOrphanedEntityIssues:
             # predicate stays a predicate and reordering this condition cannot
             # silently change the bookkeeping.
             self._active.discard(issue_id)
+        # The leftover marker is added only on the shape that carries it, so
+        # the departed-key card's data dict stays byte-identical to what it has
+        # always been and no flow reading it back has to learn a new key.
+        data = {"entry_id": record.entry_id, "sensor_key": record.sensor_key}
+        if record.leftover:
+            data["leftover"] = True
         try:
             ir.async_create_issue(
                 self._hass,
@@ -685,8 +708,8 @@ class RainPointOrphanedEntityIssues:
                 issue_id,
                 is_fixable=True,
                 severity=ir.IssueSeverity.WARNING,
-                translation_key=ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
-                data={"entry_id": record.entry_id, "sensor_key": record.sensor_key},
+                translation_key=LEFTOVER_ENTITIES_TRANSLATION_KEY if record.leftover else ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
+                data=data,
                 # The threat, stated where the values are: Home Assistant
                 # renders this card and its confirm dialog as Markdown, and
                 # sub_name, model, addr and hub_name all arrive from the
@@ -714,12 +737,25 @@ class RainPointOrphanedEntityIssues:
             # reason its sibling does: marking first would let one transient
             # registry error suppress every later attempt for this key.
             self._active.add(issue_id)
-            _LOGGER.warning(
-                "RainPoint no longer lists sensor key %s after %s checks; offering its %s leftover entity/entities for removal",
-                record.sensor_key,
-                record.missed_polls,
-                record.entity_count,
-            )
+            # One line per shape, because the two say opposite things about the
+            # device. Both carry the sensor key and two integers only, never a
+            # cloud-supplied name or model.
+            if record.leftover:
+                _LOGGER.warning(
+                    "Sensor key %s is still listed and reporting, but %s of its entity row(s) have had nothing behind "
+                    "them for %s updates; offering them for removal",
+                    record.sensor_key,
+                    record.entity_count,
+                    record.missed_polls,
+                )
+            else:
+                _LOGGER.warning(
+                    "RainPoint no longer lists sensor key %s after %s checks; "
+                    "offering its %s leftover entity/entities for removal",
+                    record.sensor_key,
+                    record.missed_polls,
+                    record.entity_count,
+                )
         except Exception as issue_exc:
             _LOGGER.debug(
                 "Failed to create the orphaned entities repair issue (id=%s): %s",
