@@ -110,6 +110,12 @@ class RainPointClient:
         # imports the mqtt layer -- the supervisor must never keep running on
         # credentials the HTTP layer has superseded.
         self._relogin_listeners: list[Callable[[], None]] = []
+        # Deliberately a separate list from _relogin_listeners: an invalidation
+        # is not a rotation, the token has not been replaced yet. The relogin
+        # subscribers include the MQTT credential supervisor, which must keep
+        # firing only on an actual rotation, not on the moment the cached
+        # token is merely known to be dead.
+        self._token_invalidated_listeners: list[Callable[[], None]] = []
 
     # --- token state helpers ---
 
@@ -120,6 +126,16 @@ class RainPointClient:
         replaced while a previous token was already held.
         """
         self._relogin_listeners.append(callback)
+
+    def register_token_invalidated_listener(self, callback: Callable[[], None]) -> None:
+        """Register a callback fired synchronously when a rejection expires the cached token.
+
+        Its purpose is to let the caller persist the now-known-dead expiry, so
+        a later rebuild of the client (e.g. after a config entry reload) does
+        not replay it. Does not fire when the rejection predicate declines to
+        act.
+        """
+        self._token_invalidated_listeners.append(callback)
 
     def _auth_headers(self) -> dict:
         """Generate authentication headers for API calls."""
@@ -175,11 +191,30 @@ class RainPointClient:
 
         Only act when the rejected request carried the token that is still
         current: under concurrent requests a slow rejection for an
-        already-replaced token must not invalidate the fresh one.
+        already-replaced token must not invalidate the fresh one. Also only act
+        when the token is still live, so this is a transition rather than a
+        repeat: that makes the invalidation happen at most once per token
+        generation, which is what keeps a code the cloud may overload from
+        producing repeated work.
         """
-        if code in _SESSION_REJECTED_CODES and request_token is not None and request_token == self._token:
+        if (
+            code in _SESSION_REJECTED_CODES
+            and request_token is not None
+            and request_token == self._token
+            and self._token_expires_at is not None
+        ):
             _LOGGER.info("RainPoint session rejected (code %s); forcing re-login on the next call", code)
             self._token_expires_at = None
+            for callback in self._token_invalidated_listeners:
+                # Isolate each callback in its own try/except, mirroring the
+                # relogin loop's isolation and for the same reason: this runs
+                # inside every API method's error path, and a raising
+                # subscriber must not replace a session error with an
+                # unrelated one nor skip the subscribers after it.
+                try:
+                    callback()
+                except Exception:
+                    _LOGGER.exception("RainPoint token-invalidated listener raised; continuing")
 
     # --- login / auth ---
 

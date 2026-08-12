@@ -1161,6 +1161,131 @@ class TestDisplacedSessionRecovery:
         assert client._token_expires_at == expires_at
 
 
+class TestTokenInvalidationListeners:
+    """register_token_invalidated_listener fires only on a genuine expiry transition."""
+
+    def test_fires_on_act(self):
+        """A recognized rejection for the current, still-live token fires every listener."""
+        client = _make_client()
+        client._token = "T1"
+        client._token_expires_at = datetime.now(UTC) + timedelta(days=60)
+        calls = []
+        client.register_token_invalidated_listener(lambda: calls.append(1))
+
+        client._maybe_invalidate_token(1001, "T1")
+
+        assert len(calls) == 1
+
+    def test_silent_on_superseded_token(self):
+        """A rejection carrying a token that has already been replaced fires nothing."""
+        client = _make_client()
+        client._token = "T2"
+        client._token_expires_at = datetime.now(UTC) + timedelta(days=60)
+        calls = []
+        client.register_token_invalidated_listener(lambda: calls.append(1))
+
+        client._maybe_invalidate_token(1001, "T1")
+
+        assert calls == []
+
+    def test_silent_on_unrecognized_code(self):
+        """A code outside the recognized set fires nothing."""
+        client = _make_client()
+        client._token = "T1"
+        client._token_expires_at = datetime.now(UTC) + timedelta(days=60)
+        calls = []
+        client.register_token_invalidated_listener(lambda: calls.append(1))
+
+        client._maybe_invalidate_token(3, "T1")
+
+        assert calls == []
+
+    def test_silent_on_repeat_rejection_for_the_same_already_invalidated_token(self):
+        """A second rejection carrying the same already-invalidated token fires no listener again.
+
+        This is the transition guard: an invalidation happens at most once per
+        token generation.
+        """
+        client = _make_client()
+        client._token = "T1"
+        client._token_expires_at = datetime.now(UTC) + timedelta(days=60)
+        calls = []
+        client.register_token_invalidated_listener(lambda: calls.append(1))
+
+        client._maybe_invalidate_token(1001, "T1")
+        client._maybe_invalidate_token(1001, "T1")
+
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_raising_listener_is_isolated(self, caplog):
+        """A raising listener does not replace the session error and does not skip later listeners."""
+        client = _make_client()
+        client._token = "T1"
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        raising = MagicMock(side_effect=RuntimeError("listener boom"))
+        after = MagicMock()
+        client.register_token_invalidated_listener(raising)
+        client.register_token_invalidated_listener(after)
+
+        client._session.get = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with caplog.at_level(logging.ERROR), pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 1001"):
+            await client.get_devices_by_hid(hid=42)
+
+        raising.assert_called_once_with()
+        after.assert_called_once_with()
+        assert any("token-invalidated listener raised" in r.message for r in caplog.records)
+
+
+class TestDisplacedSessionSurvivesReload:
+    """A client rebuilt from the persisted entry data after a displacement re-authenticates.
+
+    Unload discards the running client, so the faithful model of a reload is a
+    second, independently constructed RainPointClient restored from the same
+    persisted dict, not a fresh assertion on the first client's own state.
+    """
+
+    @staticmethod
+    def _login_json_body() -> dict:
+        return {
+            "code": 0,
+            "data": {"token": "rotated-token", "refreshToken": "rotated-refresh", "tokenExpired": 3600},
+            "ts": 1700000000000,
+        }
+
+    @pytest.mark.asyncio
+    async def test_survives_reload(self):
+        """A second client built from the invalidation-updated persisted dict re-authenticates."""
+        client = _make_client()
+        future_expiry = int((datetime.now(UTC) + timedelta(hours=1)).timestamp())
+        client.restore_tokens({"token": "stale-token", "refresh_token": "old-refresh", "token_expires_at": future_expiry})
+
+        persisted: dict = {}
+        client.register_token_invalidated_listener(lambda: persisted.update(client.export_tokens()))
+
+        client._session.get = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 1001"):
+            await client.get_devices_by_hid(hid=42)
+
+        assert persisted["token"] == "stale-token"
+        assert persisted["token_expires_at"] is None
+
+        second_client = _make_client()
+        second_client.restore_tokens(persisted)
+
+        assert second_client._token_valid() is False
+
+        second_client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": []}))
+        second_client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        await second_client.get_devices_by_hid(hid=42)
+
+        assert second_client._session.post.call_count == 1
+
+
 class TestAuthHeaders:
     """Tests for _auth_headers method."""
 
