@@ -101,6 +101,7 @@ from tests.payload_samples import (
     SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD,
+    SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV345_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
 )
@@ -1707,6 +1708,121 @@ class TestZoneWaterUsageSensor:
         assert usage.native_value is None
 
 
+class TestZoneRunDurationSensor:
+    """One run-duration entity per reported zone on the HTV213/245 valve family.
+
+    Mirrors TestZoneWaterUsageSensor's _setup and _valve_entry helper shape
+    rather than inventing a second one, since both entities are built by the
+    same factory from the same reported-zones source.
+    """
+
+    @staticmethod
+    def _valve_entry(zones):
+        return make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=MODEL_VALVE_245,
+            sub_name="Valve",
+            data={"type": "valve_hub", "zones": zones, "rssi_dbm": -37, "battery_percent": 100},
+        )
+
+    @staticmethod
+    def _first_duration(entities):
+        return next(e for e in entities if isinstance(e, RainPointZoneRunDurationSensor))
+
+    async def _setup(self, zones):
+        """Run platform setup against these zones, returning the entities it registered."""
+        sensor_key = "100_200_1"
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: self._valve_entry(zones)}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_one_duration_entity_per_reported_zone(self):
+        """Two reported zones yield two duration entities, named and keyed per zone, in ascending order."""
+        zones = {
+            1: {"open": False, "duration_seconds": 0},
+            2: {"open": True, "duration_seconds": 2940},
+        }
+        durations = [e for e in await self._setup(zones) if isinstance(e, RainPointZoneRunDurationSensor)]
+        assert len(durations) == 2
+        assert [e.native_value for e in durations] == [0, 2940]
+        assert durations[0]._attr_unique_id == "rainpoint_100_200_1_zone1_run_duration"
+        assert durations[0]._attr_name == "Zone 1 Run Duration"
+        assert durations[1]._attr_unique_id == "rainpoint_100_200_1_zone2_run_duration"
+        assert durations[1]._attr_name == "Zone 2 Run Duration"
+
+    @pytest.mark.asyncio
+    async def test_no_duration_entities_when_no_zones_reported(self):
+        """A frame reporting no zones grows no phantom duration entities."""
+        durations = [e for e in await self._setup({}) if isinstance(e, RainPointZoneRunDurationSensor)]
+        assert durations == []
+
+    @pytest.mark.asyncio
+    async def test_no_duration_entities_when_zones_are_malformed(self):
+        """A decode without a usable zones dict still produces battery and signal, no duration entities."""
+        sensor_key = "100_200_1"
+        sensor_info = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=MODEL_VALVE_245,
+            sub_name="Valve",
+            data={"type": "valve_hub", "rssi_dbm": -37, "battery_percent": 100},
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)] == []
+        assert len(captured) == 3
+
+    @pytest.mark.asyncio
+    async def test_declarations(self):
+        """DURATION device class, seconds unit, MEASUREMENT state class."""
+        zones = {1: {"open": False, "duration_seconds": 0}}
+        duration = self._first_duration(await self._setup(zones))
+        assert duration._attr_device_class == SensorDeviceClass.DURATION
+        assert duration._attr_native_unit_of_measurement == UnitOfTime.SECONDS
+        assert duration._attr_state_class == SensorStateClass.MEASUREMENT
+
+    @pytest.mark.asyncio
+    async def test_present_record_missing_duration_key_reads_none(self):
+        """A zone record present but missing duration_seconds reads None, distinct from an explicit 0."""
+        zones = {1: {"open": False}}
+        duration = self._first_duration(await self._setup(zones))
+        assert duration.native_value is None
+
+    @pytest.mark.asyncio
+    async def test_present_record_with_zero_duration_reads_zero(self):
+        """A zone record explicitly carrying duration_seconds of 0 reads 0."""
+        zones = {1: {"open": False, "duration_seconds": 0}}
+        duration = self._first_duration(await self._setup(zones))
+        assert duration.native_value == 0
+
+    @pytest.mark.asyncio
+    async def test_missing_zone_record_reads_none(self):
+        """A zone that drops out of a later frame reads None rather than stale or zero."""
+        zones = {1: {"open": False, "duration_seconds": 120}}
+        duration = self._first_duration(await self._setup(zones))
+        duration.coordinator.data["sensors"]["100_200_1"]["data"]["zones"] = {}
+        assert duration.native_value is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_zones_payload_reads_none(self):
+        """A non-dict zones value degrades to no state instead of raising into the state machine."""
+        zones = {1: {"open": False, "duration_seconds": 120}}
+        duration = self._first_duration(await self._setup(zones))
+        duration.coordinator.data["sensors"]["100_200_1"]["data"]["zones"] = ["not", "a", "dict"]
+        assert duration.native_value is None
+
+
 class TestWiderValveFamilyUsageEntities:
     """The 3- and 4-zone family members get the same per-zone usage entities."""
 
@@ -1748,6 +1864,45 @@ class TestWiderValveFamilyUsageEntities:
         assert len(usage) == 4
         assert all(e.native_value is None for e in usage)
         assert all(e.extra_state_attributes["last_usage_counts"] is None for e in usage)
+
+
+class TestWiderValveFamilyRunDurationEntities:
+    """The 3- and 4-zone family members get the same per-zone run-duration entities."""
+
+    @staticmethod
+    async def _setup(model, payload):
+        """Run platform setup for this model, returning only the run-duration entities it registered."""
+        sensor_key = "100_200_1"
+        sensor_info = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=model,
+            sub_name="Valve",
+            data=decode_htv213frf_valve(payload),
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        return [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)]
+
+    @pytest.mark.asyncio
+    async def test_htv345_gets_one_duration_entity_per_zone_in_ascending_order(self):
+        """The 3-zone capture yields three duration entities, numbered 1 through 3, all idle."""
+        durations = await self._setup(MODEL_VALVE_345, SAMPLE_HTV345_TLV_PAYLOAD)
+        assert len(durations) == 3
+        assert [e._zone_num for e in durations] == [1, 2, 3]
+        assert [e.native_value for e in durations] == [0, 0, 0]
+
+    @pytest.mark.asyncio
+    async def test_htv405_gets_one_duration_entity_per_zone_in_ascending_order(self):
+        """The 4-zone capture yields four duration entities, numbered 1 through 4, all idle, no gap and no extra."""
+        durations = await self._setup(MODEL_VALVE_405, SAMPLE_HTV405_TLV_PAYLOAD)
+        assert len(durations) == 4
+        assert [e._zone_num for e in durations] == [1, 2, 3, 4]
+        assert [e.native_value for e in durations] == [0, 0, 0, 0]
 
 
 class TestZoneRunDurationAcrossAFailedPoll:
@@ -1835,6 +1990,134 @@ class TestZoneRunDurationAcrossAFailedPoll:
         assert coordinator.data is data_before
         assert [e.native_value for e in durations] == [0, 2940]
         assert all(entity.available for entity in durations)
+
+
+class TestRunDurationUniqueIdDisjointness:
+    """No unique_id collides across the platforms that build entities for one HTV245 key.
+
+    binary_sensor.py builds nothing for the valve family (it is HIC801W
+    station-only), so sensor, number and valve are the whole set for this
+    model. The expected set is written out explicitly rather than only
+    counted, so a future rename of any one id fails here.
+    """
+
+    _SENSOR_KEY = "100_200_1"
+
+    @classmethod
+    def _entry(cls):
+        """One HTV245 key reporting a single zone, enough to exercise all three platforms."""
+        return make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=MODEL_VALVE_245,
+            sub_name="Valve",
+            data={
+                "type": "valve_hub",
+                "zones": {1: {"open": False, "duration_seconds": 0, "last_usage_counts": 0, "last_usage_gallons": 0.0}},
+                "rssi_dbm": -37,
+                "battery_percent": 100,
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_id_collides_and_every_pre_phase_id_survives(self):
+        """Collect every unique_id sensor, number, and valve build for the key; compare against the exact expected set."""
+        from custom_components.rainpoint.number import async_setup_entry as number_async_setup_entry
+        from custom_components.rainpoint.valve import async_setup_entry as valve_async_setup_entry
+
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={self._SENSOR_KEY: self._entry()}))
+        hass, entry = _make_hass(coordinator)
+
+        sensor_captured: list = []
+        number_captured: list = []
+        valve_captured: list = []
+        await async_setup_entry(hass, entry, MagicMock(side_effect=lambda ents, **kw: sensor_captured.extend(ents)))
+        await number_async_setup_entry(hass, entry, MagicMock(side_effect=lambda ents, **kw: number_captured.extend(ents)))
+        await valve_async_setup_entry(hass, entry, MagicMock(side_effect=lambda ents, **kw: valve_captured.extend(ents)))
+
+        all_ids = [
+            entity._attr_unique_id
+            for entity in (*sensor_captured, *number_captured, *valve_captured)
+            if getattr(entity, "_attr_unique_id", None)
+        ]
+        assert len(all_ids) == len(set(all_ids)), "a unique_id was offered by more than one entity"
+
+        # Written explicitly, not derived, so a rename of any pre-phase id
+        # (in particular the number-platform duration and the sensor-platform
+        # water-used id) fails this assertion rather than silently passing.
+        expected = {
+            "rainpoint_100_200_1_battery",
+            "rainpoint_100_200_1_rssi",
+            "rainpoint_100_200_1_raw_payload",
+            "rainpoint_100_200_1_zone1_water_used",
+            "rainpoint_100_200_1_zone1_run_duration",
+            "rainpoint_100_200_1_zone1_duration",
+            "rainpoint_100_200_1_zone1",
+        }
+        assert set(all_ids) == expected
+
+
+class TestZoneRunDurationLateArrival:
+    """A zone appearing for the first time on an already-added key gets no new entity this session.
+
+    _LateSensorEntityAdder's add-once gate is per sensor key, not per zone, so
+    a key that already has its model entities never triggers a second
+    collect() call to react to a newly-reported zone. This is
+    RainPointZoneWaterUsageSensor's existing behaviour, exercised here for
+    the run-duration entity because both are built by the same factory and
+    gated by the same key.
+    """
+
+    _ONE_ZONE_TLV_PAYLOAD = "11#18dc0119d80025ad3c00"
+    """Hand-built HTV245 TLV frame reporting zone 1 open (60s) and no zone 2 record at all."""
+
+    @staticmethod
+    def _hub_record(mid=200, addr=1):
+        return {
+            "mid": mid,
+            "name": "Hub A",
+            "deviceName": "d",
+            "productKey": "pk",
+            "homeName": "H",
+            "subDevices": [{"addr": addr, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"}],
+        }
+
+    @staticmethod
+    def _status(value, mid=200, sid="D01"):
+        return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": value, "time": 1785420002247}]}]
+
+    @pytest.mark.asyncio
+    async def test_a_zone_added_mid_session_grows_no_new_entity(self):
+        """One zone at first refresh, a second zone at a later refresh: the key gates the addition, not the zone."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [self._hub_record()]
+        client.get_multiple_device_status.return_value = self._status(self._ONE_ZONE_TLV_PAYLOAD)
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+        entry.options = {}
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"test_entry": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["test_entry"]["coordinator"] = coordinator
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+        await coordinator.async_config_entry_first_refresh()
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        first_durations = [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)]
+        assert len(first_durations) == 1
+
+        client.get_multiple_device_status.return_value = self._status(SAMPLE_HTV245_TLV_PAYLOAD)
+        await coordinator.async_refresh()
+
+        assert [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)] == first_durations
 
 
 class TestHtv210bDispatch:
