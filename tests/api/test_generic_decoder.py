@@ -12,10 +12,10 @@ from tests.payload_samples import (
     CATALOG_ANCHOR_MODEL,
     HWS019WRF_V2_PAYLOAD,
     MOISTURE_FULL_ASCII_PAYLOAD,
+    MOISTURE_FULL_HEX_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
-    SAMPLE_HTV405_TLV_PAYLOAD,
     SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD,
 )
 
@@ -271,20 +271,29 @@ class TestDecodeGenericCatalogAnnotation:
     def test_tlv_field_with_no_catalog_match_carries_no_catalog_key(self):
         """A TLV field whose index the committed catalog does not declare stays unannotated.
 
-        HTV405FRF's catalog entry has no dpCode 54 (STA_REPTIME), a real gap
-        in the committed catalog rather than a monkeypatched one.
+        HCS026FRF's sole variant 317 declares STA_BAT, STA_REPTIME, STA_RH and
+        STA_RSSI, so the STA_ILLUMINANCE the frame genuinely carries has no
+        catalog counterpart. A real gap in the committed catalog rather than a
+        monkeypatched one, and a durable one: the model has exactly one
+        variant, so there is no second row a later catalog refresh could
+        resolve the field against.
+
+        This replaced HTV405FRF's missing dpCode 54 (STA_REPTIME), which
+        RainPoint closed in the 2026-08 catalog refresh.
         """
-        no_model = decode_generic(SAMPLE_HTV405_TLV_PAYLOAD)
+        no_model = decode_generic(MOISTURE_FULL_HEX_PAYLOAD)
         annotated_fields = [dict(f) for f in no_model["fields"]]
-        generic_decoder_module._annotate_fields_with_catalog(annotated_fields, "HTV405FRF", no_model["dp_id_prefixed"], "38")
+        generic_decoder_module._annotate_fields_with_catalog(annotated_fields, "HCS026FRF", no_model["dp_id_prefixed"], "317")
 
-        no_model_by_dp_id = {f["dp_id"]: f for f in no_model["fields"]}
-        reptime = next(f for f in annotated_fields if f["name"] == "STA_REPTIME")
+        # Matched by name, not dp_id: this frame is not dp-id-prefixed, so every
+        # field reports dp_id 0 and a dp_id-keyed lookup would collapse to
+        # whichever field came last. STA_ILLUMINANCE appears exactly once here.
+        illuminance = next(f for f in annotated_fields if f["name"] == "STA_ILLUMINANCE")
+        expected = next(f for f in no_model["fields"] if f["name"] == "STA_ILLUMINANCE")
 
-        assert "catalog" not in reptime
-        expected = no_model_by_dp_id[reptime["dp_id"]]
-        assert reptime["value"] == expected["value"]
-        assert reptime["raw"] == expected["raw"]
+        assert "catalog" not in illuminance
+        assert illuminance["value"] == expected["value"]
+        assert illuminance["raw"] == expected["raw"]
 
     def test_group_count_mismatch_leaves_the_whole_group_unannotated(self, monkeypatch):
         """A group whose field count disagrees with the catalog's candidate count is refused entirely.

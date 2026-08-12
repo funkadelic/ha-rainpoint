@@ -2099,10 +2099,10 @@ class TestHic801wCatalogKeying:
     one."""
 
     def test_variant_279_is_the_8_port_accessory_with_ctl_water(self):
-        """279 declares 9 datapoints, an 8-port accessory, and CTL_WATER --
+        """279 declares 10 datapoints, an 8-port accessory, and CTL_WATER --
         never CTL_BT_WATER -- so no DP-endpoint routing is involved."""
         entry = get_catalog_entry("HIC801W", 279)
-        assert len(entry) == 9
+        assert len(entry) == 10
         identities = [e["identity"] for e in entry]
         assert "CTL_WATER" in identities
         assert "CTL_BT_WATER" not in identities

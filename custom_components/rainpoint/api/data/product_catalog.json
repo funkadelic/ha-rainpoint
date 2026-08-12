@@ -39,6 +39,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -73,10 +80,17 @@
         },
         {
           "dpCode": 32,
-          "dpDataType": "TD2",
+          "dpDataType": "U8",
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -164,6 +178,13 @@
           "dpLen": 4,
           "dpPort": 0,
           "identity": "STA_OTHER_TOTAL"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -216,6 +237,13 @@
           "dpLen": 2,
           "dpPort": 0,
           "identity": "STA_7DAY_RAIN"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -254,6 +282,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_BAT"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -292,6 +327,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_BAT"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -337,6 +379,13 @@
           "dpLen": 1,
           "dpPort": 2,
           "identity": "STA_BAT"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -413,6 +462,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -444,6 +500,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -578,6 +641,13 @@
           "dpLen": 4,
           "dpPort": 0,
           "identity": "STA_OTHER_TOTAL"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -769,6 +839,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_BAT"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -814,6 +891,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_BAT"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -984,6 +1068,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_BAT"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -1043,6 +1134,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSRP"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -1102,6 +1200,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSRP"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -1161,6 +1266,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSRP"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -1192,6 +1304,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_BAT"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -1230,6 +1349,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_BAT"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -1741,6 +1867,13 @@
           "dpLen": 4,
           "dpPort": 0,
           "identity": "STA_TS_DET"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -1810,7 +1943,7 @@
         },
         {
           "dpCode": 37,
-          "dpDataType": "S32",
+          "dpDataType": "U32",
           "dpLen": 4,
           "dpPort": 0,
           "identity": "STA_WATER_ZONES"
@@ -1821,6 +1954,13 @@
           "dpLen": 4,
           "dpPort": 0,
           "identity": "STA_TS_DET"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -2070,6 +2210,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -2171,6 +2318,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -2314,6 +2468,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSRP"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -2492,6 +2653,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSRP"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -2528,7 +2696,7 @@
           "dpCode": 11,
           "dpDataType": "",
           "dpLen": 1,
-          "dpPort": 0,
+          "dpPort": 1,
           "identity": "CTL_SET_DELAY"
         },
         {
@@ -2579,6 +2747,13 @@
           "dpLen": 4,
           "dpPort": 1,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -2652,6 +2827,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -2739,6 +2921,13 @@
           "dpLen": 4,
           "dpPort": 1,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -2812,6 +3001,13 @@
           "dpLen": 1,
           "dpPort": 1,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -2899,6 +3095,13 @@
           "dpLen": 4,
           "dpPort": 1,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -2958,6 +3161,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -3045,6 +3255,13 @@
           "dpLen": 4,
           "dpPort": 1,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -3118,6 +3335,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -3259,6 +3483,13 @@
           "identity": "STA_LASTUSAGE"
         },
         {
+          "dpCode": 17,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_POWER"
+        },
+        {
           "dpCode": 19,
           "dpDataType": "U32",
           "dpLen": 4,
@@ -3271,6 +3502,13 @@
           "dpLen": 4,
           "dpPort": 1,
           "identity": "STA_EVTIME"
+        },
+        {
+          "dpCode": 29,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_VOLTAGE"
         },
         {
           "dpCode": 30,
@@ -3379,6 +3617,13 @@
           "dpLen": 4,
           "dpPort": 1,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -3466,6 +3711,13 @@
           "dpLen": 4,
           "dpPort": 1,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -3581,6 +3833,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -3717,6 +3976,13 @@
           "dpLen": 4,
           "dpPort": 2,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -3853,6 +4119,13 @@
           "dpLen": 4,
           "dpPort": 2,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -4111,6 +4384,13 @@
           "dpLen": 4,
           "dpPort": 2,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -4247,6 +4527,13 @@
           "dpLen": 4,
           "dpPort": 2,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
@@ -4606,8 +4893,8 @@
         },
         {
           "dpCode": 32,
-          "dpDataType": "TD2",
-          "dpLen": 2,
+          "dpDataType": "U8",
+          "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
         },
@@ -4645,6 +4932,13 @@
           "dpLen": 4,
           "dpPort": 4,
           "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": true,
