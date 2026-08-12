@@ -15,6 +15,10 @@ proves none of that wiring.
 
 from __future__ import annotations
 
+import ast
+import inspect
+import logging
+import textwrap
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -22,20 +26,36 @@ from unittest.mock import MagicMock, patch
 import pytest
 from homeassistant.const import ATTR_RESTORED
 
-from custom_components.rainpoint import _sync_orphaned_entity_issues_on_updates
+from custom_components.rainpoint import (
+    _build_leftover_row_pairs,
+    _debounced_leftover_pairs,
+    _ledger_pairs_by_key,
+    _leftover_pairs_now,
+    _remove_orphaned_key_rows,
+    _row_is_unbacked,
+    _sync_orphaned_entity_issues_on_updates,
+)
 from custom_components.rainpoint.const import (
     DOMAIN,
+    GENERIC_CONTROL_UNIQUE_ID_MARKER,
+    GENERIC_UNIQUE_ID_MARKER,
+    HUB_IDENTIFIER_PREFIX,
     LEFTOVER_ENTITIES_TRANSLATION_KEY,
     LEFTOVER_ROW_DEBOUNCE_UPDATES,
+    ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
 )
-from custom_components.rainpoint.entity import LATE_ADDER_STORE_KEY
+from custom_components.rainpoint.coordinator import ORPHANED_KEY_DEBOUNCE_POLLS
+from custom_components.rainpoint.entity import LATE_ADDER_STORE_KEY, LateEntityAdder
 from custom_components.rainpoint.repairs import async_create_fix_flow
 from custom_components.rainpoint.sensor import async_setup_entry as sensor_async_setup_entry
 from custom_components.rainpoint.valve import async_setup_entry as valve_async_setup_entry
 from tests.test_orphan_removal import (
     ENTRY_ID,
+    HID,
     SENSOR_KEY,
     _build_timeline,
+    _hub_record,
+    _ledger_entity,
     _patched_issue_registry,
 )
 
@@ -87,6 +107,9 @@ class _Harness:
         self.entity_get_raises = False
         self.device_get_raises = False
         self.states_raise = False
+        # Entity ids whose removal the registry refuses, which is how a row
+        # that raises on the way out is driven into the per-row guard.
+        self.remove_raises_for: set[str] = set()
 
     def add_row(
         self,
@@ -154,7 +177,9 @@ class _Harness:
             """Records each removal against the row's own entity id."""
 
             def async_remove(self, entity_id):
-                """Record one removal call."""
+                """Record one removal call, or refuse it."""
+                if entity_id in harness.remove_raises_for:
+                    raise RuntimeError(f"{entity_id} is busy")
                 harness.removed.append(entity_id)
 
         return _FakeEntityRegistry()
@@ -183,11 +208,16 @@ class _Harness:
             return self._entity_registry()
 
         def _entity_entries(registry, entry_id):
-            """Return this config entry's surviving rows, re-derived per call."""
+            """Return this config entry's surviving rows, re-derived per call.
+
+            The rows themselves rather than clones of them, because a guard
+            test needs a row shape that raises when one of its fields is read,
+            and cloning through vars() would evaluate that field first.
+            """
             return [
-                SimpleNamespace(**vars(row))
+                row
                 for row in self.entity_rows
-                if row.config_entry_id == entry_id and row.entity_id not in self.removed
+                if getattr(row, "config_entry_id", None) == entry_id and getattr(row, "entity_id", None) not in self.removed
             ]
 
         def _device_get(hass):
@@ -228,6 +258,43 @@ async def _armed_install(harness: _Harness):
     await valve_async_setup_entry(hass, entry, harness.make_add_entities("valve"))
     await sensor_async_setup_entry(hass, entry, harness.make_add_entities("sensor"))
     return coordinator, hass, entry, client
+
+
+def _adder_with(domain: str, unique_ids, key: str = SENSOR_KEY) -> LateEntityAdder:
+    """A real adder whose ledger holds these unique_ids for one sensor key.
+
+    A real one rather than a stub, because the derivation reads the ledger
+    through the same two accessors the removal path does, and a stub that
+    answered them without ever having recorded anything would prove neither.
+    """
+    coordinator = SimpleNamespace(data={"sensors": {}})
+    adder = LateEntityAdder(
+        coordinator,
+        lambda entities: None,
+        lambda k, i: [_ledger_entity(unique_id) for unique_id in unique_ids],
+        domain,
+    )
+    adder.collect(key, {})
+    return adder
+
+
+def _seed_adder() -> LateEntityAdder:
+    """One adder recording a single sensor row, so the key is a candidate at all.
+
+    A sensor key reaches the derivation only when some adder recorded it this
+    session, so every scan test needs one ledger entry that is not the row
+    under test.
+    """
+    return _adder_with("sensor", [f"rainpoint_{SENSOR_KEY}_battery"])
+
+
+def _derive(harness: _Harness, *, adders=None, live_keys=frozenset({SENSOR_KEY})) -> dict:
+    """Run the leftover derivation once over one seeded install."""
+    hass = SimpleNamespace(data={}, states=harness.state_machine())
+    entry = SimpleNamespace(entry_id=ENTRY_ID)
+    entry_store = {LATE_ADDER_STORE_KEY: list(adders if adders is not None else [_seed_adder()])}
+    with harness.patched():
+        return _build_leftover_row_pairs(hass, entry, entry_store, live_keys)
 
 
 def _ledger_snapshot(hass) -> list[tuple[str, frozenset[str]]]:
@@ -300,3 +367,495 @@ class TestLeftoverRowEndToEnd:
                 await coordinator.async_refresh()
                 assert create.call_count == 1
                 assert any(call.args[2] == issue_id for call in delete.call_args_list)
+
+
+class TestLivenessIsTheGate:
+    """Nothing without an exact restored marker behind it is ever a candidate.
+
+    This is the guard the whole shape rests on. Every case here fails against
+    a derivation that reads the marker loosely, and every one of them errs
+    towards leaving a row alone, because the only thing downstream of a True
+    verdict is an offer to delete recorder history that cannot be restored.
+    """
+
+    def test_a_row_whose_state_carries_no_restored_marker_is_never_a_candidate(self):
+        """The ordinary live row: in no ledger, on a live key, and still safe."""
+        harness = _Harness()
+        harness.add_row(LEFTOVER_ENTITY_ID, LEFTOVER_UNIQUE_ID, state=_live_state())
+
+        assert _derive(harness) == {}
+
+    def test_a_row_with_no_state_at_all_is_never_a_candidate(self):
+        """An absent state establishes nothing, so it cannot establish death."""
+        harness = _Harness()
+        harness.add_row(LEFTOVER_ENTITY_ID, LEFTOVER_UNIQUE_ID)
+
+        assert _derive(harness) == {}
+
+    def test_a_truthy_restored_value_that_is_not_the_boolean_is_never_a_candidate(self):
+        """The identity comparison, as the guard it exists to be.
+
+        A state stand-in can answer a truthy object for any attribute, so a
+        truthiness test here would read a whole harness as dead.
+        """
+        harness = _Harness()
+        harness.add_row(LEFTOVER_ENTITY_ID, LEFTOVER_UNIQUE_ID, state=_restored_state("yes"))
+
+        assert _derive(harness) == {}
+
+    def test_a_state_whose_attributes_are_not_a_mapping_is_never_a_candidate(self):
+        """The row shape a MagicMock state machine hands back."""
+        harness = _Harness()
+        harness.add_row(LEFTOVER_ENTITY_ID, LEFTOVER_UNIQUE_ID, state=SimpleNamespace(attributes=MagicMock()))
+
+        assert _derive(harness) == {}
+
+    def test_an_unreadable_state_machine_yields_no_candidates_rather_than_every_row(self):
+        """The failure direction that matters: unreadable means "leave alone"."""
+        harness = _Harness()
+        harness.add_leftover_row()
+        harness.states_raise = True
+
+        assert _derive(harness) == {}
+
+    def test_the_gate_in_isolation_answers_true_only_for_an_exact_marker(self):
+        """The predicate on its own, including the shape that raises."""
+        hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
+        assert _row_is_unbacked(hass, "sensor.absent") is False
+
+        dead = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: _restored_state()))
+        assert _row_is_unbacked(dead, "sensor.dead") is True
+
+
+class TestWhatTheScanMayNotReach:
+    """Four populations the scan is prohibited from offering, and one it may."""
+
+    def test_a_disabled_row_is_never_a_candidate(self):
+        """A row the user disabled is still the user's. It is not leftover."""
+        harness = _Harness()
+        harness.add_leftover_row(disabled_by="user")
+
+        assert _derive(harness) == {}
+
+    def test_a_generic_namespace_row_is_never_a_candidate_in_either_namespace(self):
+        """The generic sweep owns that namespace and governs it by its own
+        toggles, so a second path deciding on those rows would let one of them
+        remove what the other means to keep."""
+        harness = _Harness()
+        harness.add_leftover_row(
+            entity_id=f"sensor.rainpoint_{SENSOR_KEY}{GENERIC_UNIQUE_ID_MARKER}humidity",
+            unique_id=f"rainpoint_{SENSOR_KEY}{GENERIC_UNIQUE_ID_MARKER}humidity",
+        )
+        harness.add_leftover_row(
+            entity_id=f"switch.rainpoint_{SENSOR_KEY}{GENERIC_CONTROL_UNIQUE_ID_MARKER}1",
+            unique_id=f"rainpoint_{SENSOR_KEY}{GENERIC_CONTROL_UNIQUE_ID_MARKER}1",
+        )
+
+        assert _derive(harness) == {}
+
+    def test_a_per_zone_row_is_never_a_candidate_in_any_of_its_spellings(self):
+        """The narrowing guard, in the only direction it may ever apply.
+
+        A zone produces its entities the first time that zone reports, so a
+        zone nobody has watered since the last restart reads exactly like a
+        zone that is gone for good. All four spellings this integration writes
+        are covered, not just the bare one.
+        """
+        harness = _Harness()
+        for suffix in ("zone1", "zone1_duration", "zone2_water_used", "zone3_state"):
+            unique_id = f"rainpoint_{SENSOR_KEY}_{suffix}"
+            harness.add_leftover_row(entity_id=f"sensor.{unique_id}", unique_id=unique_id)
+
+        assert _derive(harness) == {}
+
+    def test_a_row_carrying_no_string_unique_id_is_never_a_candidate(self):
+        """A row shape the scan cannot name a pair for cannot be removed by one."""
+        harness = _Harness()
+        harness.add_leftover_row(entity_id="sensor.no_unique_id", unique_id=None)
+
+        assert _derive(harness) == {}
+
+    def test_a_row_whose_entity_id_carries_no_domain_is_never_a_candidate(self):
+        """The domain is half the pair, and there is nowhere else to read it
+        from: an entity has no domain until Home Assistant registers it."""
+        harness = _Harness()
+        harness.add_leftover_row(entity_id="no_domain_here", unique_id=LEFTOVER_UNIQUE_ID)
+
+        assert _derive(harness) == {}
+
+    def test_a_row_whose_pair_an_adder_recorded_is_never_a_candidate(self):
+        """That row belongs to the departed-key shape, whose scope is the
+        ledger. Two shapes claiming one row is how a live row gets deleted."""
+        harness = _Harness()
+        recorded = f"rainpoint_{SENSOR_KEY}_battery"
+        harness.add_leftover_row(entity_id=f"sensor.{recorded}", unique_id=recorded)
+
+        assert _derive(harness) == {}
+
+    def test_the_same_unique_id_in_another_domain_is_a_separate_candidate(self):
+        """Registry uniqueness is per domain, so a unique_id on its own is a
+        partial identifier. The recorded pair is spared and the unrecorded one
+        in the other domain is offered, from one and the same id."""
+        harness = _Harness()
+        recorded = f"rainpoint_{SENSOR_KEY}_battery"
+        harness.add_leftover_row(entity_id=f"sensor.{recorded}", unique_id=recorded)
+        harness.add_leftover_row(entity_id=f"binary_sensor.{recorded}", unique_id=recorded)
+
+        assert _derive(harness) == {SENSOR_KEY: frozenset({("binary_sensor", recorded)})}
+
+
+class TestHowARowReachesASensorKey:
+    """Only through its device row's identifier, never through its own id."""
+
+    def test_a_previous_unique_id_shape_stays_out_of_reach(self):
+        """The hub identifier shape that predates the hub identity re-key
+        resolves to something no adder recorded, so a row sitting on it fails
+        the candidate-key test at the same gate that excludes a foreign row.
+        Driven with the real old spelling rather than an invented string."""
+        harness = _Harness(device_rows=[_sub_device_row(sensor_key=f"{HUB_IDENTIFIER_PREFIX}{HID}")])
+        harness.add_leftover_row()
+
+        assert _derive(harness) == {}
+
+    def test_a_row_whose_device_row_cannot_be_resolved_is_never_a_candidate(self):
+        """No device row means no sensor key, and no sensor key means no card."""
+        harness = _Harness(device_rows=[])
+        harness.add_leftover_row()
+
+        assert _derive(harness) == {}
+
+    def test_a_key_absent_from_the_current_poll_yields_nothing(self):
+        """The mutual-exclusion half: a key the poll does not list belongs to
+        the departed shape, whatever its rows look like."""
+        harness = _Harness()
+        harness.add_leftover_row()
+
+        assert _derive(harness, live_keys=frozenset()) == {}
+
+
+class TestTheScanDegradesRatherThanRaising:
+    """It runs inside a coordinator listener, so nothing here may propagate."""
+
+    def test_an_unreadable_entity_registry_yields_no_candidates(self):
+        """Offering nothing is the safe answer for a surface that deletes."""
+        harness = _Harness()
+        harness.add_leftover_row()
+        harness.entity_get_raises = True
+
+        assert _derive(harness) == {}
+
+    def test_an_unreadable_device_registry_yields_no_candidates(self):
+        """Without it no row can be resolved to a key at all."""
+        harness = _Harness()
+        harness.add_leftover_row()
+        harness.device_get_raises = True
+
+        assert _derive(harness) == {}
+
+    def test_a_malformed_device_row_does_not_abort_the_scan(self):
+        """A row carrying no identifiers attribute at all is the shape that
+        raises rather than answering None, and the row beside it must still
+        resolve."""
+        harness = _Harness(
+            device_rows=[
+                SimpleNamespace(id="device_missing_identifiers", config_entries=frozenset({ENTRY_ID})),
+                _sub_device_row(),
+            ]
+        )
+        harness.add_leftover_row()
+
+        assert _derive(harness) == {SENSOR_KEY: frozenset({("sensor", LEFTOVER_UNIQUE_ID)})}
+
+    def test_a_malformed_entity_row_does_not_abort_the_scan(self):
+        """One row whose fields cannot be read must cost only that row."""
+
+        class _ExplodingRow:
+            """A registry row whose unique_id cannot be read at all."""
+
+            entity_id = "sensor.exploding"
+            device_id = SUB_DEVICE_ROW_ID
+            disabled_by = None
+            config_entry_id = ENTRY_ID
+
+            @property
+            def unique_id(self):
+                """Raise the way an unexpected row shape would."""
+                raise RuntimeError("unreadable row")
+
+        harness = _Harness()
+        harness.entity_rows.append(_ExplodingRow())
+        harness.add_leftover_row()
+
+        assert _derive(harness) == {SENSOR_KEY: frozenset({("sensor", LEFTOVER_UNIQUE_ID)})}
+
+    def test_a_malformed_adder_does_not_abort_the_pair_index(self):
+        """The other adders' recorded pairs must still be known, or their live
+        rows would read as unrecorded and become candidates."""
+        broken = SimpleNamespace()
+        harness = _Harness()
+        recorded = f"rainpoint_{SENSOR_KEY}_battery"
+        harness.add_leftover_row(entity_id=f"sensor.{recorded}", unique_id=recorded)
+        harness.add_leftover_row()
+
+        assert _derive(harness, adders=[broken, _seed_adder()]) == {SENSOR_KEY: frozenset({("sensor", LEFTOVER_UNIQUE_ID)})}
+
+    def test_the_pair_index_skips_only_the_adder_it_could_not_read(self):
+        """The index in isolation, which is what the claim above rests on."""
+        pairs = _ledger_pairs_by_key([SimpleNamespace(), _seed_adder()])
+
+        assert pairs == {SENSOR_KEY: {("sensor", f"rainpoint_{SENSOR_KEY}_battery")}}
+
+
+class TestTheOrderRowsArriveInDoesNotMatter:
+    """The match is set membership, so the registry's own order is irrelevant."""
+
+    def test_reversing_the_registry_rows_produces_identical_candidates(self):
+        """Driven by reversing the row list rather than by asserting a sort,
+        because a sort would prove only that this test sorted something."""
+        forward = _Harness()
+        for index in range(4):
+            unique_id = f"rainpoint_{SENSOR_KEY}_dead{index}"
+            forward.add_leftover_row(entity_id=f"sensor.{unique_id}", unique_id=unique_id)
+        forward.add_row(f"sensor.rainpoint_{SENSOR_KEY}_battery", f"rainpoint_{SENSOR_KEY}_battery", state=_live_state())
+
+        reverse = _Harness()
+        reverse.entity_rows = list(reversed(forward.entity_rows))
+        reverse.states = dict(forward.states)
+
+        assert _derive(forward) == _derive(reverse)
+
+
+class TestThePairWindow:
+    """Each pair serves its own window, and a broken run starts a fresh one."""
+
+    def test_a_pair_is_offered_only_once_it_has_served_the_whole_window(self):
+        """The boundary, counted rather than assumed."""
+        counts: dict = {}
+        pairs = {SENSOR_KEY: frozenset({("sensor", LEFTOVER_UNIQUE_ID)})}
+
+        for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES - 1):
+            assert _debounced_leftover_pairs(counts, pairs) == {}
+
+        assert _debounced_leftover_pairs(counts, pairs) == pairs
+
+    def test_a_pair_that_stops_qualifying_serves_a_fresh_window_when_it_returns(self):
+        """A row that came back to life and died again is a new observation,
+        not a resumption. Decrementing, or leaving the count in place, would
+        offer it on the very next update after it died a second time."""
+        counts: dict = {}
+        pairs = {SENSOR_KEY: frozenset({("sensor", LEFTOVER_UNIQUE_ID)})}
+
+        for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES - 1):
+            _debounced_leftover_pairs(counts, pairs)
+        # One update in which the row is backed again drops the entry outright.
+        assert _debounced_leftover_pairs(counts, {}) == {}
+        assert counts == {}
+
+        assert _debounced_leftover_pairs(counts, pairs) == {}
+
+    def test_a_second_dead_row_on_the_same_key_serves_its_own_window(self):
+        """Per pair rather than per key: a sibling's accumulated count must not
+        carry a pair that first qualified today straight to the card."""
+        counts: dict = {}
+        first = ("sensor", LEFTOVER_UNIQUE_ID)
+        second = ("sensor", f"rainpoint_{SENSOR_KEY}_stale")
+
+        for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+            _debounced_leftover_pairs(counts, {SENSOR_KEY: frozenset({first})})
+
+        assert _debounced_leftover_pairs(counts, {SENSOR_KEY: frozenset({first, second})}) == {SENSOR_KEY: frozenset({first})}
+
+
+class TestWhatTheConfirmMayTake:
+    """The removal scope on this shape, and everything it must leave alone."""
+
+    @staticmethod
+    def _confirm(harness: _Harness, pairs, *, adders=None):
+        """Run the removal executor for one key over a seeded install."""
+        adder = adders[0] if adders else _seed_adder()
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}}, states=harness.state_machine())
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+        with harness.patched():
+            return _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, leftover_pairs=pairs), adder
+
+    def test_exactly_the_named_pair_goes_and_the_device_row_stays(self):
+        """The device is still on the account and still reporting, so releasing
+        its device row would take a live device's page."""
+        harness = _Harness()
+        harness.add_leftover_row()
+        harness.add_row(f"sensor.rainpoint_{SENSOR_KEY}_battery", f"rainpoint_{SENSOR_KEY}_battery", state=_live_state())
+
+        count, adder = self._confirm(harness, frozenset({("sensor", LEFTOVER_UNIQUE_ID)}))
+
+        assert count == 1
+        assert harness.removed == [LEFTOVER_ENTITY_ID]
+        assert harness.released == []
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_battery"})
+
+    def test_only_the_exactly_matching_pair_goes_when_two_domains_share_one_id(self):
+        """The adjacency case as a removal rather than as a derivation: naming
+        one pair may never take the row in the other domain."""
+        harness = _Harness()
+        shared = f"rainpoint_{SENSOR_KEY}_shared"
+        harness.add_leftover_row(entity_id=f"sensor.{shared}", unique_id=shared)
+        harness.add_leftover_row(entity_id=f"binary_sensor.{shared}", unique_id=shared)
+
+        count, _adder = self._confirm(harness, frozenset({("binary_sensor", shared)}))
+
+        assert count == 1
+        assert harness.removed == [f"binary_sensor.{shared}"]
+
+    def test_an_empty_pair_set_removes_nothing_and_leaves_one_breadcrumb(self, caplog):
+        """Home Assistant deletes a fixable issue once its flow finishes, so a
+        confirm that resolved to nothing looks to the user exactly like a
+        successful removal. The log line is the only trace left."""
+        harness = _Harness()
+        harness.add_leftover_row()
+        empty = _adder_with("sensor", [])
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint"):
+            count, adder = self._confirm(harness, frozenset(), adders=[empty])
+
+        assert count == 0
+        assert harness.removed == []
+        assert harness.released == []
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+        breadcrumbs = [r.getMessage() for r in caplog.records if "Nothing in scope for sensor key" in r.getMessage()]
+        assert len(breadcrumbs) == 1
+        assert SENSOR_KEY in breadcrumbs[0]
+
+    def test_a_row_that_refuses_to_go_does_not_break_the_confirm(self):
+        """This runs inside a Repairs flow step, so nothing may propagate, and
+        the row that did go still counts."""
+        harness = _Harness()
+        harness.add_leftover_row()
+        second = f"rainpoint_{SENSOR_KEY}_stale"
+        harness.add_leftover_row(entity_id=f"sensor.{second}", unique_id=second)
+        harness.remove_raises_for = {LEFTOVER_ENTITY_ID}
+
+        count, adder = self._confirm(harness, frozenset({("sensor", LEFTOVER_UNIQUE_ID), ("sensor", second)}))
+
+        assert count == 1
+        assert harness.removed == [f"sensor.{second}"]
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_battery"})
+
+
+class TestTheTwoShapesAreMutuallyExclusive:
+    """One key holds exactly one shape at every step of its whole life."""
+
+    @pytest.mark.asyncio
+    async def test_a_key_with_a_dead_row_that_later_departs_never_holds_both(self):
+        """Driven from present-with-a-dead-row through departure to aged out.
+
+        The leftover derivation requires the key to be in the current poll and
+        the aged-out verdict requires it to have been absent for a whole window
+        of them, so the two can never coincide. That is what lets one issue id
+        serve both without a live card ever changing its body underneath the
+        user.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, delete):
+            coordinator, _hass, _entry, client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                # Present, reporting, and carrying one dead row.
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                assert create.call_count == 1
+                assert create.call_args.kwargs["translation_key"] == LEFTOVER_ENTITIES_TRANSLATION_KEY
+                issue_id = create.call_args.args[2]
+
+                # The child leaves the enumeration. The key is no longer in the
+                # poll, so it is no longer leftover, and it has not aged out
+                # yet either: the card clears and nothing replaces it.
+                client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+                await coordinator.async_refresh()
+                assert create.call_count == 1
+                assert any(call.args[2] == issue_id for call in delete.call_args_list)
+
+                # It ages out, and the same id comes back carrying the other
+                # shape's copy.
+                for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                    await coordinator.async_refresh()
+
+                assert create.call_count == 2
+                assert create.call_args.args[2] == issue_id
+                assert create.call_args.kwargs["translation_key"] == ORPHANED_ENTITIES_ISSUE_ID_PREFIX
+                assert "leftover" not in create.call_args.kwargs["data"]
+
+
+class TestTheNarrowedPropertiesHoldInSource:
+    """The three properties this path was narrowed to, pinned as source facts.
+
+    A behavioural suite proves each function still does what it does; it
+    cannot prove that none of them grew a second reason nobody has exercised
+    yet. These assertions fail in review rather than in production if one of
+    the three is ever loosened.
+    """
+
+    # Every function this widening added or rewrote. The narrowing claims below
+    # are asserted over exactly these and nothing else, so an unrelated helper
+    # elsewhere in the module cannot satisfy or break them by accident.
+    SCAN_FUNCTIONS = (
+        _row_is_unbacked,
+        _ledger_pairs_by_key,
+        _build_leftover_row_pairs,
+        _debounced_leftover_pairs,
+        _leftover_pairs_now,
+    )
+
+    @staticmethod
+    def _tree(func):
+        """Parse one function's own source into an AST."""
+        return ast.parse(textwrap.dedent(inspect.getsource(func)))
+
+    def test_the_executor_has_exactly_one_entity_removal_call_site(self):
+        """The widening reuses the existing removal loop rather than adding a
+        second one. Two call sites is how one of them acquires a guard the
+        other does not have."""
+        source = inspect.getsource(_remove_orphaned_key_rows)
+
+        assert source.count("registry.async_remove(") == 1
+
+    def test_the_leftover_branch_reaches_neither_the_device_release_nor_a_forget(self):
+        """Both would be wrong rather than merely unnecessary here: the device
+        row still represents a device the current poll lists, and no pair on
+        this branch is in any ledger, so a forget would release unique ids that
+        live entities still hold."""
+        function = self._tree(_remove_orphaned_key_rows).body[0]
+        guards = [node for node in ast.walk(function) if isinstance(node, ast.If) and ast.unparse(node.test) == "not leftover"]
+        assert len(guards) == 1
+
+        guarded_nodes = set(map(id, ast.walk(guards[0])))
+        outside = {
+            ast.unparse(node.func) for node in ast.walk(function) if isinstance(node, ast.Call) and id(node) not in guarded_nodes
+        }
+
+        assert "_release_emptied_device_row" not in outside
+        assert not [name for name in outside if name.endswith(".forget")]
+
+    @pytest.mark.parametrize("func", SCAN_FUNCTIONS, ids=lambda f: f.__name__)
+    def test_no_function_here_tests_a_unique_id_for_a_prefix_or_a_suffix(self, func):
+        """Removal stays an exact pair list. The only two string tests allowed
+        anywhere on this path are the generic-namespace containment check, which
+        keeps this scan out of a namespace another sweep owns, and the zone
+        exclusion, which can only ever remove a candidate."""
+        tree = self._tree(func)
+        attribute_calls = {
+            ast.unparse(node.func)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+
+        assert not [name for name in attribute_calls if name.endswith((".startswith", ".endswith"))]
+        matches = {name for name in attribute_calls if name.endswith((".search", ".match", ".fullmatch"))}
+        assert matches <= {"_ZONE_UNIQUE_ID_RE.search"}
+
+        containments = {
+            ast.unparse(node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Compare) and any(isinstance(op, ast.In | ast.NotIn) for op in node.ops)
+        }
+        assert {test for test in containments if "unique_id" in test} <= {"GENERIC_UNIQUE_ID_MARKER in unique_id"}

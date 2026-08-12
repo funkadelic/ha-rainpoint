@@ -15,7 +15,10 @@ from unittest.mock import MagicMock, patch
 
 import custom_components.rainpoint as rainpoint_pkg
 from custom_components.rainpoint import repairs
-from custom_components.rainpoint.const import PUSH_HUB_IDENTITY_ISSUE_ID
+from custom_components.rainpoint.const import (
+    LEFTOVER_ENTITIES_TRANSLATION_KEY,
+    PUSH_HUB_IDENTITY_ISSUE_ID,
+)
 from custom_components.rainpoint.repairs import (
     HubConnectivityRecord,
     OrphanedEntitiesRecord,
@@ -57,6 +60,11 @@ def _hub_disconnected_entry() -> dict:
 def _orphaned_entities_entry() -> dict:
     """The issues entry whose copy RainPointOrphanedEntityIssues renders into."""
     return _load_en_translations()["issues"]["orphaned_device_entities"]
+
+
+def _leftover_entities_entry() -> dict:
+    """The issues entry the still-present shape of that same card renders into."""
+    return _load_en_translations()["issues"][LEFTOVER_ENTITIES_TRANSLATION_KEY]
 
 
 def _push_hub_identity_entry() -> dict:
@@ -247,6 +255,88 @@ class TestOrphanedEntitiesIssuePlaceholderParity:
         assert "}" not in rendered
         assert confirm["title"].format(**supplied)
         assert entry["title"].format(**supplied)
+
+
+class TestLeftoverEntitiesIssuePlaceholderParity:
+    """The second shape of the fixable card renders from its own copy.
+
+    Mirrors TestOrphanedEntitiesIssuePlaceholderParity above, against the entry
+    a record whose leftover flag is set selects. The two shapes share one issue
+    id and one placeholder supplier but not one body, so a placeholder added to
+    the supplier for either of them has to appear in both copies or one card
+    ships a blank.
+    """
+
+    @staticmethod
+    def _supplied_placeholders() -> dict[str, str]:
+        """Raise a real leftover-shaped issue and capture what the code passed."""
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        record = OrphanedEntitiesRecord(
+            entry_id="e1",
+            sensor_key="100_200_1",
+            addr=1,
+            model="HTV210B",
+            sub_name="Front Valve",
+            hub_name="Hub A",
+            entity_count=1,
+            missed_polls=30,
+            orphaned=True,
+            leftover=True,
+        )
+        with patch.object(repairs.ir, "async_create_issue") as create:
+            manager.async_sync([record])
+        create.assert_called_once()
+        return create.call_args.kwargs["translation_placeholders"]
+
+    def test_the_leftover_record_selects_the_leftover_copy(self):
+        """The card has to describe the shape that raised it: this one says the
+        device is still on the account, its sibling says it is gone."""
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        record = OrphanedEntitiesRecord(
+            entry_id="e1",
+            sensor_key="100_200_1",
+            addr=1,
+            model="HTV210B",
+            sub_name="Front Valve",
+            hub_name="Hub A",
+            entity_count=1,
+            missed_polls=30,
+            orphaned=True,
+            leftover=True,
+        )
+        with patch.object(repairs.ir, "async_create_issue") as create:
+            manager.async_sync([record])
+
+        assert create.call_args.kwargs["translation_key"] == LEFTOVER_ENTITIES_TRANSLATION_KEY
+        assert LEFTOVER_ENTITIES_TRANSLATION_KEY in _load_en_translations()["issues"]
+
+    def test_copy_placeholders_match_the_ones_the_code_supplies(self):
+        """A mismatch in either direction ships a card with a literal brace or a blank."""
+        entry = _leftover_entities_entry()
+        confirm = entry["fix_flow"]["step"]["confirm"]
+        in_copy = _placeholders_in(entry["title"]) | _placeholders_in(confirm["title"]) | _placeholders_in(confirm["description"])
+        assert in_copy == set(self._supplied_placeholders())
+
+    def test_copy_renders_with_the_supplied_values_and_leaves_no_brace(self):
+        """Proves the parity holds under an actual render, not just by name comparison."""
+        entry = _leftover_entities_entry()
+        confirm = entry["fix_flow"]["step"]["confirm"]
+        supplied = self._supplied_placeholders()
+        rendered = confirm["description"].format(**supplied)
+        assert "{" not in rendered
+        assert "}" not in rendered
+        assert confirm["title"].format(**supplied)
+        assert entry["title"].format(**supplied)
+
+    def test_the_copy_says_a_missing_reading_comes_back_on_its_own(self):
+        """The disclosure line is the mitigation for the one class of false
+        positive the technical gates reduce but cannot eliminate, so it may not
+        be edited away."""
+        body = _leftover_entities_entry()["fix_flow"]["step"]["confirm"]["description"]
+
+        assert "come back on its own" in body
+        assert "Cancel" in body
+        assert "cannot be undone" in body
 
 
 class TestPushHubIdentityIssueCopy:
