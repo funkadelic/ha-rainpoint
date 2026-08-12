@@ -1030,7 +1030,7 @@ class TestRainPointOrphanedEntityIssues:
         assert kwargs["data"] == {"entry_id": "e1", "sensor_key": "100_200_1"}
         assert "is_persistent" not in kwargs
         placeholders = kwargs["translation_placeholders"]
-        assert placeholders["sub_name"] == "Front Valve"
+        assert placeholders["device_name"] == "Front Valve"
         assert placeholders["model"] == "HTV245FRF"
         assert placeholders["address"] == "1"
         assert placeholders["hub_name"] == "Hub A"
@@ -1274,7 +1274,7 @@ class TestRainPointOrphanedEntityIssues:
         )
 
         placeholders = create.call_args.kwargs["translation_placeholders"]
-        for name in ("sub_name", "model", "hub_name", "address"):
+        for name in ("device_name", "model", "hub_name", "address"):
             value = placeholders[name]
             assert not set(value) & set("`<>[]()|\\*_#:/@")
             assert "\n" not in value

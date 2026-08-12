@@ -29,12 +29,15 @@ from homeassistant.const import ATTR_RESTORED
 from custom_components.rainpoint import (
     _build_leftover_row_pairs,
     _debounced_leftover_pairs,
+    _fetch_registry_rows,
     _ledger_pairs_by_key,
     _leftover_pairs_now,
     _remove_orphaned_key_rows,
+    _resolve_device_names,
     _row_is_unbacked,
     _sync_orphaned_entity_issues_on_updates,
 )
+from custom_components.rainpoint import dr as rainpoint_dr
 from custom_components.rainpoint.const import (
     DOMAIN,
     GENERIC_CONTROL_UNIQUE_ID_MARKER,
@@ -107,6 +110,10 @@ class _Harness:
         self.entity_get_raises = False
         self.device_get_raises = False
         self.states_raise = False
+        # Counts every call into the patched dr.async_get, which is how a test
+        # proves the device registry is fetched once per sync rather than once
+        # per consumer.
+        self.device_get_calls = 0
         # Entity ids whose removal the registry refuses, which is how a row
         # that raises on the way out is driven into the per-row guard.
         self.remove_raises_for: set[str] = set()
@@ -222,6 +229,7 @@ class _Harness:
 
         def _device_get(hass):
             """Answer the fake device registry, or raise to drive the guard."""
+            self.device_get_calls += 1
             if self.device_get_raises:
                 raise RuntimeError("device registry unavailable")
             return self._device_registry()
@@ -289,12 +297,21 @@ def _seed_adder() -> LateEntityAdder:
 
 
 def _derive(harness: _Harness, *, adders=None, live_keys=frozenset({SENSOR_KEY})) -> dict:
-    """Run the leftover derivation once over one seeded install."""
+    """Run the leftover derivation once over one seeded install.
+
+    Fetches device_rows itself, through the same patched accessors the
+    harness routes _sync_orphaned_entity_issues at, mirroring how that
+    function now supplies _build_leftover_row_pairs with an already-fetched
+    list rather than letting it fetch its own.
+    """
     hass = SimpleNamespace(data={}, states=harness.state_machine())
     entry = SimpleNamespace(entry_id=ENTRY_ID)
     entry_store = {LATE_ADDER_STORE_KEY: list(adders if adders is not None else [_seed_adder()])}
     with harness.patched():
-        return _build_leftover_row_pairs(hass, entry, entry_store, live_keys)
+        _, device_rows = _fetch_registry_rows(
+            rainpoint_dr.async_get, rainpoint_dr.async_entries_for_config_entry, hass, entry, "test"
+        )
+        return _build_leftover_row_pairs(hass, entry, entry_store, live_keys, device_rows)
 
 
 def _ledger_snapshot(hass) -> list[tuple[str, frozenset[str]]]:
@@ -531,6 +548,97 @@ class TestHowARowReachesASensorKey:
         harness.add_leftover_row()
 
         assert _derive(harness, live_keys=frozenset()) == {}
+
+
+class TestResolveDeviceNames:
+    """Each sensor key's Home Assistant name, resolved once from device rows.
+
+    Unit-level, over _resolve_device_names in isolation, because the fallback
+    order and the guard behaviour it protects hold regardless of which caller
+    supplies the rows.
+    """
+
+    def test_a_renamed_device_yields_its_name_by_user(self):
+        """The fallback's first rung: a rename always wins over the row's own
+        name, which build_sub_device_info always stamps."""
+        row = SimpleNamespace(id="d1", identifiers={(DOMAIN, SENSOR_KEY)}, name_by_user="Front Lawn", name="HTV210B 1")
+
+        assert _resolve_device_names([row]) == {SENSOR_KEY: "Front Lawn"}
+
+    def test_an_unrenamed_device_falls_back_to_its_own_name(self):
+        """A device the owner has never renamed still resolves to something,
+        rather than to nothing at all."""
+        row = SimpleNamespace(id="d1", identifiers={(DOMAIN, SENSOR_KEY)}, name_by_user=None, name="HTV210B 1")
+
+        assert _resolve_device_names([row]) == {SENSOR_KEY: "HTV210B 1"}
+
+    def test_no_device_row_yields_no_entry_for_that_key(self):
+        """The card falls back further still, to the record's own cloud
+        sub_name, entirely outside this function -- it never reads that
+        field."""
+        assert _resolve_device_names([]) == {}
+
+    def test_a_row_with_no_domain_identifier_contributes_nothing(self):
+        """A row belonging to another integration, or carrying a malformed
+        identifiers value, resolves to no sensor key and therefore names
+        nothing. _domain_sensor_key already owns both shapes."""
+        foreign = SimpleNamespace(id="d1", identifiers={("other_integration", SENSOR_KEY)}, name_by_user=None, name="X")
+        malformed = SimpleNamespace(id="d2", identifiers="not-a-set-of-tuples", name_by_user=None, name="Y")
+
+        assert _resolve_device_names([foreign, malformed]) == {}
+
+    def test_an_unreadable_registry_yields_an_empty_map(self):
+        """The caller degrades to an empty device_rows list on a registry
+        failure, and this function's job is only to answer {} for that,
+        exactly as it does for any other empty input."""
+        assert _resolve_device_names([]) == {}
+
+    def test_a_malformed_device_row_does_not_abort_the_rest(self):
+        """One row whose identifiers attribute is entirely absent -- the shape
+        that raises inside _domain_sensor_key rather than answering None --
+        costs only that row."""
+        malformed = SimpleNamespace(id="d_bad")
+        good = SimpleNamespace(id="d1", identifiers={(DOMAIN, SENSOR_KEY)}, name_by_user="Front Lawn", name="X")
+
+        assert _resolve_device_names([malformed, good]) == {SENSOR_KEY: "Front Lawn"}
+
+    def test_two_devices_of_one_model_resolve_to_two_different_names(self):
+        """The 2026-08-04 observation, at the resolution layer: two HTV210Bs
+        under one model produce two names once each carries its own
+        name_by_user."""
+        other_key = f"{HID}_300_1"
+        first = SimpleNamespace(
+            id="d1", identifiers={(DOMAIN, SENSOR_KEY)}, name_by_user="HTV210B (Hub paired)", name="HTV210B 1"
+        )
+        second = SimpleNamespace(id="d2", identifiers={(DOMAIN, other_key)}, name_by_user="HTV210B (BT)", name="HTV210B 1")
+
+        names = _resolve_device_names([first, second])
+
+        assert names[SENSOR_KEY] != names[other_key]
+
+
+class TestTheDeviceRegistryIsFetchedOncePerSync:
+    """The name lookup reuses the leftover derivation's own fetch.
+
+    Driven end to end rather than by reading source, because a shared fetch
+    is a runtime property: two functions can each hold their own call to
+    dr.async_get and still read as "no second fetch" to a source-only check.
+    """
+
+    @pytest.mark.asyncio
+    async def test_one_coordinator_update_calls_the_device_registry_once(self):
+        """One update, one dr.async_get call, covering both the leftover
+        derivation and the device-name resolution it now shares a fetch with."""
+        harness = _Harness()
+
+        with _patched_issue_registry():
+            coordinator, _hass, _entry, _client = await _armed_install(harness)
+
+            with harness.patched():
+                harness.device_get_calls = 0
+                await coordinator.async_refresh()
+
+                assert harness.device_get_calls == 1
 
 
 class TestTheScanDegradesRatherThanRaising:

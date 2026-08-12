@@ -621,8 +621,46 @@ def _ledger_pairs_by_key(adders) -> dict[str, set[tuple[str, str]]]:
     return pairs
 
 
+def _resolve_device_names(device_rows) -> dict[str, str]:
+    """Return each sensor key's Home Assistant device name, by key.
+
+    This is the name a leftover-entities card's Device bullet renders, and it
+    is resolved here, from the same device rows the leftover derivation
+    already walks, rather than inside repairs.py. That module holds no
+    knowledge of Home Assistant's registries and is testable as plain data
+    only because nothing here ever gives it any.
+
+    The fallback order is two deep and stops here: name_by_user is set only
+    once the owner renames the device, and name is always present -- stamped
+    by build_sub_device_info for every sub-device row this integration
+    writes. A key this function has nothing for is simply absent from the
+    returned mapping, and the caller falls further, to the record's own cloud
+    sub_name, which this function never reads.
+
+    A key resolved through _domain_sensor_key rather than through the row's
+    own identifiers tuple directly, so a device name can never attach to the
+    wrong sensor key: this is the same round trip every other sweep on this
+    surface performs, and a second spelling of it here would only be
+    somewhere for the two to drift apart. A row whose DOMAIN identifier
+    cannot be read at all -- the one shape that raises rather than answering
+    None -- is skipped rather than aborting the resolution for the rest.
+    """
+    names: dict[str, str] = {}
+    for row in device_rows:
+        try:
+            key = _domain_sensor_key(row)
+            if not key:
+                continue
+            name = getattr(row, "name_by_user", None) or getattr(row, "name", None)
+            if name:
+                names[key] = name
+        except Exception as exc:
+            _LOGGER.debug("Could not resolve a device name for row %s: %s", getattr(row, "id", None), exc)
+    return names
+
+
 def _build_leftover_row_pairs(
-    hass: HomeAssistant, entry: ConfigEntry, entry_store: dict, live_keys
+    hass: HomeAssistant, entry: ConfigEntry, entry_store: dict, live_keys, device_rows
 ) -> dict[str, frozenset[tuple[str, str]]]:
     """Return the dead registry rows sitting on a still-present device, by sensor key.
 
@@ -651,14 +689,19 @@ def _build_leftover_row_pairs(
     and an unreadable registry yields an empty mapping rather than raising:
     this runs inside a coordinator listener, and offering nothing is the safe
     degradation for a surface whose only outcome is a deletion offer.
+
+    ``device_rows`` is supplied by the caller rather than fetched here, so a
+    caller resolving device names for the same pass (_sync_orphaned_entity_issues)
+    reads the device registry once rather than once per consumer. An
+    unreadable device registry degrades to an empty ``device_rows`` list,
+    which yields no candidate device row and therefore no leftover pair --
+    the same degradation this function produced when it fetched its own copy.
+    The entity-registry fetch stays here: nothing else on this pass needs it.
     """
     entity_registry, entity_rows = _fetch_registry_rows(
         er.async_get, er.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
     )
-    device_registry, device_rows = _fetch_registry_rows(
-        dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
-    )
-    if entity_registry is None or device_registry is None:
+    if entity_registry is None:
         return {}
 
     ledger_pairs = _ledger_pairs_by_key(late_adders(entry_store))
@@ -743,7 +786,11 @@ def _debounced_leftover_pairs(counts: dict, pairs_by_key: dict) -> dict[str, fro
 
 
 def _build_orphaned_entity_records(
-    entry_store: dict, entry_id: str, aged_out: frozenset[str], leftover_pairs: dict | None = None
+    entry_store: dict,
+    entry_id: str,
+    aged_out: frozenset[str],
+    leftover_pairs: dict | None = None,
+    device_names: dict | None = None,
 ) -> list:
     """Translate this session's adder ledgers into plain records for the card.
 
@@ -771,6 +818,12 @@ def _build_orphaned_entity_records(
 
     Each adder is read behind its own guard, so one malformed adder cannot
     abort the sweep for the others.
+
+    ``device_names`` carries the Home Assistant name resolved for each key by
+    _resolve_device_names, keyed the same way. A key absent from it -- a
+    departed key whose device row has already gone, or an unreadable device
+    registry -- yields a record whose device_name is None, and the card falls
+    back to that record's own cloud sub_name at render time.
     """
     unique_ids: dict[str, set[str]] = {}
     descriptors: dict[str, dict] = {}
@@ -787,6 +840,7 @@ def _build_orphaned_entity_records(
             _LOGGER.debug("Skipping an unreadable late adder while building orphaned entity records: %s", exc)
 
     leftover_pairs = leftover_pairs or {}
+    device_names = device_names or {}
     records = []
     for key, ids in unique_ids.items():
         descriptor = descriptors[key]
@@ -813,22 +867,28 @@ def _build_orphaned_entity_records(
                 # default is the hub-paired reading the card already gave.
                 hub_paired=bool(descriptor.get("hub_paired", True)),
                 leftover=leftover,
+                device_name=device_names.get(key),
             )
         )
     return records
 
 
-def _leftover_pairs_now(hass: HomeAssistant, entry: ConfigEntry, coordinator, counts: dict) -> dict:
+def _leftover_pairs_now(hass: HomeAssistant, entry: ConfigEntry, coordinator, counts: dict, device_rows) -> dict:
     """Re-derive the debounced leftover pairs for this config entry, right now.
 
     Shared by the update path and the confirm path so the card and the removal
     can never disagree about scope. The confirm calls this again rather than
     replaying what the card was raised with, which is what makes a row that
     came back to life between the raise and the Submit survive the Submit.
+
+    ``device_rows`` is supplied by the caller, which is the same signature
+    change _build_leftover_row_pairs took and for the same reason: the update
+    path's caller (_sync_orphaned_entity_issues) fetches the device registry
+    once and reuses it here rather than this function fetching its own copy.
     """
     entry_store = (hass.data.get(DOMAIN) or {}).get(entry.entry_id) or {}
     live_keys = frozenset(_read_current_sensors(coordinator, "offering no leftover rows this update"))
-    return _debounced_leftover_pairs(counts, _build_leftover_row_pairs(hass, entry, entry_store, live_keys))
+    return _debounced_leftover_pairs(counts, _build_leftover_row_pairs(hass, entry, entry_store, live_keys, device_rows))
 
 
 def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordinator, manager, counts=None) -> None:
@@ -844,14 +904,27 @@ def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordi
     threshold, so a leftover row is never offered on the strength of a single
     observation by a caller that keeps no window of its own.
 
+    The device registry is fetched exactly once here, for this whole pass, and
+    handed to both consumers that need it: the leftover derivation, which
+    resolves a dead row to a sensor key through it, and _resolve_device_names,
+    which resolves the same rows to the Home Assistant name their owner gave
+    them. Fetching it twice for one pass would double this listener's
+    per-update registry-walk cost for no second answer.
+
     Never raises. Every read below is guarded, and this runs inside a
     coordinator listener where an exception would break the update for every
     other consumer of that notification.
     """
     try:
         entry_store = (hass.data.get(DOMAIN) or {}).get(entry.entry_id) or {}
-        leftover = _leftover_pairs_now(hass, entry, coordinator, counts if counts is not None else {})
-        records = _build_orphaned_entity_records(entry_store, entry.entry_id, _read_aged_out_keys(coordinator), leftover)
+        _, device_rows = _fetch_registry_rows(
+            dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
+        )
+        device_names = _resolve_device_names(device_rows)
+        leftover = _leftover_pairs_now(hass, entry, coordinator, counts if counts is not None else {}, device_rows)
+        records = _build_orphaned_entity_records(
+            entry_store, entry.entry_id, _read_aged_out_keys(coordinator), leftover, device_names
+        )
         manager.async_sync(records)
     except Exception as exc:
         _LOGGER.debug("Leftover entity sweep failed; leaving every card exactly as it is: %s", exc)
@@ -895,12 +968,23 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         rather than replayed from whatever the card was raised with. A row
         whose entity came back between the raise and the Submit is backed
         again by then and drops out of the pair set, so it survives.
+
+        Fetches its own device rows rather than sharing the periodic sweep's:
+        this runs once, on a human's confirm, at a moment displaced from
+        whatever update last ran the sweep, so reusing a stale fetch here
+        would re-derive the removal scope against device rows that may no
+        longer be current.
         """
+        _, device_rows = _fetch_registry_rows(
+            dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
+        )
         return _remove_orphaned_key_rows(
             hass,
             entry,
             sensor_key,
-            leftover_pairs=_leftover_pairs_now(hass, entry, coordinator, leftover_counts).get(sensor_key, frozenset()),
+            leftover_pairs=_leftover_pairs_now(hass, entry, coordinator, leftover_counts, device_rows).get(
+                sensor_key, frozenset()
+            ),
         )
 
     try:

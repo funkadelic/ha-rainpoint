@@ -362,6 +362,77 @@ class TestOrphanedKeyEndToEnd:
         assert removed == []
 
 
+class TestDepartedKeyRecordCarriesADeviceName:
+    """The departed-key shape gets the same naming treatment as the leftover one.
+
+    The 2026-08-04 observation was made on this shape, so naming only the
+    still-present card would close nothing. Both draw on the same
+    _resolve_device_names / device_name plumbing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_device_s_card_carries_its_home_assistant_name(self):
+        """The device row survives an aged-out key right up to confirm, so its
+        name_by_user is available to name the card."""
+        coordinator, hass, entry, client = _build_timeline()
+        _removed, entity_get, entity_entries = _make_entity_registry()
+        device_row = SimpleNamespace(
+            id="d1",
+            identifiers={(DOMAIN, SENSOR_KEY)},
+            config_entries=frozenset({ENTRY_ID}),
+            name_by_user="Front Lawn Valve",
+            name="HTV245FRF 1",
+        )
+        _events, device_get, device_entries = _make_device_registry([device_row])
+        _captured, async_add_entities = _capturing_add_entities()
+
+        with (
+            _patched_issue_registry() as (create, _delete),
+            patch("custom_components.rainpoint.er.async_get", side_effect=entity_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=entity_entries),
+            patch("custom_components.rainpoint.dr.async_get", side_effect=device_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=device_entries),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            await valve_async_setup_entry(hass, entry, async_add_entities)
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+
+            assert create.call_count == 1
+            assert create.call_args.kwargs["translation_placeholders"]["device_name"] == "Front Lawn Valve"
+
+    @pytest.mark.asyncio
+    async def test_no_device_row_falls_back_to_the_cloud_sub_name(self):
+        """Today's behaviour for a departed key whose device row is already
+        gone, or whose registry could not be read: the card still names
+        something, drawn from the cloud record rather than a blank."""
+        coordinator, hass, entry, client = _build_timeline()
+        _removed, entity_get, entity_entries = _make_entity_registry()
+        _captured, async_add_entities = _capturing_add_entities()
+
+        with (
+            _patched_issue_registry() as (create, _delete),
+            patch("custom_components.rainpoint.er.async_get", side_effect=entity_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=entity_entries),
+            patch("custom_components.rainpoint.dr.async_get", side_effect=RuntimeError("device registry unavailable")),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            await valve_async_setup_entry(hass, entry, async_add_entities)
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+
+            assert create.call_count == 1
+            # "Hub A" is the sub-device name _hub_record stamps into the cloud
+            # record, which build_sub_device_info reads as sub_name.
+            assert create.call_args.kwargs["translation_placeholders"]["device_name"] == "Hub A"
+
+
 class TestOrphanedCardLifecycle:
     """A card only ever appears for a sustained absence, and clears itself."""
 

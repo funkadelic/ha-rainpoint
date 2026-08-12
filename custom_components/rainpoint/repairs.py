@@ -544,6 +544,14 @@ class OrphanedEntitiesRecord:
     # Defaulted so every existing construction stays valid, and because the
     # departed shape is the one that shipped first.
     leftover: bool = False
+    # The Home Assistant name for this device -- name_by_user if the owner has
+    # renamed it, otherwise the device row's own name -- resolved by the
+    # caller and never by this module. None means no device row could be
+    # resolved for this key (a departed key, an unreadable device registry, or
+    # a key this session's adders never emitted), in which case the card falls
+    # back to sub_name, the cloud's own name for the device. Defaulted so
+    # every existing construction stays valid.
+    device_name: str | None = None
 
 
 def orphaned_entities_issue_id(sensor_key: str, entry_id: str) -> str:
@@ -663,6 +671,16 @@ class RainPointOrphanedEntityIssues:
         approve a destructive action. The two integers are this integration's
         own and are stringified rather than sanitized.
 
+        The Device bullet's value is record.device_name, the Home Assistant
+        name the device's owner sees, falling back to record.sub_name, the
+        cloud's own name, only when no device name could be resolved. That
+        fallback resolves before the sanitizer, so exactly one sanitized value
+        reaches both the card and, through _description_placeholders, its
+        confirm dialog -- there is no second, unsanitized copy anywhere in
+        between. A user-set device name is untrusted Markdown on exactly the
+        same terms a cloud string is: nothing about where a value originated
+        earns it a laxer boundary than every other placeholder here crosses.
+
         is_persistent is deliberately not passed. The default False means the
         issue registry does not restore this card across a restart, so no
         stale card can outlive the session that raised it, and the sweep
@@ -712,12 +730,15 @@ class RainPointOrphanedEntityIssues:
                 data=data,
                 # The threat, stated where the values are: Home Assistant
                 # renders this card and its confirm dialog as Markdown, and
-                # sub_name, model, addr and hub_name all arrive from the
-                # RainPoint payload with nothing validating them. Every one of
-                # them goes through the sanitizer; the two counts are this
-                # integration's own and are only stringified.
+                # device_name, model, addr and hub_name all arrive from
+                # sources this module does not control -- device_name from a
+                # Home Assistant registry a user can rename freely, the other
+                # three from the RainPoint payload -- with nothing validating
+                # any of them. Every one of them goes through the sanitizer;
+                # the two counts are this integration's own and are only
+                # stringified.
                 translation_placeholders={
-                    "sub_name": _sanitize_placeholder(record.sub_name),
+                    "device_name": _sanitize_placeholder(record.device_name or record.sub_name),
                     "model": _sanitize_placeholder(record.model),
                     "address": _sanitize_placeholder(record.addr),
                     # The literal "none" for a device that never had a hub,
