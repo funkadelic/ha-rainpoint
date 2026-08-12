@@ -24,7 +24,30 @@ def _make_stub(name: str) -> ModuleType:
 # Real stubs for update_coordinator: must be real classes so that
 # RainPointCoordinator can inherit from DataUpdateCoordinator and be
 # instantiated as a normal Python object.
+#
+# HomeAssistantError and ConfigEntryNotReady are defined here rather than with
+# the rest of the homeassistant.exceptions stubs further down, because
+# DataUpdateCoordinator.async_config_entry_first_refresh raises the latter.
+# Their sys.modules registration still happens down there, once the stub
+# modules exist to hang them on.
 # ---------------------------------------------------------------------------
+
+
+# HomeAssistantError must be a real exception class so `raise HomeAssistantError(...)` works.
+class _HomeAssistantError(Exception):
+    """_HomeAssistantError."""
+
+    pass
+
+
+class ConfigEntryNotReady(_HomeAssistantError):
+    """Real ConfigEntryNotReady stub, raised by a failed first refresh.
+
+    A subclass of the same HomeAssistantError stub the real exception
+    derives from, so a test catching the base class still works.
+    """
+
+    pass
 
 
 class DataUpdateCoordinator:
@@ -518,26 +541,9 @@ class _DeviceInfo(dict):
 sys.modules["homeassistant.helpers.device_registry"].DeviceInfo = _DeviceInfo
 
 
-# HomeAssistantError must be a real exception class so `raise HomeAssistantError(...)` works.
-class _HomeAssistantError(Exception):
-    """_HomeAssistantError."""
-
-    pass
-
-
+# Both classes are defined at the top of this file, next to the
+# DataUpdateCoordinator stub that raises ConfigEntryNotReady.
 sys.modules["homeassistant.exceptions"].HomeAssistantError = _HomeAssistantError
-
-
-class ConfigEntryNotReady(_HomeAssistantError):
-    """Real ConfigEntryNotReady stub, raised by a failed first refresh.
-
-    A subclass of the same HomeAssistantError stub the real exception
-    derives from, so a test catching the base class still works.
-    """
-
-    pass
-
-
 sys.modules["homeassistant.exceptions"].ConfigEntryNotReady = ConfigEntryNotReady
 
 
