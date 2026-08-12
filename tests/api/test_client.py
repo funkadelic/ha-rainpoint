@@ -1,5 +1,6 @@
 """Tests for the RainPoint API client."""
 
+import ast
 import asyncio
 import hashlib
 import importlib.util
@@ -405,20 +406,21 @@ class TestControlWorkModeDp:
 
     @pytest.mark.asyncio
     async def test_non_token_error_code_raises_and_leaves_the_token_alone(self):
-        """A non-zero code that is not the token-rejection code raises without expiring the token.
+        """A non-zero code that is not in the session-rejection set raises without expiring the token.
 
-        Pairs with the NOT_TOKEN case below. Only the token-rejection code may
-        force a re-login, so an unrelated server error must leave both the
-        cached token and its expiry untouched: expiring on any error would make
-        every transient failure cost a round trip to re-authenticate.
+        Pairs with the NOT_TOKEN case below. Only a recognized session-rejection
+        code may force a re-login, so an unrelated server error must leave both
+        the cached token and its expiry untouched: expiring on any error would
+        make every transient failure cost a round trip to re-authenticate.
         """
         client = self._make_client()
         client.ensure_logged_in = AsyncMock()
-        client._session.post = MagicMock(return_value=self._mock_response({"code": 1004, "msg": "some other error"}))
+        assert 3 not in _SESSION_REJECTED_CODES  # never a silent no-op if the set later grows to include it
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 3, "msg": "some other error"}))
         request_token = client._token
         expires_at = client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
 
-        with pytest.raises(RainPointApiError, match="controlWorkModeDP failed: code 1004"):
+        with pytest.raises(RainPointApiError, match="controlWorkModeDP failed: code 3"):
             await client.control_work_mode_dp(
                 mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000"
             )
@@ -1160,6 +1162,56 @@ class TestDisplacedSessionRecovery:
         assert client._token == "stale-token"
         assert client._token_expires_at == expires_at
 
+    def test_recognized_codes_are_pinned(self):
+        """Dropping a member of _SESSION_REJECTED_CODES is a red test, not a silent regression.
+
+        Not the proof of recovery, which lives in test_recovers_on_the_next_call
+        above; this only pins the set's membership.
+        """
+        assert frozenset({1001, 1004}) == _SESSION_REJECTED_CODES
+        assert isinstance(_SESSION_REJECTED_CODES, frozenset)
+
+    @pytest.mark.asyncio
+    async def test_one_token_generation_costs_at_most_one_login(self):
+        """Two consecutive rejections carrying the same token cost exactly one login.
+
+        Models two requests rejected for the same token generation before
+        anything has reacted to either: ensure_logged_in is bypassed for both
+        rejections, so both raw calls carry the identical current token and
+        the transition guard absorbs the second rejection without a second
+        forced login. The real bound method is restored for the third call,
+        which is where the one recovery login this whole sequence costs
+        actually happens. This is what bounds a response code the cloud may
+        overload: the cost is one extra login per token generation, never a
+        loop.
+        """
+        client = _make_client()
+        client._token = "stale-token"
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        real_ensure_logged_in = client.ensure_logged_in
+        client.ensure_logged_in = AsyncMock()
+
+        rejection_one = _mock_response({"code": 1001, "msg": "session rejected"})
+        rejection_two = _mock_response({"code": 1001, "msg": "session rejected"})
+        client._session.get = MagicMock(side_effect=[rejection_one, rejection_two])
+
+        with pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 1001"):
+            await client.get_devices_by_hid(hid=42)
+        with pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 1001"):
+            await client.get_devices_by_hid(hid=42)
+
+        assert client._token == "stale-token"
+        assert client._token_expires_at is None
+
+        client.ensure_logged_in = real_ensure_logged_in
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": []}))
+        client._session.post = MagicMock(return_value=_mock_response(self._login_json_body()))
+
+        await client.get_devices_by_hid(hid=42)
+
+        assert client._session.post.call_count == 1
+
 
 class TestTokenInvalidationListeners:
     """register_token_invalidated_listener fires only on a genuine expiry transition."""
@@ -1238,6 +1290,35 @@ class TestTokenInvalidationListeners:
         after.assert_called_once_with()
         assert any("token-invalidated listener raised" in r.message for r in caplog.records)
 
+    @pytest.mark.asyncio
+    async def test_superseded_token_real_call_path_leaves_current_token_untouched(self):
+        """A slow rejection for a token a relogin already replaced must not expire the fresh one.
+
+        Models the concurrency this guards against: a request in flight
+        carries the old token, and by the time its rejection is processed a
+        relogin has already installed a fresh one. Driven through a real API
+        method rather than the helper-level test above.
+        """
+        client = _make_client()
+        client._token = "old-token"
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client.ensure_logged_in = AsyncMock()
+
+        fresh_expiry = datetime.now(UTC) + timedelta(hours=2)
+
+        def _replace_token_mid_flight(*_args, **_kwargs):
+            client._token = "fresh-token"
+            client._token_expires_at = fresh_expiry
+            return _mock_response({"code": 1001, "msg": "NOT_TOKEN"})
+
+        client._session.get = MagicMock(side_effect=_replace_token_mid_flight)
+
+        with pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 1001"):
+            await client.get_devices_by_hid(hid=42)
+
+        assert client._token == "fresh-token"
+        assert client._token_expires_at == fresh_expiry
+
 
 class TestDisplacedSessionSurvivesReload:
     """A client rebuilt from the persisted entry data after a displacement re-authenticates.
@@ -1284,6 +1365,86 @@ class TestDisplacedSessionSurvivesReload:
         await second_client.get_devices_by_hid(hid=42)
 
         assert second_client._session.post.call_count == 1
+
+
+class TestEverySessionRejectionIsRouted:
+    """Every method that raises on a non-zero response code routes it through
+    _maybe_invalidate_token, so the recognized set is applied unconditionally
+    rather than per endpoint. A new endpoint that forgets the predicate is a
+    red test here rather than a quietly unrecoverable session.
+
+    Parses api/client.py with the standard library ast module rather than
+    importing and inspecting behavior, so the check reads the source the way
+    a reviewer would and catches the omission even if no test happens to
+    exercise the new endpoint's error path.
+    """
+
+    _CLIENT_PATH = Path(__file__).resolve().parent.parent.parent / "custom_components" / "rainpoint" / "api" / "client.py"
+
+    @classmethod
+    def _client_class_node(cls) -> ast.ClassDef:
+        """Return the RainPointClient ClassDef node from the client module's source."""
+        tree = ast.parse(cls._CLIENT_PATH.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "RainPointClient":
+                return node
+        raise AssertionError("RainPointClient class not found in api/client.py")
+
+    @staticmethod
+    def _compares_to_zero(test: ast.expr) -> bool:
+        """True when test is a bare "... != 0" comparison.
+
+        Distinguishes a response-code guard from an HTTP-status guard
+        structurally (the wire test each method actually branches on) rather
+        than by the raised message's wording, which the set_device_state
+        method already shows is not uniform: its message names data.get('msg')
+        rather than the word "code".
+        """
+        if not isinstance(test, ast.Compare):
+            return False
+        return any(
+            isinstance(op, ast.NotEq) and isinstance(comparator, ast.Constant) and comparator.value == 0
+            for op, comparator in zip(test.ops, test.comparators, strict=True)
+        )
+
+    @classmethod
+    def _raises_on_nonzero_code(cls, func: ast.AsyncFunctionDef | ast.FunctionDef) -> bool:
+        """True when the method's body raises RainPointApiError inside a "code != 0" branch."""
+        for node in ast.walk(func):
+            if not isinstance(node, ast.If) or not cls._compares_to_zero(node.test):
+                continue
+            if any(isinstance(inner, ast.Raise) for inner in ast.walk(node)):
+                return True
+        return False
+
+    @staticmethod
+    def _calls_maybe_invalidate_token(func: ast.AsyncFunctionDef | ast.FunctionDef) -> bool:
+        """True when the method's body calls self._maybe_invalidate_token(...)."""
+        return any(
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "_maybe_invalidate_token"
+            for node in ast.walk(func)
+        )
+
+    def test_every_code_based_raise_routes_through_the_predicate(self):
+        """A method that raises on a non-zero code without invalidating the token fails here."""
+        class_node = self._client_class_node()
+        methods = [
+            node
+            for node in class_node.body
+            if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
+            # A login response is not token-gated -- there is no existing
+            # session to invalidate on a login failure -- so _login is
+            # deliberately excluded from this scan rather than routed.
+            and node.name != "_login"
+        ]
+
+        in_scope = [method for method in methods if self._raises_on_nonzero_code(method)]
+        # Guards against a parsing change making this vacuously green: the
+        # scan must actually have found the eleven methods it exists to cover.
+        assert len(in_scope) >= 11
+
+        missing = [method.name for method in in_scope if not self._calls_maybe_invalidate_token(method)]
+        assert missing == []
 
 
 class TestAuthHeaders:
