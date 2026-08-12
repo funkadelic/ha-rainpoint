@@ -1992,6 +1992,150 @@ class TestZoneRunDurationAcrossAFailedPoll:
         assert all(entity.available for entity in durations)
 
 
+class TestTheStubsFailedPollContract:
+    """The shared coordinator stub's failed-poll behaviour, proven against a real RainPointCoordinator.
+
+    Each case mirrors a documented real DataUpdateCoordinator behaviour
+    rather than an invented one: optimistic last_update_success at
+    construction, ConfigEntryNotReady from a failed first refresh,
+    UpdateFailed swallowed by a later refresh with the previous data kept
+    and every listener still notified, last_update_success restored by a
+    following success, and a genuinely unexpected exception still
+    propagating rather than being silently absorbed.
+    """
+
+    _MID = 200
+    _ADDR = 1
+
+    @classmethod
+    def _hub_record(cls):
+        """One real HTV245 hub record listing its single zone-bearing child."""
+        return {
+            "mid": cls._MID,
+            "name": "Hub A",
+            "deviceName": "d",
+            "productKey": "pk",
+            "homeName": "H",
+            "subDevices": [{"addr": cls._ADDR, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"}],
+        }
+
+    @classmethod
+    def _status(cls, value=SAMPLE_HTV245_TLV_PAYLOAD):
+        """A multipleDeviceStatus reading for the hub carrying this raw value."""
+        return [{"mid": cls._MID, "subDeviceStatus": [{"id": "D01", "value": value, "time": 1785420002247}]}]
+
+    @classmethod
+    def _build(cls):
+        """Return (coordinator, hass, entry, client) for one real HTV245 hub, unrefreshed."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [cls._hub_record()]
+        client.get_multiple_device_status.return_value = cls._status()
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+        entry.options = {}
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"test_entry": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["test_entry"]["coordinator"] = coordinator
+        return coordinator, hass, entry, client
+
+    @pytest.mark.asyncio
+    async def test_constructed_and_never_refreshed_starts_optimistic(self):
+        """A coordinator that has never refreshed reads last_update_success True and data None."""
+        coordinator, _hass, _entry, _client = self._build()
+        assert coordinator.last_update_success is True
+        assert coordinator.data is None
+
+    @pytest.mark.asyncio
+    async def test_first_refresh_failure_raises_config_entry_not_ready(self):
+        """A first refresh whose update fails raises ConfigEntryNotReady and leaves no data."""
+        from homeassistant.exceptions import ConfigEntryNotReady
+
+        coordinator, _hass, _entry, client = self._build()
+        client.get_multiple_device_status.side_effect = RainPointApiError("boom")
+
+        with pytest.raises(ConfigEntryNotReady):
+            await coordinator.async_config_entry_first_refresh()
+
+        assert coordinator.last_update_success is False
+        assert coordinator.data is None
+
+    @pytest.mark.asyncio
+    async def test_mid_session_failure_keeps_previous_data_and_still_notifies_listeners(self):
+        """A refresh failing after a good first refresh does not raise, keeps data, and still notifies."""
+        coordinator, _hass, _entry, client = self._build()
+        await coordinator.async_config_entry_first_refresh()
+        data_before = coordinator.data
+
+        notified = []
+        coordinator.async_add_listener(lambda: notified.append(True))
+
+        client.get_multiple_device_status.side_effect = RainPointApiError("boom")
+        await coordinator.async_refresh()
+
+        assert coordinator.last_update_success is False
+        assert coordinator.data is data_before
+        assert notified == [True]
+
+    @pytest.mark.asyncio
+    async def test_a_successful_refresh_after_a_failure_restores_success_and_replaces_data(self):
+        """A refresh that succeeds after a prior failure sets last_update_success back to True and swaps data."""
+        coordinator, _hass, _entry, client = self._build()
+        await coordinator.async_config_entry_first_refresh()
+
+        client.get_multiple_device_status.side_effect = RainPointApiError("boom")
+        await coordinator.async_refresh()
+        assert coordinator.last_update_success is False
+        failed_data = coordinator.data
+
+        client.get_multiple_device_status.side_effect = None
+        client.get_multiple_device_status.return_value = self._status(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)
+        await coordinator.async_refresh()
+
+        assert coordinator.last_update_success is True
+        assert coordinator.data is not failed_data
+
+    @pytest.mark.asyncio
+    async def test_a_non_update_failed_exception_still_propagates(self):
+        """An exception the coordinator's own update path never wraps into UpdateFailed still escapes async_refresh."""
+        coordinator, _hass, _entry, _client = self._build()
+        coordinator._async_update_data = AsyncMock(side_effect=RuntimeError("not an UpdateFailed"))
+
+        with pytest.raises(RuntimeError):
+            await coordinator.async_refresh()
+
+    @pytest.mark.asyncio
+    async def test_available_across_a_failed_poll_is_characterized_not_changed(self):
+        """A sub-device entity keeps reading available through a failed poll: a pinned fact, not a fix.
+
+        RainPointSubDeviceEntity.available replaces
+        homeassistant.helpers.update_coordinator.CoordinatorEntity.available
+        wholesale and drops its last_update_success term, so a sub-device
+        entity shows its last reading as available through a poll failure
+        rather than flipping to unavailable. This test records that current
+        behaviour; whether it is right is a separate backlog question, and
+        this phase deliberately does not change it.
+        """
+        coordinator, hass, entry, client = self._build()
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        durations = [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)]
+        assert durations, "the setup produced no run-duration entity, so this test proves nothing"
+
+        client.get_multiple_device_status.side_effect = RainPointApiError("boom")
+        await coordinator.async_refresh()
+
+        assert coordinator.last_update_success is False
+        assert all(entity.available for entity in durations)
+
+
 class TestRunDurationUniqueIdDisjointness:
     """No unique_id collides across the platforms that build entities for one HTV245 key.
 
