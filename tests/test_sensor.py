@@ -1778,6 +1778,22 @@ class TestZoneRunDurationSensor:
         assert RainPointHicRunDurationSensor._attr_suggested_display_precision == 0
 
     @pytest.mark.asyncio
+    async def test_duration_is_reported_in_seconds_and_displayed_in_minutes(self):
+        """The native reading stays in the device's own unit while the default display matches how a run is set.
+
+        The wire is second-resolution and a run commanded outside Home
+        Assistant need not land on a whole minute, so seconds is what gets
+        recorded. Minutes is only the suggested display, which a user can
+        override per entity, so nothing is lost by presenting it that way.
+        """
+        zones = {1: {"open": False, "duration_seconds": 0}}
+        duration = next(e for e in await self._setup(zones) if isinstance(e, RainPointZoneRunDurationSensor))
+        assert duration._attr_native_unit_of_measurement == UnitOfTime.SECONDS
+        assert duration._attr_suggested_unit_of_measurement == UnitOfTime.MINUTES
+        assert RainPointHicRunDurationSensor._attr_native_unit_of_measurement == UnitOfTime.SECONDS
+        assert RainPointHicRunDurationSensor._attr_suggested_unit_of_measurement == UnitOfTime.MINUTES
+
+    @pytest.mark.asyncio
     async def test_no_duration_entities_when_no_zones_reported(self):
         """A frame reporting no zones grows no phantom duration entities."""
         durations = [e for e in await self._setup({}) if isinstance(e, RainPointZoneRunDurationSensor)]

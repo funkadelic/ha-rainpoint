@@ -1566,7 +1566,14 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
 
 
 class RainPointZoneRunDurationSensor(RainPointZoneSensorBase):
-    """The current run's length, in seconds, for one valve zone.
+    """The current run's length for one valve zone, recorded in seconds and shown in minutes.
+
+    Seconds is the device's own resolution and is what gets stored: the TLV
+    duration values are second-resolution, and a run started from the
+    RainPoint app or the hub's own schedule is under no obligation to land
+    on a whole minute, so rounding on the way in would discard a reading the
+    device actually reported. Minutes is only the suggested display, chosen
+    to match how a run is set here, and any user can override it per entity.
 
     This is not a memory of the previous run. Every captured frame from both
     the HTV245FRF and HTV345FRF/HTV405FRF reporters decodes the same way: an
@@ -1593,6 +1600,7 @@ class RainPointZoneRunDurationSensor(RainPointZoneSensorBase):
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_suggested_unit_of_measurement = UnitOfTime.MINUTES
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
     _attr_icon = "mdi:timer-outline"
@@ -1751,6 +1759,7 @@ class RainPointHicRunDurationSensor(RainPointHic801wSensorBase):
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_suggested_unit_of_measurement = UnitOfTime.MINUTES
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
     _attr_icon = "mdi:timer-outline"
