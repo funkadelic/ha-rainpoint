@@ -223,7 +223,11 @@ def _packed_wall_clock(raw: int) -> str | None:
 
 
 def _wkstate_open(raw: int) -> float | None:
-    """Mask bit zero: the open/closed reading both cited decoders agree on."""
+    """Mask bit zero: the open/closed reading every cited decoder agrees on.
+
+    See the STA_WKSTATE row's Evidence note below for the decoder paths this
+    reading rests on and the decision governing a model no capture backs.
+    """
     return float(raw & 0x01)
 
 
@@ -394,18 +398,80 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         valid_range=(0.0, 1.0),
         precision=0,
         widths=frozenset({1}),
-        # Width: a single state byte, the width both cited decoders check
+        # Width: a single state byte, the width every cited decoder checks
         # for before masking bit zero.
-        # Evidence: api/decoders.py:264 (decode_htv213frf_valve, the ASCII
-        # HTV213FRF/HTV245FRF path) masks bit zero and notes the device
-        # reports 0x21 and 0x20 rather than 0x01 and 0x00, and
-        # api/decoders.py:821 (_extract_valve_hub_zone, the TLV valve-hub
-        # path) compares the raw byte against 0x01 on hardware that reports
-        # plain 0x01 and 0x00. Masking bit zero is the one reading that
-        # satisfies both decoders at once.
+        # Evidence: the claim is about the shape of the record, not a list of
+        # blessed model names -- a single-byte STA_WKSTATE record whose bit 0
+        # is the running flag. widths=frozenset({1}) above is what enforces
+        # that shape, so the claim has a mechanism behind it rather than
+        # sitting as prose beside an unrelated check, and a newly catalogued
+        # model presenting the same single-byte record is covered by
+        # construction.
         #
-        # The bits above the lowest one are not explained by either decoder
-        # and are deliberately left unread.
+        # A model-name allowlist is not available here: every evidenced
+        # family below is in HAND_WRITTEN_MODELS, and having a hand-written
+        # decoder is exactly what api/trust.py's is_hand_written_model uses to
+        # keep a model out of this generic path, so a model-name gate would
+        # refuse every model that can actually reach this row. Trusting only
+        # proven models and keeping the feature are not both available.
+        #
+        # Provenance, not a gate, naming each decoder path in api/decoders.py
+        # by symbol. Line numbers are deliberately omitted: the two this note
+        # used to carry both drifted onto unrelated code, a symbol does not,
+        # and TestRunStateEvidenceNoteDriftGuard below checks the symbol.
+        # - decode_htv213frf_valve, the ASCII HTV213FRF/HTV245FRF path,
+        #   masking through _extract_htv213_zones, device reporting 0x21 and
+        #   0x20 rather than 0x01 and 0x00.
+        # - decode_valve_hub, the TLV valve-hub path, through
+        #   _extract_valve_hub_zone, comparing the raw byte against 0x01 on
+        #   hardware that reports plain 0x01 and 0x00.
+        # - decode_htv145frf, the flat marker stream, 0xD8 zone marker, bit 0
+        #   set means open, device reporting 0x21 and 0x20. Its other bit-0
+        #   read, the 0xDC marker, is the hub online flag and is not evidence
+        #   for this row.
+        # - decode_htv210b, the structural record walk, masking bit 0, with
+        #   the same mask applied on the command-response path
+        #   (decode_htv210b_dp_state).
+        # - decode_hic801w. Its own evidence, stated inline: STA_WKSTATE reads
+        #   0x21 whenever any station runs and 0x00 when idle, 12 of 12
+        #   frames on the reporting owner's unit, settled 2026-08-10.
+        #   decode_hic801w itself reads no STA_WKSTATE byte and derives idle
+        #   from STA_WATER_ZONES b0 instead, so this row's evidence for
+        #   HIC801W comes from its capture corpus rather than from a byte the
+        #   decoder reads, and the decoder stays independent of this row.
+        #
+        # These five paths span RainPoint's framings (ASCII, TLV, the flat
+        # marker stream and the structural record walk) and both raw
+        # encodings, and masking bit zero is the single reading that
+        # satisfies all of them at once. No capture in either corpus
+        # contradicts it. That is the reasoning, not a headcount: a count of
+        # families expires the moment a sixth arrives.
+        #
+        # Correction: a frame captured 2026-07-17 was once recorded as an
+        # idle capture reading 0x21. It was not idle. It carries WATER_ZONES
+        # 01 03 00 00 and DURATION 1800, so station 1 was mid-run, and 0x21
+        # meaning running is consistent with the other paths rather than in
+        # tension with them. That earlier idle reading is void and must not
+        # be cited again.
+        #
+        # Decision: the row keeps reading bit zero for a model it has no
+        # captures for, and does not refuse the way widths above refuses an
+        # unevidenced record width. Reverses on a captured frame from any
+        # model showing bit zero meaning something other than running -- not
+        # a suspicion, and not the absence of a capture, an actual
+        # counterexample.
+        #
+        # generic_control._run_state_open reads this same row for its write
+        # confirmation, so a wrong bit-zero semantic would both display a
+        # wrong state and confirm a command that never moved hardware. It was
+        # examined for this decision and inherits no new refusal: its
+        # declared-width and ASCII-declined refusals stand unchanged.
+        #
+        # This provenance list is kept complete by
+        # TestRunStateEvidenceNoteDriftGuard in tests/test_generic_entities.py.
+        #
+        # The bits above the lowest one are not explained by any cited
+        # decoder and are deliberately left unread.
     ),
 }
 
