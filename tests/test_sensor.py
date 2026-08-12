@@ -1765,6 +1765,19 @@ class TestZoneRunDurationSensor:
         assert durations[1]._attr_name == "Zone 2 Run Duration"
 
     @pytest.mark.asyncio
+    async def test_duration_is_displayed_as_whole_seconds(self):
+        """The reading is whole seconds, so it declares zero decimal places rather than letting the frontend pick.
+
+        Without this the duration device class renders an integer 0 as
+        "0.00 s" on the device page, which reads as a precision the device
+        never reported.
+        """
+        zones = {1: {"open": False, "duration_seconds": 0}}
+        duration = next(e for e in await self._setup(zones) if isinstance(e, RainPointZoneRunDurationSensor))
+        assert duration._attr_suggested_display_precision == 0
+        assert RainPointHicRunDurationSensor._attr_suggested_display_precision == 0
+
+    @pytest.mark.asyncio
     async def test_no_duration_entities_when_no_zones_reported(self):
         """A frame reporting no zones grows no phantom duration entities."""
         durations = [e for e in await self._setup({}) if isinstance(e, RainPointZoneRunDurationSensor)]

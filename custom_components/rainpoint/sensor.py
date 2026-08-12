@@ -1594,6 +1594,7 @@ class RainPointZoneRunDurationSensor(RainPointZoneSensorBase):
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
     _attr_icon = "mdi:timer-outline"
 
     def __init__(
@@ -1751,6 +1752,7 @@ class RainPointHicRunDurationSensor(RainPointHic801wSensorBase):
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
     _attr_icon = "mdi:timer-outline"
 
     def __init__(
