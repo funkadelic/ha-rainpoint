@@ -4,6 +4,7 @@ import hashlib
 import logging
 from pathlib import Path
 
+import custom_components.rainpoint.api.decoders as decoders_module
 import custom_components.rainpoint.api.generic_decoder as generic_decoder_module
 import custom_components.rainpoint.api.utils as api_utils_module
 from custom_components.rainpoint.api import decode_generic, is_ascii_declined
@@ -634,3 +635,65 @@ class TestAsciiFramingNonRegression:
         for module in (generic_decoder_module, api_utils_module):
             offenders = [name for name in vars(module) if any(fragment in name.upper() for fragment in forbidden_fragments)]
             assert offenders == [], f"{module.__name__} defines: {offenders}"
+
+
+def _hic801w_field_constant_comment() -> str:
+    """Return the comment block directly above the HIC801W field constants.
+
+    Walks back from the ``_HIC801W_FIELD_DURATION`` assignment over the
+    contiguous run of comment lines immediately preceding it. Scoping the
+    retired-clause check below to this block is what keeps it from failing
+    on an unrelated future comment elsewhere in the file that happens to use
+    the same ordinary phrase.
+    """
+    lines = Path(decoders_module.__file__).read_text().splitlines()
+    anchor = next(i for i, line in enumerate(lines) if line.startswith("_HIC801W_FIELD_DURATION"))
+    start = anchor
+    while start > 0 and lines[start - 1].lstrip().startswith("#"):
+        start -= 1
+    assert start < anchor, "no comment block found above _HIC801W_FIELD_DURATION"
+    return "\n".join(lines[start:anchor])
+
+
+class TestHic801wFieldConstantsExcludeWkstate:
+    """decode_hic801w's structural field constants never name field index 30.
+
+    Placed here rather than in test_decoders.py because this module already
+    reads decoders.py's own namespace structurally (see
+    TestAsciiFramingNonRegression.test_no_per_family_body_position_table_exists
+    above), and this guard follows the same "absence over the module's own
+    namespace" shape rather than a repo-wide grep. STA_WKSTATE is field index
+    30 in the HIC801W structural record; decode_hic801w must read no byte at
+    that index, which is the fact the field-constant comment above
+    _HIC801W_FIELD_DURATION states in prose. This test proves the fact
+    structurally rather than trusting the comment's wording, so a future edit
+    that quietly adds a work-state read (by adding a
+    ``_HIC801W_FIELD_WKSTATE = 30`` constant, or by repointing an existing
+    constant to 30) fails the suite regardless of what the comment still says.
+    No positive wording of the comment is pinned here, so rewording it must
+    not start failing these tests. The one text assertion below is an
+    absence check on a single retired clause, scoped to this comment block.
+    """
+
+    def test_no_field_constant_equals_the_wkstate_index(self):
+        """No _HIC801W_FIELD_* constant in the module equals index 30 (STA_WKSTATE)."""
+        offenders = {
+            name: value for name, value in vars(decoders_module).items() if name.startswith("_HIC801W_FIELD_") and value == 30
+        }
+        assert offenders == {}, f"a HIC801W field constant reads the STA_WKSTATE index: {offenders}"
+
+    def test_wkstate_field_constant_name_is_absent(self):
+        """The module defines no _HIC801W_FIELD_WKSTATE constant at all."""
+        assert not hasattr(decoders_module, "_HIC801W_FIELD_WKSTATE")
+
+    def test_retired_disclaiming_clause_is_gone(self):
+        """The retired 'other model families' clause does not reappear in this comment.
+
+        Guards the meaning of the comment without pinning its current
+        wording: only the specific retired clause is checked for absence, not
+        any positive text the comment currently carries. Scoped to the
+        HIC801W field-constant block rather than the whole file, so an
+        unrelated comment elsewhere that reuses the same ordinary phrase
+        cannot fail this test for a reason that has nothing to do with it.
+        """
+        assert "other model families" not in _hic801w_field_constant_comment()

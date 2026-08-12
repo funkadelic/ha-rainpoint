@@ -196,6 +196,77 @@ class TestRunStateEvidenceNoteDriftGuard:
         assert _registered_decoder_names(DECODER_REGISTRY) >= _DECODERS_WITHOUT_RUN_STATE
 
 
+class TestRunStateRowShapeClaimHasItsMechanism:
+    """The row's record-shape claim is only as good as the width that enforces it.
+
+    Kept out of TestRunStateEvidenceNoteDriftGuard above, whose subject is
+    keeping the provenance list in lockstep with DECODER_REGISTRY. This
+    class has a different subject: the declared width the note names as the
+    mechanism behind its claim.
+    """
+
+    def test_wkstate_widths_are_exactly_one_byte(self):
+        """The row's Evidence note rests on a mechanism, and this pins that mechanism.
+
+        The note states the claim as a record-shape claim ("a single-byte
+        STA_WKSTATE record whose bit 0 is the running flag") and says
+        ``widths=frozenset({1})`` on the same row is what enforces that
+        shape. Nothing else in the suite asserts the row's widths equal
+        exactly ``{1}``: the generic width-refusal test only checks that
+        *some* undeclared width is rejected, and a row widened to
+        ``frozenset({1, 2})`` would leave every other test green while
+        making the note's central claim false. This assertion is that
+        missing pin.
+        """
+        assert _IDENTITY_SPECS["STA_WKSTATE"].widths == frozenset({1})
+
+
+class TestRunStateEvidenceNoteCarriesDecisionAndCorrection:
+    """The row's Decision, reversal condition and Correction sections cannot be deleted silently.
+
+    TestRunStateEvidenceNoteDriftGuard above only checks that decoder symbol
+    names appear in the row's source; it says nothing about the Decision
+    paragraph, the reversal condition or the Correction paragraph, all three
+    of which could be deleted outright with every other test in the suite
+    still green. This class is that missing guard.
+
+    What is pinned: the smallest anchors that survive a rewording of the
+    row's prose -- the literal section labels ``Decision:`` and
+    ``Correction:``, the date the correction voids (``2026-07-17``), and the
+    stem ``revers`` for the reversal condition. What is NOT pinned: any full
+    sentence, any exact phrasing around those anchors, or the order the
+    sections appear in. A rewording of the note that keeps all three
+    sections intact, in whatever words, must keep passing this test; only
+    deleting a section (or the fact it voids the 2026-07-17 claim, or the
+    fact something reverses it) may fail it. Never relax these anchors down
+    to nothing to make a failure disappear; that defeats the purpose of the
+    guard.
+    """
+
+    def test_row_names_the_decision_section(self):
+        """The row's source still contains a Decision section."""
+        assert "Decision:" in _wkstate_row_source()
+
+    def test_row_names_the_reversal_condition(self):
+        """The row's source still states that something reverses the decision.
+
+        Matched case-insensitively on the stem ``revers`` so a reword to
+        "reversal", "reverses" or "reversed" keeps passing, which is this
+        class's stated design goal; only deleting the clause fails it. An
+        earlier draft also required the word "running", which was dropped:
+        the row uses that word three times outside this clause, so it
+        survived the clause's deletion and could never be the half of the
+        assertion that fired.
+        """
+        assert "revers" in _wkstate_row_source().lower()
+
+    def test_row_names_the_correction_section_and_its_date(self):
+        """The row's source still carries a Correction section voiding the 2026-07-17 claim."""
+        source = _wkstate_row_source()
+        assert "Correction:" in source
+        assert "2026-07-17" in source
+
+
 def _dp(identity: str, dp_port=0, dp_code: int = 10, data_type: str = "U8") -> dict:
     """Build one catalog dp entry."""
     return {"dpCode": dp_code, "identity": identity, "dpPort": dp_port, "dpDataType": data_type, "dpLen": 1}
