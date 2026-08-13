@@ -36,6 +36,7 @@ from custom_components.rainpoint import coordinator as coordinator_module
 from custom_components.rainpoint.const import (
     CONF_HIDS,
     DOMAIN,
+    HUB_IDENTIFIER_PREFIX,
     MODEL_MOISTURE_SIMPLE,
     MODEL_VALVE_245,
 )
@@ -206,8 +207,17 @@ def _patched_issue_registry():
     held: dict[tuple[str, str], object] = {}
 
     def _create(hass, domain, issue_id, **kwargs):
-        """Record the raised card the way the registry would hold it."""
-        held[(domain, issue_id)] = SimpleNamespace(translation_placeholders=kwargs.get("translation_placeholders"))
+        """Record the raised card the way the registry would hold it.
+
+        The data dict is held alongside the placeholders because the confirm
+        dialog reads both: the placeholders are the text it shows, and the data
+        carries the offer that text describes, which the flow snapshots at the
+        moment it shows it. A double holding only the text would leave every
+        confirm with no ceiling and no test could tell.
+        """
+        held[(domain, issue_id)] = SimpleNamespace(
+            translation_placeholders=kwargs.get("translation_placeholders"), data=kwargs.get("data")
+        )
 
     def _delete(hass, domain, issue_id):
         """Drop a card, and stay a no-op for an id the registry never held."""
@@ -360,6 +370,152 @@ class TestOrphanedKeyEndToEnd:
             assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 0
 
         assert removed == []
+
+
+class TestDepartedKeyRecordCarriesADeviceName:
+    """The departed-key shape gets the same naming treatment as the leftover one.
+
+    The 2026-08-04 observation was made on this shape, so naming only the
+    still-present card would close nothing. Both draw on the same
+    _resolve_device_names / device_name plumbing.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_device_s_card_carries_its_home_assistant_name(self):
+        """The device row survives an aged-out key right up to confirm, so its
+        name_by_user is available to name the card."""
+        coordinator, hass, entry, client = _build_timeline()
+        _removed, entity_get, entity_entries = _make_entity_registry()
+        device_row = SimpleNamespace(
+            id="d1",
+            identifiers={(DOMAIN, SENSOR_KEY)},
+            config_entries=frozenset({ENTRY_ID}),
+            name_by_user="Front Lawn Valve",
+            name="HTV245FRF 1",
+        )
+        _events, device_get, device_entries = _make_device_registry([device_row])
+        _captured, async_add_entities = _capturing_add_entities()
+
+        with (
+            _patched_issue_registry() as (create, _delete),
+            patch("custom_components.rainpoint.er.async_get", side_effect=entity_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=entity_entries),
+            patch("custom_components.rainpoint.dr.async_get", side_effect=device_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=device_entries),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            await valve_async_setup_entry(hass, entry, async_add_entities)
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+
+            assert create.call_count == 1
+            assert create.call_args.kwargs["translation_placeholders"]["device_name"] == "Front Lawn Valve"
+
+    @pytest.mark.asyncio
+    async def test_no_device_row_falls_back_to_the_cloud_sub_name(self):
+        """Today's behaviour for a departed key whose device row is already
+        gone, or whose registry could not be read: the card still names
+        something, drawn from the cloud record rather than a blank."""
+        coordinator, hass, entry, client = _build_timeline()
+        _removed, entity_get, entity_entries = _make_entity_registry()
+        _captured, async_add_entities = _capturing_add_entities()
+
+        with (
+            _patched_issue_registry() as (create, _delete),
+            patch("custom_components.rainpoint.er.async_get", side_effect=entity_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=entity_entries),
+            patch("custom_components.rainpoint.dr.async_get", side_effect=RuntimeError("device registry unavailable")),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            await valve_async_setup_entry(hass, entry, async_add_entities)
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+
+            assert create.call_count == 1
+            # "Hub A" is the sub-device name _hub_record stamps into the cloud
+            # record, which build_sub_device_info reads as sub_name.
+            assert create.call_args.kwargs["translation_placeholders"]["device_name"] == "Hub A"
+
+
+class TestDepartedKeyRecordCarriesAHubName:
+    """The Hub bullet resolves the way the Device bullet does, on both shapes.
+
+    A card that named the device the way its owner does while naming the hub
+    the way RainPoint does was describing one home in two vocabularies. The
+    hub has its own device row on this config entry, so the sweep's single
+    device-registry fetch already carries the name.
+    """
+
+    @staticmethod
+    def _hub_device_row(name_by_user="HWG023WBRF-V2 Hub"):
+        """One hub device row, identified the way this integration writes it."""
+        return SimpleNamespace(
+            id="d_hub",
+            identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{HID}_{MID}")},
+            config_entries=frozenset({ENTRY_ID}),
+            name_by_user=name_by_user,
+            # Deliberately not the cloud's own string for this hub, which is
+            # "Hub A". The two routes to a hub name have to be told apart: a
+            # row whose registry name matched the cloud fallback would satisfy
+            # the unrenamed-hub assertion below even if this function ignored
+            # the registry entirely.
+            name="Hub A Registry Name",
+        )
+
+    async def _card_for(self, device_rows):
+        """Drive an aged-out key to its card over these device rows."""
+        coordinator, hass, entry, client = _build_timeline()
+        _removed, entity_get, entity_entries = _make_entity_registry()
+        _events, device_get, device_entries = _make_device_registry(device_rows)
+        _captured, async_add_entities = _capturing_add_entities()
+
+        with (
+            _patched_issue_registry() as (create, _delete),
+            patch("custom_components.rainpoint.er.async_get", side_effect=entity_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=entity_entries),
+            patch("custom_components.rainpoint.dr.async_get", side_effect=device_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=device_entries),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            await valve_async_setup_entry(hass, entry, async_add_entities)
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+
+            assert create.call_count == 1
+            return create.call_args.kwargs["translation_placeholders"]
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_hub_names_the_card_s_hub_bullet(self):
+        """The maintainer's own hub, named the way it is named everywhere else
+        in Home Assistant rather than the way RainPoint names it."""
+        placeholders = await self._card_for([self._hub_device_row()])
+
+        assert placeholders["hub_name"] == "HWG023WBRF-V2 Hub"
+
+    @pytest.mark.asyncio
+    async def test_an_unrenamed_hub_still_gets_a_name_from_its_own_row(self):
+        """A hub the owner never renamed resolves to the registry's own name
+        for it, which is a name rather than a blank."""
+        placeholders = await self._card_for([self._hub_device_row(name_by_user=None)])
+
+        assert placeholders["hub_name"] == "Hub A Registry Name"
+
+    @pytest.mark.asyncio
+    async def test_no_hub_row_falls_back_to_the_cloud_hub_name(self):
+        """A hub whose row cannot be resolved is still named, from the cloud
+        record the ledger's descriptor holds."""
+        placeholders = await self._card_for([])
+
+        assert placeholders["hub_name"] == "Hub A"
 
 
 class TestOrphanedCardLifecycle:

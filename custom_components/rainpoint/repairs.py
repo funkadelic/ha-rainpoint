@@ -75,6 +75,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from .const import (
     DOMAIN,
     HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
+    LEFTOVER_ENTITIES_TRANSLATION_KEY,
     ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
     PUSH_HUB_IDENTITY_ISSUE_ID,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
@@ -291,7 +292,17 @@ def silent_device_issue_id(hid: Any, mid: int, addr: int) -> str:
 # a Repairs translation placeholder: backtick, angle brackets, square
 # brackets, parentheses, pipe, backslash, asterisk, underscore, and hash, plus
 # the colon, forward slash and at sign that make a bare address linkable.
-_MARKDOWN_HTML_TRANSLATION = str.maketrans("", "", "`<>[]()|\\*_#:/@")
+#
+# Braces go with them, for the layer below Markdown rather than Markdown
+# itself. A card body is a template of {placeholder} tokens, and the values
+# filling them come from the RainPoint payload and from device names a user
+# typed, so a value of the literal "{entity_list}" is a value that looks like
+# one of this integration's own tokens. Whether a frontend would substitute it
+# depends on a substitution order this module does not control, and the card in
+# question is the one whose Submit deletes recorder history. Every literal on
+# this path that legitimately carries a brace is this integration's own and
+# never crosses the sanitizer.
+_MARKDOWN_HTML_TRANSLATION = str.maketrans("", "", "`<>[]()|\\*_#:/@{}")
 _WHITESPACE_RUN_RE = re.compile(r"\s+")
 # The bare-host form some Markdown renderers autolink on the prefix alone,
 # with no scheme and no surrounding syntax to strip.
@@ -344,6 +355,69 @@ def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
     text = _AUTOLINK_PREFIX_RE.sub(" ", text)
     text = text.strip()[:limit]
     return text or "unknown"
+
+
+# Home Assistant's own entity id charset: lowercase letters, digits and
+# underscores either side of exactly one dot. Anchored with \Z rather than $,
+# which matches before a trailing newline as well as at the end: "sensor.foo\n"
+# passes a $-anchored charset check and then breaks the list item it is
+# rendered into across two lines. This function validates rather than
+# sanitizes, so the anchor has to mean what the check claims.
+_ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+\Z")
+# How many entity ids a card names before it stops listing and starts counting.
+# One leftover row is the common case; a departed device can carry ten or more,
+# and an uncapped list would run a translation placeholder to whatever length
+# the registry happens to hold.
+_ENTITY_LIST_LIMIT = 10
+# Each named id is a Markdown list item nested under the count line above it,
+# so a card reads as a count and then the names behind that count.
+_ENTITY_LIST_INDENT = "  - "
+
+
+def _format_entity_list(entity_ids: Iterable[str], limit: int = _ENTITY_LIST_LIMIT) -> str:
+    """Render entity ids as a Markdown list, each id inside a code span.
+
+    Validate and pass, rather than sanitize and hope, and the difference from
+    _sanitize_placeholder is the point. That function neutralizes a cloud
+    string or a user-set device name, neither of which has any grammar to
+    check, by deleting every Markdown-active character. An entity id is the
+    opposite problem: Home Assistant constrains it to lowercase letters,
+    digits and underscores either side of one dot, so it can be checked
+    against that charset outright. Running one through the sanitizer instead
+    would delete its underscores and dot and print
+    "sensorhtv210bunsupportedhtv210b", naming nothing the user can find.
+
+    An id that does not match the charset is dropped rather than repaired.
+    Repairing would invent an id, and this list is a promise about which rows
+    Submit takes; a name the user cannot match against their own registry is
+    worse than one fewer name, and the card's count still tells them how many
+    rows are in scope.
+
+    The code span is what makes the underscores render as underscores rather
+    than as emphasis, and wrapping is safe here for one reason only: a value
+    that matches the charset cannot contain a backtick, so it cannot close the
+    span early and cannot reach the surrounding Markdown. The backticks
+    themselves are this integration's own copy and are never taken from data.
+    The same wrapping would not be safe around a cloud string, which is why
+    every other placeholder crosses the sanitizer instead.
+
+    At most ``limit`` ids are named, and whatever is left over is counted in
+    plain language on a line of its own. The remainder is measured against
+    everything supplied, dropped ids included, so it agrees with the count the
+    card renders above it. Nothing supplied, or nothing that survives the
+    charset check, renders as the empty string, which leaves the card its count
+    line and no list at all.
+    """
+    supplied = list(entity_ids)
+    valid = [entity_id for entity_id in supplied if isinstance(entity_id, str) and _ENTITY_ID_RE.match(entity_id)]
+    if not valid:
+        return ""
+    named = valid[:limit]
+    lines = [f"{_ENTITY_LIST_INDENT}`{entity_id}`" for entity_id in named]
+    remaining = len(supplied) - len(named)
+    if remaining > 0:
+        lines.append(f"{_ENTITY_LIST_INDENT}and {remaining} more")
+    return "\n".join(lines)
 
 
 class RainPointSilentDeviceIssues:
@@ -536,6 +610,46 @@ class OrphanedEntitiesRecord:
     # reads it. False is the Bluetooth wrapper record's child, which never had
     # a hub for the card to name.
     hub_paired: bool = True
+    # The entity ids the card names, and nothing else. Display only: the
+    # removal executor is keyed on the exact (domain, unique_id) pairs the
+    # caller derived, and never on anything rendered from this tuple. Keeping
+    # the two apart is deliberate -- a disclosure surface that becomes the
+    # deletion authority is how a row the user was never shown gets deleted, or
+    # a row the user was shown survives under a name that has since changed.
+    # Empty is the ordinary state for the departed-key shape, which has no
+    # entity ids to name, and for any caller that supplies none.
+    entity_ids: tuple[str, ...] = ()
+    # The exact (domain, unique_id) pairs this card is offering, carried into
+    # the issue's data dict so the flow behind it can snapshot what was on
+    # offer at the moment the dialog was shown. It is a ceiling and never a
+    # scope: the confirm still re-derives which rows are dead right now, and
+    # intersects that with this. A pair that recovered between the two drops
+    # out of the derivation, and a pair that went dead after the dialog opened
+    # is not in here, so neither can be taken. Sorted by the caller so an
+    # unchanged offer publishes an unchanged value and the dedup holds.
+    leftover_pairs: tuple[tuple[str, str], ...] = ()
+    # Which of the two shapes produced this record, and therefore which body
+    # the card renders. False is the departed-key shape: RainPoint has stopped
+    # listing the device. True is the still-present shape: the device is on the
+    # account and reporting, and these rows have had nothing behind them.
+    # Defaulted so every existing construction stays valid, and because the
+    # departed shape is the one that shipped first.
+    leftover: bool = False
+    # The Home Assistant name for this device -- name_by_user if the owner has
+    # renamed it, otherwise the device row's own name -- resolved by the
+    # caller and never by this module. None means no device row could be
+    # resolved for this key (a departed key, an unreadable device registry, or
+    # a key this session's adders never emitted), in which case the card falls
+    # back to sub_name, the cloud's own name for the device. Defaulted so
+    # every existing construction stays valid.
+    device_name: str | None = None
+    # The Home Assistant name for the hub this device hangs off, resolved by
+    # the caller from the hub's own device registry row and never by this
+    # module. None means no hub row could be resolved, in which case the card
+    # falls back to hub_name, the cloud's own string for it. Read only while
+    # hub_paired is True: a device with no hub renders the literal "none",
+    # which is a different statement rather than another rung of this fallback.
+    hub_device_name: str | None = None
 
 
 def orphaned_entities_issue_id(sensor_key: str, entry_id: str) -> str:
@@ -574,11 +688,18 @@ class RainPointOrphanedEntityIssues:
         A reload builds a fresh instance with no memory of what a prior
         session raised, which is why _clear_issue deletes unconditionally
         rather than only when it believes the issue is active.
+
+        ``_published`` remembers what each active card was last raised with,
+        keyed by the same issue id, so a card whose values have moved can be
+        told apart from one that has not. It is dropped in lockstep with the
+        card in _clear_issue, and it is per-instance for the same reason the
+        active set is.
         """
         self._hass = hass
         self._active: set[str] = set()
+        self._published: dict[str, dict] = {}
 
-    def async_sync(self, records: list[OrphanedEntitiesRecord]) -> None:
+    def async_sync(self, records: list[OrphanedEntitiesRecord], *, hold_leftover: bool = False) -> None:
         """Reconcile the active issue set against one update's worth of records.
 
         An orphaned record raises its issue once (deduped on _active). A
@@ -590,6 +711,15 @@ class RainPointOrphanedEntityIssues:
         active id no record mentions at all is cleared as a removal rather
         than a recovery, which is what happens once a confirmed fix has
         emptied the ledger entry that produced the record.
+
+        ``hold_leftover`` says the caller's still-present derivation could not
+        look this time, so the records it built carry no verdict about that
+        shape. Its cards are left exactly as they are, rather than read as
+        recovered: a registry that could not be read is not evidence that a
+        device's rows are backed again, and withdrawing the card would both
+        tell the user that in the log and cost them the waiting period the card
+        represents. The departed-key shape is derived from coordinator data
+        alone, so it is unaffected and reconciles normally in the same pass.
         """
         mentioned: set[str] = set()
         for record in records:
@@ -597,10 +727,21 @@ class RainPointOrphanedEntityIssues:
             mentioned.add(issue_id)
             if record.orphaned:
                 self._raise_issue(issue_id, record)
-            else:
+            elif not (hold_leftover and self._published_is_leftover(issue_id)):
                 self._clear_issue(issue_id)
         for stale_id in self._active - mentioned:
+            if hold_leftover and self._published_is_leftover(stale_id):
+                continue
             self._clear_issue(stale_id, reason=_CLEAR_REASON_REMOVED)
+
+    def _published_is_leftover(self, issue_id: str) -> bool:
+        """Return True when the card this id carries is the still-present shape.
+
+        Read from what was last published rather than from the record in hand,
+        because the caller reaching for this has no record for the key: the
+        derivation that would have built one could not run.
+        """
+        return bool(((self._published.get(issue_id) or {}).get("data") or {}).get("leftover"))
 
     @callback
     def async_clear_all(self) -> None:
@@ -655,6 +796,31 @@ class RainPointOrphanedEntityIssues:
         approve a destructive action. The two integers are this integration's
         own and are stringified rather than sanitized.
 
+        The Device bullet's value is record.device_name, the Home Assistant
+        name the device's owner sees, falling back to record.sub_name, the
+        cloud's own name, only when no device name could be resolved. That
+        fallback resolves before the sanitizer, so exactly one sanitized value
+        reaches both the card and, through _description_placeholders, its
+        confirm dialog -- there is no second, unsanitized copy anywhere in
+        between. A user-set device name is untrusted Markdown on exactly the
+        same terms a cloud string is: nothing about where a value originated
+        earns it a laxer boundary than every other placeholder here crosses.
+
+        The Hub bullet resolves the same way, from record.hub_device_name
+        falling back to record.hub_name, for the same reason and across the
+        same boundary. A card that named the device the way its owner does
+        while naming the hub the way RainPoint does was describing one home in
+        two vocabularies.
+
+        The still-present shape also names the entities it is offering, one per
+        line, so the card's promise is a list rather than a bare count. That
+        list is display only and is built by _format_entity_list, which
+        validates each id against Home Assistant's entity id charset instead of
+        sanitizing it. Nothing downstream reads it: the removal executor is
+        keyed on the (domain, unique_id) pairs the caller derived, so a card
+        that could not name a row still removes it, and a row renamed after the
+        card was raised is still removed under whatever id it now carries.
+
         is_persistent is deliberately not passed. The default False means the
         issue registry does not restore this card across a restart, so no
         stale card can outlive the session that raised it, and the sweep
@@ -669,15 +835,107 @@ class RainPointOrphanedEntityIssues:
         the UI while this set still holds its id. Deduping on the set alone
         would then suppress every later attempt and strand the user with
         leftover entities and no surface left to act on.
+
+        The dedup is on the values rather than on the id, which is the second
+        thing an active card cannot be trusted about. The confirm re-derives
+        what it will remove at the moment it runs, so the count the user reads
+        has to be the count that Submit will act on. A still-present device can
+        gain a second unused row while its card is already up, and freezing the
+        card at whatever it said when it was first raised would have the user
+        approve removing one entity and lose two. Re-raising with the same id
+        is an update rather than a second card, so the values are simply
+        published again; a record whose rendered values have not moved returns
+        here without touching the registry, so an unchanged card still costs
+        nothing per update. Each republish carries its own log line for the
+        same reason the first raise does: the number the user is being asked to
+        approve changed.
+
+        The translation key is chosen from the record's shape while the issue
+        id is not, and both halves of that are deliberate. The card has to
+        describe the shape that raised it, because "RainPoint has stopped
+        listing this device" and "this device is on your account and reporting"
+        are opposite statements to the user reading them. The id stays one per
+        key because the two shapes are mutually exclusive for one key: the
+        leftover derivation requires the key to be in the current poll, and an
+        aged-out key is by definition absent from it.
         """
+        # The leftover marker is added only on the shape that carries it, so
+        # the departed-key card's data dict stays byte-identical to what it has
+        # always been and no flow reading it back has to learn a new key.
+        data: dict[str, Any] = {"entry_id": record.entry_id, "sensor_key": record.sensor_key}
+        if record.leftover:
+            data["leftover"] = True
+            # What this card is offering, for the flow to snapshot when it
+            # shows the dialog. It rides in `data` rather than in the
+            # placeholders because it is not rendered: the placeholders name
+            # entity ids for a human to read and stop at ten of them, while
+            # this is the whole offer, keyed the only way a removal is ever
+            # keyed. Publishing it here also puts it inside the dedup below,
+            # so a card whose offer has changed republishes even where every
+            # rendered value stayed the same.
+            data["leftover_pairs"] = record.leftover_pairs
+        # Everything the registry is asked to render, assembled before the
+        # dedup rather than after it, because the dedup's question is whether
+        # any of it has moved since this card was last published.
+        published = {
+            "translation_key": LEFTOVER_ENTITIES_TRANSLATION_KEY if record.leftover else ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
+            "data": data,
+            # The threat, stated where the values are: Home Assistant renders
+            # this card and its confirm dialog as Markdown, and device_name,
+            # model, addr and hub_name all arrive from sources this module does
+            # not control -- device_name from a Home Assistant registry a user
+            # can rename freely, the other three from the RainPoint payload --
+            # with nothing validating any of them. Every one of them goes
+            # through the sanitizer; the two counts are this integration's own
+            # and are only stringified.
+            "translation_placeholders": {
+                "device_name": _sanitize_placeholder(record.device_name or record.sub_name),
+                "model": _sanitize_placeholder(record.model),
+                "address": _sanitize_placeholder(record.addr),
+                # The literal "none" for a device that never had a hub,
+                # exactly as the not-reporting card does and for the same
+                # reason: the sanitizer's "unknown" fallback reads as lost
+                # state, when the truth is that there is no hub to name. A
+                # Bluetooth wrapper record carries an empty name, so without
+                # this the card's least useful line is the one naming a hub the
+                # device was never on. The literal is ours, not the cloud's, so
+                # it needs no sanitizing.
+                #
+                # A paired hub is named the way the Device bullet above is: the
+                # Home Assistant name its owner sees, falling back to the
+                # cloud's own string only when no hub row could be resolved.
+                # The fallback resolves before the sanitizer, so exactly one
+                # sanitized value reaches both the card and its confirm dialog.
+                "hub_name": _sanitize_placeholder(record.hub_device_name or record.hub_name) if record.hub_paired else "none",
+                "entity_count": str(record.entity_count),
+                "missed_polls": str(record.missed_polls),
+            },
+        }
+        if record.leftover:
+            # Supplied on the shape whose copy renders it, and on no other. The
+            # same flag chooses the translation key above, so the placeholder
+            # set and the body it feeds cannot drift apart: a placeholder with
+            # no home in the copy is a value the user never sees, and a
+            # placeholder in the copy with no supplier ships a literal brace.
+            # The departed-key shape names no entity ids because it has none to
+            # name: its scope comes from this session's adder ledgers, which
+            # record unique ids rather than entity ids, and resolving those to
+            # entity ids would mean walking the entity registry on a path that
+            # deliberately never touches it.
+            published["translation_placeholders"]["entity_list"] = _format_entity_list(record.entity_ids)
+
         if issue_id in self._active:
-            if self._issue_still_registered(issue_id):
+            if not self._issue_still_registered(issue_id):
+                # Home Assistant deleted it out from under this set, so the
+                # mark is stale. Dropped here rather than inside the test
+                # above, so the predicate stays a predicate and reordering this
+                # condition cannot silently change the bookkeeping.
+                self._active.discard(issue_id)
+            elif self._published.get(issue_id) == published:
+                # A live card saying exactly what it already says. Returning
+                # here is what keeps an unchanged card from rewriting the issue
+                # registry on every poll and every pushed frame.
                 return
-            # Home Assistant deleted it out from under this set, so the mark is
-            # stale. Dropped here rather than inside the test above, so the
-            # predicate stays a predicate and reordering this condition cannot
-            # silently change the bookkeeping.
-            self._active.discard(issue_id)
         try:
             ir.async_create_issue(
                 self._hass,
@@ -685,41 +943,36 @@ class RainPointOrphanedEntityIssues:
                 issue_id,
                 is_fixable=True,
                 severity=ir.IssueSeverity.WARNING,
-                translation_key=ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
-                data={"entry_id": record.entry_id, "sensor_key": record.sensor_key},
-                # The threat, stated where the values are: Home Assistant
-                # renders this card and its confirm dialog as Markdown, and
-                # sub_name, model, addr and hub_name all arrive from the
-                # RainPoint payload with nothing validating them. Every one of
-                # them goes through the sanitizer; the two counts are this
-                # integration's own and are only stringified.
-                translation_placeholders={
-                    "sub_name": _sanitize_placeholder(record.sub_name),
-                    "model": _sanitize_placeholder(record.model),
-                    "address": _sanitize_placeholder(record.addr),
-                    # The literal "none" for a device that never had a hub,
-                    # exactly as the not-reporting card does and for the same
-                    # reason: the sanitizer's "unknown" fallback reads as lost
-                    # state, when the truth is that there is no hub to name. A
-                    # Bluetooth wrapper record carries an empty name, so
-                    # without this the card's least useful line is the one
-                    # naming a hub the device was never on. The literal is
-                    # ours, not the cloud's, so it needs no sanitizing.
-                    "hub_name": _sanitize_placeholder(record.hub_name) if record.hub_paired else "none",
-                    "entity_count": str(record.entity_count),
-                    "missed_polls": str(record.missed_polls),
-                },
+                **published,
             )
             # Marked active only once the registry accepted it, for the same
             # reason its sibling does: marking first would let one transient
-            # registry error suppress every later attempt for this key.
+            # registry error suppress every later attempt for this key. The
+            # published values are recorded in the same breath and for the same
+            # reason: a raise the registry refused published nothing, so the
+            # next update has to try again rather than dedup against values no
+            # card is carrying.
             self._active.add(issue_id)
-            _LOGGER.warning(
-                "RainPoint no longer lists sensor key %s after %s checks; offering its %s leftover entity/entities for removal",
-                record.sensor_key,
-                record.missed_polls,
-                record.entity_count,
-            )
+            self._published[issue_id] = published
+            # One line per shape, because the two say opposite things about the
+            # device. Both carry the sensor key and two integers only, never a
+            # cloud-supplied name or model.
+            if record.leftover:
+                _LOGGER.warning(
+                    "Sensor key %s is still listed and reporting, but %s of its entity row(s) have had nothing behind "
+                    "them for %s updates; offering them for removal",
+                    record.sensor_key,
+                    record.entity_count,
+                    record.missed_polls,
+                )
+            else:
+                _LOGGER.warning(
+                    "RainPoint no longer lists sensor key %s after %s checks; "
+                    "offering its %s leftover entity/entities for removal",
+                    record.sensor_key,
+                    record.missed_polls,
+                    record.entity_count,
+                )
         except Exception as issue_exc:
             _LOGGER.debug(
                 "Failed to create the orphaned entities repair issue (id=%s): %s",
@@ -757,37 +1010,65 @@ class RainPointOrphanedEntityIssues:
         Three reasons rather than the siblings' two, because this manager also
         withdraws its cards on unload, and a withdrawal is neither a recovery
         nor a removal from the account.
+
+        The remembered published values go with the mark, so a key that is
+        cleared and later raised again publishes from scratch rather than
+        deduping against what a card that no longer exists was carrying. The
+        shape is read out of them before they go, because two of the three
+        reasons say something that is only true of one shape.
         """
         was_active = issue_id in self._active
+        was_leftover = bool(((self._published.get(issue_id) or {}).get("data") or {}).get("leftover"))
         self._active.discard(issue_id)
+        self._published.pop(issue_id, None)
         try:
             ir.async_delete_issue(self._hass, DOMAIN, issue_id)
             if not was_active:
                 return
             if reason == _CLEAR_REASON_RECOVERED:
-                _LOGGER.info(
-                    "RainPoint lists this device again; clearing the orphaned entities repair issue (id=%s)",
-                    issue_id,
-                )
+                # The two shapes recover from opposite states, so neither line
+                # can stand in for the other. RainPoint stopped listing the
+                # departed key and now lists it again; it never stopped listing
+                # the still-present one, whose rows simply have something behind
+                # them once more.
+                if was_leftover:
+                    _LOGGER.info(
+                        "This device's unused entity rows are backed again; clearing its repair issue (id=%s)",
+                        issue_id,
+                    )
+                else:
+                    _LOGGER.info(
+                        "RainPoint lists this device again; clearing the orphaned entities repair issue (id=%s)",
+                        issue_id,
+                    )
             elif reason == _CLEAR_REASON_UNLOADED:
-                # Warning rather than info, unlike the other two reasons, and
-                # the only one of the three that leaves the user worse off. A
-                # recovery and a removal both end with nothing left to offer;
-                # a withdrawal ends with the leftover rows still registered and
-                # no surface left to offer them through, because the same fact
-                # that makes the card unclearable after a reload makes it
-                # unraisable. The rows have to be removed from the entity
-                # registry by hand from here, so the line names them.
+                # A withdrawal costs the two shapes different things, and only
+                # one of them strands anything. The departed-key card is raised
+                # from this session's adder ledgers, and the same fact that
+                # makes it unclearable after a reload makes it unraisable, so
+                # its rows are left with no surface at all and the line has to
+                # name the manual step. The still-present card is derived from
+                # the entity registry, which survives the reload, so its rows
+                # are offered again once they re-serve their window. That is
+                # what README.md tells the user, and a warning here would
+                # contradict it.
                 #
-                # It cannot become noise: was_active gates it, so it fires only
-                # where a card was genuinely up at unload, and at most once per
+                # Neither can become noise: was_active gates both, so they fire
+                # only where a card was genuinely up at unload, at most once per
                 # withdrawn card.
-                _LOGGER.warning(
-                    "Unloading this config entry; withdrawing the orphaned entities repair issue (id=%s). "
-                    "Its leftover entity rows are still registered and will not be offered again after the reload; "
-                    "remove them from the entity registry by hand",
-                    issue_id,
-                )
+                if was_leftover:
+                    _LOGGER.info(
+                        "Unloading this config entry; withdrawing the unused entities repair issue (id=%s). "
+                        "Its rows are offered again once they have served their window after the reload",
+                        issue_id,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Unloading this config entry; withdrawing the orphaned entities repair issue (id=%s). "
+                        "Its leftover entity rows are still registered and will not be offered again after the reload; "
+                        "remove them from the entity registry by hand",
+                        issue_id,
+                    )
             else:
                 _LOGGER.info(
                     "No leftover entities remain to offer; clearing the orphaned entities repair issue (id=%s)",
@@ -799,6 +1080,57 @@ class RainPointOrphanedEntityIssues:
                 issue_id,
                 issue_exc,
             )
+
+
+def _snapshot_offered_pairs(issue, *, leftover_shape: bool) -> frozenset[tuple[str, str]] | None:
+    """Read the exact pairs a card is offering, as they stand right now.
+
+    None means there is no offer to hold the removal to, and the shape the
+    caller names is the only route to it. The departed-key card carries no pair
+    list at all, because its scope comes from the session's ledgers rather than
+    from a registry scan, so there is nothing here to constrain and the confirm
+    falls back to those ledgers as it always has.
+
+    Every outcome on the still-present shape is a set, the failures included,
+    and that is the whole contract this exists to keep. Its confirm may take
+    only what its dialog was shown, so a card whose offer cannot be read is not
+    a card with no offer: the offer exists and is unknown, the answer is an
+    empty ceiling, and Submit takes nothing rather than falling back to a
+    re-derivation no dialog was ever held to. That covers an issue that could
+    not be read at all, one whose data raises, and one whose pair list is
+    missing or unreadable. A pair that does not survive normalization is
+    dropped for the same reason rather than repaired. Narrower is the safe
+    direction on a surface whose Submit deletes recorder history: the cost of
+    dropping one is that a genuinely dead row waits for the next card, and the
+    cost of inventing one is a row the user never approved.
+
+    The whole read sits inside the guard, the attribute included. ``getattr``'s
+    default covers a missing ``data`` and nothing else, so an entry that raises
+    on the attribute would otherwise propagate out of the flow step that shows
+    the dialog and leave the user with a broken one.
+    """
+    if not leftover_shape:
+        return None
+    try:
+        offered = (getattr(issue, "data", None) or {}).get("leftover_pairs")
+    except Exception as exc:
+        _LOGGER.debug("Could not read what the orphaned entities card is offering: %s", exc)
+        return frozenset()
+    if offered is None:
+        return frozenset()
+    pairs = set()
+    try:
+        for pair in offered:
+            domain, unique_id = pair
+            if isinstance(domain, str) and isinstance(unique_id, str):
+                pairs.add((domain, unique_id))
+    except Exception as exc:
+        # Whatever was read before the failure stands as the ceiling, and a
+        # failure on the first member therefore leaves an empty one. Same
+        # direction as every other partial read here: the confirm takes less
+        # than the card offered, never more.
+        _LOGGER.debug("Could not read one of the pairs the orphaned entities card is offering: %s", exc)
+    return frozenset(pairs)
 
 
 class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
@@ -818,6 +1150,20 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
     def __init__(self, data: dict | None) -> None:
         """Hold the issue's data dict, which names what may be removed."""
         self._flow_data = dict(data or {})
+        # What the card was offering at the moment this flow showed its dialog,
+        # filled in by that step and read by the submit that follows it.
+        #
+        # The still-present shape starts at an empty ceiling rather than at
+        # None, which is the same answer every failed read on that shape gives:
+        # a submit that somehow arrived without the dialog having been shown
+        # has been shown nothing, so it may take nothing. Home Assistant always
+        # shows the form first, so this is the invariant stated where it cannot
+        # be skipped rather than a case anyone has seen. None belongs to the
+        # departed-key shape alone, which removes from the session's ledgers
+        # and never consults an offer.
+        self._offered_pairs: frozenset[tuple[str, str]] | None = (
+            frozenset() if bool((data or {}).get("leftover", False)) else None
+        )
 
     @property
     def _sensor_key(self) -> str:
@@ -828,6 +1174,18 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
     def _entry_id(self) -> str:
         """The one config entry this flow is allowed to act on."""
         return str(self._flow_data.get("entry_id", ""))
+
+    @property
+    def _leftover_shape(self) -> bool:
+        """Which of the two card shapes raised this flow.
+
+        Read from the issue's own data dict, which is the only place the shape
+        is recorded, and handed to the remover so that nothing downstream has
+        to guess it. The departed-key card carries no such key at all, and its
+        absence is what makes False the right answer there rather than a
+        default standing in for a missing one.
+        """
+        return bool(self._flow_data.get("leftover", False))
 
     async def async_step_init(self, user_input: dict | None = None):
         """Handle the first step of the fix flow."""
@@ -841,13 +1199,34 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         if user_input is not None:
             self._remove_rows()
             return self.async_create_entry(data={})
+        # One read of the issue feeds both halves of what the dialog promises:
+        # the text the user reads and the offer that text describes. Reading it
+        # twice would take them from two different moments, and the whole point
+        # of the snapshot is that it belongs to the moment the user was shown.
+        issue = self._read_issue()
+        self._offered_pairs = _snapshot_offered_pairs(issue, leftover_shape=self._leftover_shape)
         return self.async_show_form(
             step_id="confirm",
             data_schema=vol.Schema({}),
-            description_placeholders=self._description_placeholders(),
+            description_placeholders=self._description_placeholders(issue),
         )
 
-    def _description_placeholders(self) -> dict | None:
+    def _read_issue(self):
+        """Return the issue this flow was opened from, or None.
+
+        Guarded rather than allowed to raise, because this runs inside a flow
+        step and an exception here leaves the user with a broken dialog rather
+        than a degraded one.
+        """
+        try:
+            issue_id = orphaned_entities_issue_id(self._sensor_key, self._entry_id)
+            return ir.async_get(self.hass).async_get_issue(DOMAIN, issue_id)
+        except Exception as exc:
+            _LOGGER.debug("Could not read the orphaned entities issue: %s", exc)
+            return None
+
+    @staticmethod
+    def _description_placeholders(issue) -> dict | None:
         """Reuse the raised issue's own placeholders for the confirm dialog.
 
         Reading them back rather than building a second dict is what keeps the
@@ -856,23 +1235,38 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         placeholders rather than raising out of a flow step and leaving the
         user with a broken dialog.
         """
+        if issue is None:
+            return None
         try:
-            issue_id = orphaned_entities_issue_id(self._sensor_key, self._entry_id)
-            issue = ir.async_get(self.hass).async_get_issue(DOMAIN, issue_id)
-            if issue is None:
-                return None
             return issue.translation_placeholders
         except Exception as exc:
             _LOGGER.debug("Could not read the orphaned entities issue placeholders: %s", exc)
             return None
 
     def _remove_rows(self) -> None:
-        """Call this config entry's removal executor for this key.
+        """Call this config entry's removal executor for this key and this shape.
 
         The executor is published by the config entry's own setup, so a flow
         submitted after that entry was torn down finds nothing and removes
         nothing. Guarded rather than allowed to raise, because an exception
         here surfaces as a broken repair dialog.
+
+        The card's shape goes with the key, because the executor's two scopes
+        are not variations of one another and it cannot recover the shape from
+        anything else it has. A still-present card whose every offered row came
+        back to life before the user pressed Submit legitimately resolves to no
+        rows at all, and an executor left to infer the shape from that emptiness
+        would read it as the departed-key case and delete every entity the
+        session recorded for a live, reporting device.
+
+        The offer this flow was shown goes with them, and closes the gap the
+        re-derivation alone leaves open. Re-deriving keeps a row that recovered
+        while the dialog sat open from being taken; on its own it does nothing
+        about a row that went dead while it sat open, because the sweep behind
+        the card keeps running, and a second row can finish its window,
+        republish the card and enter the re-derived scope under a dialog whose
+        text still describes one row. Held to what it was shown, the confirm can
+        only ever narrow that scope, never widen it.
         """
         entry_id = self._flow_data.get("entry_id")
         try:
@@ -881,7 +1275,7 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
             _LOGGER.debug("No orphaned entity remover is registered for entry %s: %s", entry_id, exc)
             return
         try:
-            remover(self._sensor_key)
+            remover(self._sensor_key, leftover_shape=self._leftover_shape, offered_pairs=self._offered_pairs)
         except Exception as exc:
             _LOGGER.debug("Removing the entities for sensor key %s failed: %s", self._sensor_key, exc)
 

@@ -118,6 +118,22 @@ HUB_CONNECTIVITY_ISSUE_ID_PREFIX = "hub_disconnected"
 # is this bare prefix, so the two are independent and the id shape can change
 # without touching translations/en.json.
 ORPHANED_ENTITIES_ISSUE_ID_PREFIX = "orphaned_device_entities"
+# How many consecutive qualifying observations a registry row has to make
+# before its (domain, unique_id) pair may be offered on a card. Counted in
+# coordinator updates rather than polls, and the distinction is real: this
+# sweep runs from a coordinator listener, which also fires on every pushed
+# frame, so an update is not the same event as a poll here. Held at the same
+# number as the departed-key window so the two shapes of the same card do not
+# ask a user to reason about two different waiting periods.
+LEFTOVER_ROW_DEBOUNCE_UPDATES = 30
+# The translation key the still-present shape of the leftover card renders
+# from. Independent of the issue id, which keeps the
+# ORPHANED_ENTITIES_ISSUE_ID_PREFIX shape for both: the two shapes are
+# mutually exclusive for one sensor key, because the leftover derivation
+# requires the key to be in the current poll while an aged-out key is by
+# definition absent from it, so one id per key still holds and an active card
+# never has to change its body underneath the user.
+LEFTOVER_ENTITIES_TRANSLATION_KEY = "leftover_device_entities"
 # Committed, variant-keyed force-disable list. Each member is a
 # (model, modelCode-as-string) tuple, keyed exactly the way the product
 # catalog itself is keyed: get_catalog_entry's UNCODED_VARIANT sentinel ("*")
