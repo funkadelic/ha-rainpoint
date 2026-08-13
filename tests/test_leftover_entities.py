@@ -35,6 +35,7 @@ from custom_components.rainpoint import (
     _remove_orphaned_key_rows,
     _resolve_device_names,
     _row_is_unbacked,
+    _settled_leftover_pairs,
     _sync_orphaned_entity_issues_on_updates,
 )
 from custom_components.rainpoint import dr as rainpoint_dr
@@ -1031,6 +1032,152 @@ class TestARecoveredCardTakesNothing:
                 assert harness.released == []
 
 
+class TestTheConfirmReadsTheWindowWithoutAdvancingIt:
+    """A confirm is not an observation, so it may not move the debounce window.
+
+    The window belongs to the update path, which is where the observations are
+    made. The confirm re-derives its scope against that window and must select
+    from it as it already stands: a pair sitting one update short of the
+    threshold that crossed it on the confirm call itself would be deleted
+    without ever having been named on the card the user read, and the recorder
+    history behind it does not come back.
+    """
+
+    SECOND_UNIQUE_ID = f"rainpoint_{SENSOR_KEY}_stale"
+    SECOND_ENTITY_ID = f"sensor.rainpoint_{SENSOR_KEY}_stale"
+
+    @staticmethod
+    def _shared_window(hass) -> dict:
+        """The debounce window the update path and the confirm path both hold.
+
+        Reached through the published remover's own closure rather than
+        rebuilt beside it, because the property under test is about that one
+        dict object. A second dict standing in for it would answer the
+        question in a way no confirm could ever fail.
+        """
+        remover = hass.data[DOMAIN][ENTRY_ID]["orphan_entity_remover"]
+        return inspect.getclosurevars(remover).nonlocals["leftover_counts"]
+
+    @pytest.mark.asyncio
+    async def test_a_row_one_update_short_of_the_window_survives_a_confirm(self):
+        """Stop one update short, raise nothing, then run the confirm anyway.
+
+        Driven as a timeline because the defect is entirely one of ordering:
+        the row has to reach exactly the count below the threshold through real
+        updates, and the confirm has to be the next thing that touches it. A
+        window handed in at that count proves nothing about which path put it
+        there.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES - 1):
+                    await coordinator.async_refresh()
+                # No card has been raised, so nothing has been offered at all.
+                assert create.call_count == 0
+
+                window = self._shared_window(hass)
+                before = dict(window)
+                assert before[(SENSOR_KEY, ("sensor", LEFTOVER_UNIQUE_ID))] == LEFTOVER_ROW_DEBOUNCE_UPDATES - 1
+
+                removed = hass.data[DOMAIN][ENTRY_ID]["orphan_entity_remover"](SENSOR_KEY)
+
+                assert removed == 0
+                assert harness.removed == []
+                assert harness.released == []
+                # The confirm read the window and left it exactly as it was.
+                assert window == before
+
+    @pytest.mark.asyncio
+    async def test_the_confirm_takes_exactly_the_rows_the_card_named(self):
+        """The disclosure property itself, with a second row held just short.
+
+        One row is offered on a card while a second serves all but the last
+        update of its own window. The card says one entity, so Submit may take
+        one entity, and the row that has not finished its window waits for an
+        update rather than for a human.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                assert create.call_count == 1
+                issue_id = create.call_args.args[2]
+                assert create.call_args.kwargs["translation_placeholders"]["entity_count"] == "1"
+
+                # A second row on the same device goes dead while the card is
+                # up and stops one update short of qualifying.
+                harness.add_leftover_row(entity_id=self.SECOND_ENTITY_ID, unique_id=self.SECOND_UNIQUE_ID)
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES - 1):
+                    await coordinator.async_refresh()
+
+                # The card never changed its count, so its promise is still one.
+                assert create.call_count == 1
+                assert create.call_args.kwargs["translation_placeholders"]["entity_count"] == "1"
+
+                window = self._shared_window(hass)
+                before = dict(window)
+                assert before[(SENSOR_KEY, ("sensor", self.SECOND_UNIQUE_ID))] == LEFTOVER_ROW_DEBOUNCE_UPDATES - 1
+
+                flow = await async_create_fix_flow(hass, issue_id, create.call_args.kwargs["data"])
+                flow.hass = hass
+                shown = await flow.async_step_init()
+                assert shown["description_placeholders"]["entity_count"] == "1"
+
+                await flow.async_step_confirm({})
+
+                # Exactly the one the card named. The row still serving its
+                # window is untouched, and so is the window itself.
+                assert harness.removed == [LEFTOVER_ENTITY_ID]
+                assert harness.released == []
+                assert window == before
+
+    def test_the_read_only_selection_never_offers_more_than_advancing_would(self):
+        """The two selections compared at the boundary, over one window.
+
+        The claim the confirm path rests on is a relation between the two
+        functions rather than a fact about either: reading the window can never
+        answer a pair that advancing it would have withheld. Asserted at every
+        count from empty to past the threshold, because the only count where
+        the two can disagree is the one immediately below it.
+        """
+        pair = ("sensor", LEFTOVER_UNIQUE_ID)
+        pairs = {SENSOR_KEY: frozenset({pair})}
+        window: dict = {}
+
+        for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES + 1):
+            settled = _settled_leftover_pairs(window, pairs)
+            # Read-only leaves the window alone, whatever it answers.
+            snapshot = dict(window)
+            assert _settled_leftover_pairs(window, pairs) == settled
+            assert window == snapshot
+
+            advanced = _debounced_leftover_pairs(window, pairs)
+            assert settled.get(SENSOR_KEY, frozenset()) <= advanced.get(SENSOR_KEY, frozenset())
+
+        # And past the threshold the two finally agree, so this is a narrowing
+        # rather than a path that never offers anything.
+        assert _settled_leftover_pairs(window, pairs) == pairs
+
+    def test_a_pair_the_window_has_never_seen_is_never_settled(self):
+        """A row that first went dead after the last update is not offerable.
+
+        It has no entry in the window at all, and the absent case has to read
+        as zero rather than as unknown, or a newly dead row would be removable
+        the moment a card raised for one of its siblings was confirmed.
+        """
+        assert _settled_leftover_pairs({}, {SENSOR_KEY: frozenset({("sensor", LEFTOVER_UNIQUE_ID)})}) == {}
+
+
 class TestTheTwoShapesAreMutuallyExclusive:
     """One key holds exactly one shape at every step of its whole life."""
 
@@ -1094,6 +1241,7 @@ class TestTheNarrowedPropertiesHoldInSource:
         _ledger_pairs_by_key,
         _build_leftover_row_pairs,
         _debounced_leftover_pairs,
+        _settled_leftover_pairs,
         _leftover_pairs_now,
     )
 

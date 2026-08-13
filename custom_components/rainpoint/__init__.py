@@ -772,6 +772,11 @@ def _debounced_leftover_pairs(counts: dict, pairs_by_key: dict) -> dict[str, fro
     fresh full window. `counts` is the caller's own dict and is mutated in
     place, because the window has to survive across updates and the only
     sensible owner of it is the listener that runs them.
+
+    Advancing is the update path's business alone. A caller that only needs to
+    know which pairs have already served their window reads
+    _settled_leftover_pairs instead, and the split between the two is what
+    keeps the card's promise and the confirm's scope from diverging.
     """
     qualifying = {(sensor_key, pair) for sensor_key, pairs in pairs_by_key.items() for pair in pairs}
     for stale in set(counts) - qualifying:
@@ -783,6 +788,37 @@ def _debounced_leftover_pairs(counts: dict, pairs_by_key: dict) -> dict[str, fro
         if counts[entry_key] >= LEFTOVER_ROW_DEBOUNCE_UPDATES:
             debounced.setdefault(entry_key[0], set()).add(entry_key[1])
     return {sensor_key: frozenset(pairs) for sensor_key, pairs in debounced.items()}
+
+
+def _settled_leftover_pairs(counts: Mapping, pairs_by_key: dict) -> dict[str, frozenset[tuple[str, str]]]:
+    """Return the pairs that had already served the window, advancing nothing.
+
+    The read-only counterpart of _debounced_leftover_pairs, and the only one
+    the confirm path may use. An observation is what advances a window, and a
+    confirm is not an observation: it is a human answering a question the
+    update path already asked. Advancing there would let a pair sitting one
+    update short of the threshold cross it on the confirm call itself and enter
+    the removal scope without ever having been named on the card the user read,
+    on the one surface in this integration whose Submit deletes recorder
+    history permanently.
+
+    Selecting on the count as it already stands is strictly narrower than
+    advancing it first, at every count and for every pair, so nothing this
+    answers was outside what the last update offered. A pair that recovered and
+    died again keeps whatever count it had rather than gaining one, so it waits
+    for a sweep to re-establish it, which is the same direction.
+
+    ``counts`` is typed as a Mapping to say the thing this function exists for:
+    it is never written. Skipping the stale-entry prune is part of that, and
+    costs nothing, because an entry the current derivation no longer qualifies
+    is never looked up here and the next update path sweep drops it.
+    """
+    settled: dict[str, set[tuple[str, str]]] = {}
+    for sensor_key, pairs in pairs_by_key.items():
+        for pair in pairs:
+            if counts.get((sensor_key, pair), 0) >= LEFTOVER_ROW_DEBOUNCE_UPDATES:
+                settled.setdefault(sensor_key, set()).add(pair)
+    return {sensor_key: frozenset(pairs) for sensor_key, pairs in settled.items()}
 
 
 def _build_orphaned_entity_records(
@@ -873,13 +909,24 @@ def _build_orphaned_entity_records(
     return records
 
 
-def _leftover_pairs_now(hass: HomeAssistant, entry: ConfigEntry, coordinator, counts: dict, device_rows) -> dict:
+def _leftover_pairs_now(
+    hass: HomeAssistant, entry: ConfigEntry, coordinator, counts: dict, device_rows, *, advance: bool = True
+) -> dict:
     """Re-derive the debounced leftover pairs for this config entry, right now.
 
     Shared by the update path and the confirm path so the card and the removal
     can never disagree about scope. The confirm calls this again rather than
     replaying what the card was raised with, which is what makes a row that
     came back to life between the raise and the Submit survive the Submit.
+
+    ``advance`` says whether this call is an observation. The update path is
+    one, and passes the default, so every pair it derives serves another update
+    of its window. The confirm path is not: it passes False and gets the same
+    fresh derivation narrowed to the pairs whose window was already served, and
+    ``counts`` is left exactly as it was. Both paths share the derivation
+    precisely so the confirm cannot take a row the card never named, and
+    letting the confirm advance the shared window would have handed it a row
+    one update short of the threshold for that reason alone.
 
     ``device_rows`` is supplied by the caller, which is the same signature
     change _build_leftover_row_pairs took and for the same reason: the update
@@ -888,7 +935,10 @@ def _leftover_pairs_now(hass: HomeAssistant, entry: ConfigEntry, coordinator, co
     """
     entry_store = (hass.data.get(DOMAIN) or {}).get(entry.entry_id) or {}
     live_keys = frozenset(_read_current_sensors(coordinator, "offering no leftover rows this update"))
-    return _debounced_leftover_pairs(counts, _build_leftover_row_pairs(hass, entry, entry_store, live_keys, device_rows))
+    pairs_by_key = _build_leftover_row_pairs(hass, entry, entry_store, live_keys, device_rows)
+    if advance:
+        return _debounced_leftover_pairs(counts, pairs_by_key)
+    return _settled_leftover_pairs(counts, pairs_by_key)
 
 
 def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordinator, manager, counts=None) -> None:
@@ -981,6 +1031,14 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         if every one of them came back the scope is empty and this removes
         nothing.
 
+        The re-derivation reads the debounce window without advancing it. The
+        window belongs to the update path, which is where the observations are
+        made, and a confirm makes none: it is a human answering a question that
+        path already asked. Advancing here would let a row sitting one update
+        short of the threshold cross it on this call and be deleted without
+        ever having appeared on the card the user read, which is the one thing
+        this whole surface promises cannot happen.
+
         It fetches its own device rows rather than sharing the periodic sweep's:
         this runs once, on a human's confirm, at a moment displaced from
         whatever update last ran the sweep, so reusing a stale fetch here
@@ -1004,7 +1062,7 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
             hass,
             entry,
             sensor_key,
-            leftover_pairs=_leftover_pairs_now(hass, entry, coordinator, leftover_counts, device_rows).get(
+            leftover_pairs=_leftover_pairs_now(hass, entry, coordinator, leftover_counts, device_rows, advance=False).get(
                 sensor_key, frozenset()
             ),
             leftover_shape=True,
