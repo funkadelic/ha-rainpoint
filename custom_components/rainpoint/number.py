@@ -332,3 +332,26 @@ class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
 
         # Assigned last so the marker always wins over any domain default icon.
         self._attr_icon = GENERIC_CONTROL_MARKER_ICON
+
+    @property
+    def _run_state_open(self) -> bool | None:
+        """Read this port's own explicit open/closed/unknown reading.
+
+        Calls generic_control.generic_run_state_open, the same body the
+        companion generic valve's own run-state property now calls, so this
+        entity and its valve can never disagree about whether a port is
+        open. Imported inside the property body rather than at module level:
+        generic_control reaches sensor.py's RainPointSensorBase transitively
+        through generic_entities, so a top-level import here would pull the
+        whole sensor platform into this module's import graph -- the same
+        reason and the same shape build_generic_duration_entities already
+        uses for its own deferred import.
+        """
+        from .generic_control import generic_run_state_open
+
+        return generic_run_state_open(self.coordinator, self._sensor_key, self._datapoint.dp_port)
+
+    @property
+    def _zone_label(self) -> str:
+        """Name this entity's own datapoint port in the refusal message."""
+        return f"Zone {self._datapoint.dp_port}"

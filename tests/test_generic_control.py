@@ -1066,6 +1066,25 @@ class TestAsciiFramedPayloadRefused:
             mock_matching_field.assert_not_called()
 
 
+class TestRunStateOpenDelegatesToTheSharedFunction:
+    """RainPointGenericControlBase._run_state_open must not re-derive its own
+    reading -- it delegates to the module-level generic_run_state_open, the
+    same body number.py's companion duration entity now calls, so a control
+    entity and its duration companion can never disagree about whether a
+    port is open.
+    """
+
+    def test_run_state_open_calls_the_module_level_function(self):
+        """A patched module-level function is what answers the property, not a private copy."""
+        entity, _, _ = _build_anchor_valve(fields=[_run_state_field(1, 1)])
+
+        with patch.object(generic_control_module, "generic_run_state_open", return_value="sentinel") as mock_fn:
+            result = entity._run_state_open
+
+        assert result == "sentinel"
+        mock_fn.assert_called_once_with(entity.coordinator, entity._sensor_key, entity._datapoint.dp_port)
+
+
 # ---------------------------------------------------------------------------
 # Consumers of decode_generic's fields list, proven inert against the new
 # co-present error-and-fields shape a declined ASCII result now carries.

@@ -16,6 +16,7 @@ from custom_components.rainpoint.const import (
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS
 from custom_components.rainpoint.entity import LateEntityAdder, late_adders, register_late_adder
+from custom_components.rainpoint.generic_control import RUN_STATE_IDENTITY
 from custom_components.rainpoint.number import (
     DURATION_DEFAULT_MINUTES,
     DURATION_MAX_MINUTES,
@@ -48,17 +49,56 @@ SOCKET_MODEL = "HWG004WRF"  # CTL_SOCK only -- no valve zone, so no duration com
 SOCKET_MODEL_CODE = 34
 
 
-def _unknown_data(model: str) -> dict:
-    """Build the {"type": "unknown", ...} decoded-payload shape the control gate requires."""
-    return {"type": "unknown", "model": model, "raw_value": "11#00", "generic": {"fields": [], "field_names": []}}
+def _unknown_data(model: str, fields: list[dict] | None = None) -> dict:
+    """Build the {"type": "unknown", ...} decoded-payload shape the control gate requires.
+
+    fields defaults to [] (the common case: a variant declaring no run-state
+    identity at all), and accepts a caller-supplied list so the mid-run
+    refusal tests can drive the same run-state field shape
+    tests/test_generic_control.py's own _run_state_field builds.
+    """
+    fields = fields if fields is not None else []
+    return {
+        "type": "unknown",
+        "model": model,
+        "raw_value": "11#00",
+        "generic": {"fields": fields, "field_names": [f["name"] for f in fields]},
+    }
 
 
-def _generic_control_sensor_info(model: str, model_code: int, sub_name: str = "Valve Hub 1") -> dict:
-    entry = make_sensor_entry(hid=100, mid=200, addr=1, model=model, sub_name=sub_name, data=_unknown_data(model))
+def _generic_control_sensor_info(
+    model: str, model_code: int, sub_name: str = "Valve Hub 1", fields: list[dict] | None = None
+) -> dict:
+    entry = make_sensor_entry(hid=100, mid=200, addr=1, model=model, sub_name=sub_name, data=_unknown_data(model, fields))
     entry["model_code"] = model_code
     entry["device_name"] = "dev1"
     entry["product_key"] = "pk1"
     return entry
+
+
+def _run_state_field(dp_port: int, value) -> dict:
+    """Build one decode_generic field entry for STA_WKSTATE, catalog-annotated.
+
+    Mirrors tests/test_generic_control.py's own _run_state_field so the
+    companion duration entity's refusal cases are driven through the same
+    field shape its sibling generic valve is proven against, rather than a
+    module-local variant that could quietly drift from it.
+    """
+    return {
+        "name": RUN_STATE_IDENTITY,
+        "index": 30,
+        "dp_id": 30,
+        "raw": f"{value:02x}" if isinstance(value, int) and not isinstance(value, bool) else str(value),
+        "value": value,
+        "catalog": {
+            "dp_port": dp_port,
+            "data_type": "U8",
+            "declared_width": 1,
+            "signed": False,
+            "port_number": 1,
+            "width_mismatch": False,
+        },
+    }
 
 
 def _make_number(current_value=10.0, firmware_version="1.0"):
@@ -1167,3 +1207,123 @@ class TestDurationRefusalRealTimeline:
         await zone1.async_set_native_value(8.0)
         assert zone1.native_value == 8.0
         assert zone1.async_write_ha_state.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# The mid-run refusal extended to the generic control family, reading its
+# run state through generic_control.generic_run_state_open -- the same body
+# the companion generic valve now calls.
+# ---------------------------------------------------------------------------
+
+
+class TestGenericDurationRefusal:
+    """Every case in the generic family's own behaviour list.
+
+    Driven through the real build_generic_duration_entities factory, so
+    these cases run against the same entity the platform ships rather than
+    a hand-constructed one.
+    """
+
+    @staticmethod
+    def _build(fields=None):
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE, fields=fields)
+        coordinator = _make_generic_coordinator("100_200_1", sensor_info)
+        entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+        entity = entities[0]
+        entity.hass = MagicMock()
+        entity.async_write_ha_state = MagicMock()
+        return entity, coordinator
+
+    @pytest.mark.asyncio
+    async def test_explicit_open_refuses_with_the_same_message_shape(self):
+        entity, _ = self._build(fields=[_run_state_field(1, 1)])
+
+        with pytest.raises(HomeAssistantError) as excinfo:
+            await entity.async_set_native_value(1.0)
+
+        message = str(excinfo.value)
+        assert "Zone 1" in message
+        assert "watering" in message
+        assert "closed" in message
+        assert "next run" in message
+        entity.async_write_ha_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ascii_declined_payload_accepts(self):
+        entity, coordinator = self._build(fields=[_run_state_field(1, 1)])
+        coordinator.data["sensors"]["100_200_1"]["data"]["generic"]["ascii_framed"] = True
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_matching_run_state_record_accepts(self):
+        entity, _ = self._build(fields=[])
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_non_integer_value_accepts(self):
+        entity, _ = self._build(fields=[_run_state_field(1, "1")])
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_bool_value_accepts(self):
+        entity, _ = self._build(fields=[_run_state_field(1, True)])
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_record_at_an_unproven_width_accepts(self):
+        field = dict(_run_state_field(1, 1), raw="0100")
+        entity, _ = self._build(fields=[field])
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_state_closed_accepts(self):
+        entity, _ = self._build(fields=[_run_state_field(1, 0)])
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_the_common_case_of_no_run_state_identity_at_all_accepts_every_write(self):
+        """The practical outcome of the same rule meeting thinner data, asserted directly.
+
+        A generic duration entity built for a model whose catalog data
+        supplies no run-state identity at all is, in practice, the common
+        case for this family -- and this must not be read later as a defect.
+        """
+        entity, _ = self._build()  # fields=None -> []
+
+        await entity.async_set_native_value(1.0)
+        await entity.async_set_native_value(2.0)
+
+        assert entity.native_value == 2.0
+        assert entity.async_write_ha_state.call_count == 2
+
+    def test_zone_label_is_zone_plus_the_datapoint_port(self):
+        entity, _ = self._build()
+        assert entity._zone_label == "Zone 1"
+
+    def test_both_duration_families_reach_refusal_through_the_same_inherited_method(self):
+        """Neither family can carry its own rule: they resolve to one method object."""
+        assert RainPointZoneDurationNumber.async_set_native_value is RainPointGenericZoneDurationNumber.async_set_native_value
