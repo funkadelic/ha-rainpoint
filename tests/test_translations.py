@@ -256,6 +256,33 @@ class TestOrphanedEntitiesIssuePlaceholderParity:
         assert confirm["title"].format(**supplied)
         assert entry["title"].format(**supplied)
 
+    def test_a_device_name_on_the_record_renders_ahead_of_the_cloud_sub_name(self):
+        """The ordinary case: an owner-renamed device names the card by that
+        name rather than by the cloud's own name for it, and the copy still
+        renders clean with no unresolved brace."""
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        record = OrphanedEntitiesRecord(
+            entry_id="e1",
+            sensor_key="100_200_1",
+            addr=1,
+            model="HTV245FRF",
+            sub_name="HTV245FRF",
+            hub_name="Hub A",
+            entity_count=2,
+            missed_polls=30,
+            orphaned=True,
+            device_name="Front Lawn Valve",
+        )
+        with patch.object(repairs.ir, "async_create_issue") as create:
+            manager.async_sync([record])
+
+        placeholders = create.call_args.kwargs["translation_placeholders"]
+        assert placeholders["device_name"] == "Front Lawn Valve"
+        confirm = _orphaned_entities_entry()["fix_flow"]["step"]["confirm"]
+        rendered = confirm["description"].format(**placeholders)
+        assert "{" not in rendered
+        assert "}" not in rendered
+
 
 class TestLeftoverEntitiesIssuePlaceholderParity:
     """The second shape of the fixable card renders from its own copy.
@@ -337,6 +364,34 @@ class TestLeftoverEntitiesIssuePlaceholderParity:
         assert "come back on its own" in body
         assert "Cancel" in body
         assert "cannot be undone" in body
+
+    def test_a_device_name_on_the_record_renders_ahead_of_the_cloud_sub_name(self):
+        """The still-present shape gets the same naming treatment: an
+        owner-renamed device names the card by that name, and the copy still
+        renders clean with no unresolved brace."""
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        record = OrphanedEntitiesRecord(
+            entry_id="e1",
+            sensor_key="100_200_1",
+            addr=1,
+            model="HTV210B",
+            sub_name="HTV210B",
+            hub_name="Hub A",
+            entity_count=1,
+            missed_polls=30,
+            orphaned=True,
+            leftover=True,
+            device_name="HTV210B Hub Paired",
+        )
+        with patch.object(repairs.ir, "async_create_issue") as create:
+            manager.async_sync([record])
+
+        placeholders = create.call_args.kwargs["translation_placeholders"]
+        assert placeholders["device_name"] == "HTV210B Hub Paired"
+        confirm = _leftover_entities_entry()["fix_flow"]["step"]["confirm"]
+        rendered = confirm["description"].format(**placeholders)
+        assert "{" not in rendered
+        assert "}" not in rendered
 
 
 class TestPushHubIdentityIssueCopy:

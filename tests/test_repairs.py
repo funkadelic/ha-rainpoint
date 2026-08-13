@@ -952,8 +952,15 @@ def _make_orphan_record(
     missed_polls=30,
     orphaned=True,
     hub_paired=True,
+    device_name=None,
 ):
-    """Build an OrphanedEntitiesRecord with sensible defaults for one key."""
+    """Build an OrphanedEntitiesRecord with sensible defaults for one key.
+
+    device_name defaults to None, which is the shape a departed key or an
+    unreadable device registry produces, so a caller that does not pass it
+    exercises the sub_name fallback exactly as most existing tests here rely
+    on it doing.
+    """
     return OrphanedEntitiesRecord(
         entry_id=entry_id,
         sensor_key=sensor_key,
@@ -965,6 +972,7 @@ def _make_orphan_record(
         missed_polls=missed_polls,
         orphaned=orphaned,
         hub_paired=hub_paired,
+        device_name=device_name,
     )
 
 
@@ -1279,6 +1287,78 @@ class TestRainPointOrphanedEntityIssues:
             assert not set(value) & set("`<>[]()|\\*_#:/@")
             assert "\n" not in value
             assert "www." not in value
+
+    def test_a_user_set_device_name_crosses_the_same_sanitizer_boundary(self, issue_mocks):
+        """Driven through _raise_issue with a record whose device_name carries
+        the hostile content, so the proof is on the path this value actually
+        takes rather than on _sanitize_placeholder called directly."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(device_name="[Click](http://evil.example)\nsecond line")])
+
+        value = create.call_args.kwargs["translation_placeholders"]["device_name"]
+        assert not set(value) & set("`<>[]()|\\*_#:/@")
+        assert "\n" not in value
+        assert "www." not in value
+
+    def test_a_user_set_name_and_a_cloud_string_with_the_same_content_sanitize_identically(self, issue_mocks):
+        """The property that makes "the same boundary" true rather than merely
+        claimed: a user-set device_name and RainPoint's own sub_name, carrying
+        identical hostile content, must produce the identical placeholder."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        hostile = "[Click](http://evil.example)\nsecond line"
+
+        manager.async_sync([_make_orphan_record(device_name=hostile)])
+        from_device_name = create.call_args.kwargs["translation_placeholders"]["device_name"]
+
+        manager.async_sync([_make_orphan_record(sensor_key="100_200_2", device_name=None, sub_name=hostile)])
+        from_sub_name = create.call_args.kwargs["translation_placeholders"]["device_name"]
+
+        assert from_device_name == from_sub_name
+
+    def test_a_device_name_longer_than_the_limit_is_capped_at_64_code_points(self, issue_mocks):
+        """A name made entirely of a two-byte-in-UTF-8 character proves the cap
+        counts Python string positions, not encoded bytes or grapheme
+        clusters: 100 of them cap to 64, not to some byte-derived shorter
+        count."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(device_name="é" * 100)])
+
+        value = create.call_args.kwargs["translation_placeholders"]["device_name"]
+        assert len(value) == 64
+
+    def test_no_device_name_and_no_sub_name_renders_the_sanitizer_fallback(self, issue_mocks):
+        """Neither None reaches the card as a blank bullet or a Python repr."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(device_name=None, sub_name=None)])
+
+        assert create.call_args.kwargs["translation_placeholders"]["device_name"] == "unknown"
+
+    def test_no_device_name_falls_back_to_the_sanitized_sub_name(self, issue_mocks):
+        """The ordinary case for a device the owner has never renamed."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(device_name=None, sub_name="Front Valve")])
+
+        assert create.call_args.kwargs["translation_placeholders"]["device_name"] == "Front Valve"
+
+    def test_no_log_line_carries_the_device_name(self, issue_mocks, caplog):
+        """Log lines on this path carry only the sensor key and integers,
+        never a cloud-supplied name or a user-set one."""
+        _create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_orphan_record(device_name="Distinctive Device Name Xyzzy")])
+
+        assert "Distinctive Device Name Xyzzy" not in caplog.text
 
 
 class _FakeIssue:
