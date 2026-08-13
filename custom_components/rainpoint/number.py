@@ -409,6 +409,7 @@ class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
         self._sensor_info = sensor_info
         self._base_slug = base_slug
         self._datapoint = datapoint
+        self._port_number = port_number
         self._current_value: float = DURATION_DEFAULT_MINUTES
 
         identity = datapoint.identity
@@ -445,5 +446,12 @@ class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
 
     @property
     def _zone_label(self) -> str:
-        """Name this entity's own datapoint port in the refusal message."""
-        return f"Zone {self._datapoint.dp_port}"
+        """Name this entity's own datapoint port in the refusal message.
+
+        Gated the same way this entity's own display name is gated in
+        __init__: a single-port device never shows a zone number in its
+        name, so its refusal message must not name one either.
+        """
+        if self._port_number is not None and self._port_number > 1:
+            return f"Zone {self._datapoint.dp_port}"
+        return "The zone"

@@ -622,6 +622,16 @@ class TestGenericZoneDurationNumberConstruction:
             "Zone 2 CTL_WATER Duration (unverified)",
         ]
 
+    def test_two_zone_labels_include_the_datapoint_port(self):
+        """A two-zone device's refusal message must name a zone, matching its own name's gate."""
+        sensor_info = _generic_control_sensor_info(TWO_ZONE_MODEL, TWO_ZONE_MODEL_CODE, sub_name="Yard")
+        coordinator = _make_generic_coordinator("1_2_1", sensor_info)
+
+        entities = build_generic_duration_entities(coordinator, "1_2_1", sensor_info, "1_2_1")
+
+        labels = sorted(e._zone_label for e in entities)
+        assert labels == ["Zone 1", "Zone 2"]
+
     def test_icon_is_the_generic_control_marker_icon(self):
         from custom_components.rainpoint.const import GENERIC_CONTROL_MARKER_ICON
 
@@ -1237,13 +1247,14 @@ class TestGenericDurationRefusal:
 
     @pytest.mark.asyncio
     async def test_explicit_open_refuses_with_the_same_message_shape(self):
+        """The anchor model is single-zone, so the refusal names no zone number, matching its own entity name."""
         entity, _ = self._build(fields=[_run_state_field(1, 1)])
 
         with pytest.raises(HomeAssistantError) as excinfo:
             await entity.async_set_native_value(1.0)
 
         message = str(excinfo.value)
-        assert "Zone 1" in message
+        assert "The zone" in message
         assert "watering" in message
         assert "closed" in message
         assert "next run" in message
@@ -1321,9 +1332,10 @@ class TestGenericDurationRefusal:
         assert entity.native_value == 2.0
         assert entity.async_write_ha_state.call_count == 2
 
-    def test_zone_label_is_zone_plus_the_datapoint_port(self):
+    def test_zone_label_names_no_number_on_a_single_zone_device(self):
+        """The anchor model is single-zone, so its refusal must not name a zone the entity's own name omits."""
         entity, _ = self._build()
-        assert entity._zone_label == "Zone 1"
+        assert entity._zone_label == "The zone"
 
     def test_both_duration_families_reach_refusal_through_the_same_inherited_method(self):
         """Neither family can carry its own rule: they resolve to one method object."""
