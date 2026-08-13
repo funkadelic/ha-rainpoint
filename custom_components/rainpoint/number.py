@@ -179,6 +179,57 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         existed. The accepted cost is that editing the setpoint for the next
         run while the current one waters is blocked too; the user must wait
         for the run to end.
+
+        The decision behind this guard, recorded here in full rather than
+        only in a working file, because the deliverable this guard exists
+        to satisfy is the record itself and not only the behaviour a test
+        can prove on its own.
+
+        This entity is a setpoint for the next run and has never been a
+        live control of the run already in progress, so refusing a mid-run
+        edit with an explanation is the honest answer rather than an
+        obstructive one. The failure this guard replaces was silent in both
+        directions: the old code accepted the new number, wrote it to
+        state, and did nothing to the running zone, leaving the person who
+        made the change with no way to tell that it had no effect. Raising
+        before any state mutation fixes both halves at once, because the
+        displayed value never moves and the raise itself is Home
+        Assistant's own signal that the write did not happen.
+
+        Three other answers were weighed and rejected. Re-commanding the
+        running zone with the new value, so the entity becomes a live
+        control instead of a setpoint, was rejected because it cannot be
+        built honestly today: nobody has probed what an open command does
+        to a zone that is already open, so whether it restarts the run
+        from zero or merely adjusts the time remaining is unknown; the
+        hub-paired endpoint addresses a run by an absolute end time rather
+        than a duration, so a mid-run value would be ambiguous between
+        ending the run one minute from now and declaring that the run
+        should have been one minute long and stopping it now; and the box
+        input mode this entity uses commits on every keystroke, so editing
+        a setpoint by typing would turn into an unbounded stream of valve
+        writes instead of one command. Accepting the write and marking the
+        entity stale, so the setpoint could still be edited for a later run
+        while the current one keeps going, was rejected because Home
+        Assistant has no warning-on-success affordance for a number write:
+        a person would learn the change did not take only by opening an
+        attribute panel, which answers less than the toast this guard
+        raises instead. Marking the entity unavailable for the length of
+        the run was rejected because unavailable is Home Assistant's own
+        word for a device that is broken, and using it here would report a
+        working entity as faulty for as long as it waters.
+
+        The cost knowingly accepted is that this guard also blocks the
+        legitimate case of setting up the next run's duration while the
+        current one is still watering; there is no way today to tell that
+        intent apart from an attempt to change the run in progress, so the
+        user must wait for the run to end before the setpoint can move
+        again. Re-commanding the running zone would revive as an option if
+        a hardware probe settles what an open command does to an
+        already-open zone and a meaning is decided for a mid-run duration
+        against an absolute end time; until both of those are answered,
+        refusing remains the only answer this integration can build
+        honestly.
         """
         if self._run_state_open is True:
             raise HomeAssistantError(

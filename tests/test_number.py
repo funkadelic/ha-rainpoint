@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1435,3 +1436,43 @@ class TestOpenRunAttributes:
         attrs = zone1.extra_state_attributes
         assert "duration_seconds" not in attrs
         assert "event_time" not in attrs
+
+
+class TestRecordedDecision:
+    """Pins the decision record living in async_set_native_value's docstring.
+
+    A requirement whose deliverable is a document has no behaviour of its
+    own to assert, so this suite is the only automatable proof the record
+    survives a later refactor. Each test pins one short, distinguishing
+    phrase rather than a whole sentence, so ordinary rewording of the
+    record still passes while deleting any one of its parts fails.
+    """
+
+    @staticmethod
+    def _record() -> str:
+        return inspect.getdoc(_RainPointDurationNumberBase.async_set_native_value)
+
+    def test_record_states_why_refusing_is_honest(self):
+        assert "honest" in self._record()
+
+    def test_record_names_the_re_command_rejection(self):
+        record = self._record()
+        assert "restart" in record
+        assert "absolute end time" in record
+
+    def test_record_names_the_accept_and_mark_stale_rejection(self):
+        assert "warning-on-success" in self._record()
+
+    def test_record_names_the_unavailable_rejection(self):
+        assert "unavailable" in self._record()
+
+    def test_record_names_the_accepted_cost(self):
+        assert "must wait for the run to end" in self._record()
+
+    def test_record_names_what_would_revive_the_re_command_option(self):
+        assert "hardware probe" in self._record()
+
+    def test_record_has_no_em_dash_or_en_dash(self):
+        record = self._record()
+        assert chr(8212) not in record
+        assert chr(8211) not in record
