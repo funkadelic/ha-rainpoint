@@ -460,7 +460,12 @@ class TestDepartedKeyRecordCarriesAHubName:
             identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{HID}_{MID}")},
             config_entries=frozenset({ENTRY_ID}),
             name_by_user=name_by_user,
-            name="Hub A",
+            # Deliberately not the cloud's own string for this hub, which is
+            # "Hub A". The two routes to a hub name have to be told apart: a
+            # row whose registry name matched the cloud fallback would satisfy
+            # the unrenamed-hub assertion below even if this function ignored
+            # the registry entirely.
+            name="Hub A Registry Name",
         )
 
     async def _card_for(self, device_rows):
@@ -502,7 +507,7 @@ class TestDepartedKeyRecordCarriesAHubName:
         for it, which is a name rather than a blank."""
         placeholders = await self._card_for([self._hub_device_row(name_by_user=None)])
 
-        assert placeholders["hub_name"] == "Hub A"
+        assert placeholders["hub_name"] == "Hub A Registry Name"
 
     @pytest.mark.asyncio
     async def test_no_hub_row_falls_back_to_the_cloud_hub_name(self):
