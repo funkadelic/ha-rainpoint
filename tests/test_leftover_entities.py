@@ -599,11 +599,25 @@ class TestResolveDeviceNames:
 
         assert _resolve_device_names([foreign, malformed]) == {}
 
-    def test_an_unreadable_registry_yields_an_empty_map(self):
-        """The caller degrades to an empty device_rows list on a registry
-        failure, and this function's job is only to answer {} for that,
-        exactly as it does for any other empty input."""
-        assert _resolve_device_names([]) == {}
+    @pytest.mark.asyncio
+    async def test_an_unreadable_registry_names_nothing_on_a_real_sweep(self):
+        """Driven through the sweep rather than by handing this function an
+        empty list, which proves only what the test above already proves. What
+        matters here is that a device registry that cannot be read reaches this
+        function as no rows at all, so the card falls back to the cloud's own
+        name for the device instead of failing the update."""
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, _hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+            harness.device_get_raises = True
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+
+            assert create.call_count == 0
 
     def test_a_malformed_device_row_does_not_abort_the_rest(self):
         """One row whose identifiers attribute is entirely absent -- the shape
@@ -615,9 +629,10 @@ class TestResolveDeviceNames:
         assert _resolve_device_names([malformed, good]) == {SENSOR_KEY: "Front Lawn"}
 
     def test_two_devices_of_one_model_resolve_to_two_different_names(self):
-        """The 2026-08-04 observation, at the resolution layer: two HTV210Bs
-        under one model produce two names once each carries its own
-        name_by_user."""
+        """_resolve_device_names keys on each row's own DOMAIN identifier, so
+        two devices of one model resolve separately: a home with two of the
+        same hardware gets each one's own name_by_user rather than one name
+        standing in for both."""
         other_key = f"{HID}_300_1"
         first = SimpleNamespace(
             id="d1", identifiers={(DOMAIN, SENSOR_KEY)}, name_by_user="HTV210B (Hub paired)", name="HTV210B 1"
@@ -1433,7 +1448,6 @@ class TestARecoveredCardTakesNothing:
                 flow = await async_create_fix_flow(hass, create.call_args.args[2], kwargs["data"])
                 flow.hass = hass
 
-                # The one row the card offered is backed again by the time the
                 # The dialog is shown while the row is still dead, and the row
                 # recovers between that and the Submit, which is the ordering
                 # this test is about.

@@ -1856,7 +1856,10 @@ class TestRainPointOrphanedEntitiesRepairFlow:
         await _make_flow(_flow_hass(leftover_remover), leftover=True).async_step_confirm({})
         await _make_flow(_flow_hass(departed_remover)).async_step_confirm({})
 
-        assert leftover_calls == [("100_200_1", True, None)]
+        # A submit that never showed a dialog has been shown nothing, so the
+        # still-present shape carries an empty ceiling into it and takes
+        # nothing; the departed shape carries no ceiling, having none to carry.
+        assert leftover_calls == [("100_200_1", True, frozenset())]
         assert departed_calls == [("100_200_1", False, None)]
 
     @pytest.mark.asyncio
@@ -1892,8 +1895,13 @@ class TestRainPointOrphanedEntitiesRepairFlow:
     async def test_a_remover_that_raises_does_not_break_the_dialog(self, caplog):
         """An exception here surfaces to the user as a broken repair dialog."""
 
-        def _boom(key, *, leftover_shape=True):
-            """Fail the way a torn-down registry would."""
+        def _boom(key, *, leftover_shape=True, offered_pairs=None):
+            """Fail the way a torn-down registry would.
+
+            Every argument the flow actually passes is accepted, so what this
+            raises is the failure under test rather than a TypeError from a
+            stub that has drifted from the signature.
+            """
             raise RuntimeError("registry down")
 
         flow = _make_flow(_flow_hass(_boom))

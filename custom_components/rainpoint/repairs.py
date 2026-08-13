@@ -1131,10 +1131,19 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         """Hold the issue's data dict, which names what may be removed."""
         self._flow_data = dict(data or {})
         # What the card was offering at the moment this flow showed its dialog,
-        # filled in by that step and read by the submit that follows it. None
-        # means no snapshot was taken: either the dialog has not been shown yet
-        # or the issue could not be read when it was.
-        self._offered_pairs: frozenset[tuple[str, str]] | None = None
+        # filled in by that step and read by the submit that follows it.
+        #
+        # The still-present shape starts at an empty ceiling rather than at
+        # None, which is the same answer every failed read on that shape gives:
+        # a submit that somehow arrived without the dialog having been shown
+        # has been shown nothing, so it may take nothing. Home Assistant always
+        # shows the form first, so this is the invariant stated where it cannot
+        # be skipped rather than a case anyone has seen. None belongs to the
+        # departed-key shape alone, which removes from the session's ledgers
+        # and never consults an offer.
+        self._offered_pairs: frozenset[tuple[str, str]] | None = (
+            frozenset() if bool((data or {}).get("leftover", False)) else None
+        )
 
     @property
     def _sensor_key(self) -> str:

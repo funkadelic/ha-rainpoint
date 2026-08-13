@@ -202,6 +202,30 @@ class TestHubDisconnectedIssuePlaceholderParity:
         assert entry["title"].format(**supplied)
 
 
+def _orphan_record(**overrides) -> OrphanedEntitiesRecord:
+    """One orphaned-entities record, with only what a test cares about named.
+
+    The five constructions in this module differed by model, sub_name,
+    entity_count, leftover and device_name and agreed on everything else, so a
+    field added to the record meant five edits and five chances to leave one
+    behind saying something different from its neighbours. Mirrors
+    _make_orphan_record in tests/test_repairs.py.
+    """
+    fields = {
+        "entry_id": "e1",
+        "sensor_key": "100_200_1",
+        "addr": 1,
+        "model": "HTV245FRF",
+        "sub_name": "Front Valve",
+        "hub_name": "Hub A",
+        "entity_count": 2,
+        "missed_polls": 30,
+        "orphaned": True,
+    }
+    fields.update(overrides)
+    return OrphanedEntitiesRecord(**fields)
+
+
 class TestOrphanedEntitiesIssuePlaceholderParity:
     """The copy's placeholders and the ones _raise_issue supplies must match.
 
@@ -216,17 +240,7 @@ class TestOrphanedEntitiesIssuePlaceholderParity:
     def _supplied_placeholders() -> dict[str, str]:
         """Raise a real issue and capture what the code passed to the registry."""
         manager = RainPointOrphanedEntityIssues(MagicMock())
-        record = OrphanedEntitiesRecord(
-            entry_id="e1",
-            sensor_key="100_200_1",
-            addr=1,
-            model="HTV245FRF",
-            sub_name="Front Valve",
-            hub_name="Hub A",
-            entity_count=2,
-            missed_polls=30,
-            orphaned=True,
-        )
+        record = _orphan_record()
         with patch.object(repairs.ir, "async_create_issue") as create:
             manager.async_sync([record])
         create.assert_called_once()
@@ -261,18 +275,7 @@ class TestOrphanedEntitiesIssuePlaceholderParity:
         name rather than by the cloud's own name for it, and the copy still
         renders clean with no unresolved brace."""
         manager = RainPointOrphanedEntityIssues(MagicMock())
-        record = OrphanedEntitiesRecord(
-            entry_id="e1",
-            sensor_key="100_200_1",
-            addr=1,
-            model="HTV245FRF",
-            sub_name="HTV245FRF",
-            hub_name="Hub A",
-            entity_count=2,
-            missed_polls=30,
-            orphaned=True,
-            device_name="Front Lawn Valve",
-        )
+        record = _orphan_record(sub_name="HTV245FRF", device_name="Front Lawn Valve")
         with patch.object(repairs.ir, "async_create_issue") as create:
             manager.async_sync([record])
 
@@ -298,18 +301,7 @@ class TestLeftoverEntitiesIssuePlaceholderParity:
     def _supplied_placeholders() -> dict[str, str]:
         """Raise a real leftover-shaped issue and capture what the code passed."""
         manager = RainPointOrphanedEntityIssues(MagicMock())
-        record = OrphanedEntitiesRecord(
-            entry_id="e1",
-            sensor_key="100_200_1",
-            addr=1,
-            model="HTV210B",
-            sub_name="Front Valve",
-            hub_name="Hub A",
-            entity_count=1,
-            missed_polls=30,
-            orphaned=True,
-            leftover=True,
-        )
+        record = _orphan_record(model="HTV210B", entity_count=1, leftover=True)
         with patch.object(repairs.ir, "async_create_issue") as create:
             manager.async_sync([record])
         create.assert_called_once()
@@ -319,18 +311,7 @@ class TestLeftoverEntitiesIssuePlaceholderParity:
         """The card has to describe the shape that raised it: this one says the
         device is still on the account, its sibling says it is gone."""
         manager = RainPointOrphanedEntityIssues(MagicMock())
-        record = OrphanedEntitiesRecord(
-            entry_id="e1",
-            sensor_key="100_200_1",
-            addr=1,
-            model="HTV210B",
-            sub_name="Front Valve",
-            hub_name="Hub A",
-            entity_count=1,
-            missed_polls=30,
-            orphaned=True,
-            leftover=True,
-        )
+        record = _orphan_record(model="HTV210B", entity_count=1, leftover=True)
         with patch.object(repairs.ir, "async_create_issue") as create:
             manager.async_sync([record])
 
@@ -370,18 +351,8 @@ class TestLeftoverEntitiesIssuePlaceholderParity:
         owner-renamed device names the card by that name, and the copy still
         renders clean with no unresolved brace."""
         manager = RainPointOrphanedEntityIssues(MagicMock())
-        record = OrphanedEntitiesRecord(
-            entry_id="e1",
-            sensor_key="100_200_1",
-            addr=1,
-            model="HTV210B",
-            sub_name="HTV210B",
-            hub_name="Hub A",
-            entity_count=1,
-            missed_polls=30,
-            orphaned=True,
-            leftover=True,
-            device_name="HTV210B Hub Paired",
+        record = _orphan_record(
+            model="HTV210B", sub_name="HTV210B", entity_count=1, leftover=True, device_name="HTV210B Hub Paired"
         )
         with patch.object(repairs.ir, "async_create_issue") as create:
             manager.async_sync([record])
