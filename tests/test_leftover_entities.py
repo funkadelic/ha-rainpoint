@@ -32,6 +32,7 @@ from custom_components.rainpoint import (
     _fetch_registry_rows,
     _ledger_pairs_by_key,
     _leftover_pairs_now,
+    _name_leftover_pairs,
     _remove_orphaned_key_rows,
     _resolve_device_names,
     _row_is_unbacked,
@@ -640,6 +641,133 @@ class TestTheDeviceRegistryIsFetchedOncePerSync:
                 await coordinator.async_refresh()
 
                 assert harness.device_get_calls == 1
+
+
+class TestTheCardNamesTheRowsItOffers:
+    """A count says how many; the list says which, and that is the promise.
+
+    Driven end to end rather than over the record builder alone, because the
+    names have to survive the whole path from the registry row that produced
+    them to the card the user reads.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_card_names_the_dead_row_it_would_remove(self):
+        """The maintainer's own card: one row, named, in a code span."""
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, _hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+
+                placeholders = create.call_args.kwargs["translation_placeholders"]
+                assert placeholders["entity_list"] == f"  - `{LEFTOVER_ENTITY_ID}`"
+                assert placeholders["entity_count"] == "1"
+
+    @pytest.mark.asyncio
+    async def test_a_live_row_on_the_same_device_is_never_named(self):
+        """The list may only name what the pair set holds, so a row that is
+        alive is absent from both."""
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, _hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+            live_unique_id = f"rainpoint_{SENSOR_KEY}_alive"
+            harness.add_row(f"sensor.{live_unique_id}", live_unique_id, state=_live_state())
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+
+                entity_list = create.call_args.kwargs["translation_placeholders"]["entity_list"]
+                assert entity_list == f"  - `{LEFTOVER_ENTITY_ID}`"
+                assert live_unique_id not in entity_list
+
+    def test_the_names_are_looked_up_from_the_pairs_the_scan_offered(self):
+        """The mapping in isolation: one entry per offered pair, sorted, so a
+        card whose rows have not changed is not republished on every update."""
+        pairs = {SENSOR_KEY: frozenset({("sensor", "rainpoint_b"), ("valve", "rainpoint_a")})}
+        entity_ids = {("sensor", "rainpoint_b"): "sensor.second", ("valve", "rainpoint_a"): "valve.first"}
+
+        assert _name_leftover_pairs(pairs, entity_ids) == {SENSOR_KEY: ("sensor.second", "valve.first")}
+
+    def test_a_key_with_no_offered_pairs_names_nothing(self):
+        """Nothing offered is the ordinary state of a healthy install."""
+        assert _name_leftover_pairs({}, {}) == {}
+
+
+class TestTheDisplayedListIsNotTheRemovalAuthority:
+    """What Submit takes is the pair set, and never a rendered entity id.
+
+    The split is the whole reason the card can name anything at all. A
+    disclosure surface that becomes the deletion authority takes whatever the
+    text happens to say, which is either less than the user approved or, once
+    a name has moved, something else entirely.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_row_the_card_could_not_name_is_still_removed(self):
+        """A row whose entity id falls outside Home Assistant's charset is
+        dropped from the list rather than repaired into one, and the count
+        still names it. The pair set is untouched, so Submit still takes it."""
+        harness = _Harness()
+        unnameable_entity_id = "sensor.Legacy_Row"
+        unnameable_unique_id = f"rainpoint_{SENSOR_KEY}_legacy"
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row(entity_id=unnameable_entity_id, unique_id=unnameable_unique_id)
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+
+                kwargs = create.call_args.kwargs
+                assert kwargs["translation_placeholders"]["entity_list"] == ""
+                assert kwargs["translation_placeholders"]["entity_count"] == "1"
+
+                flow = await async_create_fix_flow(hass, create.call_args.args[2], kwargs["data"])
+                flow.hass = hass
+                await flow.async_step_confirm({})
+
+                assert harness.removed == [unnameable_entity_id]
+
+    @pytest.mark.asyncio
+    async def test_a_row_renamed_after_the_card_was_raised_is_removed_under_its_new_id(self):
+        """The card named one entity id and the removal took another, which is
+        exactly right: the row is the same row, and its (domain, unique_id)
+        pair never moved. A removal keyed on the rendered name would have
+        missed it, or taken whatever now answers to the old one."""
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            row = harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+
+                kwargs = create.call_args.kwargs
+                assert kwargs["translation_placeholders"]["entity_list"] == f"  - `{LEFTOVER_ENTITY_ID}`"
+
+                # The user renames the entity between reading the card and
+                # pressing Submit. Its state moves with it, as Home Assistant's
+                # own rename does.
+                renamed = "sensor.renamed_after_the_card"
+                harness.states[renamed] = harness.states.pop(row.entity_id)
+                row.entity_id = renamed
+
+                flow = await async_create_fix_flow(hass, create.call_args.args[2], kwargs["data"])
+                flow.hass = hass
+                await flow.async_step_confirm({})
+
+                assert harness.removed == [renamed]
 
 
 class TestTheScanDegradesRatherThanRaising:

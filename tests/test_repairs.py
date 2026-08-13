@@ -23,6 +23,7 @@ from custom_components.rainpoint.const import (
     SILENT_DEVICE_ISSUE_ID_PREFIX,
 )
 from custom_components.rainpoint.repairs import (
+    _ENTITY_LIST_LIMIT,
     HubConnectivityRecord,
     OrphanedEntitiesRecord,
     RainPointHubConnectivityIssues,
@@ -31,6 +32,7 @@ from custom_components.rainpoint.repairs import (
     RainPointPushWatchdog,
     RainPointSilentDeviceIssues,
     SilentDeviceRecord,
+    _format_entity_list,
     _sanitize_placeholder,
     async_create_fix_flow,
     hub_connectivity_issue_id,
@@ -359,6 +361,90 @@ class TestSanitizePlaceholder:
         result = _sanitize_placeholder("https://evil.example/phish")
         assert result != "unknown"
         assert "evil.example" in result
+
+
+class TestFormatEntityList:
+    """Entity ids are validated and passed, never sanitized and hoped over.
+
+    The card's list is the strongest part of its promise about what Submit
+    takes, so it has to name a row the user can find in their own registry.
+    _sanitize_placeholder cannot do that job: it deletes underscores and dots,
+    which is most of what an entity id is made of.
+    """
+
+    def test_one_entity_id_renders_inside_a_code_span(self):
+        """The code span is what keeps an underscore an underscore rather than
+        the start of emphasis."""
+        assert _format_entity_list(["sensor.htv210b_unsupported_htv210b"]) == "  - `sensor.htv210b_unsupported_htv210b`"
+
+    def test_the_sanitizer_would_have_destroyed_the_same_value(self):
+        """Stated as a comparison, because it is the whole argument for a
+        second function rather than a reuse of the first."""
+        assert _sanitize_placeholder("sensor.htv210b_unsupported_htv210b") == "sensor.htv210bunsupportedhtv210b"
+        assert "sensor.htv210b_unsupported_htv210b" in _format_entity_list(["sensor.htv210b_unsupported_htv210b"])
+
+    def test_every_id_gets_its_own_line(self):
+        """One clause of fact per line, which is also what makes a list of ten
+        readable in a card."""
+        rendered = _format_entity_list(["sensor.a_one", "valve.b_two"])
+
+        assert rendered.splitlines() == ["  - `sensor.a_one`", "  - `valve.b_two`"]
+
+    @pytest.mark.parametrize(
+        "entity_id",
+        [
+            "sensor.has`backtick",
+            "sensor.Has_Capitals",
+            "sensor.has space",
+            "no_domain_at_all",
+            "sensor.two.dots",
+            "sensor.<img src=x>",
+            "",
+        ],
+    )
+    def test_a_value_outside_the_charset_is_dropped_rather_than_repaired(self, entity_id):
+        """Repairing would invent an id, and this list is a promise about which
+        rows Submit takes. A name the user cannot match against their own
+        registry is worse than one fewer name."""
+        assert _format_entity_list([entity_id]) == ""
+
+    def test_a_non_string_value_is_dropped_too(self):
+        """The record is plain data any caller can build, so the type is
+        checked rather than assumed."""
+        assert _format_entity_list([None, 42]) == ""
+
+    def test_a_dropped_value_cannot_close_the_code_span_it_would_have_sat_in(self):
+        """The security property the backticks rest on, driven rather than
+        asserted about the pattern: a value carrying a backtick never reaches
+        the rendered list, so it cannot escape into the surrounding Markdown."""
+        rendered = _format_entity_list(["sensor.good_row", "sensor.evil`](http://evil.example)"])
+
+        assert rendered.splitlines() == ["  - `sensor.good_row`", "  - and 1 more"]
+        assert "evil.example" not in rendered
+        assert rendered.count("`") == 2
+
+    def test_nothing_supplied_renders_nothing(self):
+        """An empty list leaves the card its count line and no list at all,
+        rather than an empty bullet."""
+        assert _format_entity_list([]) == ""
+
+    def test_a_long_list_is_capped_and_the_rest_is_counted_in_plain_language(self):
+        """A departed device can carry ten rows or more, and an uncapped list
+        would run a translation placeholder to whatever length the registry
+        happens to hold."""
+        rendered = _format_entity_list([f"sensor.row_{index}" for index in range(_ENTITY_LIST_LIMIT + 3)])
+        lines = rendered.splitlines()
+
+        assert len(lines) == _ENTITY_LIST_LIMIT + 1
+        assert lines[-1] == "  - and 3 more"
+
+    def test_a_dropped_value_is_counted_in_the_overflow_rather_than_vanishing(self):
+        """The remainder is measured against everything supplied, so the list
+        and the count line above it cannot disagree about how many rows are in
+        scope."""
+        rendered = _format_entity_list(["sensor.good_row", "sensor.Bad Row"], limit=1)
+
+        assert rendered.splitlines() == ["  - `sensor.good_row`", "  - and 1 more"]
 
 
 class TestSilentDeviceIssueId:
@@ -954,6 +1040,7 @@ def _make_orphan_record(
     hub_paired=True,
     device_name=None,
     leftover=False,
+    entity_ids=(),
 ):
     """Build an OrphanedEntitiesRecord with sensible defaults for one key.
 
@@ -964,6 +1051,10 @@ def _make_orphan_record(
 
     leftover defaults to False, the departed-key shape, which is the one that
     shipped first and the one every existing test here means.
+
+    entity_ids defaults to empty, which is what the departed-key shape always
+    carries and what a still-present record whose ids could not be resolved
+    carries too.
     """
     return OrphanedEntitiesRecord(
         entry_id=entry_id,
@@ -978,6 +1069,7 @@ def _make_orphan_record(
         hub_paired=hub_paired,
         device_name=device_name,
         leftover=leftover,
+        entity_ids=entity_ids,
     )
 
 
@@ -1388,6 +1480,95 @@ class TestRainPointOrphanedEntityIssues:
             manager.async_sync([_make_orphan_record(device_name="Distinctive Device Name Xyzzy")])
 
         assert "Distinctive Device Name Xyzzy" not in caplog.text
+
+
+class TestTheCardNamesTheEntitiesItWouldRemove:
+    """The still-present card lists the rows behind its count.
+
+    A bare count is the weakest part of a promise about exactly what Submit
+    deletes, and the list is what makes it checkable against the user's own
+    entity registry.
+    """
+
+    def test_the_still_present_card_names_its_rows(self, issue_mocks):
+        """The maintainer's own card, with the one row it has."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync(
+            [_make_orphan_record(leftover=True, entity_count=1, entity_ids=("sensor.htv210b_unsupported_htv210b",))]
+        )
+
+        placeholders = create.call_args.kwargs["translation_placeholders"]
+        assert placeholders["entity_list"] == "  - `sensor.htv210b_unsupported_htv210b`"
+        # The count stays visible alongside the names rather than being
+        # replaced by them.
+        assert placeholders["entity_count"] == "1"
+
+    def test_the_departed_key_card_supplies_no_list_at_all(self, issue_mocks):
+        """Its scope comes from this session's adder ledgers, which record
+        unique ids rather than entity ids, so it has nothing to name. A
+        placeholder its copy does not carry would render nowhere, and one its
+        copy carried without a supplier would ship a literal brace."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(leftover=False)])
+
+        assert "entity_list" not in create.call_args.kwargs["translation_placeholders"]
+
+    def test_a_still_present_card_with_no_resolvable_ids_still_renders(self, issue_mocks):
+        """Nothing to name leaves the count line standing on its own rather
+        than leaving the placeholder unsupplied."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(leftover=True, entity_ids=())])
+
+        assert create.call_args.kwargs["translation_placeholders"]["entity_list"] == ""
+
+    def test_the_confirm_dialog_reads_back_the_same_list_the_card_published(self, issue_mocks):
+        """One supplier for both surfaces, exactly as every other placeholder
+        on this card has: the dialog reads the raised issue rather than
+        building a second list that could disagree with the first."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        manager.async_sync([_make_orphan_record(leftover=True, entity_ids=("sensor.left_over_row",))])
+        published = create.call_args.kwargs["translation_placeholders"]
+
+        issue = SimpleNamespace(translation_placeholders=published)
+        flow = RainPointOrphanedEntitiesRepairFlow({"entry_id": "e1", "sensor_key": "100_200_1", "leftover": True})
+        flow.hass = MagicMock()
+        with patch.object(repairs.ir, "async_get", return_value=SimpleNamespace(async_get_issue=lambda *_: issue)):
+            assert flow._description_placeholders()["entity_list"] == "  - `sensor.left_over_row`"
+
+    def test_a_card_whose_named_rows_change_is_republished(self, issue_mocks):
+        """The list is part of what the user is being asked to approve, so a
+        card that gains a row has to say so rather than keeping the list it was
+        first raised with."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        registry = SimpleNamespace(async_get_issue=lambda domain, issue_id: object())
+
+        with patch.object(repairs.ir, "async_get", return_value=registry):
+            manager.async_sync([_make_orphan_record(leftover=True, entity_count=1, entity_ids=("sensor.first_row",))])
+            manager.async_sync(
+                [_make_orphan_record(leftover=True, entity_count=2, entity_ids=("sensor.first_row", "sensor.second_row"))]
+            )
+
+        assert create.call_count == 2
+        assert "sensor.second_row" in create.call_args.kwargs["translation_placeholders"]["entity_list"]
+
+    def test_no_log_line_carries_the_entity_list(self, issue_mocks, caplog):
+        """The log discipline on this path is keys and integer counts. A card's
+        rendered Markdown is neither."""
+        _create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_orphan_record(leftover=True, entity_ids=("sensor.distinctive_xyzzy_row",))])
+
+        assert "distinctive_xyzzy_row" not in caplog.text
 
 
 class _FakeIssue:

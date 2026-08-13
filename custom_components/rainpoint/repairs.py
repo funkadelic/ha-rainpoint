@@ -347,6 +347,65 @@ def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
     return text or "unknown"
 
 
+# Home Assistant's own entity id charset: lowercase letters, digits and
+# underscores either side of exactly one dot.
+_ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+# How many entity ids a card names before it stops listing and starts counting.
+# One leftover row is the common case; a departed device can carry ten or more,
+# and an uncapped list would run a translation placeholder to whatever length
+# the registry happens to hold.
+_ENTITY_LIST_LIMIT = 10
+# Each named id is a Markdown list item nested under the count line above it,
+# so a card reads as a count and then the names behind that count.
+_ENTITY_LIST_INDENT = "  - "
+
+
+def _format_entity_list(entity_ids: Iterable[str], limit: int = _ENTITY_LIST_LIMIT) -> str:
+    """Render entity ids as a Markdown list, each id inside a code span.
+
+    Validate and pass, rather than sanitize and hope, and the difference from
+    _sanitize_placeholder is the point. That function neutralizes a cloud
+    string or a user-set device name, neither of which has any grammar to
+    check, by deleting every Markdown-active character. An entity id is the
+    opposite problem: Home Assistant constrains it to lowercase letters,
+    digits and underscores either side of one dot, so it can be checked
+    against that charset outright. Running one through the sanitizer instead
+    would delete its underscores and dot and print
+    "sensorhtv210bunsupportedhtv210b", naming nothing the user can find.
+
+    An id that does not match the charset is dropped rather than repaired.
+    Repairing would invent an id, and this list is a promise about which rows
+    Submit takes; a name the user cannot match against their own registry is
+    worse than one fewer name, and the card's count still tells them how many
+    rows are in scope.
+
+    The code span is what makes the underscores render as underscores rather
+    than as emphasis, and wrapping is safe here for one reason only: a value
+    that matches the charset cannot contain a backtick, so it cannot close the
+    span early and cannot reach the surrounding Markdown. The backticks
+    themselves are this integration's own copy and are never taken from data.
+    The same wrapping would not be safe around a cloud string, which is why
+    every other placeholder crosses the sanitizer instead.
+
+    At most ``limit`` ids are named, and whatever is left over is counted in
+    plain language on a line of its own. The remainder is measured against
+    everything supplied, dropped ids included, so it agrees with the count the
+    card renders above it. Nothing supplied, or nothing that survives the
+    charset check, renders as the empty string, which leaves the card its count
+    line and no list at all.
+    """
+    supplied = list(entity_ids)
+    valid = [entity_id for entity_id in supplied if isinstance(entity_id, str) and _ENTITY_ID_RE.match(entity_id)]
+    if not valid:
+        return ""
+    named = valid[:limit]
+    lines = [f"{_ENTITY_LIST_INDENT}`{entity_id}`" for entity_id in named]
+    remaining = len(supplied) - len(named)
+    if remaining > 0:
+        lines.append(f"{_ENTITY_LIST_INDENT}and {remaining} more")
+    return "\n".join(lines)
+
+
 class RainPointSilentDeviceIssues:
     """Raises and clears one Repairs issue per silent sub-device.
 
@@ -537,6 +596,15 @@ class OrphanedEntitiesRecord:
     # reads it. False is the Bluetooth wrapper record's child, which never had
     # a hub for the card to name.
     hub_paired: bool = True
+    # The entity ids the card names, and nothing else. Display only: the
+    # removal executor is keyed on the exact (domain, unique_id) pairs the
+    # caller derived, and never on anything rendered from this tuple. Keeping
+    # the two apart is deliberate -- a disclosure surface that becomes the
+    # deletion authority is how a row the user was never shown gets deleted, or
+    # a row the user was shown survives under a name that has since changed.
+    # Empty is the ordinary state for the departed-key shape, which has no
+    # entity ids to name, and for any caller that supplies none.
+    entity_ids: tuple[str, ...] = ()
     # Which of the two shapes produced this record, and therefore which body
     # the card renders. False is the departed-key shape: RainPoint has stopped
     # listing the device. True is the still-present shape: the device is on the
@@ -688,6 +756,15 @@ class RainPointOrphanedEntityIssues:
         same terms a cloud string is: nothing about where a value originated
         earns it a laxer boundary than every other placeholder here crosses.
 
+        The still-present shape also names the entities it is offering, one per
+        line, so the card's promise is a list rather than a bare count. That
+        list is display only and is built by _format_entity_list, which
+        validates each id against Home Assistant's entity id charset instead of
+        sanitizing it. Nothing downstream reads it: the removal executor is
+        keyed on the (domain, unique_id) pairs the caller derived, so a card
+        that could not name a row still removes it, and a row renamed after the
+        card was raised is still removed under whatever id it now carries.
+
         is_persistent is deliberately not passed. The default False means the
         issue registry does not restore this card across a restart, so no
         stale card can outlive the session that raised it, and the sweep
@@ -763,6 +840,18 @@ class RainPointOrphanedEntityIssues:
                 "missed_polls": str(record.missed_polls),
             },
         }
+        if record.leftover:
+            # Supplied on the shape whose copy renders it, and on no other. The
+            # same flag chooses the translation key above, so the placeholder
+            # set and the body it feeds cannot drift apart: a placeholder with
+            # no home in the copy is a value the user never sees, and a
+            # placeholder in the copy with no supplier ships a literal brace.
+            # The departed-key shape names no entity ids because it has none to
+            # name: its scope comes from this session's adder ledgers, which
+            # record unique ids rather than entity ids, and resolving those to
+            # entity ids would mean walking the entity registry on a path that
+            # deliberately never touches it.
+            published["translation_placeholders"]["entity_list"] = _format_entity_list(record.entity_ids)
 
         if issue_id in self._active:
             if not self._issue_still_registered(issue_id):

@@ -660,7 +660,7 @@ def _resolve_device_names(device_rows) -> dict[str, str]:
 
 
 def _build_leftover_row_pairs(
-    hass: HomeAssistant, entry: ConfigEntry, entry_store: dict, live_keys, device_rows
+    hass: HomeAssistant, entry: ConfigEntry, entry_store: dict, live_keys, device_rows, entity_ids: dict | None = None
 ) -> dict[str, frozenset[tuple[str, str]]]:
     """Return the dead registry rows sitting on a still-present device, by sensor key.
 
@@ -697,7 +697,16 @@ def _build_leftover_row_pairs(
     which yields no candidate device row and therefore no leftover pair --
     the same degradation this function produced when it fetched its own copy.
     The entity-registry fetch stays here: nothing else on this pass needs it.
+
+    ``entity_ids`` is an optional dict the caller owns and this fills in place,
+    mapping each offered pair to the entity id its registry row currently
+    carries, so the card can name the rows it is offering. It is display only
+    and it is deliberately optional: the update path, which raises the card,
+    passes one, and the confirm path, which does the removing, passes nothing
+    and never sees an entity id at all. The pair set is the removal scope on
+    both paths, and it is unchanged by whether a caller asked for the names.
     """
+    named_entity_ids = entity_ids if entity_ids is not None else {}
     entity_registry, entity_rows = _fetch_registry_rows(
         er.async_get, er.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
     )
@@ -752,6 +761,11 @@ def _build_leftover_row_pairs(
             if not _row_is_unbacked(hass, entity_id):
                 continue
             leftovers.setdefault(sensor_key, set()).add(pair)
+            # Recorded only for a pair that passed every gate above, so the
+            # names the card renders and the pairs Submit acts on come from
+            # one and the same decision. A pair is unique across the entity
+            # registry, so this needs no per-key nesting.
+            named_entity_ids[pair] = entity_id
         except Exception as exc:
             _LOGGER.debug("Could not decide on entity registry row %s: %s", getattr(row, "entity_id", None), exc)
 
@@ -821,12 +835,35 @@ def _settled_leftover_pairs(counts: Mapping, pairs_by_key: dict) -> dict[str, fr
     return {sensor_key: frozenset(pairs) for sensor_key, pairs in settled.items()}
 
 
+def _name_leftover_pairs(leftover_pairs: dict, entity_ids: Mapping) -> dict[str, tuple[str, ...]]:
+    """Return the entity id behind each offered pair, by sensor key, for display.
+
+    The card's list and the removal's scope come from one derivation and are
+    kept in different shapes on purpose. What Submit takes is the pair set this
+    reads; what the user reads is the names, and nothing ever travels back the
+    other way. A row this cannot name is still in the pair set and is still
+    removed.
+
+    Every pair here was offered by the same _build_leftover_row_pairs call that
+    filled ``entity_ids``, because the debounce only ever narrows that
+    derivation, so the lookup is direct rather than defended. If that ever
+    stops holding, the caller's own guard leaves every card exactly as it is,
+    which is the safe direction for a surface whose only outcome is an offer to
+    delete.
+
+    Sorted so a card's list is stable between updates, which keeps the raise
+    dedup from republishing a card whose rows have not changed.
+    """
+    return {sensor_key: tuple(sorted(entity_ids[pair] for pair in pairs)) for sensor_key, pairs in leftover_pairs.items()}
+
+
 def _build_orphaned_entity_records(
     entry_store: dict,
     entry_id: str,
     aged_out: frozenset[str],
     leftover_pairs: dict | None = None,
     device_names: dict | None = None,
+    leftover_entity_ids: dict | None = None,
 ) -> list:
     """Translate this session's adder ledgers into plain records for the card.
 
@@ -860,6 +897,14 @@ def _build_orphaned_entity_records(
     departed key whose device row has already gone, or an unreadable device
     registry -- yields a record whose device_name is None, and the card falls
     back to that record's own cloud sub_name at render time.
+
+    ``leftover_entity_ids`` carries the entity ids the still-present shape's
+    card names, keyed the same way. It reaches the record for display and for
+    nothing else; ``leftover_pairs`` remains the only thing the removal is ever
+    keyed on. The departed-key shape carries no ids at all, because its scope
+    comes from the adder ledgers, which record unique ids rather than entity
+    ids, and resolving those would mean walking the entity registry from a
+    function that deliberately reads no registry.
     """
     unique_ids: dict[str, set[str]] = {}
     descriptors: dict[str, dict] = {}
@@ -877,6 +922,7 @@ def _build_orphaned_entity_records(
 
     leftover_pairs = leftover_pairs or {}
     device_names = device_names or {}
+    leftover_entity_ids = leftover_entity_ids or {}
     records = []
     for key, ids in unique_ids.items():
         descriptor = descriptors[key]
@@ -904,13 +950,24 @@ def _build_orphaned_entity_records(
                 hub_paired=bool(descriptor.get("hub_paired", True)),
                 leftover=leftover,
                 device_name=device_names.get(key),
+                # Read on the still-present shape alone, which is the only one
+                # whose ids were ever resolved, and gated on the same verdict
+                # that chooses the card body so the two cannot disagree.
+                entity_ids=leftover_entity_ids.get(key, ()) if leftover else (),
             )
         )
     return records
 
 
 def _leftover_pairs_now(
-    hass: HomeAssistant, entry: ConfigEntry, coordinator, counts: dict, device_rows, *, advance: bool = True
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator,
+    counts: dict,
+    device_rows,
+    *,
+    advance: bool = True,
+    entity_ids: dict | None = None,
 ) -> dict:
     """Re-derive the debounced leftover pairs for this config entry, right now.
 
@@ -932,10 +989,15 @@ def _leftover_pairs_now(
     change _build_leftover_row_pairs took and for the same reason: the update
     path's caller (_sync_orphaned_entity_issues) fetches the device registry
     once and reuses it here rather than this function fetching its own copy.
+
+    ``entity_ids`` is passed straight through to the derivation, which fills it
+    with the entity id behind each offered pair. Only the update path asks for
+    it, because only the update path renders a card; the confirm path leaves it
+    at None and removes by pair alone.
     """
     entry_store = (hass.data.get(DOMAIN) or {}).get(entry.entry_id) or {}
     live_keys = frozenset(_read_current_sensors(coordinator, "offering no leftover rows this update"))
-    pairs_by_key = _build_leftover_row_pairs(hass, entry, entry_store, live_keys, device_rows)
+    pairs_by_key = _build_leftover_row_pairs(hass, entry, entry_store, live_keys, device_rows, entity_ids)
     if advance:
         return _debounced_leftover_pairs(counts, pairs_by_key)
     return _settled_leftover_pairs(counts, pairs_by_key)
@@ -971,9 +1033,19 @@ def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordi
             dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
         )
         device_names = _resolve_device_names(device_rows)
-        leftover = _leftover_pairs_now(hass, entry, coordinator, counts if counts is not None else {}, device_rows)
+        # Filled by the derivation below with the entity id behind each offered
+        # pair, for the card to name. Nothing downstream of the card reads it.
+        entity_ids: dict[tuple[str, str], str] = {}
+        leftover = _leftover_pairs_now(
+            hass, entry, coordinator, counts if counts is not None else {}, device_rows, entity_ids=entity_ids
+        )
         records = _build_orphaned_entity_records(
-            entry_store, entry.entry_id, _read_aged_out_keys(coordinator), leftover, device_names
+            entry_store,
+            entry.entry_id,
+            _read_aged_out_keys(coordinator),
+            leftover,
+            device_names,
+            _name_leftover_pairs(leftover, entity_ids),
         )
         manager.async_sync(records)
     except Exception as exc:
