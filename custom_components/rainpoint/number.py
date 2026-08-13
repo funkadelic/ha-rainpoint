@@ -177,9 +177,9 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         stored value does not move and no state is written. What the web
         interface does with the value is recorded at the end of this
         docstring. A reading that is not an explicit open accepts the write
-        exactly as before this guard existed. The accepted cost is that editing the setpoint for the next
-        run while the current one waters is blocked too; the user must wait
-        for the run to end.
+        exactly as before this guard existed. The accepted cost is that
+        editing the setpoint for the next run while the current one waters
+        is blocked too; the user must wait for the run to end.
 
         The decision behind this guard, recorded here in full rather than
         only in a working file, because the deliverable this guard exists
@@ -196,6 +196,14 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         before any state mutation fixes both halves at once, because the
         stored value never holds the rejected number, and the raise itself
         is Home Assistant's own signal that the write did not happen.
+
+        For the same reason the message tells the user to set the value
+        again once the run ends, rather than saying it applies to the next
+        run. Raising discards the typed number instead of deferring it, so
+        the next run uses the duration that was already stored. A message
+        promising otherwise would be false, and doubly misleading beside a
+        box that goes on showing the rejected number, which is the exact
+        pairing the closing paragraph of this docstring describes.
 
         Three other answers were weighed and rejected. Re-commanding the
         running zone with the new value, so the entity becomes a live
@@ -261,7 +269,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         if self._run_state_open is True:
             raise HomeAssistantError(
                 f"{self._zone_label} is watering. The run duration can only be changed while the zone is closed. "
-                "The new value would apply to the next run."
+                "The change was not saved, so set it again once the run ends."
             )
         self._current_value = value
         self.async_write_ha_state()

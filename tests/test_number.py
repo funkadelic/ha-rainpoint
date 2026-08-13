@@ -1087,7 +1087,7 @@ class TestDurationRefusalGuard:
         num.async_write_ha_state.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_refusal_message_names_the_zone_the_rule_and_the_promise(self):
+    async def test_refusal_message_names_the_zone_the_rule_and_what_to_do(self):
         num = _make_number(current_value=10.0)
         _set_zone(num, open=True)
 
@@ -1098,7 +1098,21 @@ class TestDurationRefusalGuard:
         assert "Zone 1" in message
         assert "watering" in message
         assert "closed" in message
-        assert "next run" in message
+        assert "not saved" in message
+        assert "once the run ends" in message
+
+    @pytest.mark.asyncio
+    async def test_refusal_message_promises_nothing_about_a_later_run(self):
+        """The raise discards the typed value, so any promise that it applies later would be false."""
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=True)
+
+        with pytest.raises(HomeAssistantError) as excinfo:
+            await num.async_set_native_value(1.0)
+
+        message = str(excinfo.value)
+        assert "would apply" not in message
+        assert "next run" not in message
 
     @pytest.mark.asyncio
     async def test_refusal_message_carries_no_end_time_or_clock_value(self):
@@ -1257,7 +1271,8 @@ class TestGenericDurationRefusal:
         assert "The zone" in message
         assert "watering" in message
         assert "closed" in message
-        assert "next run" in message
+        assert "not saved" in message
+        assert "once the run ends" in message
         entity.async_write_ha_state.assert_not_called()
 
     @pytest.mark.asyncio
