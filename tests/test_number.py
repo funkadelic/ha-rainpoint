@@ -70,6 +70,7 @@ def _unknown_data(model: str, fields: list[dict] | None = None) -> dict:
 def _generic_control_sensor_info(
     model: str, model_code: int, sub_name: str = "Valve Hub 1", fields: list[dict] | None = None
 ) -> dict:
+    """Build a generic-control sensor entry for the given model, with its catalog identity attached."""
     entry = make_sensor_entry(hid=100, mid=200, addr=1, model=model, sub_name=sub_name, data=_unknown_data(model, fields))
     entry["model_code"] = model_code
     entry["device_name"] = "dev1"
@@ -669,6 +670,7 @@ class TestGenericZoneDurationNumberConstruction:
 
 class TestGenericZoneDurationNumberBehavior:
     def _build(self):
+        """Build the anchor model's generic duration entity through the real factory."""
         sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
         coordinator = _make_generic_coordinator("100_200_1", sensor_info)
         entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
@@ -1014,6 +1016,7 @@ class TestDurationRefusalGuard:
 
     @pytest.mark.asyncio
     async def test_explicit_open_refuses(self):
+        """An explicit open refuses the write and leaves the stored value where it was."""
         num = _make_number(current_value=10.0)
         _set_zone(num, open=True)
 
@@ -1025,6 +1028,7 @@ class TestDurationRefusalGuard:
 
     @pytest.mark.asyncio
     async def test_explicit_closed_accepts(self):
+        """An explicitly closed zone accepts the write exactly as before this guard existed."""
         num = _make_number(current_value=10.0)
         _set_zone(num, open=False)
 
@@ -1035,6 +1039,7 @@ class TestDurationRefusalGuard:
 
     @pytest.mark.asyncio
     async def test_open_none_accepts(self):
+        """An unknown open state accepts the write: only an explicit open refuses."""
         num = _make_number(current_value=10.0)
         _set_zone(num, open=None)
 
@@ -1045,6 +1050,7 @@ class TestDurationRefusalGuard:
 
     @pytest.mark.asyncio
     async def test_zone_record_missing_accepts(self):
+        """A missing zone record accepts the write rather than failing closed on absent data."""
         num = _make_number(current_value=10.0)
         _set_zone_missing(num)
 
@@ -1055,6 +1061,7 @@ class TestDurationRefusalGuard:
 
     @pytest.mark.asyncio
     async def test_sensor_key_absent_accepts(self):
+        """A sensor key absent from the snapshot accepts the write."""
         num = _make_number(current_value=10.0)
         del num.coordinator.data["sensors"][num._sensor_key]
 
@@ -1065,6 +1072,7 @@ class TestDurationRefusalGuard:
 
     @pytest.mark.asyncio
     async def test_falsy_data_accepts(self):
+        """A device carrying no decoded data accepts the write."""
         num = _make_number(current_value=10.0)
         num.coordinator.data["sensors"][num._sensor_key]["data"] = None
 
@@ -1075,6 +1083,7 @@ class TestDurationRefusalGuard:
 
     @pytest.mark.asyncio
     async def test_silent_entry_accepts(self):
+        """A device that has gone silent accepts the write rather than blocking on a stale reading."""
         num = _make_number(current_value=10.0)
         num.coordinator.data["sensors"][num._sensor_key]["data"] = {
             "type": SILENT_DATA_TYPE,
@@ -1088,6 +1097,7 @@ class TestDurationRefusalGuard:
 
     @pytest.mark.asyncio
     async def test_refusal_message_names_the_zone_the_rule_and_what_to_do(self):
+        """The refusal names the zone, states the rule, and says what to do next."""
         num = _make_number(current_value=10.0)
         _set_zone(num, open=True)
 
@@ -1116,6 +1126,7 @@ class TestDurationRefusalGuard:
 
     @pytest.mark.asyncio
     async def test_refusal_message_carries_no_end_time_or_clock_value(self):
+        """The refusal carries no end time, timestamp or raw duration for a reader to misread."""
         num = _make_number(current_value=10.0)
         _set_zone(num, open=True, duration_seconds=600, event_time="2026-08-13T21:05:00")
 
@@ -1129,6 +1140,7 @@ class TestDurationRefusalGuard:
 
     @pytest.mark.asyncio
     async def test_two_identical_attempts_against_an_open_zone_both_refuse(self):
+        """A repeated attempt refuses again and sends nothing to the cloud."""
         num = _make_number(current_value=10.0)
         _set_zone(num, open=True)
 
@@ -1142,10 +1154,12 @@ class TestDurationRefusalGuard:
         assert num.coordinator._client.mock_calls == []
 
     def test_base_class_default_run_state_open_is_none(self):
+        """The base class defaults to an unknown run state, so a subclass missing the hook accepts writes."""
         base = _RainPointDurationNumberBase.__new__(_RainPointDurationNumberBase)
         assert base._run_state_open is None
 
     def test_base_class_default_zone_label_names_no_number(self):
+        """The base class label is a non-empty string carrying no zone number."""
         base = _RainPointDurationNumberBase.__new__(_RainPointDurationNumberBase)
         label = base._zone_label
         assert isinstance(label, str)
@@ -1153,6 +1167,7 @@ class TestDurationRefusalGuard:
         assert not any(char.isdigit() for char in label)
 
     def test_base_class_default_open_run_attributes_is_empty(self):
+        """The base class contributes no open-run attributes of its own."""
         base = _RainPointDurationNumberBase.__new__(_RainPointDurationNumberBase)
         assert base._open_run_attributes == {}
 
@@ -1251,6 +1266,7 @@ class TestGenericDurationRefusal:
 
     @staticmethod
     def _build(fields=None):
+        """Build the anchor model's generic duration entity through the real factory."""
         sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE, fields=fields)
         coordinator = _make_generic_coordinator("100_200_1", sensor_info)
         entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
@@ -1277,6 +1293,7 @@ class TestGenericDurationRefusal:
 
     @pytest.mark.asyncio
     async def test_ascii_declined_payload_accepts(self):
+        """An ASCII-framed payload is not a proven run state, so the write is accepted."""
         entity, coordinator = self._build(fields=[_run_state_field(1, 1)])
         coordinator.data["sensors"]["100_200_1"]["data"]["generic"]["ascii_framed"] = True
 
@@ -1287,6 +1304,7 @@ class TestGenericDurationRefusal:
 
     @pytest.mark.asyncio
     async def test_no_matching_run_state_record_accepts(self):
+        """No run-state record at all accepts the write."""
         entity, _ = self._build(fields=[])
 
         await entity.async_set_native_value(1.0)
@@ -1296,6 +1314,7 @@ class TestGenericDurationRefusal:
 
     @pytest.mark.asyncio
     async def test_non_integer_value_accepts(self):
+        """A run-state value that is not an integer accepts the write."""
         entity, _ = self._build(fields=[_run_state_field(1, "1")])
 
         await entity.async_set_native_value(1.0)
@@ -1305,6 +1324,7 @@ class TestGenericDurationRefusal:
 
     @pytest.mark.asyncio
     async def test_bool_value_accepts(self):
+        """A boolean run-state value accepts the write rather than reading as open."""
         entity, _ = self._build(fields=[_run_state_field(1, True)])
 
         await entity.async_set_native_value(1.0)
@@ -1314,6 +1334,7 @@ class TestGenericDurationRefusal:
 
     @pytest.mark.asyncio
     async def test_a_record_at_an_unproven_width_accepts(self):
+        """A run-state record at an unproven width accepts the write."""
         field = dict(_run_state_field(1, 1), raw="0100")
         entity, _ = self._build(fields=[field])
 
@@ -1324,6 +1345,7 @@ class TestGenericDurationRefusal:
 
     @pytest.mark.asyncio
     async def test_run_state_closed_accepts(self):
+        """A run state reading closed accepts the write."""
         entity, _ = self._build(fields=[_run_state_field(1, 0)])
 
         await entity.async_set_native_value(1.0)
@@ -1368,6 +1390,7 @@ class TestOpenRunAttributes:
 
     @pytest.mark.asyncio
     async def test_open_zone_carries_duration_and_event_time(self):
+        """An open zone carries the running run's duration and event time beside the usual attributes."""
         num = _make_number()
         _set_zone(num, open=True, duration_seconds=600, event_time="2026-08-13T21:05:00")
 
@@ -1378,6 +1401,7 @@ class TestOpenRunAttributes:
         assert attrs["firmware_version"] == "1.0"
 
     def test_closed_zone_carries_neither_key(self):
+        """A closed zone carries neither running-run key."""
         num = _make_number()
         _set_zone(num, open=False, duration_seconds=600, event_time="2026-08-13T21:05:00")
 
@@ -1387,6 +1411,7 @@ class TestOpenRunAttributes:
         assert "event_time" not in attrs
 
     def test_open_none_carries_neither_key(self):
+        """An unknown open state carries neither running-run key."""
         num = _make_number()
         _set_zone(num, open=None)
 
@@ -1396,6 +1421,7 @@ class TestOpenRunAttributes:
         assert "event_time" not in attrs
 
     def test_no_zone_record_carries_neither_key_but_still_carries_sub_device_attributes(self):
+        """A missing zone record drops the running-run keys and keeps the sub device's own attributes."""
         num = _make_number()
         _set_zone_missing(num)
 
@@ -1406,6 +1432,7 @@ class TestOpenRunAttributes:
         assert attrs["firmware_version"] == "1.0"
 
     def test_open_zone_with_no_duration_omits_the_key(self):
+        """A duration the device did not report is omitted rather than carried as an empty value."""
         num = _make_number()
         _set_zone(num, open=True, duration_seconds=None, event_time="2026-08-13T21:05:00")
 
@@ -1415,6 +1442,7 @@ class TestOpenRunAttributes:
         assert attrs["event_time"] == "2026-08-13T21:05:00"
 
     def test_open_zone_with_no_event_time_omits_the_key(self):
+        """An event time the device did not report is omitted rather than carried as an empty value."""
         num = _make_number()
         _set_zone(num, open=True, duration_seconds=600, event_time=None)
 
@@ -1424,6 +1452,7 @@ class TestOpenRunAttributes:
         assert "event_time" not in attrs
 
     def test_state_raw_is_not_added(self):
+        """The raw state byte stays out of the attributes a user reads."""
         num = _make_number()
         _set_zone(num, open=True, duration_seconds=600, event_time="2026-08-13T21:05:00", state_raw=1)
 
@@ -1477,29 +1506,37 @@ class TestRecordedDecision:
 
     @staticmethod
     def _record() -> str:
+        """Read the decision record out of the guard's own docstring."""
         return inspect.getdoc(_RainPointDurationNumberBase.async_set_native_value)
 
     def test_record_states_why_refusing_is_honest(self):
+        """The record says why refusing is the honest answer rather than an obstructive one."""
         assert "honest" in self._record()
 
     def test_record_names_the_re_command_rejection(self):
+        """The record names the re-command alternative and why it cannot be built today."""
         record = self._record()
         assert "restart" in record
         assert "absolute end time" in record
 
     def test_record_names_the_accept_and_mark_stale_rejection(self):
+        """The record names the accept-and-mark-stale alternative and why it was rejected."""
         assert "warning-on-success" in self._record()
 
     def test_record_names_the_unavailable_rejection(self):
+        """The record names the mark-unavailable alternative and why it was rejected."""
         assert "unavailable" in self._record()
 
     def test_record_names_the_accepted_cost(self):
+        """The record names the cost this guard knowingly accepts."""
         assert "must wait for the run to end" in self._record()
 
     def test_record_names_what_would_revive_the_re_command_option(self):
+        """The record names the condition that would revive the re-command option."""
         assert "hardware probe" in self._record()
 
     def test_record_has_no_em_dash_or_en_dash(self):
+        """The record carries neither an em-dash nor an en-dash."""
         record = self._record()
         assert chr(8212) not in record
         assert chr(8211) not in record
