@@ -177,7 +177,7 @@ A device can stay on your account and report normally while some of its entity r
 
 Home Assistant raises "A device has unused entities" once the rows have looked that way thirty times running. That is counted in updates rather than on a clock, and with push enabled an update arrives whenever a device sends a reading, so the real wait depends on how chatty your devices are. Restarting Home Assistant or reloading the integration starts that count again from zero.
 
-This card names every entity it would remove, so you can check the list against the device page before deciding. It can still offer a row that is only temporarily quiet, because a reading that has not arrived since the last restart looks the same from inside the integration as one that is gone for good. Watering zones are never offered here, so a zone you have not run yet is safe either way. **Cancel** leaves everything alone. Unlike the card above, this one comes back after a reload if the rows still look unused.
+This card names the entities it would remove, up to ten of them and a count of any beyond that, so you can check the list against the device page before deciding. It can still offer a row that is only temporarily quiet, because a reading that has not arrived since the last restart looks the same from inside the integration as one that is gone for good. Watering zones are never offered here, so a zone you have not run yet is safe either way. **Cancel** leaves everything alone. Unlike the card above, this one comes back after a reload if the rows still look unused.
 
 ### Neither card removes anything on its own
 
