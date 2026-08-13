@@ -299,9 +299,11 @@ class RainPointZoneDurationNumber(_RainPointDurationNumberBase):
 
         An identically-shaped copy of RainPointValveEntity._zone_data in
         valve.py, kept as a copy rather than a shared call so this change
-        never touches that live control path.
+        never touches that live control path. Guards coordinator.data is
+        None the same way the sibling generic_run_state_open does, since
+        DataUpdateCoordinator.data is None before the first update.
         """
-        sensors = self.coordinator.data.get("sensors", {})
+        sensors = (self.coordinator.data or {}).get("sensors", {})
         info = sensors.get(self._sensor_key)
         if not info:
             return None
