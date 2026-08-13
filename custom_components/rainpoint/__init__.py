@@ -992,6 +992,11 @@ def _build_orphaned_entity_records(
                 # whose ids were ever resolved, and gated on the same verdict
                 # that chooses the card body so the two cannot disagree.
                 entity_ids=leftover_entity_ids.get(key, ()) if leftover else (),
+                # The offer itself, keyed the way the removal is keyed, for the
+                # confirm dialog to be held to. Sorted rather than taken in set
+                # order so that an offer which has not changed publishes an
+                # identical value, and the card's dedup keeps holding.
+                leftover_pairs=tuple(sorted(leftover_pairs[key])) if leftover else (),
             )
         )
     return records
@@ -1123,7 +1128,7 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
     # previous session was looking at.
     leftover_counts: dict[tuple[str, tuple[str, str]], int] = {}
 
-    def _remove(sensor_key: str, *, leftover_shape: bool = True) -> int:
+    def _remove(sensor_key: str, *, leftover_shape: bool = True, offered_pairs=None) -> int:
         """Remove this config entry's rows for one sensor key, in one named shape.
 
         ``leftover_shape`` is the card's own shape, carried here from the
@@ -1151,6 +1156,17 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         ever having appeared on the card the user read, which is the one thing
         this whole surface promises cannot happen.
 
+        ``offered_pairs`` is what the card was offering when the dialog opened,
+        and the scope is the intersection of the two. Each half answers a
+        failure the other cannot. The re-derivation drops a row that recovered
+        while the dialog sat open, which the snapshot alone would still take.
+        The snapshot drops a row that went dead while it sat open, which the
+        re-derivation alone would take: the sweep goes on running under an open
+        dialog, so a second row can finish its window and republish the card
+        while the text in front of the user still describes one row. None means
+        the flow had no snapshot to give, and leaves the re-derivation as the
+        whole scope, which is what this path did before the snapshot existed.
+
         It fetches its own device rows rather than sharing the periodic sweep's:
         this runs once, on a human's confirm, at a moment displaced from
         whatever update last ran the sweep, so reusing a stale fetch here
@@ -1170,13 +1186,29 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         _, device_rows = _fetch_registry_rows(
             dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
         )
+        derived = _leftover_pairs_now(hass, entry, coordinator, leftover_counts, device_rows, advance=False).get(
+            sensor_key, frozenset()
+        )
+        scope = derived if offered_pairs is None else derived & frozenset(offered_pairs)
+        if not scope:
+            # The breadcrumb for a Submit that took nothing, and the only place
+            # the reason for that is knowable. The executor below sees one empty
+            # set and cannot tell which of these produced it, so it says only
+            # what it did; the counts here say why. All three are integers and a
+            # sensor key, which is this integration's own.
+            _LOGGER.debug(
+                "Nothing is in scope for sensor key %s: %s row(s) are dead right now, "
+                "%s were on the card, and the key is %sin this update's sensors",
+                sensor_key,
+                len(derived),
+                "unknown" if offered_pairs is None else len(frozenset(offered_pairs)),
+                "" if sensor_key in _read_current_sensors(coordinator, "confirming a removal") else "not ",
+            )
         return _remove_orphaned_key_rows(
             hass,
             entry,
             sensor_key,
-            leftover_pairs=_leftover_pairs_now(hass, entry, coordinator, leftover_counts, device_rows, advance=False).get(
-                sensor_key, frozenset()
-            ),
+            leftover_pairs=scope,
             leftover_shape=True,
         )
 
@@ -1435,15 +1467,23 @@ def _remove_orphaned_key_rows(
 
     if not doomed:
         if leftover_shape:
-            # Every row this card offered is backed again by the time the user
-            # confirmed, so there is nothing left to take. Info rather than
-            # warning, and it names no follow-up action, because nothing went
-            # wrong here and nothing is left stranded: the device is present,
-            # its rows are alive, and the card simply arrived at a question
-            # that had already answered itself.
+            # Nothing is in scope by the time the user confirmed, so there is
+            # nothing to take. States the outcome and stops there rather than
+            # naming a cause, because several arrive here and this function
+            # cannot tell them apart from one empty set: every offered row came
+            # back, a row that went dead after the card was shown is held out
+            # by the offer the dialog was given, the key dropped out of this
+            # update's sensors, or a registry could not be read. The caller
+            # that derived the scope logs the counts that separate them.
+            #
+            # Info rather than warning, and it names no follow-up action.
+            # Nothing is stranded on this shape whichever cause applies: the
+            # device is present and reporting, so a row that is genuinely dead
+            # is offered again on the next card rather than left with no
+            # surface to remove it through.
             _LOGGER.info(
-                "Nothing is left over for sensor key %s by the time its removal was confirmed; "
-                "every row that was offered is backed again, so none was removed and its device row was left alone",
+                "No leftover rows were in scope for sensor key %s by the time its removal was confirmed, "
+                "so no entity was removed and its device row was left alone",
                 sensor_key,
             )
             return 0

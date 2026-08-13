@@ -1032,6 +1032,11 @@ class TestWhatTheConfirmMayTake:
         On this shape an empty scope is the ordinary recovery outcome rather
         than a fault, so the ledger-derived scope is never consulted and the
         breadcrumb says nothing about removing rows by hand.
+
+        It also names no cause. Several arrive at this same empty set and this
+        function cannot tell them apart, so the line states what it did and
+        leaves the counts that separate them to the caller that derived the
+        scope.
         """
         harness = _Harness()
         harness.add_leftover_row()
@@ -1045,9 +1050,13 @@ class TestWhatTheConfirmMayTake:
         assert harness.released == []
         # The ledger is untouched: this shape never resolves through it.
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_battery"})
-        breadcrumbs = [r.getMessage() for r in caplog.records if "Nothing is left over for sensor key" in r.getMessage()]
+        breadcrumbs = [r.getMessage() for r in caplog.records if "No leftover rows were in scope" in r.getMessage()]
         assert len(breadcrumbs) == 1
         assert SENSOR_KEY in breadcrumbs[0]
+        # It states an outcome and no cause: nothing here claims the rows came
+        # back, because this function cannot know that they did.
+        assert "backed again" not in breadcrumbs[0]
+        assert "by hand" not in breadcrumbs[0]
         assert not [r.getMessage() for r in caplog.records if "Nothing in scope for sensor key" in r.getMessage()]
 
     def test_a_row_that_refuses_to_go_does_not_break_the_confirm(self):
@@ -1203,6 +1212,42 @@ class TestARecoveredCardTakesNothing:
                 assert _ledger_snapshot(hass) == ledger_before
 
     @pytest.mark.asyncio
+    async def test_the_breadcrumb_for_an_empty_confirm_separates_the_reasons(self, caplog):
+        """Several confirms take nothing, and they are not the same event.
+
+        Every row recovering is the benign one. The key dropping out of the
+        current update is not: the same miss prunes those rows' windows, so the
+        card needs a fresh window to come back, while Home Assistant has already
+        deleted the one the user pressed. The executor sees one empty set for
+        both, so the line that can tell them apart is the one where the scope is
+        derived, and it carries counts rather than a guess at the cause.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                flow = await async_create_fix_flow(hass, create.call_args.args[2], create.call_args.kwargs["data"])
+                flow.hass = hass
+                await flow.async_step_init()
+                harness.states[LEFTOVER_ENTITY_ID] = _live_state()
+
+                with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint"):
+                    await flow.async_step_confirm({})
+
+        breadcrumbs = [r.getMessage() for r in caplog.records if "Nothing is in scope for sensor key" in r.getMessage()]
+        assert len(breadcrumbs) == 1
+        # The row recovered, so nothing is dead now, one row was on the card,
+        # and the device is still in the update. Three facts, no cause.
+        assert "0 row(s) are dead right now" in breadcrumbs[0]
+        assert "1 were on the card" in breadcrumbs[0]
+        assert "the key is in this update's sensors" in breadcrumbs[0]
+
+    @pytest.mark.asyncio
     async def test_only_the_row_that_stayed_dead_goes_when_its_sibling_recovers(self):
         """The partial case, which is what keeps the empty case honest.
 
@@ -1344,6 +1389,56 @@ class TestTheConfirmReadsTheWindowWithoutAdvancingIt:
                 assert harness.removed == [LEFTOVER_ENTITY_ID]
                 assert harness.released == []
                 assert window == before
+
+    @pytest.mark.asyncio
+    async def test_a_row_that_finishes_its_window_under_an_open_dialog_is_not_taken(self):
+        """The other half of the disclosure property, on the other clock.
+
+        Holding the window still at the confirm answers a row the update path
+        had not finished counting. It does nothing about a row that finishes
+        counting while the dialog sits open, because the sweep behind the card
+        goes on running: the second row crosses the threshold, the card is
+        republished saying two, and the dialog in front of the user still says
+        one. What Submit may take is what that dialog said, so the confirm is
+        held to the offer it was shown rather than to the offer the card is
+        carrying by the time it is answered.
+
+        Driven as a timeline for the same reason its sibling is: the whole
+        defect is an ordering one, and a scope handed in at the end proves
+        nothing about which side of the dialog the row arrived on.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                assert create.call_count == 1
+                issue_id = create.call_args.args[2]
+
+                # The user opens the card and reads a dialog naming one row.
+                flow = await async_create_fix_flow(hass, issue_id, create.call_args.kwargs["data"])
+                flow.hass = hass
+                shown = await flow.async_step_init()
+                assert shown["description_placeholders"]["entity_count"] == "1"
+
+                # A second row goes dead and serves its whole window while that
+                # dialog sits open, so the card itself now says two.
+                harness.add_leftover_row(entity_id=self.SECOND_ENTITY_ID, unique_id=self.SECOND_UNIQUE_ID)
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                assert create.call_args.kwargs["translation_placeholders"]["entity_count"] == "2"
+
+                await flow.async_step_confirm({})
+
+                # The dialog said one, so one went. The row that arrived after
+                # the user read it keeps its registry row and its history, and
+                # is offered again on the card that is still up.
+                assert harness.removed == [LEFTOVER_ENTITY_ID]
+                assert harness.released == []
 
     def test_the_read_only_selection_never_offers_more_than_advancing_would(self):
         """The two selections compared at the boundary, over one window.

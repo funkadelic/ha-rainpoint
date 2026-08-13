@@ -34,6 +34,7 @@ from custom_components.rainpoint.repairs import (
     SilentDeviceRecord,
     _format_entity_list,
     _sanitize_placeholder,
+    _snapshot_offered_pairs,
     async_create_fix_flow,
     hub_connectivity_issue_id,
     orphaned_entities_issue_id,
@@ -1642,7 +1643,7 @@ class TestTheCardNamesTheEntitiesItWouldRemove:
         flow = RainPointOrphanedEntitiesRepairFlow({"entry_id": "e1", "sensor_key": "100_200_1", "leftover": True})
         flow.hass = MagicMock()
         with patch.object(repairs.ir, "async_get", return_value=SimpleNamespace(async_get_issue=lambda *_: issue)):
-            assert flow._description_placeholders()["entity_list"] == "  - `sensor.left_over_row`"
+            assert flow._description_placeholders(flow._read_issue())["entity_list"] == "  - `sensor.left_over_row`"
 
     def test_a_card_whose_named_rows_change_is_republished(self, issue_mocks):
         """The list is part of what the user is being asked to approve, so a
@@ -1676,9 +1677,10 @@ class TestTheCardNamesTheEntitiesItWouldRemove:
 class _FakeIssue:
     """An issue registry entry carrying only what the confirm dialog reads."""
 
-    def __init__(self, translation_placeholders):
-        """Hold the placeholders the raised card supplied."""
+    def __init__(self, translation_placeholders, data=None):
+        """Hold the placeholders the raised card supplied, and its data dict."""
         self.translation_placeholders = translation_placeholders
+        self.data = data
 
 
 def _flow_hass(remover=None, *, with_entry=True, with_remover=True):
@@ -1706,18 +1708,20 @@ def _make_flow(hass, sensor_key="100_200_1", entry_id="e1", *, leftover=None):
 
 
 def _recording_remover(result=0):
-    """Return (calls, remover), where the remover records its key and its shape.
+    """Return (calls, remover), recording the key, the shape and the offer.
 
-    The shape is recorded rather than ignored because it is the one argument
-    the flow has to supply itself: the executor cannot recover it from the key
-    or from anything it derives, and getting it wrong deletes a live device's
-    whole entity set.
+    All three are recorded rather than ignored because all three are arguments
+    the flow has to supply itself. The executor cannot recover the shape from
+    the key or from anything it derives, and getting it wrong deletes a live
+    device's whole entity set; it cannot recover the offer at all, because the
+    only record of what the user was shown is the one this flow took when it
+    showed it.
     """
-    calls: list[tuple[str, bool]] = []
+    calls: list[tuple[str, bool, object]] = []
 
-    def _remover(sensor_key, *, leftover_shape=True):
+    def _remover(sensor_key, *, leftover_shape=True, offered_pairs=None):
         """Record one removal request exactly as the flow made it."""
-        calls.append((sensor_key, leftover_shape))
+        calls.append((sensor_key, leftover_shape, offered_pairs))
         return result
 
     return calls, _remover
@@ -1760,7 +1764,9 @@ class TestRainPointOrphanedEntitiesRepairFlow:
 
         result = await flow.async_step_confirm({})
 
-        assert calls == [("100_200_1", False)]
+        # No form was shown, so the flow has no snapshot to hand over and the
+        # executor falls back to its own re-derivation.
+        assert calls == [("100_200_1", False, None)]
         assert result["type"] == "create_entry"
 
     @pytest.mark.asyncio
@@ -1781,8 +1787,8 @@ class TestRainPointOrphanedEntitiesRepairFlow:
         await _make_flow(_flow_hass(leftover_remover), leftover=True).async_step_confirm({})
         await _make_flow(_flow_hass(departed_remover)).async_step_confirm({})
 
-        assert leftover_calls == [("100_200_1", True)]
-        assert departed_calls == [("100_200_1", False)]
+        assert leftover_calls == [("100_200_1", True, None)]
+        assert departed_calls == [("100_200_1", False, None)]
 
     @pytest.mark.asyncio
     async def test_the_flow_never_deletes_the_issue_itself(self, issue_mocks):
@@ -1870,4 +1876,165 @@ class TestRainPointOrphanedEntitiesRepairFlow:
             step = await flow.async_step_init()
 
         assert step["description_placeholders"] is None
+        assert [r.getMessage() for r in caplog.records if "Could not read the orphaned entities issue" in r.getMessage()]
+
+    @pytest.mark.asyncio
+    async def test_an_issue_that_will_not_yield_its_placeholders_still_shows_a_form(self, caplog):
+        """The registry answered, the entry it answered with did not.
+
+        A separate guard from the registry read above, because it fails at a
+        different point: the issue is in hand, so the snapshot the dialog takes
+        from it is unaffected, and only the text degrades.
+        """
+
+        class _UnreadableIssue:
+            """An issue entry that raises the moment its placeholders are read."""
+
+            def __init__(self):
+                """Carry an ordinary offer, so only the text can fail."""
+                self.data = {"leftover_pairs": (("sensor", "rainpoint_100_200_1_left_over"),)}
+
+            @property
+            def translation_placeholders(self):
+                """Raise, the way a registry entry mid-migration might."""
+                raise RuntimeError("no placeholders")
+
+        registry = MagicMock()
+        registry.async_get_issue.return_value = _UnreadableIssue()
+        flow = _make_flow(_flow_hass(_recording_remover()[1]), leftover=True)
+
+        with (
+            patch.object(repairs.ir, "async_get", return_value=registry),
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"),
+        ):
+            step = await flow.async_step_init()
+
+        assert step["description_placeholders"] is None
         assert [r.getMessage() for r in caplog.records if "issue placeholders" in r.getMessage()]
+        # The offer was still read, so the Submit behind this dialog is still
+        # held to it.
+        assert flow._offered_pairs == frozenset({("sensor", "rainpoint_100_200_1_left_over")})
+
+
+PAIR = ("sensor", "rainpoint_100_200_1_left_over")
+SECOND_PAIR = ("number", "rainpoint_100_200_1_duration")
+
+
+class TestTheOfferTheDialogWasShown:
+    """What the card is offering, snapshotted when the dialog is shown.
+
+    The re-derivation at Submit answers a row that recovered while the dialog
+    sat open. It cannot answer a row that went dead while it sat open, because
+    the sweep behind the card keeps running: a second row can finish its window
+    and enter the re-derived scope under a dialog whose text still describes one
+    row. This snapshot is the ceiling that answers that one.
+    """
+
+    def test_the_offer_is_read_back_as_pairs(self):
+        """The shape the removal is keyed on, and no other."""
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": (PAIR, SECOND_PAIR)})) == frozenset({PAIR, SECOND_PAIR})
+
+    def test_a_list_of_lists_reads_back_the_same(self):
+        """Nothing here depends on the offer still being tuples.
+
+        The value travels through Home Assistant's issue registry rather than
+        straight from the caller, so a round trip that turned every tuple into
+        a list must not silently empty the ceiling and hand the confirm an
+        unconstrained scope.
+        """
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": [list(PAIR)]})) == frozenset({PAIR})
+
+    def test_a_departed_key_card_offers_no_pairs_at_all(self):
+        """That shape's scope comes from the session's ledgers, so there is
+        nothing to hold it to and None says exactly that."""
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"entry_id": "e1"})) is None
+
+    def test_no_issue_yields_no_ceiling_rather_than_an_empty_one(self):
+        """A card already dismissed elsewhere leaves the confirm to its own
+        re-derivation, which is what this path did before the snapshot."""
+        assert _snapshot_offered_pairs(None) is None
+
+    def test_an_unreadable_data_dict_yields_no_ceiling(self, caplog):
+        """Guarded rather than allowed to raise: this runs inside the step that
+        shows the dialog."""
+
+        class _Exploding:
+            """A data dict that raises the moment it is asked for a key."""
+
+            def get(self, _key):
+                """Raise the way a half-migrated registry entry might."""
+                raise RuntimeError("no data")
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
+            assert _snapshot_offered_pairs(_FakeIssue({}, _Exploding())) is None
+
+        assert [r.getMessage() for r in caplog.records if "what the orphaned entities card is offering" in r.getMessage()]
+
+    def test_a_pair_that_is_not_a_pair_stops_the_read_without_losing_the_rest(self, caplog):
+        """A malformed member narrows the ceiling rather than voiding it.
+
+        Narrower is the safe direction on a surface whose Submit deletes
+        recorder history: a genuinely dead row that falls out here waits for the
+        next card, while a repaired one would be a row the user never approved.
+        """
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
+            snapshot = _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": [PAIR, "not-a-pair-at-all"]}))
+
+        assert snapshot == frozenset({PAIR})
+        assert [r.getMessage() for r in caplog.records if "one of the pairs" in r.getMessage()]
+
+    def test_a_non_string_member_is_dropped(self):
+        """The value is plain data by the time it comes back, so the type is
+        checked rather than assumed."""
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": [PAIR, ("sensor", None)]})) == frozenset({PAIR})
+
+    @pytest.mark.asyncio
+    async def test_showing_the_dialog_snapshots_the_offer_and_submitting_hands_it_over(self):
+        """The two halves in one flow, in the order a user drives them."""
+        calls, remover = _recording_remover()
+        registry = MagicMock()
+        registry.async_get_issue.return_value = _FakeIssue({"entity_count": "1"}, {"leftover_pairs": (PAIR,)})
+        flow = _make_flow(_flow_hass(remover), leftover=True)
+
+        with patch.object(repairs.ir, "async_get", return_value=registry):
+            await flow.async_step_init()
+            await flow.async_step_confirm({})
+
+        assert calls == [("100_200_1", True, frozenset({PAIR}))]
+
+    @pytest.mark.asyncio
+    async def test_a_card_that_gains_a_row_under_an_open_dialog_hands_over_the_old_offer(self):
+        """The defect this exists for, at the seam where it happens.
+
+        The card is republished with a second row while the dialog sits open.
+        What reaches the executor is still the one row the user was shown, so
+        the row that arrived after they read it cannot be taken by that Submit.
+        """
+        calls, remover = _recording_remover()
+        registry = MagicMock()
+        registry.async_get_issue.return_value = _FakeIssue({"entity_count": "1"}, {"leftover_pairs": (PAIR,)})
+        flow = _make_flow(_flow_hass(remover), leftover=True)
+
+        with patch.object(repairs.ir, "async_get", return_value=registry):
+            await flow.async_step_init()
+            # The sweep runs on under the open dialog and republishes the card.
+            registry.async_get_issue.return_value = _FakeIssue({"entity_count": "2"}, {"leftover_pairs": (PAIR, SECOND_PAIR)})
+            await flow.async_step_confirm({})
+
+        assert calls == [("100_200_1", True, frozenset({PAIR}))]
+        assert SECOND_PAIR not in calls[0][2]
+
+    @pytest.mark.asyncio
+    async def test_a_departed_key_confirm_carries_no_ceiling(self):
+        """That shape ignores the offer entirely, and passing an empty set
+        rather than None would read as a ceiling of nothing."""
+        calls, remover = _recording_remover()
+        registry = MagicMock()
+        registry.async_get_issue.return_value = _FakeIssue({"entity_count": "1"}, {"entry_id": "e1"})
+        flow = _make_flow(_flow_hass(remover))
+
+        with patch.object(repairs.ir, "async_get", return_value=registry):
+            await flow.async_step_init()
+            await flow.async_step_confirm({})
+
+        assert calls == [("100_200_1", False, None)]

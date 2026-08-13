@@ -605,6 +605,15 @@ class OrphanedEntitiesRecord:
     # Empty is the ordinary state for the departed-key shape, which has no
     # entity ids to name, and for any caller that supplies none.
     entity_ids: tuple[str, ...] = ()
+    # The exact (domain, unique_id) pairs this card is offering, carried into
+    # the issue's data dict so the flow behind it can snapshot what was on
+    # offer at the moment the dialog was shown. It is a ceiling and never a
+    # scope: the confirm still re-derives which rows are dead right now, and
+    # intersects that with this. A pair that recovered between the two drops
+    # out of the derivation, and a pair that went dead after the dialog opened
+    # is not in here, so neither can be taken. Sorted by the caller so an
+    # unchanged offer publishes an unchanged value and the dedup holds.
+    leftover_pairs: tuple[tuple[str, str], ...] = ()
     # Which of the two shapes produced this record, and therefore which body
     # the card renders. False is the departed-key shape: RainPoint has stopped
     # listing the device. True is the still-present shape: the device is on the
@@ -819,9 +828,18 @@ class RainPointOrphanedEntityIssues:
         # The leftover marker is added only on the shape that carries it, so
         # the departed-key card's data dict stays byte-identical to what it has
         # always been and no flow reading it back has to learn a new key.
-        data = {"entry_id": record.entry_id, "sensor_key": record.sensor_key}
+        data: dict[str, Any] = {"entry_id": record.entry_id, "sensor_key": record.sensor_key}
         if record.leftover:
             data["leftover"] = True
+            # What this card is offering, for the flow to snapshot when it
+            # shows the dialog. It rides in `data` rather than in the
+            # placeholders because it is not rendered: the placeholders name
+            # entity ids for a human to read and stop at ten of them, while
+            # this is the whole offer, keyed the only way a removal is ever
+            # keyed. Publishing it here also puts it inside the dedup below,
+            # so a card whose offer has changed republishes even where every
+            # rendered value stayed the same.
+            data["leftover_pairs"] = record.leftover_pairs
         # Everything the registry is asked to render, assembled before the
         # dedup rather than after it, because the dedup's question is whether
         # any of it has moved since this card was last published.
@@ -1007,6 +1025,41 @@ class RainPointOrphanedEntityIssues:
             )
 
 
+def _snapshot_offered_pairs(issue) -> frozenset[tuple[str, str]] | None:
+    """Read the exact pairs a card is offering, as they stand right now.
+
+    None means there is nothing to hold the removal to, and the three ways of
+    arriving at it are all the same answer: no issue could be read, the card is
+    the departed-key shape and carries no pair list at all, or its data could
+    not be read. The confirm treats None as no ceiling and falls back to its own
+    re-derivation, which is what this path did before the snapshot existed and
+    is already narrowed to the rows that are dead now.
+
+    A pair that does not survive normalization is dropped rather than repaired,
+    which can only make the snapshot narrower than the offer. That is the safe
+    direction on a surface whose Submit deletes recorder history: the cost of
+    dropping one is that a genuinely dead row waits for the next card, and the
+    cost of inventing one is a row the user never approved.
+    """
+    data = getattr(issue, "data", None) or {}
+    try:
+        offered = data.get("leftover_pairs")
+    except Exception as exc:
+        _LOGGER.debug("Could not read what the orphaned entities card is offering: %s", exc)
+        return None
+    if offered is None:
+        return None
+    pairs = set()
+    try:
+        for pair in offered:
+            domain, unique_id = pair
+            if isinstance(domain, str) and isinstance(unique_id, str):
+                pairs.add((domain, unique_id))
+    except Exception as exc:
+        _LOGGER.debug("Could not read one of the pairs the orphaned entities card is offering: %s", exc)
+    return frozenset(pairs)
+
+
 class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
     """The confirmation dialog behind the orphaned entities card.
 
@@ -1024,6 +1077,11 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
     def __init__(self, data: dict | None) -> None:
         """Hold the issue's data dict, which names what may be removed."""
         self._flow_data = dict(data or {})
+        # What the card was offering at the moment this flow showed its dialog,
+        # filled in by that step and read by the submit that follows it. None
+        # means no snapshot was taken: either the dialog has not been shown yet
+        # or the issue could not be read when it was.
+        self._offered_pairs: frozenset[tuple[str, str]] | None = None
 
     @property
     def _sensor_key(self) -> str:
@@ -1059,13 +1117,34 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         if user_input is not None:
             self._remove_rows()
             return self.async_create_entry(data={})
+        # One read of the issue feeds both halves of what the dialog promises:
+        # the text the user reads and the offer that text describes. Reading it
+        # twice would take them from two different moments, and the whole point
+        # of the snapshot is that it belongs to the moment the user was shown.
+        issue = self._read_issue()
+        self._offered_pairs = _snapshot_offered_pairs(issue)
         return self.async_show_form(
             step_id="confirm",
             data_schema=vol.Schema({}),
-            description_placeholders=self._description_placeholders(),
+            description_placeholders=self._description_placeholders(issue),
         )
 
-    def _description_placeholders(self) -> dict | None:
+    def _read_issue(self):
+        """Return the issue this flow was opened from, or None.
+
+        Guarded rather than allowed to raise, because this runs inside a flow
+        step and an exception here leaves the user with a broken dialog rather
+        than a degraded one.
+        """
+        try:
+            issue_id = orphaned_entities_issue_id(self._sensor_key, self._entry_id)
+            return ir.async_get(self.hass).async_get_issue(DOMAIN, issue_id)
+        except Exception as exc:
+            _LOGGER.debug("Could not read the orphaned entities issue: %s", exc)
+            return None
+
+    @staticmethod
+    def _description_placeholders(issue) -> dict | None:
         """Reuse the raised issue's own placeholders for the confirm dialog.
 
         Reading them back rather than building a second dict is what keeps the
@@ -1074,11 +1153,9 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         placeholders rather than raising out of a flow step and leaving the
         user with a broken dialog.
         """
+        if issue is None:
+            return None
         try:
-            issue_id = orphaned_entities_issue_id(self._sensor_key, self._entry_id)
-            issue = ir.async_get(self.hass).async_get_issue(DOMAIN, issue_id)
-            if issue is None:
-                return None
             return issue.translation_placeholders
         except Exception as exc:
             _LOGGER.debug("Could not read the orphaned entities issue placeholders: %s", exc)
@@ -1099,6 +1176,15 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         rows at all, and an executor left to infer the shape from that emptiness
         would read it as the departed-key case and delete every entity the
         session recorded for a live, reporting device.
+
+        The offer this flow was shown goes with them, and closes the gap the
+        re-derivation alone leaves open. Re-deriving keeps a row that recovered
+        while the dialog sat open from being taken; on its own it does nothing
+        about a row that went dead while it sat open, because the sweep behind
+        the card keeps running, and a second row can finish its window,
+        republish the card and enter the re-derived scope under a dialog whose
+        text still describes one row. Held to what it was shown, the confirm can
+        only ever narrow that scope, never widen it.
         """
         entry_id = self._flow_data.get("entry_id")
         try:
@@ -1107,7 +1193,7 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
             _LOGGER.debug("No orphaned entity remover is registered for entry %s: %s", entry_id, exc)
             return
         try:
-            remover(self._sensor_key, leftover_shape=self._leftover_shape)
+            remover(self._sensor_key, leftover_shape=self._leftover_shape, offered_pairs=self._offered_pairs)
         except Exception as exc:
             _LOGGER.debug("Removing the entities for sensor key %s failed: %s", self._sensor_key, exc)
 

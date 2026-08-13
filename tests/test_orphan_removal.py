@@ -207,8 +207,17 @@ def _patched_issue_registry():
     held: dict[tuple[str, str], object] = {}
 
     def _create(hass, domain, issue_id, **kwargs):
-        """Record the raised card the way the registry would hold it."""
-        held[(domain, issue_id)] = SimpleNamespace(translation_placeholders=kwargs.get("translation_placeholders"))
+        """Record the raised card the way the registry would hold it.
+
+        The data dict is held alongside the placeholders because the confirm
+        dialog reads both: the placeholders are the text it shows, and the data
+        carries the offer that text describes, which the flow snapshots at the
+        moment it shows it. A double holding only the text would leave every
+        confirm with no ceiling and no test could tell.
+        """
+        held[(domain, issue_id)] = SimpleNamespace(
+            translation_placeholders=kwargs.get("translation_placeholders"), data=kwargs.get("data")
+        )
 
     def _delete(hass, domain, issue_id):
         """Drop a card, and stay a no-op for an id the registry never held."""
