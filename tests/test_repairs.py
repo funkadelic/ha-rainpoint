@@ -1969,9 +1969,14 @@ class TestTheOfferTheDialogWasShown:
         re-derivation, which is what this path did before the snapshot."""
         assert _snapshot_offered_pairs(None) is None
 
-    def test_an_unreadable_data_dict_yields_no_ceiling(self, caplog):
-        """Guarded rather than allowed to raise: this runs inside the step that
-        shows the dialog."""
+    def test_an_unreadable_data_dict_yields_an_empty_ceiling_not_a_missing_one(self, caplog):
+        """A card whose offer cannot be read is not a card with no offer.
+
+        The offer exists and is unknown, so Submit takes nothing rather than
+        falling back to a re-derivation no dialog was ever held to. Guarded
+        rather than allowed to raise either way: this runs inside the step that
+        shows the dialog.
+        """
 
         class _Exploding:
             """A data dict that raises the moment it is asked for a key."""
@@ -1981,9 +1986,42 @@ class TestTheOfferTheDialogWasShown:
                 raise RuntimeError("no data")
 
         with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
-            assert _snapshot_offered_pairs(_FakeIssue({}, _Exploding())) is None
+            assert _snapshot_offered_pairs(_FakeIssue({}, _Exploding())) == frozenset()
 
         assert [r.getMessage() for r in caplog.records if "what the orphaned entities card is offering" in r.getMessage()]
+
+    def test_an_issue_that_raises_on_its_data_attribute_is_caught_too(self):
+        """The attribute read sits inside the guard, not outside it.
+
+        ``getattr``'s default covers a missing attribute and nothing else, so an
+        entry that raises on ``data`` would propagate out of the flow step that
+        shows the dialog and leave the user with a broken one rather than a
+        degraded one.
+        """
+
+        class _RaisingIssue:
+            """An issue entry whose data attribute raises when it is read."""
+
+            def __init__(self):
+                """Carry ordinary placeholders, so only the offer can fail."""
+                self.translation_placeholders = {}
+
+            @property
+            def data(self):
+                """Raise the way a half-migrated registry entry might."""
+                raise RuntimeError("no data attribute")
+
+        assert _snapshot_offered_pairs(_RaisingIssue()) == frozenset()
+
+    def test_a_first_member_that_cannot_be_read_leaves_an_empty_ceiling(self):
+        """The narrowing holds at its own boundary.
+
+        A read that fails before anything survives it leaves a ceiling of
+        nothing, which is the same direction as dropping one malformed member
+        out of several, rather than the no-ceiling answer a missing offer gets.
+        """
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": 42})) == frozenset()
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": ["not-a-pair", PAIR]})) == frozenset()
 
     def test_a_pair_that_is_not_a_pair_stops_the_read_without_losing_the_rest(self, caplog):
         """A malformed member narrows the ceiling rather than voiding it.

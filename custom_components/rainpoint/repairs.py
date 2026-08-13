@@ -1032,25 +1032,33 @@ class RainPointOrphanedEntityIssues:
 def _snapshot_offered_pairs(issue) -> frozenset[tuple[str, str]] | None:
     """Read the exact pairs a card is offering, as they stand right now.
 
-    None means there is nothing to hold the removal to, and the three ways of
-    arriving at it are all the same answer: no issue could be read, the card is
-    the departed-key shape and carries no pair list at all, or its data could
-    not be read. The confirm treats None as no ceiling and falls back to its own
-    re-derivation, which is what this path did before the snapshot existed and
-    is already narrowed to the rows that are dead now.
+    None means there is no offer to hold the removal to, and there are exactly
+    two ways to it: no issue could be read at all, or the card is the
+    departed-key shape, whose data carries no pair list because its scope comes
+    from the session's ledgers instead. The confirm treats None as no ceiling
+    and falls back to its own re-derivation, which is what this path did before
+    the snapshot existed and is already narrowed to the rows that are dead now.
 
-    A pair that does not survive normalization is dropped rather than repaired,
-    which can only make the snapshot narrower than the offer. That is the safe
+    Every other outcome narrows, including the failures, and that asymmetry is
+    the point. A card that carries an offer this cannot read is not a card with
+    no offer: the offer exists and is unknown, so the answer is an empty
+    ceiling, and Submit takes nothing rather than falling back to a scope no
+    dialog was ever held to. A pair that does not survive normalization is
+    dropped for the same reason, rather than repaired. Narrower is the safe
     direction on a surface whose Submit deletes recorder history: the cost of
     dropping one is that a genuinely dead row waits for the next card, and the
     cost of inventing one is a row the user never approved.
+
+    The whole read sits inside the guard, the attribute included. ``getattr``'s
+    default covers a missing ``data`` and nothing else, so an entry that raises
+    on the attribute would otherwise propagate out of the flow step that shows
+    the dialog and leave the user with a broken one.
     """
-    data = getattr(issue, "data", None) or {}
     try:
-        offered = data.get("leftover_pairs")
+        offered = (getattr(issue, "data", None) or {}).get("leftover_pairs")
     except Exception as exc:
         _LOGGER.debug("Could not read what the orphaned entities card is offering: %s", exc)
-        return None
+        return frozenset()
     if offered is None:
         return None
     pairs = set()
@@ -1060,6 +1068,10 @@ def _snapshot_offered_pairs(issue) -> frozenset[tuple[str, str]] | None:
             if isinstance(domain, str) and isinstance(unique_id, str):
                 pairs.add((domain, unique_id))
     except Exception as exc:
+        # Whatever was read before the failure stands as the ceiling, and a
+        # failure on the first member therefore leaves an empty one. Same
+        # direction as every other partial read here: the confirm takes less
+        # than the card offered, never more.
         _LOGGER.debug("Could not read one of the pairs the orphaned entities card is offering: %s", exc)
     return frozenset(pairs)
 
