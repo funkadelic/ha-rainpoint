@@ -94,6 +94,11 @@ _HUB_MIGRATABLE_SUFFIXES = frozenset(
 # may never be used to bring a row into scope, and removal itself stays an
 # exact (domain, unique_id) pair match with no string reasoning in it.
 _ZONE_UNIQUE_ID_RE = re.compile(r"_zone\d+(?:_|$)")
+# What a failed registry read on the leftover path says it cost, named once for
+# the three reads that make it: the entity-registry read inside the derivation,
+# and the device-registry reads on the update path and the confirm path. They
+# are one sweep from the user's side, so they report as one thing.
+_LEFTOVER_SCAN = "the leftover entity scan"
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -707,13 +712,10 @@ def _build_leftover_row_pairs(
     that excludes a foreign row, and stays unreachable from the card and from
     the fix flow.
 
-    Four further gates, each of which is a prohibition of its own: a row a live
-    entity object holds is never offered, because the liveness marker is what
-    makes it a candidate at all; a row the user has disabled is never offered;
-    a row in the generic unique_id namespace is never offered, because
-    _remove_stale_generic_entities owns that namespace and governs it by its
-    own toggles; and a row whose pair the session's adders already recorded is
-    never offered, because that row belongs to the departed-key shape.
+    The gates that decide a single row live in _leftover_pair_for_row, which
+    this calls once per row that resolved to a candidate key. What stays here
+    is the registry-wide part: resolving rows to keys and collecting what
+    survives.
 
     Every read is guarded per row, so one malformed row cannot abort the scan,
     and an unreadable registry yields an empty mapping rather than raising:
@@ -738,7 +740,7 @@ def _build_leftover_row_pairs(
     """
     named_entity_ids = entity_ids if entity_ids is not None else {}
     entity_registry, entity_rows = _fetch_registry_rows(
-        er.async_get, er.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
+        er.async_get, er.async_entries_for_config_entry, hass, entry, _LEFTOVER_SCAN
     )
     if entity_registry is None:
         return {}
@@ -766,40 +768,70 @@ def _build_leftover_row_pairs(
             sensor_key = key_by_device_id.get(getattr(row, "device_id", None))
             if sensor_key is None:
                 continue
-            if getattr(row, "disabled_by", None) is not None:
+            offered = _leftover_pair_for_row(hass, row, ledger_pairs.get(sensor_key, frozenset()))
+            if offered is None:
                 continue
-            unique_id = getattr(row, "unique_id", None)
-            if not isinstance(unique_id, str) or GENERIC_UNIQUE_ID_MARKER in unique_id:
-                continue
-            entity_id = getattr(row, "entity_id", "") or ""
-            if "." not in entity_id:
-                continue
-            # Derived from the entity_id rather than read off a domain
-            # attribute, because that is how Home Assistant itself derives it
-            # and it holds for any row shape the registry hands back.
-            pair = (entity_id.split(".", 1)[0], unique_id)
-            if pair in ledger_pairs.get(sensor_key, frozenset()):
-                continue
-            # The one narrowing this path applies to a unique_id, and it can
-            # only ever remove a candidate. A zone control or a per-zone
-            # reading exists only once that zone has reported, so a zone
-            # nobody has watered since the last restart reads exactly like a
-            # zone that is gone for good, and this card's Submit deletes
-            # recorder history permanently. See _ZONE_UNIQUE_ID_RE.
-            if _ZONE_UNIQUE_ID_RE.search(unique_id):
-                continue
-            if not _row_is_unbacked(hass, entity_id):
-                continue
+            pair, entity_id = offered
             leftovers.setdefault(sensor_key, set()).add(pair)
-            # Recorded only for a pair that passed every gate above, so the
-            # names the card renders and the pairs Submit acts on come from
-            # one and the same decision. A pair is unique across the entity
-            # registry, so this needs no per-key nesting.
+            # Recorded only for a pair that passed every gate, so the names the
+            # card renders and the pairs Submit acts on come from one and the
+            # same decision. A pair is unique across the entity registry, so
+            # this needs no per-key nesting.
             named_entity_ids[pair] = entity_id
         except Exception as exc:
             _LOGGER.debug("Could not decide on entity registry row %s: %s", getattr(row, "entity_id", None), exc)
 
     return {sensor_key: frozenset(pairs) for sensor_key, pairs in leftovers.items()}
+
+
+def _leftover_pair_for_row(hass: HomeAssistant, row, key_ledger_pairs) -> tuple[tuple[str, str], str] | None:
+    """Return one row's ``(pair, entity_id)`` if it may be offered, else None.
+
+    Every gate that decides a single registry row, in one place, so the scan
+    around it is left with the part that is about the registry as a whole:
+    resolving a row to a sensor key and collecting what survives. The caller
+    has already established that this row sits on a device row whose identifier
+    resolves to a candidate key, and passes that key's ledger pairs in; nothing
+    here reaches back for anything else.
+
+    Five prohibitions, in the order they are cheapest to answer. A row the user
+    has disabled is never offered. A row in the generic unique_id namespace is
+    never offered, because _remove_stale_generic_entities owns that namespace
+    and governs it by its own toggles. A row whose pair the session's adders
+    already recorded is never offered, because that row belongs to the
+    departed-key shape. A zone row is never offered, for the reason
+    _ZONE_UNIQUE_ID_RE carries. And a row a live entity object still holds is
+    never offered, which is the marker that makes a row a candidate at all and
+    is answered last because it is the one read that goes to the state machine.
+
+    Raising is the caller's to catch: it runs this per row inside a guard that
+    keeps one malformed row from aborting the scan, and a decision made here
+    has no state of its own to leave half-written.
+    """
+    if getattr(row, "disabled_by", None) is not None:
+        return None
+    unique_id = getattr(row, "unique_id", None)
+    if not isinstance(unique_id, str) or GENERIC_UNIQUE_ID_MARKER in unique_id:
+        return None
+    entity_id = getattr(row, "entity_id", "") or ""
+    if "." not in entity_id:
+        return None
+    # Derived from the entity_id rather than read off a domain attribute,
+    # because that is how Home Assistant itself derives it and it holds for any
+    # row shape the registry hands back.
+    pair = (entity_id.split(".", 1)[0], unique_id)
+    if pair in key_ledger_pairs:
+        return None
+    # The one narrowing this path applies to a unique_id, and it can only ever
+    # remove a candidate. A zone control or a per-zone reading exists only once
+    # that zone has reported, so a zone nobody has watered since the last
+    # restart reads exactly like a zone that is gone for good, and this card's
+    # Submit deletes recorder history permanently. See _ZONE_UNIQUE_ID_RE.
+    if _ZONE_UNIQUE_ID_RE.search(unique_id):
+        return None
+    if not _row_is_unbacked(hass, entity_id):
+        return None
+    return pair, entity_id
 
 
 def _debounced_leftover_pairs(counts: dict, pairs_by_key: dict) -> dict[str, frozenset[tuple[str, str]]]:
@@ -943,6 +975,44 @@ def _build_orphaned_entity_records(
     ids, and resolving those would mean walking the entity registry from a
     function that deliberately reads no registry.
     """
+    unique_ids, descriptors = _ledger_ids_and_descriptors(entry_store)
+    leftover_pairs = leftover_pairs or {}
+    device_names = device_names or {}
+    leftover_entity_ids = leftover_entity_ids or {}
+    records = []
+    for key, ids in unique_ids.items():
+        # An aged-out key wins where both would apply. The two cannot in fact
+        # coincide: the leftover derivation requires the key to be in the
+        # current poll's sensors, while an aged-out key is by definition absent
+        # from it. Written as an order rather than assumed, so that if either
+        # derivation is ever widened, the result degrades to today's card
+        # rather than to a card that changes its body underneath the user.
+        leftover = key not in aged_out and key in leftover_pairs
+        records.append(
+            _orphaned_entity_record(
+                entry_id,
+                key,
+                descriptors[key],
+                ids,
+                leftover=leftover,
+                orphaned=key in aged_out or leftover,
+                offered_pairs=leftover_pairs.get(key, frozenset()),
+                device_names=device_names,
+                entity_ids=leftover_entity_ids.get(key, ()),
+            )
+        )
+    return records
+
+
+def _ledger_ids_and_descriptors(entry_store: dict) -> tuple[dict[str, set[str]], dict[str, dict]]:
+    """Return every unique id and descriptor this session's adders recorded, by key.
+
+    The whole of what the departed-key shape may ever act on, gathered in one
+    pass over the adders so the record builder above is left with the part that
+    is about deciding a card. Guarded per adder rather than around the loop: one
+    unreadable adder costs its own keys and no others, which is the same
+    degradation the builder had when this ran inline.
+    """
     unique_ids: dict[str, set[str]] = {}
     descriptors: dict[str, dict] = {}
     for adder in late_adders(entry_store):
@@ -956,50 +1026,56 @@ def _build_orphaned_entity_records(
                 descriptors.setdefault(key, ledger.descriptor_for(key))
         except Exception as exc:
             _LOGGER.debug("Skipping an unreadable late adder while building orphaned entity records: %s", exc)
+    return unique_ids, descriptors
 
-    leftover_pairs = leftover_pairs or {}
-    device_names = device_names or {}
-    leftover_entity_ids = leftover_entity_ids or {}
-    records = []
-    for key, ids in unique_ids.items():
-        descriptor = descriptors[key]
-        # An aged-out key wins where both would apply. The two cannot in fact
-        # coincide: the leftover derivation requires the key to be in the
-        # current poll's sensors, while an aged-out key is by definition absent
-        # from it. Written as an order rather than assumed, so that if either
-        # derivation is ever widened, the result degrades to today's card
-        # rather than to a card that changes its body underneath the user.
-        leftover = key not in aged_out and key in leftover_pairs
-        records.append(
-            OrphanedEntitiesRecord(
-                entry_id=entry_id,
-                sensor_key=key,
-                addr=descriptor.get("addr"),
-                model=descriptor.get("model"),
-                sub_name=descriptor.get("sub_name"),
-                hub_name=descriptor.get("hub_name"),
-                entity_count=len(leftover_pairs[key]) if leftover else len(ids),
-                missed_polls=LEFTOVER_ROW_DEBOUNCE_UPDATES if leftover else ORPHANED_KEY_DEBOUNCE_POLLS,
-                orphaned=key in aged_out or leftover,
-                # Absent from a descriptor written before this key was stamped, and
-                # a missing verdict is not evidence of a Bluetooth pairing, so the
-                # default is the hub-paired reading the card already gave.
-                hub_paired=bool(descriptor.get("hub_paired", True)),
-                leftover=leftover,
-                device_name=device_names.get(key),
-                hub_device_name=_hub_name_for_sensor_key(key, device_names),
-                # Read on the still-present shape alone, which is the only one
-                # whose ids were ever resolved, and gated on the same verdict
-                # that chooses the card body so the two cannot disagree.
-                entity_ids=leftover_entity_ids.get(key, ()) if leftover else (),
-                # The offer itself, keyed the way the removal is keyed, for the
-                # confirm dialog to be held to. Sorted rather than taken in set
-                # order so that an offer which has not changed publishes an
-                # identical value, and the card's dedup keeps holding.
-                leftover_pairs=tuple(sorted(leftover_pairs[key])) if leftover else (),
-            )
-        )
-    return records
+
+def _orphaned_entity_record(
+    entry_id: str,
+    key: str,
+    descriptor: dict,
+    ids,
+    *,
+    leftover: bool,
+    orphaned: bool,
+    offered_pairs,
+    device_names: Mapping,
+    entity_ids,
+) -> OrphanedEntitiesRecord:
+    """Build one key's record, in the shape the caller's verdict names.
+
+    Every field that reads differently between the two shapes is decided here,
+    against the one ``leftover`` verdict the caller passed, so the two cannot
+    disagree about which card this is. The caller owns that verdict precisely
+    because it is an ordering between two derivations rather than a fact about
+    this key alone.
+    """
+    return OrphanedEntitiesRecord(
+        entry_id=entry_id,
+        sensor_key=key,
+        addr=descriptor.get("addr"),
+        model=descriptor.get("model"),
+        sub_name=descriptor.get("sub_name"),
+        hub_name=descriptor.get("hub_name"),
+        entity_count=len(offered_pairs) if leftover else len(ids),
+        missed_polls=LEFTOVER_ROW_DEBOUNCE_UPDATES if leftover else ORPHANED_KEY_DEBOUNCE_POLLS,
+        orphaned=orphaned,
+        # Absent from a descriptor written before this key was stamped, and a
+        # missing verdict is not evidence of a Bluetooth pairing, so the default
+        # is the hub-paired reading the card already gave.
+        hub_paired=bool(descriptor.get("hub_paired", True)),
+        leftover=leftover,
+        device_name=device_names.get(key),
+        hub_device_name=_hub_name_for_sensor_key(key, device_names),
+        # Read on the still-present shape alone, which is the only one whose ids
+        # were ever resolved, and gated on the same verdict that chooses the
+        # card body so the two cannot disagree.
+        entity_ids=tuple(entity_ids) if leftover else (),
+        # The offer itself, keyed the way the removal is keyed, for the confirm
+        # dialog to be held to. Sorted rather than taken in set order so that an
+        # offer which has not changed publishes an identical value, and the
+        # card's dedup keeps holding.
+        leftover_pairs=tuple(sorted(offered_pairs)) if leftover else (),
+    )
 
 
 def _leftover_pairs_now(
@@ -1074,9 +1150,7 @@ def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordi
     """
     try:
         entry_store = (hass.data.get(DOMAIN) or {}).get(entry.entry_id) or {}
-        _, device_rows = _fetch_registry_rows(
-            dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
-        )
+        _, device_rows = _fetch_registry_rows(dr.async_get, dr.async_entries_for_config_entry, hass, entry, _LEFTOVER_SCAN)
         device_names = _resolve_device_names(device_rows)
         # Filled by the derivation below with the entity id behind each offered
         # pair, for the card to name. Nothing downstream of the card reads it.
@@ -1183,9 +1257,7 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         """
         if not leftover_shape:
             return _remove_orphaned_key_rows(hass, entry, sensor_key)
-        _, device_rows = _fetch_registry_rows(
-            dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
-        )
+        _, device_rows = _fetch_registry_rows(dr.async_get, dr.async_entries_for_config_entry, hass, entry, _LEFTOVER_SCAN)
         derived = _leftover_pairs_now(hass, entry, coordinator, leftover_counts, device_rows, advance=False).get(
             sensor_key, frozenset()
         )
@@ -1401,6 +1473,73 @@ def _release_emptied_device_row(hass: HomeAssistant, entry: ConfigEntry, sensor_
         _LOGGER.debug("Failed to release the emptied device row %s: %s", candidate_id, exc)
 
 
+def _log_empty_removal_scope(sensor_key: str, *, leftover_shape: bool) -> None:
+    """Say that a confirm took nothing, in the terms its own shape allows.
+
+    Two shapes, two different statements, and the difference is what the user
+    is left holding rather than the wording. The still-present shape strands
+    nothing: the device is on the account and reporting, so a row that really is
+    dead is offered again on the next card. The departed-key shape strands its
+    rows outright, because the card outlived the session whose ledgers named
+    them and the same fact that makes it unclearable makes it unraisable, so
+    that one names the manual step and is logged at warning.
+
+    Either way this runs where Home Assistant has already deleted the fixable
+    issue on flow completion: the user pressed a button that said it would
+    remove entities, the card vanished, and nothing happened. The log line is
+    the only trace left, which is why there is one on both shapes.
+
+    Neither line names a cause. Several routes reach an empty scope and this
+    cannot tell them apart, so the counts that separate them are logged by the
+    caller that derived it.
+    """
+    if leftover_shape:
+        _LOGGER.info(
+            "No leftover rows were in scope for sensor key %s by the time its removal was confirmed, "
+            "so no entity was removed and its device row was left alone",
+            sensor_key,
+        )
+        return
+    _LOGGER.warning(
+        "Nothing in scope for sensor key %s; its leftover entity rows were not removed. "
+        "The card outlived the session that recorded them, so remove them from the entity registry by hand",
+        sensor_key,
+    )
+
+
+def _take_doomed_rows(registry, rows, doomed) -> tuple[int, set[tuple[str, str]]]:
+    """Remove exactly the rows whose pair is in ``doomed``, and report the misses.
+
+    The one entity-removal call site on this path, and the reason it is one: a
+    second would be a second place to acquire, or lose, the exact-pair match
+    that keeps this from reasoning about what a unique_id looks like. Both
+    scopes the caller can build are answered by this same loop.
+
+    Returns the number removed and the pairs whose removal raised. A miss is
+    debug rather than an abort, because one row the registry refuses does not
+    make the rest of the confirm wrong, and the caller decides what a miss
+    costs the bookkeeping.
+    """
+    removed = 0
+    failed: set[tuple[str, str]] = set()
+    for row in rows:
+        entity_id = getattr(row, "entity_id", "") or ""
+        # Derived from the entity_id rather than read off a domain attribute,
+        # because that is how Home Assistant itself derives it and it holds for
+        # any row shape the registry hands back. A row with no dot yields the
+        # whole string, which matches no adder domain and is therefore skipped.
+        row_key = (entity_id.split(".", 1)[0], getattr(row, "unique_id", None))
+        if row_key not in doomed:
+            continue
+        try:
+            registry.async_remove(row.entity_id)
+            removed += 1
+        except Exception as exc:
+            failed.add(row_key)
+            _LOGGER.debug("Failed to remove orphaned entity %s: %s", getattr(row, "entity_id", None), exc)
+    return removed, failed
+
+
 def _remove_orphaned_key_rows(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -1466,43 +1605,7 @@ def _remove_orphaned_key_rows(
         doomed, resolved = _resolve_doomed_rows(late_adders(entry_store), sensor_key)
 
     if not doomed:
-        if leftover_shape:
-            # Nothing is in scope by the time the user confirmed, so there is
-            # nothing to take. States the outcome and stops there rather than
-            # naming a cause, because several arrive here and this function
-            # cannot tell them apart from one empty set: every offered row came
-            # back, a row that went dead after the card was shown is held out
-            # by the offer the dialog was given, the key dropped out of this
-            # update's sensors, or a registry could not be read. The caller
-            # that derived the scope logs the counts that separate them.
-            #
-            # Info rather than warning, and it names no follow-up action.
-            # Nothing is stranded on this shape whichever cause applies: the
-            # device is present and reporting, so a row that is genuinely dead
-            # is offered again on the next card rather than left with no
-            # surface to remove it through.
-            _LOGGER.info(
-                "No leftover rows were in scope for sensor key %s by the time its removal was confirmed, "
-                "so no entity was removed and its device row was left alone",
-                sensor_key,
-            )
-            return 0
-        # No adder in this session emitted anything for this key, so there is
-        # nothing in scope and no bookkeeping to drop. Removing nothing is the
-        # correct answer rather than an error: the ledgers are this path's only
-        # authority on what it may take, and a card that outlived the session
-        # whose ledgers named its rows has no scope left.
-        #
-        # Logged at warning rather than returned silently, because Home
-        # Assistant deletes a fixable issue itself once its flow finishes: the
-        # user pressed a button that said it would remove leftover entities,
-        # the card disappeared, and nothing happened. That needs a breadcrumb
-        # in the log, and the surviving rows still need removing by hand.
-        _LOGGER.warning(
-            "Nothing in scope for sensor key %s; its leftover entity rows were not removed. "
-            "The card outlived the session that recorded them, so remove them from the entity registry by hand",
-            sensor_key,
-        )
+        _log_empty_removal_scope(sensor_key, leftover_shape=leftover_shape)
         return 0
 
     registry, rows = _fetch_registry_rows(
@@ -1511,27 +1614,11 @@ def _remove_orphaned_key_rows(
     if registry is None:
         return 0
 
-    removed = 0
-    # Ids whose registry row this sweep tried and failed to take. They are what
-    # decides whether the bookkeeping may be dropped below: a row that raised
-    # is still registered, still holds its unique_id, and releasing that id
-    # would let a returning key offer it a second time.
-    failed: set[tuple[str, str]] = set()
-    for row in rows:
-        entity_id = getattr(row, "entity_id", "") or ""
-        # Derived from the entity_id rather than read off a domain attribute,
-        # because that is how Home Assistant itself derives it and it holds for
-        # any row shape the registry hands back. A row with no dot yields the
-        # whole string, which matches no adder domain and is therefore skipped.
-        row_key = (entity_id.split(".", 1)[0], getattr(row, "unique_id", None))
-        if row_key not in doomed:
-            continue
-        try:
-            registry.async_remove(row.entity_id)
-            removed += 1
-        except Exception as exc:
-            failed.add(row_key)
-            _LOGGER.debug("Failed to remove orphaned entity %s: %s", getattr(row, "entity_id", None), exc)
+    # `failed` holds the ids whose registry row this sweep tried and could not
+    # take. They are what decides whether the bookkeeping may be dropped below:
+    # a row that raised is still registered, still holds its unique_id, and
+    # releasing that id would let a returning key offer it a second time.
+    removed, failed = _take_doomed_rows(registry, rows, doomed)
 
     # Everything from here to the final count belongs to the departed-key shape
     # alone, and on the still-present shape each of these would be wrong rather

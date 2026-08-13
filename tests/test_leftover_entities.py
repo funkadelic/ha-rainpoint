@@ -32,6 +32,7 @@ from custom_components.rainpoint import (
     _fetch_registry_rows,
     _hub_name_for_sensor_key,
     _ledger_pairs_by_key,
+    _leftover_pair_for_row,
     _leftover_pairs_now,
     _name_leftover_pairs,
     _remove_orphaned_key_rows,
@@ -39,6 +40,7 @@ from custom_components.rainpoint import (
     _row_is_unbacked,
     _settled_leftover_pairs,
     _sync_orphaned_entity_issues_on_updates,
+    _take_doomed_rows,
 )
 from custom_components.rainpoint import dr as rainpoint_dr
 from custom_components.rainpoint.const import (
@@ -1539,6 +1541,7 @@ class TestTheNarrowedPropertiesHoldInSource:
         _row_is_unbacked,
         _ledger_pairs_by_key,
         _build_leftover_row_pairs,
+        _leftover_pair_for_row,
         _debounced_leftover_pairs,
         _settled_leftover_pairs,
         _leftover_pairs_now,
@@ -1549,13 +1552,19 @@ class TestTheNarrowedPropertiesHoldInSource:
         """Parse one function's own source into an AST."""
         return ast.parse(textwrap.dedent(inspect.getsource(func)))
 
-    def test_the_executor_has_exactly_one_entity_removal_call_site(self):
-        """The widening reuses the existing removal loop rather than adding a
-        second one. Two call sites is how one of them acquires a guard the
-        other does not have."""
-        source = inspect.getsource(_remove_orphaned_key_rows)
+    def test_this_path_has_exactly_one_entity_removal_call_site(self):
+        """Both scopes go through one removal loop rather than a loop each.
 
-        assert source.count("registry.async_remove(") == 1
+        Two call sites is how one of them acquires a guard the other does not
+        have. The loop now sits in its own function, so the claim is asserted
+        where it lives and the executor is held to reaching it exactly once and
+        removing nothing itself.
+        """
+        assert inspect.getsource(_take_doomed_rows).count("registry.async_remove(") == 1
+
+        executor = inspect.getsource(_remove_orphaned_key_rows)
+        assert "async_remove(" not in executor
+        assert executor.count("_take_doomed_rows(") == 1
 
     def test_the_leftover_branch_reaches_neither_the_device_release_nor_a_forget(self):
         """Both would be wrong rather than merely unnecessary here: the device
