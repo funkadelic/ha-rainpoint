@@ -953,6 +953,7 @@ def _make_orphan_record(
     orphaned=True,
     hub_paired=True,
     device_name=None,
+    leftover=False,
 ):
     """Build an OrphanedEntitiesRecord with sensible defaults for one key.
 
@@ -960,6 +961,9 @@ def _make_orphan_record(
     unreadable device registry produces, so a caller that does not pass it
     exercises the sub_name fallback exactly as most existing tests here rely
     on it doing.
+
+    leftover defaults to False, the departed-key shape, which is the one that
+    shipped first and the one every existing test here means.
     """
     return OrphanedEntitiesRecord(
         entry_id=entry_id,
@@ -973,6 +977,7 @@ def _make_orphan_record(
         orphaned=orphaned,
         hub_paired=hub_paired,
         device_name=device_name,
+        leftover=leftover,
     )
 
 
@@ -1167,6 +1172,30 @@ class TestRainPointOrphanedEntityIssues:
             manager.async_sync([_make_orphan_record()])
 
         assert create.call_count == 2
+
+    def test_a_live_card_republishes_once_its_count_moves(self, issue_mocks):
+        """The card has to describe what Submit will take.
+
+        The confirm re-derives its removal scope, so a count frozen at the
+        first raise can have the user approve removing one entity and lose
+        two. Re-raising the same id updates the card rather than stacking a
+        second one, and a record whose values have not moved still costs the
+        registry nothing.
+        """
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        issue_id = orphaned_entities_issue_id("100_200_1", "e1")
+
+        with patch.object(repairs.ir, "async_get", return_value=self._registry_holding(issue_id)):
+            manager.async_sync([_make_orphan_record(entity_count=1, leftover=True)])
+            manager.async_sync([_make_orphan_record(entity_count=1, leftover=True)])
+            assert create.call_count == 1
+
+            manager.async_sync([_make_orphan_record(entity_count=2, leftover=True)])
+
+        assert create.call_count == 2
+        assert create.call_args.args[2] == issue_id
+        assert create.call_args.kwargs["translation_placeholders"]["entity_count"] == "2"
 
     def test_an_unreadable_issue_registry_leaves_the_dedup_in_force(self, issue_mocks, caplog):
         """A failed read establishes nothing, and the safe direction for a card

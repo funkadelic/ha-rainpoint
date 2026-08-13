@@ -590,9 +590,16 @@ class RainPointOrphanedEntityIssues:
         A reload builds a fresh instance with no memory of what a prior
         session raised, which is why _clear_issue deletes unconditionally
         rather than only when it believes the issue is active.
+
+        ``_published`` remembers what each active card was last raised with,
+        keyed by the same issue id, so a card whose values have moved can be
+        told apart from one that has not. It is dropped in lockstep with the
+        card in _clear_issue, and it is per-instance for the same reason the
+        active set is.
         """
         self._hass = hass
         self._active: set[str] = set()
+        self._published: dict[str, dict] = {}
 
     def async_sync(self, records: list[OrphanedEntitiesRecord]) -> None:
         """Reconcile the active issue set against one update's worth of records.
@@ -696,6 +703,20 @@ class RainPointOrphanedEntityIssues:
         would then suppress every later attempt and strand the user with
         leftover entities and no surface left to act on.
 
+        The dedup is on the values rather than on the id, which is the second
+        thing an active card cannot be trusted about. The confirm re-derives
+        what it will remove at the moment it runs, so the count the user reads
+        has to be the count that Submit will act on. A still-present device can
+        gain a second unused row while its card is already up, and freezing the
+        card at whatever it said when it was first raised would have the user
+        approve removing one entity and lose two. Re-raising with the same id
+        is an update rather than a second card, so the values are simply
+        published again; a record whose rendered values have not moved returns
+        here without touching the registry, so an unchanged card still costs
+        nothing per update. Each republish carries its own log line for the
+        same reason the first raise does: the number the user is being asked to
+        approve changed.
+
         The translation key is chosen from the record's shape while the issue
         id is not, and both halves of that are deliberate. The card has to
         describe the shape that raised it, because "RainPoint has stopped
@@ -705,20 +726,56 @@ class RainPointOrphanedEntityIssues:
         leftover derivation requires the key to be in the current poll, and an
         aged-out key is by definition absent from it.
         """
-        if issue_id in self._active:
-            if self._issue_still_registered(issue_id):
-                return
-            # Home Assistant deleted it out from under this set, so the mark is
-            # stale. Dropped here rather than inside the test above, so the
-            # predicate stays a predicate and reordering this condition cannot
-            # silently change the bookkeeping.
-            self._active.discard(issue_id)
         # The leftover marker is added only on the shape that carries it, so
         # the departed-key card's data dict stays byte-identical to what it has
         # always been and no flow reading it back has to learn a new key.
         data = {"entry_id": record.entry_id, "sensor_key": record.sensor_key}
         if record.leftover:
             data["leftover"] = True
+        # Everything the registry is asked to render, assembled before the
+        # dedup rather than after it, because the dedup's question is whether
+        # any of it has moved since this card was last published.
+        published = {
+            "translation_key": LEFTOVER_ENTITIES_TRANSLATION_KEY if record.leftover else ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
+            "data": data,
+            # The threat, stated where the values are: Home Assistant renders
+            # this card and its confirm dialog as Markdown, and device_name,
+            # model, addr and hub_name all arrive from sources this module does
+            # not control -- device_name from a Home Assistant registry a user
+            # can rename freely, the other three from the RainPoint payload --
+            # with nothing validating any of them. Every one of them goes
+            # through the sanitizer; the two counts are this integration's own
+            # and are only stringified.
+            "translation_placeholders": {
+                "device_name": _sanitize_placeholder(record.device_name or record.sub_name),
+                "model": _sanitize_placeholder(record.model),
+                "address": _sanitize_placeholder(record.addr),
+                # The literal "none" for a device that never had a hub,
+                # exactly as the not-reporting card does and for the same
+                # reason: the sanitizer's "unknown" fallback reads as lost
+                # state, when the truth is that there is no hub to name. A
+                # Bluetooth wrapper record carries an empty name, so without
+                # this the card's least useful line is the one naming a hub the
+                # device was never on. The literal is ours, not the cloud's, so
+                # it needs no sanitizing.
+                "hub_name": _sanitize_placeholder(record.hub_name) if record.hub_paired else "none",
+                "entity_count": str(record.entity_count),
+                "missed_polls": str(record.missed_polls),
+            },
+        }
+
+        if issue_id in self._active:
+            if not self._issue_still_registered(issue_id):
+                # Home Assistant deleted it out from under this set, so the
+                # mark is stale. Dropped here rather than inside the test
+                # above, so the predicate stays a predicate and reordering this
+                # condition cannot silently change the bookkeeping.
+                self._active.discard(issue_id)
+            elif self._published.get(issue_id) == published:
+                # A live card saying exactly what it already says. Returning
+                # here is what keeps an unchanged card from rewriting the issue
+                # registry on every poll and every pushed frame.
+                return
         try:
             ir.async_create_issue(
                 self._hass,
@@ -726,38 +783,17 @@ class RainPointOrphanedEntityIssues:
                 issue_id,
                 is_fixable=True,
                 severity=ir.IssueSeverity.WARNING,
-                translation_key=LEFTOVER_ENTITIES_TRANSLATION_KEY if record.leftover else ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
-                data=data,
-                # The threat, stated where the values are: Home Assistant
-                # renders this card and its confirm dialog as Markdown, and
-                # device_name, model, addr and hub_name all arrive from
-                # sources this module does not control -- device_name from a
-                # Home Assistant registry a user can rename freely, the other
-                # three from the RainPoint payload -- with nothing validating
-                # any of them. Every one of them goes through the sanitizer;
-                # the two counts are this integration's own and are only
-                # stringified.
-                translation_placeholders={
-                    "device_name": _sanitize_placeholder(record.device_name or record.sub_name),
-                    "model": _sanitize_placeholder(record.model),
-                    "address": _sanitize_placeholder(record.addr),
-                    # The literal "none" for a device that never had a hub,
-                    # exactly as the not-reporting card does and for the same
-                    # reason: the sanitizer's "unknown" fallback reads as lost
-                    # state, when the truth is that there is no hub to name. A
-                    # Bluetooth wrapper record carries an empty name, so
-                    # without this the card's least useful line is the one
-                    # naming a hub the device was never on. The literal is
-                    # ours, not the cloud's, so it needs no sanitizing.
-                    "hub_name": _sanitize_placeholder(record.hub_name) if record.hub_paired else "none",
-                    "entity_count": str(record.entity_count),
-                    "missed_polls": str(record.missed_polls),
-                },
+                **published,
             )
             # Marked active only once the registry accepted it, for the same
             # reason its sibling does: marking first would let one transient
-            # registry error suppress every later attempt for this key.
+            # registry error suppress every later attempt for this key. The
+            # published values are recorded in the same breath and for the same
+            # reason: a raise the registry refused published nothing, so the
+            # next update has to try again rather than dedup against values no
+            # card is carrying.
             self._active.add(issue_id)
+            self._published[issue_id] = published
             # One line per shape, because the two say opposite things about the
             # device. Both carry the sensor key and two integers only, never a
             # cloud-supplied name or model.
@@ -814,9 +850,14 @@ class RainPointOrphanedEntityIssues:
         Three reasons rather than the siblings' two, because this manager also
         withdraws its cards on unload, and a withdrawal is neither a recovery
         nor a removal from the account.
+
+        The remembered published values go with the mark, so a key that is
+        cleared and later raised again publishes from scratch rather than
+        deduping against what a card that no longer exists was carrying.
         """
         was_active = issue_id in self._active
         self._active.discard(issue_id)
+        self._published.pop(issue_id, None)
         try:
             ir.async_delete_issue(self._hass, DOMAIN, issue_id)
             if not was_active:

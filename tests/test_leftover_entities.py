@@ -861,6 +861,86 @@ class TestWhatTheConfirmMayTake:
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_battery"})
 
 
+class TestTheCardSaysWhatTheConfirmWillTake:
+    """The count the user reads has to be the count Submit acts on.
+
+    The confirm re-derives its scope at the moment it runs, so a card that
+    froze its count at whatever it said when it was first raised can ask a
+    user to approve removing one entity and then remove two. A still-present
+    device is where that becomes reachable: its rows cross the window one at a
+    time, so the set can grow while the card is already up.
+    """
+
+    SECOND_UNIQUE_ID = f"rainpoint_{SENSOR_KEY}_stale"
+    SECOND_ENTITY_ID = f"sensor.rainpoint_{SENSOR_KEY}_stale"
+
+    @pytest.mark.asyncio
+    async def test_a_second_row_crossing_the_window_updates_the_live_card(self):
+        """Raise on one row, let a second qualify, then confirm.
+
+        Driven as a timeline because the whole property is an ordering one:
+        the second row has to serve its own window after the card went up, and
+        the card has to have said so before the user pressed Submit.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                assert create.call_count == 1
+                issue_id = create.call_args.args[2]
+                assert create.call_args.kwargs["translation_placeholders"]["entity_count"] == "1"
+
+                # A second row on the same device goes dead and serves its own
+                # window while the card is already up.
+                harness.add_leftover_row(entity_id=self.SECOND_ENTITY_ID, unique_id=self.SECOND_UNIQUE_ID)
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+
+                assert create.call_count == 2
+                assert create.call_args.args[2] == issue_id
+                assert create.call_args.kwargs["translation_placeholders"]["entity_count"] == "2"
+
+                flow = await async_create_fix_flow(hass, issue_id, create.call_args.kwargs["data"])
+                flow.hass = hass
+                shown = await flow.async_step_init()
+                # The dialog reads back the refreshed card, not the first one.
+                assert shown["description_placeholders"]["entity_count"] == "2"
+
+                await flow.async_step_confirm({})
+
+                assert sorted(harness.removed) == sorted([LEFTOVER_ENTITY_ID, self.SECOND_ENTITY_ID])
+                assert harness.released == []
+
+    @pytest.mark.asyncio
+    async def test_a_card_whose_values_have_not_moved_is_never_republished(self):
+        """The dedup that keeps this off the issue registry every update.
+
+        This sweep runs from a coordinator listener, so an unconditional
+        republish would rewrite the registry on every update for as long as
+        the card is up.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, _hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                assert create.call_count == 1
+
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+
+                assert create.call_count == 1
+
+
 class TestARecoveredCardTakesNothing:
     """The seam between the card and the confirm, driven end to end.
 
