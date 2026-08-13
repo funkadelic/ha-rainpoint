@@ -30,6 +30,7 @@ from custom_components.rainpoint import (
     _build_leftover_row_pairs,
     _debounced_leftover_pairs,
     _fetch_registry_rows,
+    _hub_name_for_sensor_key,
     _ledger_pairs_by_key,
     _leftover_pairs_now,
     _name_leftover_pairs,
@@ -57,6 +58,7 @@ from custom_components.rainpoint.valve import async_setup_entry as valve_async_s
 from tests.test_orphan_removal import (
     ENTRY_ID,
     HID,
+    MID,
     SENSOR_KEY,
     _build_timeline,
     _hub_record,
@@ -641,6 +643,80 @@ class TestTheDeviceRegistryIsFetchedOncePerSync:
                 await coordinator.async_refresh()
 
                 assert harness.device_get_calls == 1
+
+
+class TestTheCardNamesTheHubTheWayItsOwnerDoes:
+    """The Hub bullet resolves through the same rows the Device bullet does.
+
+    The hub has its own device row on this config entry, so the sweep's single
+    device-registry fetch already carries its name and nothing here walks a
+    registry a second time.
+    """
+
+    @staticmethod
+    def _hub_device_row(name_by_user="HWG023WBRF-V2 Hub"):
+        """One hub device row, identified the way this integration writes it."""
+        return SimpleNamespace(
+            id="device_hub",
+            identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{HID}_{MID}")},
+            config_entries=frozenset({ENTRY_ID}),
+            name_by_user=name_by_user,
+            name="Hub A",
+        )
+
+    async def _card_for(self, harness):
+        """Drive one dead row to its card over this harness's device rows."""
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, _hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+
+                assert create.call_count == 1
+                return create.call_args.kwargs["translation_placeholders"]
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_hub_names_the_card_s_hub_bullet(self):
+        """The card named the device the way its owner does while naming the
+        hub the way RainPoint does. Both now read the same way."""
+        harness = _Harness(device_rows=[_sub_device_row(), self._hub_device_row()])
+
+        assert (await self._card_for(harness))["hub_name"] == "HWG023WBRF-V2 Hub"
+
+    @pytest.mark.asyncio
+    async def test_an_unrenamed_hub_still_gets_a_name_from_its_own_row(self):
+        """A hub the owner never renamed resolves to the registry's own name
+        for it rather than to a blank."""
+        harness = _Harness(device_rows=[_sub_device_row(), self._hub_device_row(name_by_user=None)])
+
+        assert (await self._card_for(harness))["hub_name"] == "Hub A"
+
+    @pytest.mark.asyncio
+    async def test_no_hub_row_falls_back_to_the_cloud_hub_name(self):
+        """The ordinary harness carries no hub row at all, which is what an
+        unreadable registry and a departed hub both look like from here."""
+        assert (await self._card_for(_Harness()))["hub_name"] == "Hub A"
+
+    def test_the_hub_identifier_is_derived_from_the_sensor_key(self):
+        """The lookup in isolation: {hid}_{mid}_{addr} names the hub row its
+        first two segments belong to, and nothing else."""
+        names = {f"{HUB_IDENTIFIER_PREFIX}{HID}_{MID}": "HWG023WBRF-V2 Hub"}
+
+        assert _hub_name_for_sensor_key(SENSOR_KEY, names) == "HWG023WBRF-V2 Hub"
+        assert _hub_name_for_sensor_key(f"{HID}_999_1", names) is None
+
+    @pytest.mark.parametrize("sensor_key", ["", "100", "100_200", "100_200_1_2", "100__1"])
+    def test_a_key_that_is_not_three_segments_names_no_hub(self, sensor_key):
+        """A part-built identifier would resolve to some other hub's row, or to
+        none at all while looking like a lookup that worked."""
+        assert _hub_name_for_sensor_key(sensor_key, {f"{HUB_IDENTIFIER_PREFIX}{HID}_{MID}": "Named"}) is None
+
+    def test_the_pre_migration_hub_identifier_shape_names_no_hub(self):
+        """A hub row still carrying hub_{hid} is not the shape this derives, so
+        the card falls back to the cloud's own hub name rather than guessing."""
+        assert _hub_name_for_sensor_key(SENSOR_KEY, {f"{HUB_IDENTIFIER_PREFIX}{HID}": "Old Shape"}) is None
 
 
 class TestTheCardNamesTheRowsItOffers:

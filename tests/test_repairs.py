@@ -1039,6 +1039,7 @@ def _make_orphan_record(
     orphaned=True,
     hub_paired=True,
     device_name=None,
+    hub_device_name=None,
     leftover=False,
     entity_ids=(),
 ):
@@ -1051,6 +1052,11 @@ def _make_orphan_record(
 
     leftover defaults to False, the departed-key shape, which is the one that
     shipped first and the one every existing test here means.
+
+    hub_device_name defaults to None for the same reason device_name does: it
+    is the shape an unreadable device registry, or a hub with no row of the
+    migrated identifier shape, produces, and it exercises the cloud hub_name
+    fallback every existing test here relies on.
 
     entity_ids defaults to empty, which is what the departed-key shape always
     carries and what a still-present record whose ids could not be resolved
@@ -1068,6 +1074,7 @@ def _make_orphan_record(
         orphaned=orphaned,
         hub_paired=hub_paired,
         device_name=device_name,
+        hub_device_name=hub_device_name,
         leftover=leftover,
         entity_ids=entity_ids,
     )
@@ -1480,6 +1487,101 @@ class TestRainPointOrphanedEntityIssues:
             manager.async_sync([_make_orphan_record(device_name="Distinctive Device Name Xyzzy")])
 
         assert "Distinctive Device Name Xyzzy" not in caplog.text
+
+
+class TestTheHubBulletResolvesLikeTheDeviceBullet:
+    """One home, named one way, on both card shapes.
+
+    The Home Assistant hub name first, then RainPoint's own string for it,
+    then the sanitizer's fallback. A hub with no pairing at all is not on that
+    chain: it renders the literal "none", which is a different statement.
+    """
+
+    def test_the_home_assistant_hub_name_wins(self, issue_mocks):
+        """The owner renamed the hub, so that is what every other Home
+        Assistant surface calls it and what this card calls it too."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(hub_device_name="HWG023WBRF-V2 Hub", hub_name="Hub")])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "HWG023WBRF-V2 Hub"
+
+    def test_no_hub_row_falls_back_to_the_cloud_hub_name(self, issue_mocks):
+        """A hub whose device row could not be resolved is still named."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(hub_device_name=None, hub_name="Hub")])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "Hub"
+
+    def test_neither_name_renders_the_sanitizer_fallback(self, issue_mocks):
+        """Neither None reaches the card as a blank bullet or a Python repr."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(hub_device_name=None, hub_name=None)])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "unknown"
+
+    def test_a_device_with_no_hub_still_renders_none(self, issue_mocks):
+        """The Bluetooth wrapper case is unchanged and must stay that way: the
+        card goes on to suggest pairing the device to a hub, so any name at all
+        on that line reads as lost state rather than as the truth."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(hub_paired=False, hub_device_name="HWG023WBRF-V2 Hub")])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "none"
+
+    def test_a_user_set_hub_name_crosses_the_same_sanitizer_boundary(self, issue_mocks):
+        """A name from the Home Assistant registry is untrusted Markdown on
+        exactly the same terms a cloud string is. Nothing about where a value
+        came from earns it a laxer boundary."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(hub_device_name="[Click](http://evil.example)\nsecond line")])
+
+        value = create.call_args.kwargs["translation_placeholders"]["hub_name"]
+        assert not set(value) & set("`<>[]()|\\*_#:/@")
+        assert "\n" not in value
+
+    def test_a_user_set_hub_name_and_a_cloud_string_sanitize_identically(self, issue_mocks):
+        """The property that makes "the same boundary" true rather than merely
+        claimed."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        hostile = "www.evil.example\nsecond line"
+
+        manager.async_sync([_make_orphan_record(hub_device_name=hostile)])
+        from_hub_device_name = create.call_args.kwargs["translation_placeholders"]["hub_name"]
+
+        manager.async_sync([_make_orphan_record(sensor_key="100_200_2", hub_device_name=None, hub_name=hostile)])
+        from_hub_name = create.call_args.kwargs["translation_placeholders"]["hub_name"]
+
+        assert from_hub_device_name == from_hub_name
+
+    def test_no_log_line_carries_the_hub_name(self, issue_mocks, caplog):
+        """Log lines on this path carry only the sensor key and integers."""
+        _create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.repairs"):
+            manager.async_sync([_make_orphan_record(hub_device_name="Distinctive Hub Name Xyzzy")])
+
+        assert "Distinctive Hub Name Xyzzy" not in caplog.text
+
+    def test_the_still_present_shape_names_its_hub_the_same_way(self, issue_mocks):
+        """Both card bodies render {hub_name}, so both get the same treatment."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync([_make_orphan_record(leftover=True, hub_device_name="HWG023WBRF-V2 Hub", hub_name="Hub")])
+
+        assert create.call_args.kwargs["translation_placeholders"]["hub_name"] == "HWG023WBRF-V2 Hub"
 
 
 class TestTheCardNamesTheEntitiesItWouldRemove:

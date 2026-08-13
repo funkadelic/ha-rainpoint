@@ -622,20 +622,28 @@ def _ledger_pairs_by_key(adders) -> dict[str, set[tuple[str, str]]]:
 
 
 def _resolve_device_names(device_rows) -> dict[str, str]:
-    """Return each sensor key's Home Assistant device name, by key.
+    """Return each device row's Home Assistant name, by its DOMAIN identifier.
 
-    This is the name a leftover-entities card's Device bullet renders, and it
-    is resolved here, from the same device rows the leftover derivation
-    already walks, rather than inside repairs.py. That module holds no
-    knowledge of Home Assistant's registries and is testable as plain data
+    These are the names a leftover-entities card's Device and Hub bullets
+    render, and they are resolved here, from the same device rows the leftover
+    derivation already walks, rather than inside repairs.py. That module holds
+    no knowledge of Home Assistant's registries and is testable as plain data
     only because nothing here ever gives it any.
+
+    Keyed by whatever DOMAIN identifier a row carries, which is a sensor key
+    for a sub-device row and a hub identifier for a hub row. Both are wanted:
+    a hub has its own row on the same config entry, so this one pass names the
+    device and its hub together, and the record builder looks each up by the
+    key shape it needs.
 
     The fallback order is two deep and stops here: name_by_user is set only
     once the owner renames the device, and name is always present -- stamped
-    by build_sub_device_info for every sub-device row this integration
-    writes. A key this function has nothing for is simply absent from the
-    returned mapping, and the caller falls further, to the record's own cloud
-    sub_name, which this function never reads.
+    by build_sub_device_info for every sub-device row this integration writes
+    and by the hub entity's own device_info for every hub row, both of which
+    fall back to a literal rather than leaving it unset. A key this function
+    has nothing for is simply absent
+    from the returned mapping, and the caller falls further, to the record's
+    own cloud name, which this function never reads.
 
     A key resolved through _domain_sensor_key rather than through the row's
     own identifiers tuple directly, so a device name can never attach to the
@@ -657,6 +665,28 @@ def _resolve_device_names(device_rows) -> dict[str, str]:
         except Exception as exc:
             _LOGGER.debug("Could not resolve a device name for row %s: %s", getattr(row, "id", None), exc)
     return names
+
+
+def _hub_name_for_sensor_key(sensor_key: str, device_names: Mapping) -> str | None:
+    """Return the Home Assistant name of the hub a sensor key hangs off, or None.
+
+    A sensor key is {hid}_{mid}_{addr} and its hub's device row carries
+    HUB_IDENTIFIER_PREFIX + "{hid}_{mid}", so the hub is reachable from the key
+    alone. That is what lets a card's Hub bullet render the name its owner gave
+    the hub without a second registry walk: the hub has its own row on the same
+    config entry, so _resolve_device_names has already named it from the rows
+    the sweep fetched once.
+
+    A key that is not three non-empty segments yields None rather than a
+    part-built identifier, and so does a key whose hub has no row of that
+    shape, which is what a hub row still carrying the pre-migration hub_{hid}
+    identifier looks like. Either way the caller falls back to the cloud's own
+    hub name, so a hub that cannot be resolved is named rather than blank.
+    """
+    parts = sensor_key.split("_")
+    if len(parts) != 3 or not all(parts):
+        return None
+    return device_names.get(f"{_HUB_IDENTIFIER_PREFIX}{parts[0]}_{parts[1]}")
 
 
 def _build_leftover_row_pairs(
@@ -892,11 +922,18 @@ def _build_orphaned_entity_records(
     Each adder is read behind its own guard, so one malformed adder cannot
     abort the sweep for the others.
 
-    ``device_names`` carries the Home Assistant name resolved for each key by
-    _resolve_device_names, keyed the same way. A key absent from it -- a
-    departed key whose device row has already gone, or an unreadable device
-    registry -- yields a record whose device_name is None, and the card falls
-    back to that record's own cloud sub_name at render time.
+    ``device_names`` carries the Home Assistant name resolved by
+    _resolve_device_names for every device row on this config entry, keyed by
+    that row's DOMAIN identifier. A key absent from it -- a departed key whose
+    device row has already gone, or an unreadable device registry -- yields a
+    record whose device_name is None, and the card falls back to that record's
+    own cloud sub_name at render time.
+
+    The same mapping names the hub, because a hub has its own device row on
+    this config entry and was named in the same pass. It is read through
+    _hub_name_for_sensor_key, which derives the hub's identifier from the
+    sensor key, and it falls back the same way: to the record's own cloud
+    hub_name when no hub row could be resolved.
 
     ``leftover_entity_ids`` carries the entity ids the still-present shape's
     card names, keyed the same way. It reaches the record for display and for
@@ -950,6 +987,7 @@ def _build_orphaned_entity_records(
                 hub_paired=bool(descriptor.get("hub_paired", True)),
                 leftover=leftover,
                 device_name=device_names.get(key),
+                hub_device_name=_hub_name_for_sensor_key(key, device_names),
                 # Read on the still-present shape alone, which is the only one
                 # whose ids were ever resolved, and gated on the same verdict
                 # that chooses the card body so the two cannot disagree.
@@ -1020,8 +1058,10 @@ def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordi
     handed to both consumers that need it: the leftover derivation, which
     resolves a dead row to a sensor key through it, and _resolve_device_names,
     which resolves the same rows to the Home Assistant name their owner gave
-    them. Fetching it twice for one pass would double this listener's
-    per-update registry-walk cost for no second answer.
+    them. That one name pass covers the hub as well as the sub-device, because
+    a hub has its own row on this same config entry. Fetching the registry
+    twice for one pass would double this listener's per-update registry-walk
+    cost for no second answer.
 
     Never raises. Every read below is guarded, and this runs inside a
     coordinator listener where an exception would break the update for every

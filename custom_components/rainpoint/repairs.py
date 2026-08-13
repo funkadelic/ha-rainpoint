@@ -620,6 +620,13 @@ class OrphanedEntitiesRecord:
     # back to sub_name, the cloud's own name for the device. Defaulted so
     # every existing construction stays valid.
     device_name: str | None = None
+    # The Home Assistant name for the hub this device hangs off, resolved by
+    # the caller from the hub's own device registry row and never by this
+    # module. None means no hub row could be resolved, in which case the card
+    # falls back to hub_name, the cloud's own string for it. Read only while
+    # hub_paired is True: a device with no hub renders the literal "none",
+    # which is a different statement rather than another rung of this fallback.
+    hub_device_name: str | None = None
 
 
 def orphaned_entities_issue_id(sensor_key: str, entry_id: str) -> str:
@@ -756,6 +763,12 @@ class RainPointOrphanedEntityIssues:
         same terms a cloud string is: nothing about where a value originated
         earns it a laxer boundary than every other placeholder here crosses.
 
+        The Hub bullet resolves the same way, from record.hub_device_name
+        falling back to record.hub_name, for the same reason and across the
+        same boundary. A card that named the device the way its owner does
+        while naming the hub the way RainPoint does was describing one home in
+        two vocabularies.
+
         The still-present shape also names the entities it is offering, one per
         line, so the card's promise is a list rather than a bare count. That
         list is display only and is built by _format_entity_list, which
@@ -835,7 +848,13 @@ class RainPointOrphanedEntityIssues:
                 # this the card's least useful line is the one naming a hub the
                 # device was never on. The literal is ours, not the cloud's, so
                 # it needs no sanitizing.
-                "hub_name": _sanitize_placeholder(record.hub_name) if record.hub_paired else "none",
+                #
+                # A paired hub is named the way the Device bullet above is: the
+                # Home Assistant name its owner sees, falling back to the
+                # cloud's own string only when no hub row could be resolved.
+                # The fallback resolves before the sanitizer, so exactly one
+                # sanitized value reaches both the card and its confirm dialog.
+                "hub_name": _sanitize_placeholder(record.hub_device_name or record.hub_name) if record.hub_paired else "none",
                 "entity_count": str(record.entity_count),
                 "missed_polls": str(record.missed_polls),
             },
