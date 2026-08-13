@@ -5,8 +5,15 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.rainpoint.const import CONF_GENERIC_CONTROL_ENABLED, DOMAIN, MODEL_HTV210B, MODEL_VALVE_345
+from custom_components.rainpoint.const import (
+    CONF_GENERIC_CONTROL_ENABLED,
+    DOMAIN,
+    MODEL_HTV210B,
+    MODEL_VALVE_245,
+    MODEL_VALVE_345,
+)
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS
 from custom_components.rainpoint.entity import LateEntityAdder, late_adders, register_late_adder
 from custom_components.rainpoint.number import (
@@ -16,6 +23,7 @@ from custom_components.rainpoint.number import (
     DURATION_STEP_MINUTES,
     RainPointGenericZoneDurationNumber,
     RainPointZoneDurationNumber,
+    _RainPointDurationNumberBase,
     build_generic_duration_entities,
 )
 from tests.helpers import (
@@ -25,6 +33,8 @@ from tests.helpers import (
     make_coordinator_data,
     make_sensor_coordinator,
     make_sensor_entry,
+    make_valve_zone_status,
+    make_valve_zone_status_open,
 )
 
 # Real, non-hand-written catalog variants reused from tests/test_generic_control.py's
@@ -924,3 +934,236 @@ class TestSilentUnitGuardRealTimeline:
 
         assert [e._zone_num for e in valve_captured] == [1, 2]
         assert [e._zone_num for e in number_captured] == [1, 2]
+
+
+# ---------------------------------------------------------------------------
+# Mid-run duration refusal: _RainPointDurationNumberBase.async_set_native_value
+# ---------------------------------------------------------------------------
+
+
+def _set_zone_missing(num) -> None:
+    """The zones mapping exists but carries no record for this entity's zone."""
+    num.coordinator.data["sensors"][num._sensor_key]["data"] = {"zones": {}}
+
+
+def _set_zone(num, **zone_fields) -> None:
+    """Give this entity's own zone the supplied fields, replacing any prior zone data."""
+    num.coordinator.data["sensors"][num._sensor_key]["data"] = {"zones": {num._zone_num: dict(zone_fields)}}
+
+
+class TestDurationRefusalGuard:
+    """Every accept and refuse case the mid-run refusal guard must answer.
+
+    Drives the guard directly against an injected coordinator.data snapshot,
+    which is appropriate here because each case is a pure function of the
+    snapshot with no timing or debounce involved; the state-dependent
+    closed-then-open-then-closed sequence itself is proven separately by
+    TestDurationRefusalRealTimeline against a real coordinator.
+    """
+
+    @pytest.mark.asyncio
+    async def test_explicit_open_refuses(self):
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=True)
+
+        with pytest.raises(HomeAssistantError):
+            await num.async_set_native_value(1.0)
+
+        assert num.native_value == 10.0
+        num.async_write_ha_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicit_closed_accepts(self):
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=False)
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_open_none_accepts(self):
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=None)
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_zone_record_missing_accepts(self):
+        num = _make_number(current_value=10.0)
+        _set_zone_missing(num)
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sensor_key_absent_accepts(self):
+        num = _make_number(current_value=10.0)
+        del num.coordinator.data["sensors"][num._sensor_key]
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_falsy_data_accepts(self):
+        num = _make_number(current_value=10.0)
+        num.coordinator.data["sensors"][num._sensor_key]["data"] = None
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_silent_entry_accepts(self):
+        num = _make_number(current_value=10.0)
+        num.coordinator.data["sensors"][num._sensor_key]["data"] = {
+            "type": SILENT_DATA_TYPE,
+            "silent_state": "never_reported",
+        }
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refusal_message_names_the_zone_the_rule_and_the_promise(self):
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=True)
+
+        with pytest.raises(HomeAssistantError) as excinfo:
+            await num.async_set_native_value(1.0)
+
+        message = str(excinfo.value)
+        assert "Zone 1" in message
+        assert "watering" in message
+        assert "closed" in message
+        assert "next run" in message
+
+    @pytest.mark.asyncio
+    async def test_refusal_message_carries_no_end_time_or_clock_value(self):
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=True, duration_seconds=600, event_time="2026-08-13T21:05:00")
+
+        with pytest.raises(HomeAssistantError) as excinfo:
+            await num.async_set_native_value(1.0)
+
+        message = str(excinfo.value)
+        assert ":" not in message
+        assert "2026-08-13T21:05:00" not in message
+        assert "600" not in message
+
+    @pytest.mark.asyncio
+    async def test_two_identical_attempts_against_an_open_zone_both_refuse(self):
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=True)
+
+        with pytest.raises(HomeAssistantError):
+            await num.async_set_native_value(1.0)
+        with pytest.raises(HomeAssistantError):
+            await num.async_set_native_value(1.0)
+
+        assert num.native_value == 10.0
+        num.async_write_ha_state.assert_not_called()
+        assert num.coordinator._client.mock_calls == []
+
+    def test_base_class_default_run_state_open_is_none(self):
+        base = _RainPointDurationNumberBase.__new__(_RainPointDurationNumberBase)
+        assert base._run_state_open is None
+
+    def test_base_class_default_zone_label_names_no_number(self):
+        base = _RainPointDurationNumberBase.__new__(_RainPointDurationNumberBase)
+        label = base._zone_label
+        assert isinstance(label, str)
+        assert label
+        assert not any(char.isdigit() for char in label)
+
+    def test_base_class_default_open_run_attributes_is_empty(self):
+        base = _RainPointDurationNumberBase.__new__(_RainPointDurationNumberBase)
+        assert base._open_run_attributes == {}
+
+
+class TestDurationRefusalRealTimeline:
+    """The refusal proven against a real closed-then-open-then-closed
+    coordinator timeline, against the same already-constructed entity object
+    throughout, rather than an injected coordinator.data snapshot.
+    """
+
+    @staticmethod
+    async def _build_timeline():
+        """Construct -> first refresh (closed) -> platform setup for a real HTV245FRF valve hub."""
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.number import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 20,
+                "name": "Hub A",
+                "deviceName": "d",
+                "productKey": "pk",
+                "homeName": "H",
+                "subDevices": [{"addr": 1, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}],
+            }
+        ]
+        client.get_multiple_device_status.return_value = make_valve_zone_status(zones_reported=True)
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        return coordinator, client, captured
+
+    @pytest.mark.asyncio
+    async def test_a_real_zone_refuses_only_while_its_own_status_reports_open(self):
+        """One entity object, driven through closed, open, closed refreshes."""
+        coordinator, client, captured = await self._build_timeline()
+        zone1 = next(e for e in captured if e._zone_num == 1)
+        zone1.hass = MagicMock()
+        zone1.async_write_ha_state = MagicMock()
+
+        # Closed at setup: the set succeeds.
+        await zone1.async_set_native_value(5.0)
+        assert zone1.native_value == 5.0
+        zone1.async_write_ha_state.assert_called_once()
+
+        # A refresh reports zone 1 open: the same entity object now refuses,
+        # and its displayed value does not move.
+        client.get_multiple_device_status.return_value = make_valve_zone_status_open()
+        await coordinator.async_refresh()
+
+        with pytest.raises(HomeAssistantError):
+            await zone1.async_set_native_value(1.0)
+        assert zone1.native_value == 5.0
+        zone1.async_write_ha_state.assert_called_once()
+
+        # A further refresh reports zone 1 closed again: the same entity
+        # object accepts once more.
+        client.get_multiple_device_status.return_value = make_valve_zone_status(zones_reported=True)
+        await coordinator.async_refresh()
+
+        await zone1.async_set_native_value(8.0)
+        assert zone1.native_value == 8.0
+        assert zone1.async_write_ha_state.call_count == 2

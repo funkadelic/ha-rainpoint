@@ -7,6 +7,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -128,7 +129,62 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
     def native_value(self) -> float:
         return self._current_value
 
+    @property
+    def _run_state_open(self) -> bool | None:
+        """Report whether this entity's own zone is confirmed explicitly open.
+
+        None means the family cannot currently confirm its own run state --
+        no data yet, a silent device, or a reading whose meaning is not
+        settled. That is deliberately the fail-open reading: a setpoint edit
+        never starts water, so there is no safety argument for refusing on an
+        unconfirmed state, and a family that cannot answer must accept writes
+        rather than have its duration permanently locked. A concrete class
+        overrides this with its own confirmed reading; this base default is
+        what a future duration family inherits until it does.
+        """
+        return None
+
+    @property
+    def _zone_label(self) -> str:
+        """Name the subject of the refusal message.
+
+        Supplies the noun phrase async_set_native_value builds its message
+        around. The base default names no number; a family carrying a zone
+        or port number overrides it with one.
+        """
+        return "The zone"
+
+    @property
+    def _open_run_attributes(self) -> dict[str, Any]:
+        """Return the running run's own numbers, contributed only while open.
+
+        The base's extra_state_attributes evaluates the open gate once and
+        merges this only when it reads True, so this hook never re-checks
+        openness itself. A family whose data carries no such numbers
+        contributes nothing rather than inventing a substitute -- the base
+        default here is that empty contribution.
+        """
+        return {}
+
     async def async_set_native_value(self, value: float) -> None:
+        """Apply a new duration, refusing while the entity's own zone is open.
+
+        Reads the zone-open hook exactly once and compares it with ``is
+        True``, never with truthiness: None, a missing zone record, a silent
+        device and a stale reading must all accept the write, mirroring
+        valve.py's own availability gate. On an explicit open the method
+        raises before touching the stored value or writing state, so the
+        displayed value visibly does not move. A reading that is not an
+        explicit open accepts the write exactly as before this guard
+        existed. The accepted cost is that editing the setpoint for the next
+        run while the current one waters is blocked too; the user must wait
+        for the run to end.
+        """
+        if self._run_state_open is True:
+            raise HomeAssistantError(
+                f"{self._zone_label} is watering. The run duration can only be changed while the zone is closed. "
+                "The new value would apply to the next run."
+            )
         self._current_value = value
         self.async_write_ha_state()
 
@@ -170,6 +226,42 @@ class RainPointZoneDurationNumber(_RainPointDurationNumberBase):
 
         self._attr_unique_id = f"rainpoint_{hid}_{mid}_{addr}_zone{zone_num}_duration"
         self._attr_name = f"Zone {zone_num} Duration"
+
+    @property
+    def _zone_data(self) -> dict | None:
+        """Return this entity's own zone dict, or None.
+
+        An identically-shaped copy of RainPointValveEntity._zone_data in
+        valve.py, kept as a copy rather than a shared call so this change
+        never touches that live control path.
+        """
+        sensors = self.coordinator.data.get("sensors", {})
+        info = sensors.get(self._sensor_key)
+        if not info:
+            return None
+        decoded = info.get("data")
+        if not decoded:
+            return None
+        return decoded.get("zones", {}).get(self._zone_num)
+
+    @property
+    def _run_state_open(self) -> bool | None:
+        """Read this zone's own explicit open/closed/unknown reading.
+
+        Returns the raw tri-state ``open`` value rather than valve.py's
+        ``is_closed``, whose inverted truthiness would collapse None into a
+        closed reading. A zone whose record is entirely absent reads as
+        unknown, the same as one whose ``open`` flag is None.
+        """
+        zone = self._zone_data
+        if zone is None:
+            return None
+        return zone.get("open")
+
+    @property
+    def _zone_label(self) -> str:
+        """Name this entity's own zone number in the refusal message."""
+        return f"Zone {self._zone_num}"
 
 
 def build_generic_duration_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:

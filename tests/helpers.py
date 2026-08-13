@@ -147,6 +147,22 @@ platform's late-add path (test_valve.py) and the sub-device parenting timeline
 other's test class to borrow it.
 """
 
+VALVE_ZONE1_OPEN_TLV_PAYLOAD = "11#17E1D70018DC0119D8011AD8001D201E2025AD580221B740511B1A"
+"""VALVE_ZONES_TLV_PAYLOAD with zone 1 reporting open, plus a duration and an
+event-time record on zone 1's own dp_ids.
+
+Zone 1's 0xD8 state byte is flipped from 0x00 to 0x01, and two records are
+appended: dp 0x25 type 0xAD carrying 600 (10 minutes) as a 2-byte
+little-endian seconds count, and dp 0x21 type 0xB7 carrying a packed
+timestamp that decodes to 2026-08-13T21:05:00. Zone 2 is untouched and still
+decodes closed with no duration and no event time. This is used by more than
+one duration-entity test class to drive a real closed-then-open-then-closed
+coordinator timeline, so it lives here rather than in whichever module
+happened to need it first; the byte layout is not asserted in prose anywhere
+that uses it, only through decoding the payload and reading the resulting
+zone dict.
+"""
+
 
 def make_mock_session_client() -> RainPointClient:
     """Create a real RainPointClient with a mocked aiohttp session.
@@ -192,6 +208,18 @@ def make_valve_zone_status(mid=20, sid="D01", zones_reported=True, time_ms=17854
     """
     value = VALVE_ZONES_TLV_PAYLOAD if zones_reported else ""
     return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": value, "time": time_ms}]}]
+
+
+def make_valve_zone_status_open(mid=20, sid="D01", time_ms=1785420002247):
+    """The open-zone counterpart of make_valve_zone_status.
+
+    Reports zone 1 explicitly open (with a duration and an event time) and
+    zone 2 explicitly closed, via VALVE_ZONE1_OPEN_TLV_PAYLOAD. Exists so
+    more than one module can drive a real open-zone timeline through a real
+    coordinator, the same way make_valve_zone_status already does for the
+    closed case.
+    """
+    return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": VALVE_ZONE1_OPEN_TLV_PAYLOAD, "time": time_ms}]}]
 
 
 def htv210b_hub_devices(mid=20, addr=1):
