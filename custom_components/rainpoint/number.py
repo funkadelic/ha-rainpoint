@@ -190,7 +190,22 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return sub_device_attributes(self.coordinator, self._sensor_key)
+        """Merge the running run's own numbers in, only while the zone is open.
+
+        The open gate lives here rather than in _open_run_attributes itself,
+        evaluated once against the same _run_state_open hook
+        async_set_native_value reads, so the refusal and its explanation
+        read one signal: an entity can never refuse a write without also
+        carrying the numbers that explain the refusal, and an idle zone's
+        stale last-run values never accumulate on a setpoint entity. Merge
+        order mirrors valve.py's own extra_state_attributes: entity-specific
+        keys first, sub_device_attributes layered on top last.
+        """
+        attrs: dict[str, Any] = {}
+        if self._run_state_open is True:
+            attrs.update(self._open_run_attributes)
+        attrs.update(sub_device_attributes(self.coordinator, self._sensor_key))
+        return attrs
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -262,6 +277,30 @@ class RainPointZoneDurationNumber(_RainPointDurationNumberBase):
     def _zone_label(self) -> str:
         """Name this entity's own zone number in the refusal message."""
         return f"Zone {self._zone_num}"
+
+    @property
+    def _open_run_attributes(self) -> dict[str, Any]:
+        """Carry the running run's own duration and event time, only while open.
+
+        The base has already established the zone is open before this is
+        read, so this hook never re-checks that itself. Each value is
+        guarded with ``is not None`` so a missing reading omits its key
+        rather than rendering a null, mirroring valve.py's own guards. The
+        raw status byte the sibling valve entity also carries is
+        deliberately not repeated here: the decision names only these two
+        values. ``event_time`` is a naive local wall-clock string, absent on
+        some frames, which is why it lives here as an attribute rather than
+        in the refusal message.
+        """
+        attrs: dict[str, Any] = {}
+        zone = self._zone_data or {}
+        duration = zone.get("duration_seconds")
+        if duration is not None:
+            attrs["duration_seconds"] = duration
+        event_time = zone.get("event_time")
+        if event_time is not None:
+            attrs["event_time"] = event_time
+        return attrs
 
 
 def build_generic_duration_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:

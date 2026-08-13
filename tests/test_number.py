@@ -1327,3 +1327,111 @@ class TestGenericDurationRefusal:
     def test_both_duration_families_reach_refusal_through_the_same_inherited_method(self):
         """Neither family can carry its own rule: they resolve to one method object."""
         assert RainPointZoneDurationNumber.async_set_native_value is RainPointGenericZoneDurationNumber.async_set_native_value
+
+
+# ---------------------------------------------------------------------------
+# The running run's own numbers, carried as extra state attributes only
+# while the entity's own zone reads explicitly open.
+# ---------------------------------------------------------------------------
+
+
+class TestOpenRunAttributes:
+    """Every case in the open-run-attributes behaviour list."""
+
+    @pytest.mark.asyncio
+    async def test_open_zone_carries_duration_and_event_time(self):
+        num = _make_number()
+        _set_zone(num, open=True, duration_seconds=600, event_time="2026-08-13T21:05:00")
+
+        attrs = num.extra_state_attributes
+
+        assert attrs["duration_seconds"] == 600
+        assert attrs["event_time"] == "2026-08-13T21:05:00"
+        assert attrs["firmware_version"] == "1.0"
+
+    def test_closed_zone_carries_neither_key(self):
+        num = _make_number()
+        _set_zone(num, open=False, duration_seconds=600, event_time="2026-08-13T21:05:00")
+
+        attrs = num.extra_state_attributes
+
+        assert "duration_seconds" not in attrs
+        assert "event_time" not in attrs
+
+    def test_open_none_carries_neither_key(self):
+        num = _make_number()
+        _set_zone(num, open=None)
+
+        attrs = num.extra_state_attributes
+
+        assert "duration_seconds" not in attrs
+        assert "event_time" not in attrs
+
+    def test_no_zone_record_carries_neither_key_but_still_carries_sub_device_attributes(self):
+        num = _make_number()
+        _set_zone_missing(num)
+
+        attrs = num.extra_state_attributes
+
+        assert "duration_seconds" not in attrs
+        assert "event_time" not in attrs
+        assert attrs["firmware_version"] == "1.0"
+
+    def test_open_zone_with_no_duration_omits_the_key(self):
+        num = _make_number()
+        _set_zone(num, open=True, duration_seconds=None, event_time="2026-08-13T21:05:00")
+
+        attrs = num.extra_state_attributes
+
+        assert "duration_seconds" not in attrs
+        assert attrs["event_time"] == "2026-08-13T21:05:00"
+
+    def test_open_zone_with_no_event_time_omits_the_key(self):
+        num = _make_number()
+        _set_zone(num, open=True, duration_seconds=600, event_time=None)
+
+        attrs = num.extra_state_attributes
+
+        assert attrs["duration_seconds"] == 600
+        assert "event_time" not in attrs
+
+    def test_state_raw_is_not_added(self):
+        num = _make_number()
+        _set_zone(num, open=True, duration_seconds=600, event_time="2026-08-13T21:05:00", state_raw=1)
+
+        attrs = num.extra_state_attributes
+
+        assert "state_raw" not in attrs
+
+    def test_generic_duration_entity_open_carries_neither_key(self):
+        """No curated identity supplies either value on the generic path."""
+        entity, _ = TestGenericDurationRefusal._build(fields=[_run_state_field(1, 1)])
+
+        attrs = entity.extra_state_attributes
+
+        assert "duration_seconds" not in attrs
+        assert "event_time" not in attrs
+        assert attrs["firmware_version"] == "1.0.0"
+
+    @pytest.mark.asyncio
+    async def test_real_timeline_attributes_appear_and_disappear_with_the_zone(self):
+        """The same entity object gains the two keys on the refresh that opens
+        the zone and loses them on the refresh that closes it again."""
+        coordinator, client, captured = await TestDurationRefusalRealTimeline._build_timeline()
+        zone1 = next(e for e in captured if e._zone_num == 1)
+
+        assert "duration_seconds" not in zone1.extra_state_attributes
+
+        client.get_multiple_device_status.return_value = make_valve_zone_status_open()
+        await coordinator.async_refresh()
+
+        attrs = zone1.extra_state_attributes
+        assert attrs["duration_seconds"] == 600
+        assert attrs["event_time"] == "2026-08-13T21:05:00"
+
+        client.get_multiple_device_status.return_value = make_valve_zone_status(zones_reported=True)
+        await coordinator.async_refresh()
+
+        attrs = zone1.extra_state_attributes
+        assert "duration_seconds" not in attrs
+        assert "event_time" not in attrs
