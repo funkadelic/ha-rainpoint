@@ -1124,7 +1124,7 @@ def _leftover_pairs_now(
     advance: bool = True,
     entity_ids: dict | None = None,
     blind: bool = False,
-) -> dict:
+) -> dict[str, frozenset[tuple[str, str]]] | None:
     """Re-derive the debounced leftover pairs for this config entry, right now.
 
     Shared by the update path and the confirm path so the card and the removal
@@ -1276,6 +1276,25 @@ def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordi
         _LOGGER.debug("Leftover entity sweep failed; leaving every card exactly as it is: %s", exc)
 
 
+def _log_empty_scope_counts(coordinator, sensor_key: str, derived, offered_pairs) -> None:
+    """Say why a confirmed removal resolved to no rows at all.
+
+    The breadcrumb for a Submit that took nothing, and the only place the
+    reason for that is knowable. _log_empty_removal_scope, further down the
+    same confirm, sees one empty set and cannot tell which of these produced
+    it, so it says only what the confirm did; the counts here say why. All
+    three are integers and a sensor key, which is this integration's own.
+    """
+    _LOGGER.debug(
+        "Nothing is in scope for sensor key %s: %s row(s) are dead right now, "
+        "%s were on the card, and the key is %sin this update's sensors",
+        sensor_key,
+        len(derived),
+        "unknown" if offered_pairs is None else len(frozenset(offered_pairs)),
+        "" if sensor_key in _read_current_sensors(coordinator, "confirming a removal") else "not ",
+    )
+
+
 def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Publish the removal executor, sweep once, then sweep on every update.
 
@@ -1375,19 +1394,7 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         ).get(sensor_key, frozenset())
         scope = derived if offered_pairs is None else derived & frozenset(offered_pairs)
         if not scope:
-            # The breadcrumb for a Submit that took nothing, and the only place
-            # the reason for that is knowable. The executor below sees one empty
-            # set and cannot tell which of these produced it, so it says only
-            # what it did; the counts here say why. All three are integers and a
-            # sensor key, which is this integration's own.
-            _LOGGER.debug(
-                "Nothing is in scope for sensor key %s: %s row(s) are dead right now, "
-                "%s were on the card, and the key is %sin this update's sensors",
-                sensor_key,
-                len(derived),
-                "unknown" if offered_pairs is None else len(frozenset(offered_pairs)),
-                "" if sensor_key in _read_current_sensors(coordinator, "confirming a removal") else "not ",
-            )
+            _log_empty_scope_counts(coordinator, sensor_key, derived, offered_pairs)
         return _remove_orphaned_key_rows(
             hass,
             entry,
