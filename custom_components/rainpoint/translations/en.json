@@ -32,7 +32,7 @@
       }
     },
     "leftover_device_entities": {
-      "title": "A device has entities that nothing is behind",
+      "title": "A device has unused entities",
       "fix_flow": {
         "step": {
           "confirm": {

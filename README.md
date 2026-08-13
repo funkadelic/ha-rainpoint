@@ -173,9 +173,9 @@ One thing to know before deferring this one: the card is withdrawn when the inte
 
 ### The device is still here, but some of its entities are not
 
-A device can stay on your account and report normally while still carrying a row that nothing is behind: a reading it used to send and no longer does, or an entity a newer version of this integration replaced with a better one. Those rows sit permanently unavailable on an otherwise healthy device page.
+A device can stay on your account and report normally while some of its entity rows go unused: a reading it used to send and no longer does, or an entity a newer version of this integration replaced with a better one. Those rows sit permanently unavailable on an otherwise healthy device page.
 
-Home Assistant raises "A device has entities that nothing is behind" once the rows have looked that way thirty times running. That is counted in updates rather than on a clock, and with push enabled an update arrives whenever a device sends a reading, so the real wait depends on how chatty your devices are. Restarting Home Assistant or reloading the integration starts that count again from zero.
+Home Assistant raises "A device has unused entities" once the rows have looked that way thirty times running. That is counted in updates rather than on a clock, and with push enabled an update arrives whenever a device sends a reading, so the real wait depends on how chatty your devices are. Restarting Home Assistant or reloading the integration starts that count again from zero.
 
 This card names every entity it would remove, so you can check the list against the device page before deciding. It can still offer a row that is only temporarily quiet, because a reading that has not arrived since the last restart looks the same from inside the integration as one that is gone for good. Watering zones are never offered here, so a zone you have not run yet is safe either way. **Cancel** leaves everything alone. Unlike the card above, this one comes back after a reload if the rows still look unused.
 
