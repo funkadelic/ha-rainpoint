@@ -886,6 +886,18 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         """The one config entry this flow is allowed to act on."""
         return str(self._flow_data.get("entry_id", ""))
 
+    @property
+    def _leftover_shape(self) -> bool:
+        """Which of the two card shapes raised this flow.
+
+        Read from the issue's own data dict, which is the only place the shape
+        is recorded, and handed to the remover so that nothing downstream has
+        to guess it. The departed-key card carries no such key at all, and its
+        absence is what makes False the right answer there rather than a
+        default standing in for a missing one.
+        """
+        return bool(self._flow_data.get("leftover", False))
+
     async def async_step_init(self, user_input: dict | None = None):
         """Handle the first step of the fix flow."""
         return await self.async_step_confirm()
@@ -924,12 +936,20 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
             return None
 
     def _remove_rows(self) -> None:
-        """Call this config entry's removal executor for this key.
+        """Call this config entry's removal executor for this key and this shape.
 
         The executor is published by the config entry's own setup, so a flow
         submitted after that entry was torn down finds nothing and removes
         nothing. Guarded rather than allowed to raise, because an exception
         here surfaces as a broken repair dialog.
+
+        The card's shape goes with the key, because the executor's two scopes
+        are not variations of one another and it cannot recover the shape from
+        anything else it has. A still-present card whose every offered row came
+        back to life before the user pressed Submit legitimately resolves to no
+        rows at all, and an executor left to infer the shape from that emptiness
+        would read it as the departed-key case and delete every entity the
+        session recorded for a live, reporting device.
         """
         entry_id = self._flow_data.get("entry_id")
         try:
@@ -938,7 +958,7 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
             _LOGGER.debug("No orphaned entity remover is registered for entry %s: %s", entry_id, exc)
             return
         try:
-            remover(self._sensor_key)
+            remover(self._sensor_key, leftover_shape=self._leftover_shape)
         except Exception as exc:
             _LOGGER.debug("Removing the entities for sensor key %s failed: %s", self._sensor_key, exc)
 

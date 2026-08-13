@@ -1378,11 +1378,37 @@ def _flow_hass(remover=None, *, with_entry=True, with_remover=True):
     return SimpleNamespace(data=data)
 
 
-def _make_flow(hass, sensor_key="100_200_1", entry_id="e1"):
-    """Construct the flow the way async_create_fix_flow does, then bind hass."""
-    flow = RainPointOrphanedEntitiesRepairFlow({"entry_id": entry_id, "sensor_key": sensor_key})
+def _make_flow(hass, sensor_key="100_200_1", entry_id="e1", *, leftover=None):
+    """Construct the flow the way async_create_fix_flow does, then bind hass.
+
+    ``leftover`` mirrors the marker _raise_issue stamps into the issue's data
+    dict, and None is the departed-key card, whose data dict carries no such
+    key at all rather than carrying it set to False.
+    """
+    data = {"entry_id": entry_id, "sensor_key": sensor_key}
+    if leftover is not None:
+        data["leftover"] = leftover
+    flow = RainPointOrphanedEntitiesRepairFlow(data)
     flow.hass = hass
     return flow
+
+
+def _recording_remover(result=0):
+    """Return (calls, remover), where the remover records its key and its shape.
+
+    The shape is recorded rather than ignored because it is the one argument
+    the flow has to supply itself: the executor cannot recover it from the key
+    or from anything it derives, and getting it wrong deletes a live device's
+    whole entity set.
+    """
+    calls: list[tuple[str, bool]] = []
+
+    def _remover(sensor_key, *, leftover_shape=True):
+        """Record one removal request exactly as the flow made it."""
+        calls.append((sensor_key, leftover_shape))
+        return result
+
+    return calls, _remover
 
 
 class TestRainPointOrphanedEntitiesRepairFlow:
@@ -1405,8 +1431,8 @@ class TestRainPointOrphanedEntitiesRepairFlow:
     @pytest.mark.asyncio
     async def test_opening_the_card_shows_a_form_and_removes_nothing(self):
         """The irreversible step is always a submit, never an open."""
-        calls = []
-        flow = _make_flow(_flow_hass(calls.append))
+        calls, remover = _recording_remover()
+        flow = _make_flow(_flow_hass(remover))
 
         step = await flow.async_step_init()
 
@@ -1417,20 +1443,41 @@ class TestRainPointOrphanedEntitiesRepairFlow:
     @pytest.mark.asyncio
     async def test_submitting_calls_the_remover_once_with_the_key_from_the_data(self):
         """The key comes from the issue data, never from parsing the issue id."""
-        calls = []
-        flow = _make_flow(_flow_hass(calls.append))
+        calls, remover = _recording_remover()
+        flow = _make_flow(_flow_hass(remover))
 
         result = await flow.async_step_confirm({})
 
-        assert calls == ["100_200_1"]
+        assert calls == [("100_200_1", False)]
         assert result["type"] == "create_entry"
+
+    @pytest.mark.asyncio
+    async def test_the_card_s_own_shape_goes_to_the_remover_rather_than_being_inferred(self):
+        """The still-present card names its shape, and the departed one names
+        its own by carrying no marker.
+
+        The executor's two scopes are not variations of one another: one takes
+        the whole of the session's ledger for the key and releases the device
+        row, the other takes only the rows that are still dead at the moment of
+        the confirm. Left to infer the shape, an executor reads a still-present
+        card whose rows all recovered as the departed one, and deletes every
+        entity of a device that is on the account and reporting.
+        """
+        leftover_calls, leftover_remover = _recording_remover()
+        departed_calls, departed_remover = _recording_remover()
+
+        await _make_flow(_flow_hass(leftover_remover), leftover=True).async_step_confirm({})
+        await _make_flow(_flow_hass(departed_remover)).async_step_confirm({})
+
+        assert leftover_calls == [("100_200_1", True)]
+        assert departed_calls == [("100_200_1", False)]
 
     @pytest.mark.asyncio
     async def test_the_flow_never_deletes_the_issue_itself(self, issue_mocks):
         """Home Assistant's flow manager already deletes the issue on a
         non-abort result, so deleting here would be a double delete."""
         _create, delete = issue_mocks
-        flow = _make_flow(_flow_hass(lambda key: 2))
+        flow = _make_flow(_flow_hass(_recording_remover(2)[1]))
 
         await flow.async_step_init()
         await flow.async_step_confirm({})
@@ -1458,7 +1505,7 @@ class TestRainPointOrphanedEntitiesRepairFlow:
     async def test_a_remover_that_raises_does_not_break_the_dialog(self, caplog):
         """An exception here surfaces to the user as a broken repair dialog."""
 
-        def _boom(key):
+        def _boom(key, *, leftover_shape=True):
             """Fail the way a torn-down registry would."""
             raise RuntimeError("registry down")
 
@@ -1477,7 +1524,7 @@ class TestRainPointOrphanedEntitiesRepairFlow:
         supplied = {"sub_name": "Front Valve", "entity_count": "2"}
         registry = MagicMock()
         registry.async_get_issue.return_value = _FakeIssue(supplied)
-        flow = _make_flow(_flow_hass(lambda key: 0))
+        flow = _make_flow(_flow_hass(_recording_remover()[1]))
 
         with patch.object(repairs.ir, "async_get", return_value=registry):
             step = await flow.async_step_init()
@@ -1491,7 +1538,7 @@ class TestRainPointOrphanedEntitiesRepairFlow:
         rather than raising out of a flow step."""
         registry = MagicMock()
         registry.async_get_issue.return_value = None
-        flow = _make_flow(_flow_hass(lambda key: 0))
+        flow = _make_flow(_flow_hass(_recording_remover()[1]))
 
         with patch.object(repairs.ir, "async_get", return_value=registry):
             step = await flow.async_step_init()
@@ -1502,7 +1549,7 @@ class TestRainPointOrphanedEntitiesRepairFlow:
     async def test_an_unreadable_registry_yields_no_placeholders(self, caplog):
         """Same outcome by the other route, because a raising flow step is the
         one thing a confirmation dialog must never do."""
-        flow = _make_flow(_flow_hass(lambda key: 0))
+        flow = _make_flow(_flow_hass(_recording_remover()[1]))
 
         with (
             patch.object(repairs.ir, "async_get", side_effect=RuntimeError("no registry")),

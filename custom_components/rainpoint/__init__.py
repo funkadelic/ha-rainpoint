@@ -961,20 +961,42 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
     # previous session was looking at.
     leftover_counts: dict[tuple[str, tuple[str, str]], int] = {}
 
-    def _remove(sensor_key: str) -> int:
-        """Remove this config entry's rows for one sensor key.
+    def _remove(sensor_key: str, *, leftover_shape: bool = True) -> int:
+        """Remove this config entry's rows for one sensor key, in one named shape.
 
-        The leftover scope is re-derived here, at the moment of deletion,
-        rather than replayed from whatever the card was raised with. A row
-        whose entity came back between the raise and the Submit is backed
-        again by then and drops out of the pair set, so it survives.
+        ``leftover_shape`` is the card's own shape, carried here from the
+        issue's data dict rather than inferred from anything this function
+        derives. The two scopes are not variations of one another: the
+        departed-key shape resolves the whole of this session's ledger for the
+        key and releases the device row behind it, while the still-present
+        shape may only ever take the exact rows that are still dead at this
+        moment. Inferring the shape from an empty derived set would collapse
+        the second into the first precisely when every offered row had
+        recovered, which is the one case where nothing at all should be taken.
 
-        Fetches its own device rows rather than sharing the periodic sweep's:
+        On the still-present shape the scope is re-derived here, at the moment
+        of deletion, rather than replayed from whatever the card was raised
+        with. A row whose entity came back between the raise and the Submit is
+        backed again by then and drops out of the pair set, so it survives, and
+        if every one of them came back the scope is empty and this removes
+        nothing.
+
+        It fetches its own device rows rather than sharing the periodic sweep's:
         this runs once, on a human's confirm, at a moment displaced from
         whatever update last ran the sweep, so reusing a stale fetch here
         would re-derive the removal scope against device rows that may no
-        longer be current.
+        longer be current. The departed-key shape needs no such fetch, because
+        its scope comes from the ledgers alone.
+
+        The default is the still-present shape, which is the narrower of the
+        two and the only safe answer for a caller that did not say: it takes
+        only rows it has just re-derived as dead and never releases a device
+        row. Defaulting to the departed-key shape instead would let an
+        unstated shape delete every entity this session recorded for a key and
+        release the device row of a device that never left the account.
         """
+        if not leftover_shape:
+            return _remove_orphaned_key_rows(hass, entry, sensor_key)
         _, device_rows = _fetch_registry_rows(
             dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the leftover entity scan"
         )
@@ -985,6 +1007,7 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
             leftover_pairs=_leftover_pairs_now(hass, entry, coordinator, leftover_counts, device_rows).get(
                 sensor_key, frozenset()
             ),
+            leftover_shape=True,
         )
 
     try:
@@ -1176,19 +1199,38 @@ def _release_emptied_device_row(hass: HomeAssistant, entry: ConfigEntry, sensor_
         _LOGGER.debug("Failed to release the emptied device row %s: %s", candidate_id, exc)
 
 
-def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_key: str, leftover_pairs=frozenset()) -> int:
-    """Remove one sensor key's leftover rows, in whichever shape produced them.
+def _remove_orphaned_key_rows(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    sensor_key: str,
+    leftover_pairs=frozenset(),
+    *,
+    leftover_shape: bool = False,
+) -> int:
+    """Remove one sensor key's leftover rows, in the shape the caller names.
 
     The only removal executor on this path, reached only from the fix flow's
     confirm step, which is reached only after a human submits the form.
 
-    Two scopes, never both at once, and the caller decides which by whether it
-    hands in any leftover pairs. Empty is the departed-key shape and is exactly
-    what this function has always done: the rows in scope are the ones this
-    session's adders recorded for this key, and no foreign row can satisfy
-    that. Non-empty is the still-present shape, and the pairs supplied become
-    the scope outright, because none of them is in any ledger and resolving
-    them from the ledgers would yield nothing at all.
+    Two scopes, never both at once, and the caller says which by passing
+    ``leftover_shape`` rather than by leaving anything to be inferred. False is
+    the departed-key shape and is exactly what this function has always done:
+    the rows in scope are the ones this session's adders recorded for this key,
+    and no foreign row can satisfy that. True is the still-present shape, and
+    ``leftover_pairs`` becomes the scope outright, because none of those pairs
+    is in any ledger and resolving them from the ledgers would yield nothing at
+    all.
+
+    The shape is a parameter and not a reading of ``leftover_pairs`` because
+    the two are not interchangeable at the one point where it matters. An empty
+    pair set on the still-present shape is a real and expected outcome: the
+    confirm re-derives the scope, so a card whose every offered row came back
+    to life before the user pressed Submit resolves to nothing. Reading that
+    emptiness as the departed-key shape would answer it by deleting every
+    entity this session recorded for the key and releasing the device row of a
+    device that is on the account and reporting. So an empty scope on this
+    shape removes nothing and releases nothing, which is the whole of what is
+    left to do once every row has recovered.
 
     Scoped by two independent guards either way: the registry lookup is
     config-entry scoped, so there is no whole-registry scan, and every removal
@@ -1210,19 +1252,31 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
         _LOGGER.debug("Entry store unreadable; removing nothing for sensor key %s: %s", sensor_key, exc)
         return 0
 
-    leftover = frozenset(leftover_pairs or ())
-    if leftover:
+    if leftover_shape:
         # The registry-derived pair list replaces the ledger-derived one rather
         # than adding to it. `resolved` is empty on purpose and is what leaves
         # the forget loop below a no-op: not one of these pairs is in any
         # adder's bookkeeping, so there is nothing to drop, and dropping
         # anything would release unique ids that live entities on this present
         # device still hold.
-        doomed, resolved = leftover, []
+        doomed, resolved = frozenset(leftover_pairs or ()), []
     else:
         doomed, resolved = _resolve_doomed_rows(late_adders(entry_store), sensor_key)
 
     if not doomed:
+        if leftover_shape:
+            # Every row this card offered is backed again by the time the user
+            # confirmed, so there is nothing left to take. Info rather than
+            # warning, and it names no follow-up action, because nothing went
+            # wrong here and nothing is left stranded: the device is present,
+            # its rows are alive, and the card simply arrived at a question
+            # that had already answered itself.
+            _LOGGER.info(
+                "Nothing is left over for sensor key %s by the time its removal was confirmed; "
+                "every row that was offered is backed again, so none was removed and its device row was left alone",
+                sensor_key,
+            )
+            return 0
         # No adder in this session emitted anything for this key, so there is
         # nothing in scope and no bookkeeping to drop. Removing nothing is the
         # correct answer rather than an error: the ledgers are this path's only
@@ -1278,7 +1332,7 @@ def _remove_orphaned_key_rows(hass: HomeAssistant, entry: ConfigEntry, sensor_ke
     # unique ids that live entities still hold. A row this sweep failed to
     # remove is already logged at debug inside the loop above, and it still
     # reads unbacked, so its card is offered again on a later update.
-    if not leftover:
+    if not leftover_shape:
         _release_emptied_device_row(hass, entry, sensor_key)
 
         # Ordering above is load bearing, in both directions. Moving this forget

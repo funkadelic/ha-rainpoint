@@ -779,12 +779,18 @@ class TestWhatTheConfirmMayTake:
 
     @staticmethod
     def _confirm(harness: _Harness, pairs, *, adders=None):
-        """Run the removal executor for one key over a seeded install."""
+        """Run the removal executor for one key over a seeded install.
+
+        Always in the still-present shape, which is the shape the card that
+        produced these pairs carries. The shape is passed rather than left to
+        be read off the pairs, exactly as the fix flow passes it.
+        """
         adder = adders[0] if adders else _seed_adder()
         hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}}, states=harness.state_machine())
         entry = SimpleNamespace(entry_id=ENTRY_ID)
         with harness.patched():
-            return _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, leftover_pairs=pairs), adder
+            count = _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, leftover_pairs=pairs, leftover_shape=True)
+        return count, adder
 
     def test_exactly_the_named_pair_goes_and_the_device_row_stays(self):
         """The device is still on the account and still reporting, so releasing
@@ -816,21 +822,28 @@ class TestWhatTheConfirmMayTake:
     def test_an_empty_pair_set_removes_nothing_and_leaves_one_breadcrumb(self, caplog):
         """Home Assistant deletes a fixable issue once its flow finishes, so a
         confirm that resolved to nothing looks to the user exactly like a
-        successful removal. The log line is the only trace left."""
+        successful removal. The log line is the only trace left.
+
+        On this shape an empty scope is the ordinary recovery outcome rather
+        than a fault, so the ledger-derived scope is never consulted and the
+        breadcrumb says nothing about removing rows by hand.
+        """
         harness = _Harness()
         harness.add_leftover_row()
-        empty = _adder_with("sensor", [])
+        seeded = _seed_adder()
 
-        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint"):
-            count, adder = self._confirm(harness, frozenset(), adders=[empty])
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint"):
+            count, adder = self._confirm(harness, frozenset(), adders=[seeded])
 
         assert count == 0
         assert harness.removed == []
         assert harness.released == []
-        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
-        breadcrumbs = [r.getMessage() for r in caplog.records if "Nothing in scope for sensor key" in r.getMessage()]
+        # The ledger is untouched: this shape never resolves through it.
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_battery"})
+        breadcrumbs = [r.getMessage() for r in caplog.records if "Nothing is left over for sensor key" in r.getMessage()]
         assert len(breadcrumbs) == 1
         assert SENSOR_KEY in breadcrumbs[0]
+        assert not [r.getMessage() for r in caplog.records if "Nothing in scope for sensor key" in r.getMessage()]
 
     def test_a_row_that_refuses_to_go_does_not_break_the_confirm(self):
         """This runs inside a Repairs flow step, so nothing may propagate, and
@@ -846,6 +859,96 @@ class TestWhatTheConfirmMayTake:
         assert count == 1
         assert harness.removed == [f"sensor.{second}"]
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_battery"})
+
+
+class TestARecoveredCardTakesNothing:
+    """The seam between the card and the confirm, driven end to end.
+
+    The confirm re-derives its scope, so a row that came back to life between
+    the raise and the Submit drops out of it. When every offered row comes
+    back, the re-derived scope is empty, and the whole question is what an
+    empty scope means on a device that is present and reporting. It means
+    there is nothing left to take. Answering it any other way -- by reading
+    the emptiness as the departed-key shape, whose empty scope resolves
+    through the session's ledgers instead -- deletes every entity of a live
+    device and releases its device row.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_card_whose_rows_all_recovered_removes_nothing_at_all(self):
+        """Raise, recover, confirm, in that order, on a device that never left.
+
+        Driven as a timeline rather than by handing the executor an empty pair
+        set, because the recovery is the whole point: the card has to be
+        genuinely raised against a genuinely dead row, and that row has to come
+        back through the same liveness gate the derivation reads, before the
+        confirm is allowed to answer.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+            ledger_before = _ledger_snapshot(hass)
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                assert create.call_count == 1
+                kwargs = create.call_args.kwargs
+                assert kwargs["data"]["leftover"] is True
+
+                flow = await async_create_fix_flow(hass, create.call_args.args[2], kwargs["data"])
+                flow.hass = hass
+
+                # The one row the card offered is backed again by the time the
+                # user presses Submit.
+                harness.states[LEFTOVER_ENTITY_ID] = _live_state()
+                registered = sorted(row.entity_id for row in harness.entity_rows)
+
+                result = await flow.async_step_confirm({})
+
+                assert result["type"] == "create_entry"
+                # Nothing removed, including the row that was offered.
+                assert harness.removed == []
+                assert sorted(row.entity_id for row in harness.entity_rows) == registered
+                # The device is present and reporting, so its row is not released.
+                assert harness.released == []
+                # No adder's bookkeeping moved either.
+                assert _ledger_snapshot(hass) == ledger_before
+
+    @pytest.mark.asyncio
+    async def test_only_the_row_that_stayed_dead_goes_when_its_sibling_recovers(self):
+        """The partial case, which is what keeps the empty case honest.
+
+        Two rows are offered on one card and one of them comes back before the
+        confirm. The survivor proves the re-derivation is still doing its work
+        rather than the shape having been switched off wholesale, and the row
+        that did go proves the scope is narrowed to it alone.
+        """
+        harness = _Harness()
+        second_unique_id = f"rainpoint_{SENSOR_KEY}_stale"
+        second_entity_id = f"sensor.{second_unique_id}"
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+            harness.add_leftover_row(entity_id=second_entity_id, unique_id=second_unique_id)
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                kwargs = create.call_args.kwargs
+                assert kwargs["translation_placeholders"]["entity_count"] == "2"
+
+                flow = await async_create_fix_flow(hass, create.call_args.args[2], kwargs["data"])
+                flow.hass = hass
+                harness.states[LEFTOVER_ENTITY_ID] = _live_state()
+
+                await flow.async_step_confirm({})
+
+                assert harness.removed == [second_entity_id]
+                assert harness.released == []
 
 
 class TestTheTwoShapesAreMutuallyExclusive:
@@ -931,9 +1034,14 @@ class TestTheNarrowedPropertiesHoldInSource:
         """Both would be wrong rather than merely unnecessary here: the device
         row still represents a device the current poll lists, and no pair on
         this branch is in any ledger, so a forget would release unique ids that
-        live entities still hold."""
+        live entities still hold.
+
+        The guard is on the shape the caller named, never on whether the pair
+        set it handed in happens to be empty."""
         function = self._tree(_remove_orphaned_key_rows).body[0]
-        guards = [node for node in ast.walk(function) if isinstance(node, ast.If) and ast.unparse(node.test) == "not leftover"]
+        guards = [
+            node for node in ast.walk(function) if isinstance(node, ast.If) and ast.unparse(node.test) == "not leftover_shape"
+        ]
         assert len(guards) == 1
 
         guarded_nodes = set(map(id, ast.walk(guards[0])))
