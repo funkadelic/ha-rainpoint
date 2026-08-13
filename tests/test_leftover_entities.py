@@ -29,6 +29,7 @@ from homeassistant.const import ATTR_RESTORED
 from custom_components.rainpoint import (
     _build_leftover_row_pairs,
     _debounced_leftover_pairs,
+    _declared_adder_domains,
     _fetch_registry_rows,
     _hub_name_for_sensor_key,
     _ledger_pairs_by_key,
@@ -530,7 +531,12 @@ class TestWhatTheScanMayNotReach:
         harness.add_leftover_row(entity_id=f"sensor.{recorded}", unique_id=recorded)
         harness.add_leftover_row(entity_id=f"binary_sensor.{recorded}", unique_id=recorded)
 
-        assert _derive(harness) == {SENSOR_KEY: frozenset({("binary_sensor", recorded)})}
+        # Both platforms set up this session, which is what the second adder
+        # says: a row whose platform never started is held back by a different
+        # gate, and this test is about the pair identity rather than that one.
+        adders = [_seed_adder(), _adder_with("binary_sensor", [])]
+
+        assert _derive(harness, adders=adders) == {SENSOR_KEY: frozenset({("binary_sensor", recorded)})}
 
 
 class TestHowARowReachesASensorKey:
@@ -1072,6 +1078,67 @@ class TestAnUpdateThatCouldNotLookKeepsEveryWindow:
                 assert self._window(hass) == served
 
     @pytest.mark.asyncio
+    async def test_a_live_card_survives_a_blind_update_without_a_recovery_line(self, caplog):
+        """Holding the window is not enough on its own.
+
+        A blind update produces no leftover pairs, and a card whose key has no
+        pairs reads as recovered, so the card was withdrawn and the log said
+        the device's rows were backed again. Both are false on a read that
+        failed, and the user loses the card they were about to answer.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, delete):
+            coordinator, _hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                assert create.call_count == 1
+                issue_id = create.call_args.args[2]
+                delete.reset_mock()
+
+                harness.entity_get_raises = True
+                with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+                    await coordinator.async_refresh()
+
+                # The card is still up, and nothing claimed a recovery.
+                assert [call.args[2] for call in delete.call_args_list if call.args[2] == issue_id] == []
+                assert not [r for r in caplog.records if "backed again" in r.getMessage()]
+
+                # It also is not re-raised on the next readable update, because
+                # it never went away.
+                harness.entity_get_raises = False
+                await coordinator.async_refresh()
+                assert create.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_departed_key_card_still_reconciles_on_a_blind_update(self):
+        """The hold is scoped to the shape that could not be derived.
+
+        The departed-key shape is built from coordinator data alone, so an
+        unreadable entity registry says nothing about it and it goes on raising
+        in the same pass. Holding both would delay a card that has every fact
+        it needs.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, _hass, _entry, client = await _armed_install(harness)
+
+            with harness.patched():
+                harness.entity_get_raises = True
+                # The device leaves the account entirely while the leftover
+                # derivation cannot look.
+                client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+                for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS + 1):
+                    await coordinator.async_refresh()
+
+            raised = [call.kwargs["translation_key"] for call in create.call_args_list]
+            assert ORPHANED_ENTITIES_ISSUE_ID_PREFIX in raised
+
+    @pytest.mark.asyncio
     async def test_a_recovered_row_still_retires_its_window(self):
         """The other half, without which the fix above would be a leak.
 
@@ -1094,6 +1161,75 @@ class TestAnUpdateThatCouldNotLookKeepsEveryWindow:
                 await coordinator.async_refresh()
 
                 assert self._window(hass) == {}
+
+
+class TestAPlatformThatNeverStartedIsNotEvidence:
+    """A row is only judged by a platform that ran this session.
+
+    Every platform registers its late adder from inside its own setup, so an
+    adder exists for a domain if and only if that platform started. One that
+    raised on setup, or that Home Assistant has not forwarded, leaves its
+    registry rows with nothing alive behind them, which is exactly what a row
+    whose reading has gone away for good looks like. The difference matters: a
+    reload brings those rows back, and the recorder history behind a confirmed
+    removal does not come back with them.
+    """
+
+    OTHER_UNIQUE_ID = f"rainpoint_{SENSOR_KEY}_station1_watering"
+    OTHER_ENTITY_ID = f"binary_sensor.rainpoint_{SENSOR_KEY}_station1_watering"
+
+    def _harness_with_a_row_from_another_platform(self) -> _Harness:
+        """One dead row belonging to a platform other than the seeded one."""
+        harness = _Harness()
+        harness.add_leftover_row(entity_id=self.OTHER_ENTITY_ID, unique_id=self.OTHER_UNIQUE_ID)
+        return harness
+
+    def test_a_row_whose_platform_never_set_up_is_not_offered(self):
+        """Only the sensor platform ran, so a binary_sensor row is not judged."""
+        harness = self._harness_with_a_row_from_another_platform()
+
+        assert _derive(harness) == {}
+
+    def test_the_same_row_is_offered_once_its_platform_has_run(self):
+        """The identical row, once its own platform declares its domain.
+
+        Without this the gate would read as "this card no longer covers that
+        domain" rather than as "that platform did not start", and a genuinely
+        dead row on a healthy install would never be offered again.
+        """
+        harness = self._harness_with_a_row_from_another_platform()
+        adders = [_seed_adder(), _adder_with("binary_sensor", [f"rainpoint_{SENSOR_KEY}_other_row"])]
+
+        assert _derive(harness, adders=adders) == {SENSOR_KEY: frozenset({("binary_sensor", self.OTHER_UNIQUE_ID)})}
+
+    def test_an_adder_with_no_readable_domain_declares_nothing(self):
+        """The read is guarded, and an adder it cannot read declares no domain
+        rather than admitting every row."""
+        broken = SimpleNamespace(ledger=_seed_adder().ledger)
+
+        assert _declared_adder_domains({LATE_ADDER_STORE_KEY: [broken]}) == frozenset()
+
+    def test_an_adder_that_raises_costs_only_its_own_domain(self):
+        """One unreadable adder is not allowed to empty the whole set, which
+        would hold back every row on the install rather than its own."""
+
+        class _ExplodingAdder:
+            """An adder whose domain raises the moment it is read."""
+
+            @property
+            def domain(self):
+                """Raise the way a half-constructed adder might."""
+                raise RuntimeError("no domain")
+
+        adders = [_seed_adder(), _ExplodingAdder()]
+
+        assert _declared_adder_domains({LATE_ADDER_STORE_KEY: adders}) == frozenset({"sensor"})
+
+    def test_the_domains_come_from_the_adders_that_registered(self):
+        """Read straight off the adders, so it cannot drift from what set up."""
+        adders = [_seed_adder(), _adder_with("valve", []), _adder_with("number", [])]
+
+        assert _declared_adder_domains({LATE_ADDER_STORE_KEY: adders}) == frozenset({"sensor", "valve", "number"})
 
 
 class TestTheScanDegradesRatherThanRaising:

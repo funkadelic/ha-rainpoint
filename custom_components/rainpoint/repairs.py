@@ -699,7 +699,7 @@ class RainPointOrphanedEntityIssues:
         self._active: set[str] = set()
         self._published: dict[str, dict] = {}
 
-    def async_sync(self, records: list[OrphanedEntitiesRecord]) -> None:
+    def async_sync(self, records: list[OrphanedEntitiesRecord], *, hold_leftover: bool = False) -> None:
         """Reconcile the active issue set against one update's worth of records.
 
         An orphaned record raises its issue once (deduped on _active). A
@@ -711,6 +711,15 @@ class RainPointOrphanedEntityIssues:
         active id no record mentions at all is cleared as a removal rather
         than a recovery, which is what happens once a confirmed fix has
         emptied the ledger entry that produced the record.
+
+        ``hold_leftover`` says the caller's still-present derivation could not
+        look this time, so the records it built carry no verdict about that
+        shape. Its cards are left exactly as they are, rather than read as
+        recovered: a registry that could not be read is not evidence that a
+        device's rows are backed again, and withdrawing the card would both
+        tell the user that in the log and cost them the waiting period the card
+        represents. The departed-key shape is derived from coordinator data
+        alone, so it is unaffected and reconciles normally in the same pass.
         """
         mentioned: set[str] = set()
         for record in records:
@@ -718,10 +727,21 @@ class RainPointOrphanedEntityIssues:
             mentioned.add(issue_id)
             if record.orphaned:
                 self._raise_issue(issue_id, record)
-            else:
+            elif not (hold_leftover and self._published_is_leftover(issue_id)):
                 self._clear_issue(issue_id)
         for stale_id in self._active - mentioned:
+            if hold_leftover and self._published_is_leftover(stale_id):
+                continue
             self._clear_issue(stale_id, reason=_CLEAR_REASON_REMOVED)
+
+    def _published_is_leftover(self, issue_id: str) -> bool:
+        """Return True when the card this id carries is the still-present shape.
+
+        Read from what was last published rather than from the record in hand,
+        because the caller reaching for this has no record for the key: the
+        derivation that would have built one could not run.
+        """
+        return bool(((self._published.get(issue_id) or {}).get("data") or {}).get("leftover"))
 
     @callback
     def async_clear_all(self) -> None:

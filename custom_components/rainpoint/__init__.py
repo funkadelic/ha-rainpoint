@@ -750,6 +750,7 @@ def _build_leftover_row_pairs(
         return None
 
     ledger_pairs = _ledger_pairs_by_key(late_adders(entry_store))
+    declared_domains = _declared_adder_domains(entry_store)
     # A key has to be both in this session's ledgers and in the current poll.
     # The first half is what keeps an old-shape or foreign device row out; the
     # second is what makes this shape mutually exclusive with the aged-out one.
@@ -772,7 +773,7 @@ def _build_leftover_row_pairs(
             sensor_key = key_by_device_id.get(getattr(row, "device_id", None))
             if sensor_key is None:
                 continue
-            offered = _leftover_pair_for_row(hass, row, ledger_pairs.get(sensor_key, frozenset()))
+            offered = _leftover_pair_for_row(hass, row, ledger_pairs.get(sensor_key, frozenset()), declared_domains)
             if offered is None:
                 continue
             pair, entity_id = offered
@@ -788,7 +789,33 @@ def _build_leftover_row_pairs(
     return {sensor_key: frozenset(pairs) for sensor_key, pairs in leftovers.items()}
 
 
-def _leftover_pair_for_row(hass: HomeAssistant, row, key_ledger_pairs) -> tuple[tuple[str, str], str] | None:
+def _declared_adder_domains(entry_store: dict) -> frozenset[str]:
+    """Return the entity domains this session's platforms actually set up.
+
+    Every platform registers its late adder from inside its own
+    async_setup_entry, so an adder for a domain exists if and only if that
+    platform started. A platform that raised during setup, or that Home
+    Assistant has not forwarded yet, leaves no adder and therefore no domain
+    here.
+
+    That distinction is the whole point. Its registry rows survive the failure,
+    nothing alive holds them, so Home Assistant marks their states restored and
+    they read exactly like rows whose reading has gone away for good. They are
+    not: reloading brings them back, while the recorder history behind them
+    does not come back from a confirmed removal.
+    """
+    domains = set()
+    for adder in late_adders(entry_store):
+        try:
+            domain = getattr(adder, "domain", None)
+            if isinstance(domain, str) and domain:
+                domains.add(domain)
+        except Exception as exc:
+            _LOGGER.debug("Skipping an unreadable late adder while reading the declared domains: %s", exc)
+    return frozenset(domains)
+
+
+def _leftover_pair_for_row(hass: HomeAssistant, row, key_ledger_pairs, declared_domains) -> tuple[tuple[str, str], str] | None:
     """Return one row's ``(pair, entity_id)`` if it may be offered, else None.
 
     Every gate that decides a single registry row, in one place, so the scan
@@ -798,7 +825,10 @@ def _leftover_pair_for_row(hass: HomeAssistant, row, key_ledger_pairs) -> tuple[
     resolves to a candidate key, and passes that key's ledger pairs in; nothing
     here reaches back for anything else.
 
-    Five prohibitions, in the order they are cheapest to answer. A row the user
+    Six prohibitions, in the order they are cheapest to answer. A row whose
+    domain no adder declared is never offered, because the platform that would
+    hold it alive never started this session and its rows are restored-marked
+    for that reason rather than because anything is gone. A row the user
     has disabled is never offered. A row in the generic unique_id namespace is
     never offered, because _remove_stale_generic_entities owns that namespace
     and governs it by its own toggles. A row whose pair the session's adders
@@ -824,6 +854,8 @@ def _leftover_pair_for_row(hass: HomeAssistant, row, key_ledger_pairs) -> tuple[
     # because that is how Home Assistant itself derives it and it holds for any
     # row shape the registry hands back.
     pair = (entity_id.split(".", 1)[0], unique_id)
+    if pair[0] not in declared_domains:
+        return None
     if pair in key_ledger_pairs:
         return None
     # The one narrowing this path applies to a unique_id, and it can only ever
@@ -1118,6 +1150,14 @@ def _leftover_pairs_now(
     with the entity id behind each offered pair. Only the update path asks for
     it, because only the update path renders a card; the confirm path leaves it
     at None and removes by pair alone.
+
+    Returns None when this update could not look at all, which is a different
+    answer from an empty mapping and both callers act on the difference. An
+    empty mapping is a verdict that no row qualifies, and a card standing on a
+    row that no longer qualifies is withdrawn on it. None is the absence of a
+    verdict: the windows stand, and so does every card already up, because
+    withdrawing one here would tell the user their rows are backed again on the
+    strength of a registry read that failed.
     """
     entry_store = (hass.data.get(DOMAIN) or {}).get(entry.entry_id) or {}
     live_keys = _reporting_sensor_keys(coordinator)
@@ -1127,10 +1167,10 @@ def _leftover_pairs_now(
     # window this listener has been counting. A blind update leaves them exactly
     # as they are and the next readable one carries on.
     if not live_keys or blind:
-        return {}
+        return None
     pairs_by_key = _build_leftover_row_pairs(hass, entry, entry_store, live_keys, device_rows, entity_ids)
     if pairs_by_key is None:
-        return {}
+        return None
     if advance:
         return _debounced_leftover_pairs(counts, pairs_by_key)
     return _settled_leftover_pairs(counts, pairs_by_key)
@@ -1217,6 +1257,12 @@ def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordi
             # rather than a verdict, and it may not retire a single window.
             blind=device_registry is None,
         )
+        # None means the leftover half of this pass could not look. Its cards
+        # are held rather than reconciled: the departed-key half is derived
+        # from coordinator data alone and is unaffected, so it goes on raising
+        # and clearing normally in the same pass.
+        blind_leftover = leftover is None
+        leftover = leftover or {}
         records = _build_orphaned_entity_records(
             entry_store,
             entry.entry_id,
@@ -1225,7 +1271,7 @@ def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordi
             device_names,
             _name_leftover_pairs(leftover, entity_ids),
         )
-        manager.async_sync(records)
+        manager.async_sync(records, hold_leftover=blind_leftover)
     except Exception as exc:
         _LOGGER.debug("Leftover entity sweep failed; leaving every card exactly as it is: %s", exc)
 
@@ -1319,8 +1365,13 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         device_registry, device_rows = _fetch_registry_rows(
             dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the confirmed removal's device lookup"
         )
-        derived = _leftover_pairs_now(
-            hass, entry, coordinator, leftover_counts, device_rows, advance=False, blind=device_registry is None
+        # A blind confirm resolves to no scope at all, so it removes nothing:
+        # the same direction every other uncertainty on this path takes.
+        derived = (
+            _leftover_pairs_now(
+                hass, entry, coordinator, leftover_counts, device_rows, advance=False, blind=device_registry is None
+            )
+            or {}
         ).get(sensor_key, frozenset())
         scope = derived if offered_pairs is None else derived & frozenset(offered_pairs)
         if not scope:

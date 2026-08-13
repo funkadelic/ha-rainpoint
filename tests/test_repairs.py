@@ -1404,6 +1404,36 @@ class TestRainPointOrphanedEntityIssues:
         assert "served their window after the reload" in withdrawn[0].getMessage()
         assert "by hand" not in withdrawn[0].getMessage()
 
+    def test_a_held_leftover_card_is_not_cleared_as_a_removal_either(self, issue_mocks):
+        """The hold covers both routes out of the reconcile.
+
+        A pass whose still-present derivation could not look builds no record
+        at all for the key, so its card falls to the stale-set sweep rather
+        than to the not-orphaned branch. Clearing it there would withdraw the
+        card just as surely, and would call it a removal.
+        """
+        _create, delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        manager.async_sync([_make_orphan_record(leftover=True, entity_ids=("sensor.left_over_row",))])
+        delete.reset_mock()
+
+        manager.async_sync([], hold_leftover=True)
+
+        delete.assert_not_called()
+        assert manager._active == {orphaned_entities_issue_id("100_200_1", "e1")}
+
+    def test_a_held_pass_still_clears_a_departed_key_card(self, issue_mocks):
+        """The hold is scoped to the shape that could not be derived, so the
+        other one reconciles in the same pass as it always has."""
+        _create, delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        manager.async_sync([_make_orphan_record()])
+        delete.reset_mock()
+
+        manager.async_sync([], hold_leftover=True)
+
+        assert [call.args[2] for call in delete.call_args_list] == [orphaned_entities_issue_id("100_200_1", "e1")]
+
     def test_a_recovered_still_present_card_does_not_claim_the_device_came_back(self, issue_mocks):
         """RainPoint never stopped listing this device, so a line saying it
         lists it again describes the other shape's recovery."""
