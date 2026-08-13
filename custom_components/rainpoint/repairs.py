@@ -348,8 +348,12 @@ def _sanitize_placeholder(value: Any, limit: int = 64) -> str:
 
 
 # Home Assistant's own entity id charset: lowercase letters, digits and
-# underscores either side of exactly one dot.
-_ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+# underscores either side of exactly one dot. Anchored with \Z rather than $,
+# which matches before a trailing newline as well as at the end: "sensor.foo\n"
+# passes a $-anchored charset check and then breaks the list item it is
+# rendered into across two lines. This function validates rather than
+# sanitizes, so the anchor has to mean what the check claims.
+_ENTITY_ID_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+\Z")
 # How many entity ids a card names before it stops listing and starts counting.
 # One leftover row is the common case; a departed device can carry ten or more,
 # and an uncapped list would run a translation placeholder to whatever length

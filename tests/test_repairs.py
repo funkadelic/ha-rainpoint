@@ -414,6 +414,21 @@ class TestFormatEntityList:
         checked rather than assumed."""
         assert _format_entity_list([None, 42]) == ""
 
+    def test_a_trailing_newline_does_not_slip_past_the_anchor(self):
+        """The one value a charset check anchored on ``$`` still admits.
+
+        ``$`` matches before a final newline as well as at the end of the
+        string, so "sensor.foo\\n" passes a check that reads as if it could not
+        and then breaks the list item it is rendered into across two lines. The
+        whole claim this function makes is that it validates rather than
+        sanitizes, so the anchor has to mean the end of the string.
+        """
+        assert _format_entity_list(["sensor.trailing_newline\n"]) == ""
+        assert _format_entity_list(["sensor.good_row", "sensor.trailing_newline\n"]).splitlines() == [
+            "  - `sensor.good_row`",
+            "  - and 1 more",
+        ]
+
     def test_a_dropped_value_cannot_close_the_code_span_it_would_have_sat_in(self):
         """The security property the backticks rest on, driven rather than
         asserted about the pattern: a value carrying a backtick never reaches
