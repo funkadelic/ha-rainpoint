@@ -174,9 +174,10 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         device and a stale reading must all accept the write, mirroring
         valve.py's own availability gate. On an explicit open the method
         raises before touching the stored value or writing state, so the
-        displayed value visibly does not move. A reading that is not an
-        explicit open accepts the write exactly as before this guard
-        existed. The accepted cost is that editing the setpoint for the next
+        stored value does not move and no state is written. What the web
+        interface does with the value is recorded at the end of this
+        docstring. A reading that is not an explicit open accepts the write
+        exactly as before this guard existed. The accepted cost is that editing the setpoint for the next
         run while the current one waters is blocked too; the user must wait
         for the run to end.
 
@@ -193,8 +194,8 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         state, and did nothing to the running zone, leaving the person who
         made the change with no way to tell that it had no effect. Raising
         before any state mutation fixes both halves at once, because the
-        displayed value never moves and the raise itself is Home
-        Assistant's own signal that the write did not happen.
+        stored value never holds the rejected number, and the raise itself
+        is Home Assistant's own signal that the write did not happen.
 
         Three other answers were weighed and rejected. Re-commanding the
         running zone with the new value, so the entity becomes a live
@@ -230,6 +231,32 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         against an absolute end time; until both of those are answered,
         refusing remains the only answer this integration can build
         honestly.
+
+        Hardware testing after this guard shipped found that the number box
+        in the Home Assistant web interface goes on showing whatever the
+        user typed until the page is reloaded. The stored value is never
+        wrong: a read of the entity taken while the box still showed the
+        rejected number returned the value the hardware was actually
+        running to. Writing the unchanged value back to state produces no
+        state changed event at all, because the state machine compares the
+        new state and attributes against the old, finds both identical,
+        updates only the last reported timestamp, and returns, and because
+        the subscription a browser session uses listens for changes and
+        never for reports. Forcing the write so a change event does fire
+        reaches the browser and still does not move the box, because the
+        web interface binds the input's value one way from the entity
+        state, never resets the element after a call it made is rejected,
+        and its rendering layer skips assigning a value equal to the one it
+        last assigned. The only remaining lever would be to publish a state
+        the entity is not actually at, whether an empty reading, a
+        different number, or unavailable, which would put a false value in
+        front of the recorded history, the API, and any automation reading
+        this entity, to work around one input widget, and that is the same
+        objection which already rules out marking the entity unavailable
+        for the length of a run. What would fix it properly is a change in
+        the web interface, resetting the input from the entity state when
+        the call it made is rejected; until that exists, the raised
+        message is the whole of the signal and the box is expected to lag.
         """
         if self._run_state_open is True:
             raise HomeAssistantError(

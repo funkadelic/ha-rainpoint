@@ -1201,7 +1201,7 @@ class TestDurationRefusalRealTimeline:
         zone1.async_write_ha_state.assert_called_once()
 
         # A refresh reports zone 1 open: the same entity object now refuses,
-        # and its displayed value does not move.
+        # and its stored value does not move.
         client.get_multiple_device_status.return_value = make_valve_zone_status_open()
         await coordinator.async_refresh()
 
@@ -1488,3 +1488,29 @@ class TestRecordedDecision:
         record = self._record()
         assert chr(8212) not in record
         assert chr(8211) not in record
+
+    def test_record_states_the_observed_symptom(self):
+        """Hardware testing found the box keeps the rejected number until a reload."""
+        assert "until the page is reloaded" in self._record()
+
+    def test_record_states_why_the_unchanged_write_is_inert(self):
+        """An identical write updates only the last-reported timestamp and never reaches the browser."""
+        assert "never for reports" in self._record()
+
+    def test_record_states_why_the_forced_write_is_inert(self):
+        """The web interface binds the input from the entity state only one way and never resyncs it."""
+        assert "one way from the entity" in self._record()
+
+    def test_record_states_the_rejected_workaround(self):
+        """Publishing a state the entity is not actually at was rejected as a false value in front of history."""
+        assert "work around one input widget" in self._record()
+
+    def test_record_states_the_revival_condition(self):
+        """The real fix is a web interface change that resets the input from the entity state on rejection."""
+        assert "resetting the input from the entity state" in self._record()
+
+    def test_record_no_longer_claims_the_displayed_value_does_not_move(self):
+        """The two disproven claims must never reappear, even after rewording elsewhere in the record."""
+        record = self._record()
+        assert "displayed value visibly does not move" not in record
+        assert "displayed value never moves" not in record
