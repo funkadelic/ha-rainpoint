@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import inspect
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.rainpoint.const import CONF_GENERIC_CONTROL_ENABLED, DOMAIN, MODEL_HTV210B, MODEL_VALVE_345
+from custom_components.rainpoint.const import (
+    CONF_GENERIC_CONTROL_ENABLED,
+    DOMAIN,
+    MODEL_HTV210B,
+    MODEL_VALVE_245,
+    MODEL_VALVE_345,
+)
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS
 from custom_components.rainpoint.entity import LateEntityAdder, late_adders, register_late_adder
+from custom_components.rainpoint.generic_control import RUN_STATE_IDENTITY
 from custom_components.rainpoint.number import (
     DURATION_DEFAULT_MINUTES,
     DURATION_MAX_MINUTES,
@@ -16,6 +25,7 @@ from custom_components.rainpoint.number import (
     DURATION_STEP_MINUTES,
     RainPointGenericZoneDurationNumber,
     RainPointZoneDurationNumber,
+    _RainPointDurationNumberBase,
     build_generic_duration_entities,
 )
 from tests.helpers import (
@@ -25,6 +35,8 @@ from tests.helpers import (
     make_coordinator_data,
     make_sensor_coordinator,
     make_sensor_entry,
+    make_valve_zone_status,
+    make_valve_zone_status_open,
 )
 
 # Real, non-hand-written catalog variants reused from tests/test_generic_control.py's
@@ -38,17 +50,57 @@ SOCKET_MODEL = "HWG004WRF"  # CTL_SOCK only -- no valve zone, so no duration com
 SOCKET_MODEL_CODE = 34
 
 
-def _unknown_data(model: str) -> dict:
-    """Build the {"type": "unknown", ...} decoded-payload shape the control gate requires."""
-    return {"type": "unknown", "model": model, "raw_value": "11#00", "generic": {"fields": [], "field_names": []}}
+def _unknown_data(model: str, fields: list[dict] | None = None) -> dict:
+    """Build the {"type": "unknown", ...} decoded-payload shape the control gate requires.
+
+    fields defaults to [] (the common case: a variant declaring no run-state
+    identity at all), and accepts a caller-supplied list so the mid-run
+    refusal tests can drive the same run-state field shape
+    tests/test_generic_control.py's own _run_state_field builds.
+    """
+    fields = fields if fields is not None else []
+    return {
+        "type": "unknown",
+        "model": model,
+        "raw_value": "11#00",
+        "generic": {"fields": fields, "field_names": [f["name"] for f in fields]},
+    }
 
 
-def _generic_control_sensor_info(model: str, model_code: int, sub_name: str = "Valve Hub 1") -> dict:
-    entry = make_sensor_entry(hid=100, mid=200, addr=1, model=model, sub_name=sub_name, data=_unknown_data(model))
+def _generic_control_sensor_info(
+    model: str, model_code: int, sub_name: str = "Valve Hub 1", fields: list[dict] | None = None
+) -> dict:
+    """Build a generic-control sensor entry for the given model, with its catalog identity attached."""
+    entry = make_sensor_entry(hid=100, mid=200, addr=1, model=model, sub_name=sub_name, data=_unknown_data(model, fields))
     entry["model_code"] = model_code
     entry["device_name"] = "dev1"
     entry["product_key"] = "pk1"
     return entry
+
+
+def _run_state_field(dp_port: int, value) -> dict:
+    """Build one decode_generic field entry for STA_WKSTATE, catalog-annotated.
+
+    Mirrors tests/test_generic_control.py's own _run_state_field so the
+    companion duration entity's refusal cases are driven through the same
+    field shape its sibling generic valve is proven against, rather than a
+    module-local variant that could quietly drift from it.
+    """
+    return {
+        "name": RUN_STATE_IDENTITY,
+        "index": 30,
+        "dp_id": 30,
+        "raw": f"{value:02x}" if isinstance(value, int) and not isinstance(value, bool) else str(value),
+        "value": value,
+        "catalog": {
+            "dp_port": dp_port,
+            "data_type": "U8",
+            "declared_width": 1,
+            "signed": False,
+            "port_number": 1,
+            "width_mismatch": False,
+        },
+    }
 
 
 def _make_number(current_value=10.0, firmware_version="1.0"):
@@ -571,6 +623,16 @@ class TestGenericZoneDurationNumberConstruction:
             "Zone 2 CTL_WATER Duration (unverified)",
         ]
 
+    def test_two_zone_labels_include_the_datapoint_port(self):
+        """A two-zone device's refusal message must name a zone, matching its own name's gate."""
+        sensor_info = _generic_control_sensor_info(TWO_ZONE_MODEL, TWO_ZONE_MODEL_CODE, sub_name="Yard")
+        coordinator = _make_generic_coordinator("1_2_1", sensor_info)
+
+        entities = build_generic_duration_entities(coordinator, "1_2_1", sensor_info, "1_2_1")
+
+        labels = sorted(e._zone_label for e in entities)
+        assert labels == ["Zone 1", "Zone 2"]
+
     def test_icon_is_the_generic_control_marker_icon(self):
         from custom_components.rainpoint.const import GENERIC_CONTROL_MARKER_ICON
 
@@ -608,6 +670,7 @@ class TestGenericZoneDurationNumberConstruction:
 
 class TestGenericZoneDurationNumberBehavior:
     def _build(self):
+        """Build the anchor model's generic duration entity through the real factory."""
         sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE)
         coordinator = _make_generic_coordinator("100_200_1", sensor_info)
         entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
@@ -924,3 +987,582 @@ class TestSilentUnitGuardRealTimeline:
 
         assert [e._zone_num for e in valve_captured] == [1, 2]
         assert [e._zone_num for e in number_captured] == [1, 2]
+
+
+# ---------------------------------------------------------------------------
+# Mid-run duration refusal: _RainPointDurationNumberBase.async_set_native_value
+# ---------------------------------------------------------------------------
+
+
+def _set_zone_missing(num) -> None:
+    """The zones mapping exists but carries no record for this entity's zone."""
+    num.coordinator.data["sensors"][num._sensor_key]["data"] = {"zones": {}}
+
+
+def _set_zone(num, **zone_fields) -> None:
+    """Give this entity's own zone the supplied fields, replacing any prior zone data."""
+    num.coordinator.data["sensors"][num._sensor_key]["data"] = {"zones": {num._zone_num: dict(zone_fields)}}
+
+
+class TestDurationRefusalGuard:
+    """Every accept and refuse case the mid-run refusal guard must answer.
+
+    Drives the guard directly against an injected coordinator.data snapshot,
+    which is appropriate here because each case is a pure function of the
+    snapshot with no timing or debounce involved; the state-dependent
+    closed-then-open-then-closed sequence itself is proven separately by
+    TestDurationRefusalRealTimeline against a real coordinator.
+    """
+
+    @pytest.mark.asyncio
+    async def test_explicit_open_refuses(self):
+        """An explicit open refuses the write and leaves the stored value where it was."""
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=True)
+
+        with pytest.raises(HomeAssistantError):
+            await num.async_set_native_value(1.0)
+
+        assert num.native_value == 10.0
+        num.async_write_ha_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicit_closed_accepts(self):
+        """An explicitly closed zone accepts the write exactly as before this guard existed."""
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=False)
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_open_none_accepts(self):
+        """An unknown open state accepts the write: only an explicit open refuses."""
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=None)
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_zone_record_missing_accepts(self):
+        """A missing zone record accepts the write rather than failing closed on absent data."""
+        num = _make_number(current_value=10.0)
+        _set_zone_missing(num)
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sensor_key_absent_accepts(self):
+        """A sensor key absent from the snapshot accepts the write."""
+        num = _make_number(current_value=10.0)
+        del num.coordinator.data["sensors"][num._sensor_key]
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_falsy_data_accepts(self):
+        """A device carrying no decoded data accepts the write."""
+        num = _make_number(current_value=10.0)
+        num.coordinator.data["sensors"][num._sensor_key]["data"] = None
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_silent_entry_accepts(self):
+        """A device that has gone silent accepts the write rather than blocking on a stale reading."""
+        num = _make_number(current_value=10.0)
+        num.coordinator.data["sensors"][num._sensor_key]["data"] = {
+            "type": SILENT_DATA_TYPE,
+            "silent_state": "never_reported",
+        }
+
+        await num.async_set_native_value(1.0)
+
+        assert num.native_value == 1.0
+        num.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refusal_message_names_the_zone_the_rule_and_what_to_do(self):
+        """The refusal names the zone, states the rule, and says what to do next."""
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=True)
+
+        with pytest.raises(HomeAssistantError) as excinfo:
+            await num.async_set_native_value(1.0)
+
+        message = str(excinfo.value)
+        assert "Zone 1" in message
+        assert "watering" in message
+        assert "closed" in message
+        assert "not saved" in message
+        assert "once the run ends" in message
+
+    @pytest.mark.asyncio
+    async def test_refusal_message_promises_nothing_about_a_later_run(self):
+        """The raise discards the typed value, so any promise that it applies later would be false."""
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=True)
+
+        with pytest.raises(HomeAssistantError) as excinfo:
+            await num.async_set_native_value(1.0)
+
+        message = str(excinfo.value)
+        assert "would apply" not in message
+        assert "next run" not in message
+
+    @pytest.mark.asyncio
+    async def test_refusal_message_carries_no_end_time_or_clock_value(self):
+        """The refusal carries no end time, timestamp or raw duration for a reader to misread."""
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=True, duration_seconds=600, event_time="2026-08-13T21:05:00")
+
+        with pytest.raises(HomeAssistantError) as excinfo:
+            await num.async_set_native_value(1.0)
+
+        message = str(excinfo.value)
+        assert ":" not in message
+        assert "2026-08-13T21:05:00" not in message
+        assert "600" not in message
+
+    @pytest.mark.asyncio
+    async def test_two_identical_attempts_against_an_open_zone_both_refuse(self):
+        """A repeated attempt refuses again and sends nothing to the cloud."""
+        num = _make_number(current_value=10.0)
+        _set_zone(num, open=True)
+
+        with pytest.raises(HomeAssistantError):
+            await num.async_set_native_value(1.0)
+        with pytest.raises(HomeAssistantError):
+            await num.async_set_native_value(1.0)
+
+        assert num.native_value == 10.0
+        num.async_write_ha_state.assert_not_called()
+        assert num.coordinator._client.mock_calls == []
+
+    def test_base_class_default_run_state_open_is_none(self):
+        """The base class defaults to an unknown run state, so a subclass missing the hook accepts writes."""
+        base = _RainPointDurationNumberBase.__new__(_RainPointDurationNumberBase)
+        assert base._run_state_open is None
+
+    def test_base_class_default_zone_label_names_no_number(self):
+        """The base class label is a non-empty string carrying no zone number."""
+        base = _RainPointDurationNumberBase.__new__(_RainPointDurationNumberBase)
+        label = base._zone_label
+        assert isinstance(label, str)
+        assert label
+        assert not any(char.isdigit() for char in label)
+
+    def test_base_class_default_open_run_attributes_is_empty(self):
+        """The base class contributes no open-run attributes of its own."""
+        base = _RainPointDurationNumberBase.__new__(_RainPointDurationNumberBase)
+        assert base._open_run_attributes == {}
+
+
+class TestDurationRefusalRealTimeline:
+    """The refusal proven against a real closed-then-open-then-closed
+    coordinator timeline, against the same already-constructed entity object
+    throughout, rather than an injected coordinator.data snapshot.
+    """
+
+    @staticmethod
+    async def _build_timeline():
+        """Construct -> first refresh (closed) -> platform setup for a real HTV245FRF valve hub."""
+        from custom_components.rainpoint.const import CONF_HIDS
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+        from custom_components.rainpoint.number import async_setup_entry
+
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [
+            {
+                "mid": 20,
+                "name": "Hub A",
+                "deviceName": "d",
+                "productKey": "pk",
+                "homeName": "H",
+                "subDevices": [{"addr": 1, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}],
+            }
+        ]
+        client.get_multiple_device_status.return_value = make_valve_zone_status(zones_reported=True)
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.data = {CONF_HIDS: [10]}
+        entry.options = {}
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"e1": {}}}
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+
+        await coordinator.async_config_entry_first_refresh()
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        return coordinator, client, captured
+
+    @pytest.mark.asyncio
+    async def test_a_real_zone_refuses_only_while_its_own_status_reports_open(self):
+        """One entity object, driven through closed, open, closed refreshes."""
+        coordinator, client, captured = await self._build_timeline()
+        zone1 = next(e for e in captured if e._zone_num == 1)
+        zone1.hass = MagicMock()
+        zone1.async_write_ha_state = MagicMock()
+
+        # Closed at setup: the set succeeds.
+        await zone1.async_set_native_value(5.0)
+        assert zone1.native_value == 5.0
+        zone1.async_write_ha_state.assert_called_once()
+
+        # A refresh reports zone 1 open: the same entity object now refuses,
+        # and its stored value does not move.
+        client.get_multiple_device_status.return_value = make_valve_zone_status_open()
+        await coordinator.async_refresh()
+
+        with pytest.raises(HomeAssistantError):
+            await zone1.async_set_native_value(1.0)
+        assert zone1.native_value == 5.0
+        zone1.async_write_ha_state.assert_called_once()
+
+        # A further refresh reports zone 1 closed again: the same entity
+        # object accepts once more.
+        client.get_multiple_device_status.return_value = make_valve_zone_status(zones_reported=True)
+        await coordinator.async_refresh()
+
+        await zone1.async_set_native_value(8.0)
+        assert zone1.native_value == 8.0
+        assert zone1.async_write_ha_state.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# The mid-run refusal extended to the generic control family, reading its
+# run state through generic_control.generic_run_state_open -- the same body
+# the companion generic valve now calls.
+# ---------------------------------------------------------------------------
+
+
+class TestGenericDurationRefusal:
+    """Every case in the generic family's own behaviour list.
+
+    Driven through the real build_generic_duration_entities factory, so
+    these cases run against the same entity the platform ships rather than
+    a hand-constructed one.
+    """
+
+    @staticmethod
+    def _build(fields=None):
+        """Build the anchor model's generic duration entity through the real factory."""
+        sensor_info = _generic_control_sensor_info(ANCHOR_MODEL, ANCHOR_MODEL_CODE, fields=fields)
+        coordinator = _make_generic_coordinator("100_200_1", sensor_info)
+        entities = build_generic_duration_entities(coordinator, "100_200_1", sensor_info, "100_200_1")
+        entity = entities[0]
+        entity.hass = MagicMock()
+        entity.async_write_ha_state = MagicMock()
+        return entity, coordinator
+
+    @pytest.mark.asyncio
+    async def test_explicit_open_refuses_with_the_same_message_shape(self):
+        """The anchor model is single-zone, so the refusal names no zone number, matching its own entity name."""
+        entity, _ = self._build(fields=[_run_state_field(1, 1)])
+
+        with pytest.raises(HomeAssistantError) as excinfo:
+            await entity.async_set_native_value(1.0)
+
+        message = str(excinfo.value)
+        assert "The zone" in message
+        assert "watering" in message
+        assert "closed" in message
+        assert "not saved" in message
+        assert "once the run ends" in message
+        entity.async_write_ha_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ascii_declined_payload_accepts(self):
+        """An ASCII-framed payload is not a proven run state, so the write is accepted."""
+        entity, coordinator = self._build(fields=[_run_state_field(1, 1)])
+        coordinator.data["sensors"]["100_200_1"]["data"]["generic"]["ascii_framed"] = True
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_matching_run_state_record_accepts(self):
+        """No run-state record at all accepts the write."""
+        entity, _ = self._build(fields=[])
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_non_integer_value_accepts(self):
+        """A run-state value that is not an integer accepts the write."""
+        entity, _ = self._build(fields=[_run_state_field(1, "1")])
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_bool_value_accepts(self):
+        """A boolean run-state value accepts the write rather than reading as open."""
+        entity, _ = self._build(fields=[_run_state_field(1, True)])
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_record_at_an_unproven_width_accepts(self):
+        """A run-state record at an unproven width accepts the write."""
+        field = dict(_run_state_field(1, 1), raw="0100")
+        entity, _ = self._build(fields=[field])
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_state_closed_accepts(self):
+        """A run state reading closed accepts the write."""
+        entity, _ = self._build(fields=[_run_state_field(1, 0)])
+
+        await entity.async_set_native_value(1.0)
+
+        assert entity.native_value == 1.0
+        entity.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_the_common_case_of_no_run_state_identity_at_all_accepts_every_write(self):
+        """The practical outcome of the same rule meeting thinner data, asserted directly.
+
+        A generic duration entity built for a model whose catalog data
+        supplies no run-state identity at all is, in practice, the common
+        case for this family -- and this must not be read later as a defect.
+        """
+        entity, _ = self._build()  # fields=None -> []
+
+        await entity.async_set_native_value(1.0)
+        await entity.async_set_native_value(2.0)
+
+        assert entity.native_value == 2.0
+        assert entity.async_write_ha_state.call_count == 2
+
+    def test_zone_label_names_no_number_on_a_single_zone_device(self):
+        """The anchor model is single-zone, so its refusal must not name a zone the entity's own name omits."""
+        entity, _ = self._build()
+        assert entity._zone_label == "The zone"
+
+    def test_both_duration_families_reach_refusal_through_the_same_inherited_method(self):
+        """Neither family can carry its own rule: they resolve to one method object."""
+        assert RainPointZoneDurationNumber.async_set_native_value is RainPointGenericZoneDurationNumber.async_set_native_value
+
+
+# ---------------------------------------------------------------------------
+# The running run's own numbers, carried as extra state attributes only
+# while the entity's own zone reads explicitly open.
+# ---------------------------------------------------------------------------
+
+
+class TestOpenRunAttributes:
+    """Every case in the open-run-attributes behaviour list."""
+
+    @pytest.mark.asyncio
+    async def test_open_zone_carries_duration_and_event_time(self):
+        """An open zone carries the running run's duration and event time beside the usual attributes."""
+        num = _make_number()
+        _set_zone(num, open=True, duration_seconds=600, event_time="2026-08-13T21:05:00")
+
+        attrs = num.extra_state_attributes
+
+        assert attrs["duration_seconds"] == 600
+        assert attrs["event_time"] == "2026-08-13T21:05:00"
+        assert attrs["firmware_version"] == "1.0"
+
+    def test_closed_zone_carries_neither_key(self):
+        """A closed zone carries neither running-run key."""
+        num = _make_number()
+        _set_zone(num, open=False, duration_seconds=600, event_time="2026-08-13T21:05:00")
+
+        attrs = num.extra_state_attributes
+
+        assert "duration_seconds" not in attrs
+        assert "event_time" not in attrs
+
+    def test_open_none_carries_neither_key(self):
+        """An unknown open state carries neither running-run key."""
+        num = _make_number()
+        _set_zone(num, open=None)
+
+        attrs = num.extra_state_attributes
+
+        assert "duration_seconds" not in attrs
+        assert "event_time" not in attrs
+
+    def test_no_zone_record_carries_neither_key_but_still_carries_sub_device_attributes(self):
+        """A missing zone record drops the running-run keys and keeps the sub device's own attributes."""
+        num = _make_number()
+        _set_zone_missing(num)
+
+        attrs = num.extra_state_attributes
+
+        assert "duration_seconds" not in attrs
+        assert "event_time" not in attrs
+        assert attrs["firmware_version"] == "1.0"
+
+    def test_open_zone_with_no_duration_omits_the_key(self):
+        """A duration the device did not report is omitted rather than carried as an empty value."""
+        num = _make_number()
+        _set_zone(num, open=True, duration_seconds=None, event_time="2026-08-13T21:05:00")
+
+        attrs = num.extra_state_attributes
+
+        assert "duration_seconds" not in attrs
+        assert attrs["event_time"] == "2026-08-13T21:05:00"
+
+    def test_open_zone_with_no_event_time_omits_the_key(self):
+        """An event time the device did not report is omitted rather than carried as an empty value."""
+        num = _make_number()
+        _set_zone(num, open=True, duration_seconds=600, event_time=None)
+
+        attrs = num.extra_state_attributes
+
+        assert attrs["duration_seconds"] == 600
+        assert "event_time" not in attrs
+
+    def test_state_raw_is_not_added(self):
+        """The raw state byte stays out of the attributes a user reads."""
+        num = _make_number()
+        _set_zone(num, open=True, duration_seconds=600, event_time="2026-08-13T21:05:00", state_raw=1)
+
+        attrs = num.extra_state_attributes
+
+        assert "state_raw" not in attrs
+
+    def test_generic_duration_entity_open_carries_neither_key(self):
+        """No curated identity supplies either value on the generic path."""
+        entity, _ = TestGenericDurationRefusal._build(fields=[_run_state_field(1, 1)])
+
+        attrs = entity.extra_state_attributes
+
+        assert "duration_seconds" not in attrs
+        assert "event_time" not in attrs
+        assert attrs["firmware_version"] == "1.0.0"
+
+    @pytest.mark.asyncio
+    async def test_real_timeline_attributes_appear_and_disappear_with_the_zone(self):
+        """The same entity object gains the two keys on the refresh that opens
+        the zone and loses them on the refresh that closes it again."""
+        coordinator, client, captured = await TestDurationRefusalRealTimeline._build_timeline()
+        zone1 = next(e for e in captured if e._zone_num == 1)
+
+        assert "duration_seconds" not in zone1.extra_state_attributes
+
+        client.get_multiple_device_status.return_value = make_valve_zone_status_open()
+        await coordinator.async_refresh()
+
+        attrs = zone1.extra_state_attributes
+        assert attrs["duration_seconds"] == 600
+        assert attrs["event_time"] == "2026-08-13T21:05:00"
+
+        client.get_multiple_device_status.return_value = make_valve_zone_status(zones_reported=True)
+        await coordinator.async_refresh()
+
+        attrs = zone1.extra_state_attributes
+        assert "duration_seconds" not in attrs
+        assert "event_time" not in attrs
+
+
+class TestRecordedDecision:
+    """Pins the decision record living in async_set_native_value's docstring.
+
+    A requirement whose deliverable is a document has no behaviour of its
+    own to assert, so this suite is the only automatable proof the record
+    survives a later refactor. Each test pins one short, distinguishing
+    phrase rather than a whole sentence, so ordinary rewording of the
+    record still passes while deleting any one of its parts fails.
+    """
+
+    @staticmethod
+    def _record() -> str:
+        """Read the decision record out of the guard's own docstring."""
+        return inspect.getdoc(_RainPointDurationNumberBase.async_set_native_value)
+
+    def test_record_states_why_refusing_is_honest(self):
+        """The record says why refusing is the honest answer rather than an obstructive one."""
+        assert "honest" in self._record()
+
+    def test_record_names_the_re_command_rejection(self):
+        """The record names the re-command alternative and why it cannot be built today."""
+        record = self._record()
+        assert "restart" in record
+        assert "absolute end time" in record
+
+    def test_record_names_the_accept_and_mark_stale_rejection(self):
+        """The record names the accept-and-mark-stale alternative and why it was rejected."""
+        assert "warning-on-success" in self._record()
+
+    def test_record_names_the_unavailable_rejection(self):
+        """The record names the mark-unavailable alternative and why it was rejected."""
+        assert "unavailable" in self._record()
+
+    def test_record_names_the_accepted_cost(self):
+        """The record names the cost this guard knowingly accepts."""
+        assert "must wait for the run to end" in self._record()
+
+    def test_record_names_what_would_revive_the_re_command_option(self):
+        """The record names the condition that would revive the re-command option."""
+        assert "hardware probe" in self._record()
+
+    def test_record_has_no_em_dash_or_en_dash(self):
+        """The record carries neither an em-dash nor an en-dash."""
+        record = self._record()
+        assert chr(8212) not in record
+        assert chr(8211) not in record
+
+    def test_record_states_the_observed_symptom(self):
+        """Hardware testing found the box keeps the rejected number until a reload."""
+        assert "until the page is reloaded" in self._record()
+
+    def test_record_states_why_the_unchanged_write_is_inert(self):
+        """An identical write updates only the last-reported timestamp and never reaches the browser."""
+        assert "never for reports" in self._record()
+
+    def test_record_states_why_the_forced_write_is_inert(self):
+        """The web interface binds the input from the entity state only one way and never resyncs it."""
+        assert "one way from the entity" in self._record()
+
+    def test_record_states_the_rejected_workaround(self):
+        """Publishing a state the entity is not actually at was rejected as a false value in front of history."""
+        assert "work around one input widget" in self._record()
+
+    def test_record_states_the_revival_condition(self):
+        """The real fix is a web interface change that resets the input from the entity state on rejection."""
+        assert "resetting the input from the entity state" in self._record()
+
+    def test_record_no_longer_claims_the_displayed_value_does_not_move(self):
+        """The two disproven claims must never reappear, even after rewording elsewhere in the record."""
+        record = self._record()
+        assert "displayed value visibly does not move" not in record
+        assert "displayed value never moves" not in record

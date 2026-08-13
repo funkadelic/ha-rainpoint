@@ -511,6 +511,74 @@ def build_generic_switch_entities(coordinator, sensor_key: str, sensor_info: dic
     )
 
 
+def generic_run_state_open(coordinator, sensor_key: str, dp_port: int) -> bool | None:
+    """Read the curated run-state identity for one port back through the shared table's transform.
+
+    Returns True/False only when the coordinator's own decoded data carries
+    an unambiguous reading; None otherwise (including "no data yet" and "the
+    poll has not annotated this port"). Every guard below carries its
+    original reasoning forward from RainPointGenericControlBase._run_state_open,
+    which now delegates here rather than re-deriving it: an ASCII-declined
+    payload, a field match on identity and port, an int (never bool) type
+    check, a declared-width validation, and an exact isclose tri-state.
+
+    Shared by RainPointGenericControlBase._run_state_open and
+    number.RainPointGenericZoneDurationNumber._run_state_open, so a control
+    entity and its companion duration entity read the same confirmed reading
+    rather than two copies of one -- and so a behaviour change here cannot
+    turn an unconfirmed actuation into a false confirmation on one caller
+    while leaving the other correct.
+    """
+    sensors = (coordinator.data or {}).get("sensors", {})
+    info = sensors.get(sensor_key)
+    if not info:
+        return None
+    data = info.get("data")
+    if not data:
+        return None
+    generic = data.get("generic") or {}
+    if is_ascii_declined(generic):
+        # An ASCII-framed payload had its body declined by the decoder, so
+        # nothing in this result was read from a positional field, and a
+        # reading that was never taken must read as unknown rather than as
+        # a confirmation. This does not rest on the run-state field being
+        # absent from a header-only parse: that absence is true today and
+        # would stop being true the moment anyone added a body field, and
+        # this control path is exactly where that change would silently
+        # become a false write confirmation.
+        return None
+    fields = generic.get("fields") or []
+    field = _matching_field(fields, RUN_STATE_IDENTITY, dp_port)
+    if field is None:
+        return None
+    raw = field.get("value")
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        return None
+    spec = _IDENTITY_SPECS[RUN_STATE_IDENTITY]
+    if not has_declared_width(spec, field):
+        # Same refusal the sensor path applies, and it matters more here:
+        # this reading is what confirms a command actuated hardware, so a
+        # record at an unvalidated width must read as unknown rather than
+        # as a confirmation.
+        return None
+    value = spec.transform(raw)
+    if not isinstance(value, (int, float)):
+        # Unreachable while the run-state row masks bit zero to 0.0 or 1.0.
+        # Guarded because a curated row may now yield a non-numeric reading,
+        # and a control entity must report unknown rather than raise inside
+        # a state property.
+        return None
+    # The run-state transform yields exactly 0.0 or 1.0 (a bit-zero mask),
+    # so isclose is exact here; it also keeps a scaled future transform
+    # from tripping on float representation while preserving the three-way
+    # open / closed / unknown result.
+    if math.isclose(value, 1.0):
+        return True
+    if math.isclose(value, 0.0):
+        return False
+    return None
+
+
 class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
     """Shared unique_id/name/device_info/run-state/command plumbing for a control entity.
 
@@ -570,55 +638,13 @@ class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
         carries an unambiguous reading; None otherwise (including "no data
         yet" and "the poll has not annotated this port"). This is the only
         thing that ever changes what a control entity reports.
+
+        Delegates to generic_run_state_open, the module-level body this
+        property used to carry directly. The body is shared with the
+        companion duration entity in number.py, so the two can never
+        disagree about whether a port is open.
         """
-        sensors = (self.coordinator.data or {}).get("sensors", {})
-        info = sensors.get(self._sensor_key)
-        if not info:
-            return None
-        data = info.get("data")
-        if not data:
-            return None
-        generic = data.get("generic") or {}
-        if is_ascii_declined(generic):
-            # An ASCII-framed payload had its body declined by the decoder, so
-            # nothing in this result was read from a positional field, and a
-            # reading that was never taken must read as unknown rather than as
-            # a confirmation. This does not rest on the run-state field being
-            # absent from a header-only parse: that absence is true today and
-            # would stop being true the moment anyone added a body field, and
-            # this control path is exactly where that change would silently
-            # become a false write confirmation.
-            return None
-        fields = generic.get("fields") or []
-        field = _matching_field(fields, RUN_STATE_IDENTITY, self._datapoint.dp_port)
-        if field is None:
-            return None
-        raw = field.get("value")
-        if not isinstance(raw, int) or isinstance(raw, bool):
-            return None
-        spec = _IDENTITY_SPECS[RUN_STATE_IDENTITY]
-        if not has_declared_width(spec, field):
-            # Same refusal the sensor path applies, and it matters more here:
-            # this reading is what confirms a command actuated hardware, so a
-            # record at an unvalidated width must read as unknown rather than
-            # as a confirmation.
-            return None
-        value = spec.transform(raw)
-        if not isinstance(value, (int, float)):
-            # Unreachable while the run-state row masks bit zero to 0.0 or 1.0.
-            # Guarded because a curated row may now yield a non-numeric reading,
-            # and a control entity must report unknown rather than raise inside
-            # a state property.
-            return None
-        # The run-state transform yields exactly 0.0 or 1.0 (a bit-zero mask),
-        # so isclose is exact here; it also keeps a scaled future transform
-        # from tripping on float representation while preserving the three-way
-        # open / closed / unknown result.
-        if math.isclose(value, 1.0):
-            return True
-        if math.isclose(value, 0.0):
-            return False
-        return None
+        return generic_run_state_open(self.coordinator, self._sensor_key, self._datapoint.dp_port)
 
     async def _async_send_command(self, mode: int, duration: int) -> None:
         """Issue one control_work_mode call and schedule the confirming refresh.
