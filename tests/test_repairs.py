@@ -318,6 +318,22 @@ class TestSanitizePlaceholder:
         assert _sanitize_placeholder("   ") == "unknown"
         assert _sanitize_placeholder("[]()") == "unknown"
 
+    def test_a_value_cannot_carry_a_placeholder_token_of_its_own(self):
+        """The layer below Markdown, and the one this card newly exposes.
+
+        A card body is a template of {token} names, and the values filling them
+        come from the RainPoint payload and from device names a user typed. A
+        value spelling one of this integration's own tokens is a value that
+        could be substituted rather than shown, on the card whose Submit
+        deletes recorder history, and whether it would be depends on an order
+        this module does not control.
+        """
+        # The underscore goes with the braces, as it always has, so what is
+        # left cannot spell a token this integration renders either.
+        assert _sanitize_placeholder("{entity_list}") == "entitylist"
+        assert _sanitize_placeholder("Front {entity_count} Valve") == "Front entitycount Valve"
+        assert _sanitize_placeholder("{}") == "unknown"
+
     def test_defangs_a_scheme_prefixed_address_with_a_path(self):
         """Deleting the scheme separator and the slashes leaves display text, not a link."""
         result = _sanitize_placeholder("https://evil.example/phish")
@@ -1364,6 +1380,44 @@ class TestRainPointOrphanedEntityIssues:
         assert {r.levelno for r in withdrawn} == {logging.WARNING}
         assert all("remove them from the entity registry by hand" in r.getMessage() for r in withdrawn)
 
+    def test_a_withdrawn_still_present_card_says_it_comes_back(self, issue_mocks, caplog):
+        """The withdrawal costs the two shapes different things.
+
+        The departed-key card is raised from this session's adder ledgers, and
+        the same fact that makes it unclearable after a reload makes it
+        unraisable, so its rows are stranded and its line says so at warning.
+        The still-present card is derived from the entity registry, which
+        survives the reload, so its rows are offered again once they re-serve
+        their window. README.md tells the user exactly that, and a warning here
+        would contradict the shipped docs.
+        """
+        _create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        manager.async_sync([_make_orphan_record(leftover=True, entity_ids=("sensor.left_over_row",))])
+
+        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
+            manager.async_clear_all()
+
+        withdrawn = [r for r in caplog.records if "withdrawing" in r.getMessage()]
+        assert len(withdrawn) == 1
+        assert withdrawn[0].levelno == logging.INFO
+        assert "served their window after the reload" in withdrawn[0].getMessage()
+        assert "by hand" not in withdrawn[0].getMessage()
+
+    def test_a_recovered_still_present_card_does_not_claim_the_device_came_back(self, issue_mocks):
+        """RainPoint never stopped listing this device, so a line saying it
+        lists it again describes the other shape's recovery."""
+        _create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        manager.async_sync([_make_orphan_record(leftover=True, entity_ids=("sensor.left_over_row",))])
+
+        with patch.object(repairs, "_LOGGER") as logger:
+            manager.async_sync([_make_orphan_record(leftover=True, orphaned=False)])
+
+        said = " ".join(str(call.args[0]) for call in logger.info.call_args_list)
+        assert "backed again" in said
+        assert "lists this device again" not in said
+
     def test_unload_is_a_no_op_when_no_card_is_active(self, issue_mocks):
         """The ordinary unload, which is every unload on a healthy account."""
         _create, delete = issue_mocks
@@ -1947,7 +2001,9 @@ class TestTheOfferTheDialogWasShown:
 
     def test_the_offer_is_read_back_as_pairs(self):
         """The shape the removal is keyed on, and no other."""
-        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": (PAIR, SECOND_PAIR)})) == frozenset({PAIR, SECOND_PAIR})
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": (PAIR, SECOND_PAIR)}), leftover_shape=True) == frozenset(
+            {PAIR, SECOND_PAIR}
+        )
 
     def test_a_list_of_lists_reads_back_the_same(self):
         """Nothing here depends on the offer still being tuples.
@@ -1957,17 +2013,42 @@ class TestTheOfferTheDialogWasShown:
         a list must not silently empty the ceiling and hand the confirm an
         unconstrained scope.
         """
-        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": [list(PAIR)]})) == frozenset({PAIR})
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": [list(PAIR)]}), leftover_shape=True) == frozenset({PAIR})
 
     def test_a_departed_key_card_offers_no_pairs_at_all(self):
         """That shape's scope comes from the session's ledgers, so there is
-        nothing to hold it to and None says exactly that."""
-        assert _snapshot_offered_pairs(_FakeIssue({}, {"entry_id": "e1"})) is None
+        nothing to hold it to and None says exactly that. The shape is what
+        answers it, rather than the absence of a pair list, so a still-present
+        card can never reach the no-ceiling answer by failing a read."""
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"entry_id": "e1"}), leftover_shape=False) is None
 
-    def test_no_issue_yields_no_ceiling_rather_than_an_empty_one(self):
-        """A card already dismissed elsewhere leaves the confirm to its own
-        re-derivation, which is what this path did before the snapshot."""
-        assert _snapshot_offered_pairs(None) is None
+    def test_no_issue_on_the_departed_shape_yields_no_ceiling(self):
+        """That shape removes from the ledgers and never reads this at all."""
+        assert _snapshot_offered_pairs(None, leftover_shape=False) is None
+
+    def test_an_unreadable_issue_on_the_still_present_shape_takes_nothing(self):
+        """The failure route that used to widen instead of narrowing.
+
+        An issue the flow could not read at all took the same exit as the
+        departed-key shape, so a still-present confirm fell back to its own
+        re-derivation and could take a row that joined the offer after the
+        dialog opened. The shape now decides that exit, and this one never
+        reaches it.
+        """
+        assert _snapshot_offered_pairs(None, leftover_shape=True) == frozenset()
+
+    @pytest.mark.asyncio
+    async def test_a_flow_whose_registry_read_raises_removes_nothing(self):
+        """Driven through the flow, because the exit is chosen where the
+        dialog is shown rather than where the pairs are parsed."""
+        calls, remover = _recording_remover()
+        flow = _make_flow(_flow_hass(remover), leftover=True)
+
+        with patch.object(repairs.ir, "async_get", side_effect=RuntimeError("no registry")):
+            await flow.async_step_init()
+            await flow.async_step_confirm({})
+
+        assert calls == [("100_200_1", True, frozenset())]
 
     def test_an_unreadable_data_dict_yields_an_empty_ceiling_not_a_missing_one(self, caplog):
         """A card whose offer cannot be read is not a card with no offer.
@@ -1986,7 +2067,7 @@ class TestTheOfferTheDialogWasShown:
                 raise RuntimeError("no data")
 
         with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
-            assert _snapshot_offered_pairs(_FakeIssue({}, _Exploding())) == frozenset()
+            assert _snapshot_offered_pairs(_FakeIssue({}, _Exploding()), leftover_shape=True) == frozenset()
 
         assert [r.getMessage() for r in caplog.records if "what the orphaned entities card is offering" in r.getMessage()]
 
@@ -2011,7 +2092,7 @@ class TestTheOfferTheDialogWasShown:
                 """Raise the way a half-migrated registry entry might."""
                 raise RuntimeError("no data attribute")
 
-        assert _snapshot_offered_pairs(_RaisingIssue()) == frozenset()
+        assert _snapshot_offered_pairs(_RaisingIssue(), leftover_shape=True) == frozenset()
 
     def test_a_first_member_that_cannot_be_read_leaves_an_empty_ceiling(self):
         """The narrowing holds at its own boundary.
@@ -2020,8 +2101,10 @@ class TestTheOfferTheDialogWasShown:
         nothing, which is the same direction as dropping one malformed member
         out of several, rather than the no-ceiling answer a missing offer gets.
         """
-        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": 42})) == frozenset()
-        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": ["not-a-pair", PAIR]})) == frozenset()
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": 42}), leftover_shape=True) == frozenset()
+        assert (
+            _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": ["not-a-pair", PAIR]}), leftover_shape=True) == frozenset()
+        )
 
     def test_a_pair_that_is_not_a_pair_stops_the_read_without_losing_the_rest(self, caplog):
         """A malformed member narrows the ceiling rather than voiding it.
@@ -2031,7 +2114,9 @@ class TestTheOfferTheDialogWasShown:
         next card, while a repaired one would be a row the user never approved.
         """
         with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
-            snapshot = _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": [PAIR, "not-a-pair-at-all"]}))
+            snapshot = _snapshot_offered_pairs(
+                _FakeIssue({}, {"leftover_pairs": [PAIR, "not-a-pair-at-all"]}), leftover_shape=True
+            )
 
         assert snapshot == frozenset({PAIR})
         assert [r.getMessage() for r in caplog.records if "one of the pairs" in r.getMessage()]
@@ -2039,7 +2124,9 @@ class TestTheOfferTheDialogWasShown:
     def test_a_non_string_member_is_dropped(self):
         """The value is plain data by the time it comes back, so the type is
         checked rather than assumed."""
-        assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": [PAIR, ("sensor", None)]})) == frozenset({PAIR})
+        assert _snapshot_offered_pairs(
+            _FakeIssue({}, {"leftover_pairs": [PAIR, ("sensor", None)]}), leftover_shape=True
+        ) == frozenset({PAIR})
 
     @pytest.mark.asyncio
     async def test_showing_the_dialog_snapshots_the_offer_and_submitting_hands_it_over(self):

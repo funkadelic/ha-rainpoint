@@ -292,7 +292,17 @@ def silent_device_issue_id(hid: Any, mid: int, addr: int) -> str:
 # a Repairs translation placeholder: backtick, angle brackets, square
 # brackets, parentheses, pipe, backslash, asterisk, underscore, and hash, plus
 # the colon, forward slash and at sign that make a bare address linkable.
-_MARKDOWN_HTML_TRANSLATION = str.maketrans("", "", "`<>[]()|\\*_#:/@")
+#
+# Braces go with them, for the layer below Markdown rather than Markdown
+# itself. A card body is a template of {placeholder} tokens, and the values
+# filling them come from the RainPoint payload and from device names a user
+# typed, so a value of the literal "{entity_list}" is a value that looks like
+# one of this integration's own tokens. Whether a frontend would substitute it
+# depends on a substitution order this module does not control, and the card in
+# question is the one whose Submit deletes recorder history. Every literal on
+# this path that legitimately carries a brace is this integration's own and
+# never crosses the sanitizer.
+_MARKDOWN_HTML_TRANSLATION = str.maketrans("", "", "`<>[]()|\\*_#:/@{}")
 _WHITESPACE_RUN_RE = re.compile(r"\s+")
 # The bare-host form some Markdown renderers autolink on the prefix alone,
 # with no scheme and no surrounding syntax to strip.
@@ -983,9 +993,12 @@ class RainPointOrphanedEntityIssues:
 
         The remembered published values go with the mark, so a key that is
         cleared and later raised again publishes from scratch rather than
-        deduping against what a card that no longer exists was carrying.
+        deduping against what a card that no longer exists was carrying. The
+        shape is read out of them before they go, because two of the three
+        reasons say something that is only true of one shape.
         """
         was_active = issue_id in self._active
+        was_leftover = bool(((self._published.get(issue_id) or {}).get("data") or {}).get("leftover"))
         self._active.discard(issue_id)
         self._published.pop(issue_id, None)
         try:
@@ -993,29 +1006,49 @@ class RainPointOrphanedEntityIssues:
             if not was_active:
                 return
             if reason == _CLEAR_REASON_RECOVERED:
-                _LOGGER.info(
-                    "RainPoint lists this device again; clearing the orphaned entities repair issue (id=%s)",
-                    issue_id,
-                )
+                # The two shapes recover from opposite states, so neither line
+                # can stand in for the other. RainPoint stopped listing the
+                # departed key and now lists it again; it never stopped listing
+                # the still-present one, whose rows simply have something behind
+                # them once more.
+                if was_leftover:
+                    _LOGGER.info(
+                        "This device's unused entity rows are backed again; clearing its repair issue (id=%s)",
+                        issue_id,
+                    )
+                else:
+                    _LOGGER.info(
+                        "RainPoint lists this device again; clearing the orphaned entities repair issue (id=%s)",
+                        issue_id,
+                    )
             elif reason == _CLEAR_REASON_UNLOADED:
-                # Warning rather than info, unlike the other two reasons, and
-                # the only one of the three that leaves the user worse off. A
-                # recovery and a removal both end with nothing left to offer;
-                # a withdrawal ends with the leftover rows still registered and
-                # no surface left to offer them through, because the same fact
-                # that makes the card unclearable after a reload makes it
-                # unraisable. The rows have to be removed from the entity
-                # registry by hand from here, so the line names them.
+                # A withdrawal costs the two shapes different things, and only
+                # one of them strands anything. The departed-key card is raised
+                # from this session's adder ledgers, and the same fact that
+                # makes it unclearable after a reload makes it unraisable, so
+                # its rows are left with no surface at all and the line has to
+                # name the manual step. The still-present card is derived from
+                # the entity registry, which survives the reload, so its rows
+                # are offered again once they re-serve their window. That is
+                # what README.md tells the user, and a warning here would
+                # contradict it.
                 #
-                # It cannot become noise: was_active gates it, so it fires only
-                # where a card was genuinely up at unload, and at most once per
+                # Neither can become noise: was_active gates both, so they fire
+                # only where a card was genuinely up at unload, at most once per
                 # withdrawn card.
-                _LOGGER.warning(
-                    "Unloading this config entry; withdrawing the orphaned entities repair issue (id=%s). "
-                    "Its leftover entity rows are still registered and will not be offered again after the reload; "
-                    "remove them from the entity registry by hand",
-                    issue_id,
-                )
+                if was_leftover:
+                    _LOGGER.info(
+                        "Unloading this config entry; withdrawing the unused entities repair issue (id=%s). "
+                        "Its rows are offered again once they have served their window after the reload",
+                        issue_id,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Unloading this config entry; withdrawing the orphaned entities repair issue (id=%s). "
+                        "Its leftover entity rows are still registered and will not be offered again after the reload; "
+                        "remove them from the entity registry by hand",
+                        issue_id,
+                    )
             else:
                 _LOGGER.info(
                     "No leftover entities remain to offer; clearing the orphaned entities repair issue (id=%s)",
@@ -1029,22 +1062,24 @@ class RainPointOrphanedEntityIssues:
             )
 
 
-def _snapshot_offered_pairs(issue) -> frozenset[tuple[str, str]] | None:
+def _snapshot_offered_pairs(issue, *, leftover_shape: bool) -> frozenset[tuple[str, str]] | None:
     """Read the exact pairs a card is offering, as they stand right now.
 
-    None means there is no offer to hold the removal to, and there are exactly
-    two ways to it: no issue could be read at all, or the card is the
-    departed-key shape, whose data carries no pair list because its scope comes
-    from the session's ledgers instead. The confirm treats None as no ceiling
-    and falls back to its own re-derivation, which is what this path did before
-    the snapshot existed and is already narrowed to the rows that are dead now.
+    None means there is no offer to hold the removal to, and the shape the
+    caller names is the only route to it. The departed-key card carries no pair
+    list at all, because its scope comes from the session's ledgers rather than
+    from a registry scan, so there is nothing here to constrain and the confirm
+    falls back to those ledgers as it always has.
 
-    Every other outcome narrows, including the failures, and that asymmetry is
-    the point. A card that carries an offer this cannot read is not a card with
-    no offer: the offer exists and is unknown, so the answer is an empty
-    ceiling, and Submit takes nothing rather than falling back to a scope no
-    dialog was ever held to. A pair that does not survive normalization is
-    dropped for the same reason, rather than repaired. Narrower is the safe
+    Every outcome on the still-present shape is a set, the failures included,
+    and that is the whole contract this exists to keep. Its confirm may take
+    only what its dialog was shown, so a card whose offer cannot be read is not
+    a card with no offer: the offer exists and is unknown, the answer is an
+    empty ceiling, and Submit takes nothing rather than falling back to a
+    re-derivation no dialog was ever held to. That covers an issue that could
+    not be read at all, one whose data raises, and one whose pair list is
+    missing or unreadable. A pair that does not survive normalization is
+    dropped for the same reason rather than repaired. Narrower is the safe
     direction on a surface whose Submit deletes recorder history: the cost of
     dropping one is that a genuinely dead row waits for the next card, and the
     cost of inventing one is a row the user never approved.
@@ -1054,13 +1089,15 @@ def _snapshot_offered_pairs(issue) -> frozenset[tuple[str, str]] | None:
     on the attribute would otherwise propagate out of the flow step that shows
     the dialog and leave the user with a broken one.
     """
+    if not leftover_shape:
+        return None
     try:
         offered = (getattr(issue, "data", None) or {}).get("leftover_pairs")
     except Exception as exc:
         _LOGGER.debug("Could not read what the orphaned entities card is offering: %s", exc)
         return frozenset()
     if offered is None:
-        return None
+        return frozenset()
     pairs = set()
     try:
         for pair in offered:
@@ -1138,7 +1175,7 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         # twice would take them from two different moments, and the whole point
         # of the snapshot is that it belongs to the moment the user was shown.
         issue = self._read_issue()
-        self._offered_pairs = _snapshot_offered_pairs(issue)
+        self._offered_pairs = _snapshot_offered_pairs(issue, leftover_shape=self._leftover_shape)
         return self.async_show_form(
             step_id="confirm",
             data_schema=vol.Schema({}),
