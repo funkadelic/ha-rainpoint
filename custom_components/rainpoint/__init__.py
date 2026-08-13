@@ -30,7 +30,7 @@ from .const import (
     PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,
     UNIQUE_ID_PREFIX,
 )
-from .coordinator import ORPHANED_KEY_DEBOUNCE_POLLS, first_hub_record, is_hub_record
+from .coordinator import ORPHANED_KEY_DEBOUNCE_POLLS, SILENT_DATA_TYPE, first_hub_record, is_hub_record
 from .entity import late_adders
 from .repairs import OrphanedEntitiesRecord, RainPointOrphanedEntityIssues, async_sync_push_hub_identity_issue
 
@@ -94,12 +94,6 @@ _HUB_MIGRATABLE_SUFFIXES = frozenset(
 # may never be used to bring a row into scope, and removal itself stays an
 # exact (domain, unique_id) pair match with no string reasoning in it.
 _ZONE_UNIQUE_ID_RE = re.compile(r"_zone\d+(?:_|$)")
-# What a failed registry read on the leftover path says it cost, named once for
-# the three reads that make it: the entity-registry read inside the derivation,
-# and the device-registry reads on the update path and the confirm path. They
-# are one sweep from the user's side, so they report as one thing.
-_LEFTOVER_SCAN = "the leftover entity scan"
-
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
@@ -696,8 +690,8 @@ def _hub_name_for_sensor_key(sensor_key: str, device_names: Mapping) -> str | No
 
 def _build_leftover_row_pairs(
     hass: HomeAssistant, entry: ConfigEntry, entry_store: dict, live_keys, device_rows, entity_ids: dict | None = None
-) -> dict[str, frozenset[tuple[str, str]]]:
-    """Return the dead registry rows sitting on a still-present device, by sensor key.
+) -> dict[str, frozenset[tuple[str, str]]] | None:
+    """Return the dead rows sitting on a still-present device, or None if unread.
 
     The second candidate derivation on this surface, and the mirror image of
     the first. _build_orphaned_entity_records reaches a row through the ledgers
@@ -718,9 +712,15 @@ def _build_leftover_row_pairs(
     survives.
 
     Every read is guarded per row, so one malformed row cannot abort the scan,
-    and an unreadable registry yields an empty mapping rather than raising:
-    this runs inside a coordinator listener, and offering nothing is the safe
-    degradation for a surface whose only outcome is a deletion offer.
+    and an unreadable registry returns None rather than raising: this runs
+    inside a coordinator listener, and offering nothing is the safe degradation
+    for a surface whose only outcome is a deletion offer.
+
+    None and an empty mapping are two different answers and the caller acts on
+    the difference. An empty mapping is a verdict: every row was looked at and
+    none of them qualifies, which retires the windows of any pair that used to.
+    None is the absence of a verdict, and retiring a window on it would let one
+    unreadable poll cost every pending row the whole time it had served.
 
     ``device_rows`` is supplied by the caller rather than fetched here, so a
     caller resolving device names for the same pass (_sync_orphaned_entity_issues)
@@ -740,10 +740,14 @@ def _build_leftover_row_pairs(
     """
     named_entity_ids = entity_ids if entity_ids is not None else {}
     entity_registry, entity_rows = _fetch_registry_rows(
-        er.async_get, er.async_entries_for_config_entry, hass, entry, _LEFTOVER_SCAN
+        er.async_get, er.async_entries_for_config_entry, hass, entry, "the leftover entity scan's registry read"
     )
     if entity_registry is None:
-        return {}
+        # None rather than {}, and the distinction is the caller's whole
+        # decision: {} is "every row was looked at and none qualifies", which
+        # retires a pair's window, while None is "no row was looked at", which
+        # must leave every window standing.
+        return None
 
     ledger_pairs = _ledger_pairs_by_key(late_adders(entry_store))
     # A key has to be both in this session's ledgers and in the current poll.
@@ -1087,6 +1091,7 @@ def _leftover_pairs_now(
     *,
     advance: bool = True,
     entity_ids: dict | None = None,
+    blind: bool = False,
 ) -> dict:
     """Re-derive the debounced leftover pairs for this config entry, right now.
 
@@ -1115,11 +1120,54 @@ def _leftover_pairs_now(
     at None and removes by pair alone.
     """
     entry_store = (hass.data.get(DOMAIN) or {}).get(entry.entry_id) or {}
-    live_keys = frozenset(_read_current_sensors(coordinator, "offering no leftover rows this update"))
+    live_keys = _reporting_sensor_keys(coordinator)
+    # Nothing to see rather than nothing there. An update with no sensor keys at
+    # all, or one whose device rows could not be fetched, says nothing about any
+    # individual row, and answering it as "no pair qualifies" would prune every
+    # window this listener has been counting. A blind update leaves them exactly
+    # as they are and the next readable one carries on.
+    if not live_keys or blind:
+        return {}
     pairs_by_key = _build_leftover_row_pairs(hass, entry, entry_store, live_keys, device_rows, entity_ids)
+    if pairs_by_key is None:
+        return {}
     if advance:
         return _debounced_leftover_pairs(counts, pairs_by_key)
     return _settled_leftover_pairs(counts, pairs_by_key)
+
+
+def _reporting_sensor_keys(coordinator) -> frozenset[str]:
+    """Return the keys whose current record is a real reading, silence excluded.
+
+    A device that has stopped reporting does not leave ``sensors``: after
+    SILENT_DEBOUNCE_POLLS the coordinator publishes a silent entry for it, which
+    is what drives the not-reporting sensor and its own Repairs card. Reading
+    that entry as evidence the device is live is what let this card be raised
+    against a device the integration was simultaneously telling the user had
+    stopped reporting, offering to delete the entity rows and the recorder
+    history of every reading it used to send.
+
+    A silent device's rows read unbacked for exactly the reason its own reading
+    is missing, so they are not unused rows, and the card's own words ("still
+    lists this device on your account and it is reporting normally") are false
+    of it. The same SILENT_DATA_TYPE discriminator gates the valve, number,
+    select and sensor platforms; this is that gate, applied to the one path
+    whose Submit deletes.
+
+    A record this cannot read is left out rather than admitted: a malformed
+    entry is not evidence of a reporting device, and every uncertainty on this
+    path resolves towards leaving rows alone.
+    """
+    keys = set()
+    for key, record in _read_current_sensors(coordinator, "offering no leftover rows this update").items():
+        try:
+            if ((record or {}).get("data") or {}).get("type") == SILENT_DATA_TYPE:
+                continue
+        except Exception as exc:
+            _LOGGER.debug("Could not read the current record for a sensor key; leaving its rows alone: %s", exc)
+            continue
+        keys.add(key)
+    return frozenset(keys)
 
 
 def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordinator, manager, counts=None) -> None:
@@ -1150,13 +1198,24 @@ def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordi
     """
     try:
         entry_store = (hass.data.get(DOMAIN) or {}).get(entry.entry_id) or {}
-        _, device_rows = _fetch_registry_rows(dr.async_get, dr.async_entries_for_config_entry, hass, entry, _LEFTOVER_SCAN)
+        device_registry, device_rows = _fetch_registry_rows(
+            dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the leftover entity scan's device lookup"
+        )
         device_names = _resolve_device_names(device_rows)
         # Filled by the derivation below with the entity id behind each offered
         # pair, for the card to name. Nothing downstream of the card reads it.
         entity_ids: dict[tuple[str, str], str] = {}
         leftover = _leftover_pairs_now(
-            hass, entry, coordinator, counts if counts is not None else {}, device_rows, entity_ids=entity_ids
+            hass,
+            entry,
+            coordinator,
+            counts if counts is not None else {},
+            device_rows,
+            entity_ids=entity_ids,
+            # An unreadable device registry resolves no row to a key, so every
+            # pair would read as no longer qualifying. That is a failure to look
+            # rather than a verdict, and it may not retire a single window.
+            blind=device_registry is None,
         )
         records = _build_orphaned_entity_records(
             entry_store,
@@ -1257,10 +1316,12 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         """
         if not leftover_shape:
             return _remove_orphaned_key_rows(hass, entry, sensor_key)
-        _, device_rows = _fetch_registry_rows(dr.async_get, dr.async_entries_for_config_entry, hass, entry, _LEFTOVER_SCAN)
-        derived = _leftover_pairs_now(hass, entry, coordinator, leftover_counts, device_rows, advance=False).get(
-            sensor_key, frozenset()
+        device_registry, device_rows = _fetch_registry_rows(
+            dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the confirmed removal's device lookup"
         )
+        derived = _leftover_pairs_now(
+            hass, entry, coordinator, leftover_counts, device_rows, advance=False, blind=device_registry is None
+        ).get(sensor_key, frozenset())
         scope = derived if offered_pairs is None else derived & frozenset(offered_pairs)
         if not scope:
             # The breadcrumb for a Submit that took nothing, and the only place

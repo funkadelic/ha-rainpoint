@@ -36,6 +36,7 @@ from custom_components.rainpoint import (
     _leftover_pairs_now,
     _name_leftover_pairs,
     _remove_orphaned_key_rows,
+    _reporting_sensor_keys,
     _resolve_device_names,
     _row_is_unbacked,
     _settled_leftover_pairs,
@@ -52,11 +53,16 @@ from custom_components.rainpoint.const import (
     LEFTOVER_ROW_DEBOUNCE_UPDATES,
     ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
 )
-from custom_components.rainpoint.coordinator import ORPHANED_KEY_DEBOUNCE_POLLS
+from custom_components.rainpoint.coordinator import (
+    ORPHANED_KEY_DEBOUNCE_POLLS,
+    SILENT_DATA_TYPE,
+    SILENT_DEBOUNCE_POLLS,
+)
 from custom_components.rainpoint.entity import LATE_ADDER_STORE_KEY, LateEntityAdder
 from custom_components.rainpoint.repairs import async_create_fix_flow
 from custom_components.rainpoint.sensor import async_setup_entry as sensor_async_setup_entry
 from custom_components.rainpoint.valve import async_setup_entry as valve_async_setup_entry
+from tests.helpers import make_valve_zone_status
 from tests.test_orphan_removal import (
     ENTRY_ID,
     HID,
@@ -811,6 +817,10 @@ class TestTheDisplayedListIsNotTheRemovalAuthority:
 
                 flow = await async_create_fix_flow(hass, create.call_args.args[2], kwargs["data"])
                 flow.hass = hass
+                # Shown before submitted, the way Home Assistant drives it: the
+                # dialog is what takes the offer this confirm is held to, so a
+                # test that skips it asserts the unsnapshotted path instead.
+                assert (await flow.async_step_init())["step_id"] == "confirm"
                 await flow.async_step_confirm({})
 
                 assert harness.removed == [unnameable_entity_id]
@@ -843,21 +853,247 @@ class TestTheDisplayedListIsNotTheRemovalAuthority:
 
                 flow = await async_create_fix_flow(hass, create.call_args.args[2], kwargs["data"])
                 flow.hass = hass
+                assert (await flow.async_step_init())["step_id"] == "confirm"
                 await flow.async_step_confirm({})
 
                 assert harness.removed == [renamed]
 
 
+class TestADeviceThatStoppedReportingIsNeverOffered:
+    """The card says the device is reporting normally, so it may only be
+    raised for one that is.
+
+    A device that goes quiet does not leave the poll: after its silence
+    debounce the coordinator publishes a silent entry for it, which is what
+    drives the not-reporting sensor and that device's own Repairs card. Read as
+    evidence of life, that entry let this card be raised against a device the
+    integration was simultaneously telling the user had stopped reporting, and
+    offer to delete every row it carries along with the history behind them.
+    """
+
+    @staticmethod
+    def _cards(create) -> list[str]:
+        """The leftover-entity cards raised, by translation key.
+
+        Filtered rather than counted raw, because the silent device raises its
+        own not-reporting card through the same registry function. That card is
+        correct and expected here; it is the whole reason this one must not
+        appear beside it.
+        """
+        return [
+            call.kwargs["translation_key"]
+            for call in create.call_args_list
+            if call.kwargs.get("translation_key") in {LEFTOVER_ENTITIES_TRANSLATION_KEY, ORPHANED_ENTITIES_ISSUE_ID_PREFIX}
+        ]
+
+    @staticmethod
+    async def _silent_install(harness: _Harness):
+        """Drive a real install whose device then stops reporting.
+
+        The device reports at setup, so its entities are built and its rows are
+        registered the way a real install registers them, and only then goes
+        quiet. Substituting a device that never reported would remove the
+        failure mode: the rows have to exist first.
+        """
+        coordinator, hass, _entry, client = await _armed_install(harness)
+        # The hub keeps answering; the child stops appearing in its status.
+        client.get_multiple_device_status.return_value = [{"mid": MID, "subDeviceStatus": []}]
+        for _ in range(SILENT_DEBOUNCE_POLLS + 1):
+            await coordinator.async_refresh()
+        return coordinator, hass, client
+
+    @pytest.mark.asyncio
+    async def test_a_silent_device_reaches_the_silent_state_this_test_needs(self):
+        """The precondition, asserted rather than assumed.
+
+        If the device were merely absent, or still reporting, the test below
+        would pass while proving nothing at all.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (_create, _delete):
+            coordinator, _hass, _client = await self._silent_install(harness)
+
+        assert coordinator.data["sensors"][SENSOR_KEY]["data"]["type"] == SILENT_DATA_TYPE
+
+    @pytest.mark.asyncio
+    async def test_no_card_is_raised_for_a_device_that_has_stopped_reporting(self):
+        """The whole window served while the device is silent, and no offer.
+
+        Its rows read exactly like leftover rows: the entities are gone from
+        the state machine, so nothing alive is behind them, and none of them is
+        a zone row or a generic row. What keeps them off the card is the one
+        thing this device is: quiet.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, _hass, _client = await self._silent_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES * 2):
+                    await coordinator.async_refresh()
+
+            # Its own not-reporting card is up, and that one is correct.
+            assert self._cards(create) == []
+            assert create.call_count > 0
+
+    def test_a_record_that_cannot_be_read_is_left_out_rather_than_admitted(self):
+        """A malformed record is not evidence of a reporting device.
+
+        Every uncertainty on this path resolves towards leaving rows alone, so
+        a record that raises on the way to its type costs its key the candidacy
+        rather than being waved through as live.
+        """
+
+        class _ExplodingRecord:
+            """A sensor record that raises the moment it is read."""
+
+            def get(self, _key, _default=None):
+                """Raise the way a half-decoded record might."""
+                raise RuntimeError("unreadable record")
+
+        coordinator = SimpleNamespace(data={"sensors": {SENSOR_KEY: _ExplodingRecord(), "100_200_2": {"data": {}}}})
+
+        assert _reporting_sensor_keys(coordinator) == frozenset({"100_200_2"})
+
+    @pytest.mark.asyncio
+    async def test_the_same_row_is_offered_once_the_device_reports_again(self):
+        """The exclusion is about the silence and nothing else.
+
+        The identical row, on the identical key, becomes offerable the moment
+        the device is reporting again, which is what proves the guard is not
+        simply suppressing this card wholesale.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, _hass, client = await self._silent_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES):
+                    await coordinator.async_refresh()
+                assert self._cards(create) == []
+
+                # The device starts reporting again, and only now does the
+                # window that this card depends on begin to count.
+                client.get_multiple_device_status.return_value = make_valve_zone_status(mid=MID)
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES + 1):
+                    await coordinator.async_refresh()
+
+            assert self._cards(create) == [LEFTOVER_ENTITIES_TRANSLATION_KEY]
+
+
+class TestAnUpdateThatCouldNotLookKeepsEveryWindow:
+    """A failed read is not a verdict about any row.
+
+    The window is retired by "this pair no longer qualifies", which is a thing
+    the derivation can only say once it has looked. An update that could not
+    look at all used to say it about every pair at once, so one unreadable
+    registry, or one poll that carried no sensors, cost every pending row the
+    whole time it had served and withdrew any card already up.
+    """
+
+    @staticmethod
+    def _window(hass) -> dict:
+        """The debounce window held by the published remover's closure."""
+        return inspect.getclosurevars(hass.data[DOMAIN][ENTRY_ID]["orphan_entity_remover"]).nonlocals["leftover_counts"]
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_entity_registry_mid_window_costs_no_progress(self):
+        """Count part way, go blind for an update, then finish the window.
+
+        The row is offered on exactly the update it would have been offered on
+        had the blind one never happened, which is the property: a blind update
+        is skipped rather than counted or subtracted.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES - 1):
+                    await coordinator.async_refresh()
+                served = dict(self._window(hass))
+                assert served[(SENSOR_KEY, ("sensor", LEFTOVER_UNIQUE_ID))] == LEFTOVER_ROW_DEBOUNCE_UPDATES - 1
+
+                # One update the entity registry cannot be read on.
+                harness.entity_get_raises = True
+                await coordinator.async_refresh()
+                assert self._window(hass) == served
+                assert create.call_count == 0
+
+                harness.entity_get_raises = False
+                await coordinator.async_refresh()
+
+            assert create.call_count == 1
+            assert create.call_args.kwargs["translation_placeholders"]["entity_count"] == "1"
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_device_registry_mid_window_costs_no_progress(self):
+        """The other registry, which resolves a row to its sensor key.
+
+        Without it no row resolves at all, so every pair reads as no longer
+        qualifying, which is the same failure wearing a different hat.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (_create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES - 1):
+                    await coordinator.async_refresh()
+                served = dict(self._window(hass))
+
+                harness.device_get_raises = True
+                await coordinator.async_refresh()
+
+                assert self._window(hass) == served
+
+    @pytest.mark.asyncio
+    async def test_a_recovered_row_still_retires_its_window(self):
+        """The other half, without which the fix above would be a leak.
+
+        A derivation that did look and found the row backed again must still
+        retire it, or a row that recovers keeps a window it no longer deserves
+        and is offered the moment it dies again.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (_create, _delete):
+            coordinator, hass, _entry, _client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                for _ in range(LEFTOVER_ROW_DEBOUNCE_UPDATES - 1):
+                    await coordinator.async_refresh()
+                assert self._window(hass)
+
+                harness.states[LEFTOVER_ENTITY_ID] = _live_state()
+                await coordinator.async_refresh()
+
+                assert self._window(hass) == {}
+
+
 class TestTheScanDegradesRatherThanRaising:
     """It runs inside a coordinator listener, so nothing here may propagate."""
 
-    def test_an_unreadable_entity_registry_yields_no_candidates(self):
-        """Offering nothing is the safe answer for a surface that deletes."""
+    def test_an_unreadable_entity_registry_answers_none_rather_than_no_candidates(self):
+        """Offering nothing is the safe answer for a surface that deletes, but
+        it has to be said as "nothing was looked at" rather than as "nothing
+        qualifies". The second retires every window a pending row has served,
+        and one unreadable read is not evidence about any row."""
         harness = _Harness()
         harness.add_leftover_row()
         harness.entity_get_raises = True
 
-        assert _derive(harness) == {}
+        assert _derive(harness) is None
 
     def test_an_unreadable_device_registry_yields_no_candidates(self):
         """Without it no row can be resolved to a key at all."""
@@ -1198,7 +1434,10 @@ class TestARecoveredCardTakesNothing:
                 flow.hass = hass
 
                 # The one row the card offered is backed again by the time the
-                # user presses Submit.
+                # The dialog is shown while the row is still dead, and the row
+                # recovers between that and the Submit, which is the ordering
+                # this test is about.
+                assert (await flow.async_step_init())["step_id"] == "confirm"
                 harness.states[LEFTOVER_ENTITY_ID] = _live_state()
                 registered = sorted(row.entity_id for row in harness.entity_rows)
 
@@ -1275,6 +1514,7 @@ class TestARecoveredCardTakesNothing:
 
                 flow = await async_create_fix_flow(hass, create.call_args.args[2], kwargs["data"])
                 flow.hass = hass
+                assert (await flow.async_step_init())["step_id"] == "confirm"
                 harness.states[LEFTOVER_ENTITY_ID] = _live_state()
 
                 await flow.async_step_confirm({})
