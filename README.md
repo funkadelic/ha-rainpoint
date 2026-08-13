@@ -161,13 +161,27 @@ Everything above clears on its own after the hub reconnects: the Repairs notice 
 
 ## When a device's entities are left over
 
+Two different things can leave you with entity rows that will never update again, and each raises its own **Settings → Repairs** card. Both cards name the device by the name you gave it in Home Assistant, so when two are up at once you can tell them apart without cross-referencing an address against a device page. A device you have never renamed is named by RainPoint's own string for it instead.
+
+### The device is gone from your account
+
 RainPoint sometimes moves a device to a different parent record on its side, which changes the identity this integration builds its entity IDs from. A fresh set of entities then appears for the same physical device while the old set stays behind, permanently unavailable, so every reading looks like it exists twice.
 
-Home Assistant raises a **Settings → Repairs** card, "A device's entities are left over from an older listing", once the old listing has been absent from thirty consecutive checks, roughly an hour at the default two-minute polling interval. The window is deliberately long, and it pauses entirely while the device's hub is itself missing from your account listing, so a cloud-side blip cannot strand a healthy device's entities.
+Home Assistant raises "A device's entities are left over from an older listing" once the old listing has been absent from thirty consecutive checks, roughly an hour at the default two-minute polling interval. The window is deliberately long, and it pauses entirely while the device's hub is itself missing from your account listing, so a cloud-side blip cannot strand a healthy device's entities.
 
-Nothing is removed automatically. Short of deleting entities yourself under **Settings → Devices & services → Entities**, that card's **Submit** button is the only thing that removes an entity you did not opt into, and it deletes the history recorded against those entities along with them, which cannot be undone. (The one other integration-side deletion is switching off an option you turned on yourself, under [unverified generic entities](#unverified-generic-entities-opt-in), which clears the entities that option created.) If you would rather keep the history, leave the card alone: the leftover entities stay where they are, unavailable but intact. The leftover device page is released at the same time as the entities, once it carries nothing else.
+One thing to know before deferring this one: the card is withdrawn when the integration reloads or Home Assistant restarts, and it is not raised again, because the old listing is gone from your account and nothing is left to notice its entities. Removing them after that means removing them by hand under **Settings → Devices & services → Entities**.
 
-One thing to know before deferring it: the card is withdrawn when the integration reloads or Home Assistant restarts, and it is not raised again, because the old listing is gone from your account and nothing is left to notice its entities. Removing them after that means removing them by hand under **Settings → Devices & services → Entities**.
+### The device is still here, but some of its entities are not
+
+A device can stay on your account and report normally while still carrying a row that nothing is behind: a reading it used to send and no longer does, or an entity a newer version of this integration replaced with a better one. Those rows sit permanently unavailable on an otherwise healthy device page.
+
+Home Assistant raises "A device has entities that nothing is behind" once the rows have looked that way thirty times running. That is counted in updates rather than on a clock, and with push enabled an update arrives whenever a device sends a reading, so the real wait depends on how chatty your devices are.
+
+This card can offer a row that is only temporarily quiet, because a reading that has not arrived since the last restart looks the same from inside the integration as one that is gone for good. Watering zones are never offered here, so a zone you have not run yet is safe either way. For anything else, the card lists exactly what it would remove, and **Cancel** leaves it alone. Unlike the card above, this one comes back after a reload if the rows still look unused.
+
+### Neither card removes anything on its own
+
+Short of deleting entities yourself under **Settings → Devices & services → Entities**, those cards' **Submit** buttons are the only thing that removes an entity you did not opt into, and they delete the history recorded against those entities along with them, which cannot be undone. (The one other integration-side deletion is switching off an option you turned on yourself, under [unverified generic entities](#unverified-generic-entities-opt-in), which clears the entities that option created.) If you would rather keep the history, leave the card alone: the leftover entities stay where they are, unavailable but intact. On the first card, the leftover device page is released at the same time as the entities, once it carries nothing else; on the second the device is still in use, so its page stays.
 
 ---
 
