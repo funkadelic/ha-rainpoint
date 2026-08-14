@@ -1203,10 +1203,11 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # Merely "no prior status recorded for this mid to merge into yet" --
         # unrelated to the absent-vs-omitted distinction, which concerns
         # the fetch layer's status_by_mid, not this push-side merge target.
-        # The absent marker's contents are the same shape, so it doubles as
-        # the "nothing recorded yet" default here. Built fresh like everywhere
-        # else, so no absent-status object is ever shared between call sites.
-        mid_status = dict(status.get(mid, _absent_status()))
+        # A bare literal rather than the absent marker, deliberately: this site
+        # makes no absence claim, and the surrounding dict() would strip the
+        # marker's type anyway, so building one here would allocate on every
+        # push merge to say something this site does not mean.
+        mid_status = dict(status.get(mid, {"subDeviceStatus": []}))
         sub_status = list(mid_status.get("subDeviceStatus", []))
         for index, existing in enumerate(sub_status):
             # Skipped rather than indexed, for the same reason apply_push_update
