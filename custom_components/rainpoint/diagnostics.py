@@ -65,12 +65,14 @@ from .const import (
     CONF_AREA_CODE,
     CONF_GENERIC_CONTROL_ENABLED,
     CONF_GENERIC_ENTITIES_ENABLED,
+    CONF_HIC_CONTROL_PROBE_ENABLED,
     CONF_HIDS,
     CONF_PUSH_ENABLED,
     DOMAIN,
     HUB_IDENTIFIER_PREFIX,
     VERSION,
 )
+from .control_probe_entities import probe_results
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -224,11 +226,18 @@ _SENSOR_ENTRY_FIELDS = frozenset(
 # fields, and the payload itself is the middle one.
 _STATUS_ENTRY_FIELDS = frozenset({"id", "time", "value"})
 
-# The options the options flow writes, all three of them booleans. Allow-listed
+# The options the options flow writes, all of them booleans. Allow-listed
 # for the same reason the cloud records are, one step removed: the options dict
 # is whatever has ever been persisted against this entry, which includes
 # anything a past version wrote and stopped using.
-_OPTION_FIELDS = frozenset({CONF_GENERIC_CONTROL_ENABLED, CONF_GENERIC_ENTITIES_ENABLED, CONF_PUSH_ENABLED})
+_OPTION_FIELDS = frozenset(
+    {
+        CONF_GENERIC_CONTROL_ENABLED,
+        CONF_GENERIC_ENTITIES_ENABLED,
+        CONF_HIC_CONTROL_PROBE_ENABLED,
+        CONF_PUSH_ENABLED,
+    }
+)
 
 # Kept out of _HUB_RECORD_FIELDS on purpose, because `_hub_dump` walks each
 # child through its own allow-list rather than letting the list ride along
@@ -454,6 +463,12 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, config_entry: 
         "hubs": hubs,
         "sensors": sensors,
         "hub_connectivity": data.get("hub_connectivity") or {},
+        # Absent until the owner has actually run the opt-in encoding probe, so
+        # an ordinary dump is unchanged by its existence. This is the whole
+        # delivery route for that experiment: the owner presses a button and
+        # attaches this file, so the record has to ride in the download rather
+        # than live only in a log they would have to find and scrape.
+        "control_probe": probe_results(hass, config_entry.entry_id),
     }
     return async_redact_data(payload, TO_REDACT)
 

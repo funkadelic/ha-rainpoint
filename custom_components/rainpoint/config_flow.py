@@ -22,6 +22,7 @@ from .const import (
     CONF_EMAIL,
     CONF_GENERIC_CONTROL_ENABLED,
     CONF_GENERIC_ENTITIES_ENABLED,
+    CONF_HIC_CONTROL_PROBE_ENABLED,
     CONF_HIDS,
     CONF_PASSWORD,
     CONF_PUSH_ENABLED,
@@ -325,6 +326,10 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
                 vol.Required(
                     CONF_GENERIC_CONTROL_ENABLED,
                     default=self.config_entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False),
+                ): bool,
+                vol.Required(
+                    CONF_HIC_CONTROL_PROBE_ENABLED,
+                    default=self.config_entry.options.get(CONF_HIC_CONTROL_PROBE_ENABLED, False),
                 ): bool,
             }
         )

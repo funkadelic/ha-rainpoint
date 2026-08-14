@@ -60,6 +60,42 @@ GENERIC_UNIQUE_ID_MARKER = "_generic_"
 HUB_IDENTIFIER_PREFIX = "hub_"
 HUB_UNIQUE_ID_PREFIX = f"{DOMAIN}_hub_"
 
+# === HIC station-control encoding probe ===
+# Opt-in, off by default, and never reached by an ordinary user. The HIC family
+# declares one CTL_WATER datapoint at dpPort 0 for all eight stations, so the
+# station number has to be encoded inside its 2-byte payload and no status
+# frame can say how: dpCode 7 is write-only and never appears in a reading.
+# The probe walks the candidate encodings, reads the station back after each,
+# and records every attempt for the owner to attach to a support thread.
+CONF_HIC_CONTROL_PROBE_ENABLED = "hic_control_probe_enabled"
+
+# Station 3, not station 1. Three separates every candidate encoding that a 1
+# would collapse together: as a station number it is 0x03 where the bitmask for
+# the same station is 0x04, and a byte pair carrying it plus an on-flag differs
+# whichever order the two sit in. Station 1 makes all of those read 0x01.
+HIC_PROBE_STATION = 3
+
+# The shortest run worth asking for. Sized so a station that does switch on
+# stops by itself within the minute even if the probe's own stop command is
+# rejected, which is the failure mode that would otherwise leave a stranger's
+# hardware running on a guess.
+HIC_PROBE_RUN_SECONDS = 60
+
+# One day. Long enough to be unmistakable in the vendor app, which is the only
+# read-back a rain delay has: variant 279 declares no STA_ counterpart for it.
+HIC_PROBE_RAIN_DELAY_DAYS = 1
+
+# Pause between issuing a command and reading the station back. The cloud
+# forwards to the controller and the controller answers on its own schedule, so
+# an immediate read reports the previous state and would score a working
+# encoding as a miss.
+HIC_PROBE_SETTLE_SECONDS = 4
+
+# Backstop on the candidate walk. The lists below are literals, so this can
+# only fire if one is edited carelessly; it exists so a mistake there cannot
+# turn into an unbounded run of writes against someone else's controller.
+HIC_PROBE_MAX_ATTEMPTS = 24
+
 # === Generic (catalog-driven) control entity factory ===
 CONF_GENERIC_CONTROL_ENABLED = "generic_control_enabled"
 # The control marker is nested inside GENERIC_UNIQUE_ID_MARKER rather than

@@ -701,6 +701,7 @@ class RainPointClient:
         port: int,
         mode: int,
         param: str,
+        dp_code: int = _DP_CODE_CTL_BT_WATER,
     ) -> str | None:
         """Open or close a Bluetooth-backed valve zone over the datapoint control endpoint.
 
@@ -715,6 +716,12 @@ class RainPointClient:
                 endpoint reads in place of a ``duration`` field. Callers build it
                 with ``_encode_dp_duration_param``; this method sends no
                 ``duration`` key at all.
+            dp_code: The datapoint this command addresses. Defaults to the
+                Bluetooth valve code every shipped caller wants, so the valve
+                path reads the same as before this became settable. The
+                HIC encoding probe is the only caller that overrides it, and it
+                passes a code the committed catalog declares for the device it
+                is addressing rather than an arbitrary integer.
 
         Returns:
             The value of ``data["data"]`` if it is a string, or
@@ -736,7 +743,7 @@ class RainPointClient:
             "addr": addr,
             "port": port,
             "param": param,
-            "dpCode": _DP_CODE_CTL_BT_WATER,
+            "dpCode": dp_code,
         }
         # Deliberately does not log the payload or response dict the way
         # control_work_mode's debug lines do: this body carries deviceName
@@ -745,11 +752,12 @@ class RainPointClient:
         # logged, per the house rule that a cloud-record log line never
         # carries cloud-supplied free text.
         _LOGGER.debug(
-            "API call: control_work_mode_dp URL=%s mode=%s port=%s param=%s",
+            "API call: control_work_mode_dp URL=%s mode=%s port=%s param=%s dpCode=%s",
             url,
             mode,
             port,
             param,
+            dp_code,
         )
         request_token = self._token
         async with self._session.post(url, headers=self._auth_headers(), json=payload) as resp:
