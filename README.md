@@ -244,6 +244,8 @@ Home Assistant can write out a diagnostics file describing what this integration
 
 Go to **Settings → Devices & Services → RainPoint**, open the three-dot menu on the RainPoint entry and choose **Download diagnostics**. Every device page carries the same option in its own menu, which is the one to use when only one device is misbehaving.
 
+The file opens with a list of your devices, each carrying the name you gave it in Home Assistant, so you can tell which section describes which device.
+
 Removed before the file is written: your password, your login tokens, your email address, your hardware's MAC addresses, and the cloud's own device credentials and product keys. Kept on purpose: the names of your devices, your hub and your home as they appear in the app, the name you gave a device in Home Assistant, and the account-internal numbers this integration uses to tell one device from another. Nothing in that second list authenticates anything, and without it the file cannot say which device a section describes, which is the only reason to download it. Read the file before you attach it to a public issue if any of that is something you would rather not post. Only Home Assistant administrators can download it.
 
 ---
