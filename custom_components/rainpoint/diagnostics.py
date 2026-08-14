@@ -396,9 +396,10 @@ def _device_identity_map(
     the `hub_connectivity` mapping; a parsed component that disagrees with the
     key it was parsed from is worse than a join the reader makes in their head.
 
-    `in_current_poll` means absent from this poll, and never dead. Aged-out and
-    leftover verdicts belong to `repairs.py` and carry conditions this flag
-    does not evaluate.
+    `in_current_poll` is true when this poll carried a counterpart for the row.
+    False means absent from this poll, and never dead. Aged-out and leftover
+    verdicts belong to `repairs.py` and carry conditions this flag does not
+    evaluate.
 
     A row whose `_domain_sensor_key` answer is None still gets an entry rather
     than being skipped, keyed `unrecognised_{row.id}` and carrying

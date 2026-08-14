@@ -919,12 +919,12 @@ class TestDeviceIdentityMapEdges:
 
     @pytest.mark.asyncio
     async def test_a_non_ascii_name_by_user_survives_byte_for_byte(self, _registry_rows):
-        _registry_rows.append(_device("182509_236547_1", name_by_user="Jardin Trasero"))
+        _registry_rows.append(_device("182509_236547_1", name_by_user="Jardín Trasero"))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert result["devices"]["182509_236547_1"]["name_by_user"] == "Jardin Trasero"
+        assert result["devices"]["182509_236547_1"]["name_by_user"] == "Jardín Trasero"
 
     @pytest.mark.asyncio
     async def test_a_cjk_name_by_user_survives_byte_for_byte(self, _registry_rows):
@@ -1000,7 +1000,7 @@ class TestDeviceIdentityMapEdges:
 
         for record in caplog.records:
             assert "Front Lawn Valve" not in record.getMessage()
-            assert "Jardin Trasero" not in record.getMessage()
+            assert "Jardín Trasero" not in record.getMessage()
             assert HUB_LABEL not in record.getMessage()
 
     @pytest.mark.asyncio
