@@ -89,6 +89,45 @@ _DISPLAY_HUB_PAYLOAD = "1,0,1;707(707/694/1),42(42/39/1),P=9709(9709/9701/1),"
 
 
 # ---------------------------------------------------------------------------
+# Helper: a controllable UTC clock for the durational hub-disconnect window.
+# ---------------------------------------------------------------------------
+
+# An arbitrary but fixed moment every clock below starts from, so a test can
+# name a cloud change time relative to it instead of carrying a raw epoch
+# literal whose distance from "now" nobody can read.
+_CLOCK_EPOCH = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+
+
+class _FakeClock:
+    """A callable UTC clock the coordinator can be constructed with.
+
+    Injected rather than monkeypatched over a module global on purpose: a
+    timeline test that forgot the patch would measure real wall time, never
+    cross the 180 second threshold, and pass while proving nothing about
+    whether the window is measured at all.
+    """
+
+    def __init__(self, start: datetime = _CLOCK_EPOCH):
+        self.now = start
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, seconds: int) -> None:
+        """Move the clock forward, the way a test names the passage of time."""
+        self.now += timedelta(seconds=seconds)
+
+    def ms(self, offset_seconds: int = 0) -> int:
+        """Epoch milliseconds for this clock's moment, plus an offset.
+
+        The cloud's status entries carry epoch milliseconds, so a test that
+        wants a hub's change time to sit at a known point on this same
+        timeline builds it here rather than hand-computing a literal.
+        """
+        return int((self.now + timedelta(seconds=offset_seconds)).timestamp() * 1000)
+
+
+# ---------------------------------------------------------------------------
 # Helper: build a fake coordinator namespace and a mock client.
 # ---------------------------------------------------------------------------
 
@@ -110,7 +149,10 @@ def _make_coord(hids=None):
         _last_valve_command_at={},
         _silent_poll_counts={},
         _silent_issues=MagicMock(),
-        _hub_disconnect_poll_counts={},
+        _hub_disconnect_since={},
+        # A controllable clock, so a direct-call test can name elapsed time
+        # with coord._time_source.advance(...) rather than sleeping.
+        _time_source=_FakeClock(),
         _hub_connectivity_issues=MagicMock(),
         _last_poll_hub_keys=set(),
         _hub_absent_poll_counts={},
@@ -1668,21 +1710,24 @@ class TestPruneSilentState:
 class TestPruneHubConnectivityState:
     """Direct-call tests for _prune_hub_connectivity_state."""
 
-    def test_drops_counter_for_a_hub_no_longer_listed(self):
-        """A hub that leaves the device list must not keep a debounce counter alive."""
+    _SINCE_A = _CLOCK_EPOCH - timedelta(seconds=60)
+    _SINCE_B = _CLOCK_EPOCH - timedelta(seconds=30)
+
+    def test_drops_window_start_for_a_hub_no_longer_listed(self):
+        """A hub that leaves the device list must not keep a window start alive."""
         coord, _ = _make_coord()
-        coord._hub_disconnect_poll_counts = {(100, 200): 2, (100, 300): 1}
+        coord._hub_disconnect_since = {(100, 200): self._SINCE_A, (100, 300): self._SINCE_B}
         hub = _make_hub(mid=200)
         hub["hid"] = 100
 
         _coord_module.RainPointCoordinator._prune_hub_connectivity_state(coord, [hub])
 
-        assert coord._hub_disconnect_poll_counts == {(100, 200): 2}
+        assert coord._hub_disconnect_since == {(100, 200): self._SINCE_A}
 
-    def test_keeps_counters_for_hubs_still_listed(self):
-        """Pruning one hub's departure must not disturb another hub's counter."""
+    def test_keeps_window_starts_for_hubs_still_listed(self):
+        """Pruning one hub's departure must not disturb another hub's window."""
         coord, _ = _make_coord()
-        coord._hub_disconnect_poll_counts = {(100, 200): 1, (100, 300): 2}
+        coord._hub_disconnect_since = {(100, 200): self._SINCE_A, (100, 300): self._SINCE_B}
         hub1 = _make_hub(mid=200)
         hub1["hid"] = 100
         hub2 = _make_hub(mid=300)
@@ -1690,13 +1735,13 @@ class TestPruneHubConnectivityState:
 
         _coord_module.RainPointCoordinator._prune_hub_connectivity_state(coord, [hub1, hub2])
 
-        assert coord._hub_disconnect_poll_counts == {(100, 200): 1, (100, 300): 2}
+        assert coord._hub_disconnect_since == {(100, 200): self._SINCE_A, (100, 300): self._SINCE_B}
 
     def test_bluetooth_wrapper_record_is_never_treated_as_a_live_key(self):
-        """A stray counter under a wrapper's key (which should never exist in
-        practice) must not be kept alive by pruning either."""
+        """A stray window start under a wrapper's key (which should never exist
+        in practice) must not be kept alive by pruning either."""
         coord, _ = _make_coord()
-        coord._hub_disconnect_poll_counts = {(100, 346965): 2}
+        coord._hub_disconnect_since = {(100, 346965): self._SINCE_A}
         wrapper_hub = {
             "hid": 100,
             "mid": 346965,
@@ -1710,18 +1755,29 @@ class TestPruneHubConnectivityState:
 
         _coord_module.RainPointCoordinator._prune_hub_connectivity_state(coord, [wrapper_hub])
 
-        assert coord._hub_disconnect_poll_counts == {}
+        assert coord._hub_disconnect_since == {}
 
 
 class TestSyncHubConnectivityIssues:
     """Direct-call tests for _sync_hub_connectivity_issues: one HubConnectivityRecord
-    per real hub, translated correctly from the coordinator's own tri-state shape."""
+    per real hub, translated correctly from the coordinator's own tri-state shape.
 
-    def test_connected_hub_emits_a_non_disconnected_record_and_resets_the_counter(self):
-        """Recovery clears the counter back to zero, proven directly rather than
-        only through the reconcile call it feeds."""
+    Direct-call by design, for the shapes that are about translation rather
+    than about the passage of time. The debounce window itself is proven by
+    the driven timelines further down this file, never from an injected
+    already-past-threshold snapshot.
+    """
+
+    @staticmethod
+    def _seconds_ago(coord, seconds: int) -> datetime:
+        """A moment that many seconds behind the coordinator's own clock."""
+        return coord._time_source() - timedelta(seconds=seconds)
+
+    def test_connected_hub_emits_a_non_disconnected_record_and_drops_the_window(self):
+        """Recovery drops the window start, proven directly rather than only
+        through the reconcile call it feeds."""
         coord, _ = _make_coord()
-        coord._hub_disconnect_poll_counts = {(100, 200): 2}
+        coord._hub_disconnect_since = {(100, 200): self._seconds_ago(coord, 400)}
         hub = _make_hub(mid=200)
         hub["hid"] = 100
         hub_connectivity = {200: {"state": _coord_module.HUB_CONNECTED}}
@@ -1735,13 +1791,13 @@ class TestSyncHubConnectivityIssues:
         assert record.hid == 100
         assert record.mid == 200
         assert record.disconnected is False
-        assert record.missed_polls == 0
-        assert (100, 200) not in coord._hub_disconnect_poll_counts
+        assert record.offline_seconds == 0
+        assert (100, 200) not in coord._hub_disconnect_since
 
-    def test_disconnected_hub_below_threshold_increments_but_emits_no_record(self):
-        """One or two consecutive disconnected polls say nothing either way.
+    def test_disconnected_hub_below_threshold_opens_the_window_but_emits_no_record(self):
+        """A disconnect younger than the threshold says nothing either way.
 
-        The counter still advances, but no record reaches the reconcile: a
+        The window opens, but no record reaches the reconcile: a
         below-threshold poll must not emit a non-disconnected record, because
         that is indistinguishable from a confirmed-connected one by the time
         it reaches the unconditional clear in repairs.py. The id goes into
@@ -1754,7 +1810,7 @@ class TestSyncHubConnectivityIssues:
 
         _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
 
-        assert coord._hub_disconnect_poll_counts[(100, 200)] == 1
+        assert coord._hub_disconnect_since[(100, 200)] == coord._time_source()
         (records,), kwargs = (
             coord._hub_connectivity_issues.async_sync.call_args.args,
             coord._hub_connectivity_issues.async_sync.call_args.kwargs,
@@ -1762,10 +1818,11 @@ class TestSyncHubConnectivityIssues:
         assert records == []
         assert kwargs["unreachable_ids"] == {hub_connectivity_issue_id(100, 200)}
 
-    def test_disconnected_hub_at_threshold_flags_disconnected(self):
-        """The third consecutive disconnected poll is where the flag flips true."""
+    def test_disconnected_hub_past_the_threshold_flags_disconnected(self):
+        """Once the window start is older than the threshold the flag flips true,
+        and the record carries the elapsed seconds the card renders from."""
         coord, _ = _make_coord()
-        coord._hub_disconnect_poll_counts = {(100, 200): _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS - 1}
+        coord._hub_disconnect_since = {(100, 200): self._seconds_ago(coord, 240)}
         hub = _make_hub(mid=200)
         hub["hid"] = 100
         hub_connectivity = {200: {"state": _coord_module.HUB_DISCONNECTED}}
@@ -1774,7 +1831,30 @@ class TestSyncHubConnectivityIssues:
 
         (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
         assert records[0].disconnected is True
-        assert records[0].missed_polls == _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS
+        assert records[0].offline_seconds == 240
+
+    def test_a_future_dated_cloud_change_time_suppresses_rather_than_raises(self):
+        """Cloud clock skew must fail safe.
+
+        A changed_at ahead of our own clock yields a negative elapsed, which
+        fails the threshold comparison and suppresses the card. Suppressing is
+        the safe direction, so this is deliberately not a branch of its own in
+        the source, which is exactly why it needs a test of its own here.
+        """
+        coord, _ = _make_coord()
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        future = (coord._time_source() + timedelta(hours=1)).isoformat()
+        hub_connectivity = {200: {"state": _coord_module.HUB_DISCONNECTED, "changed_at": future}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        (records,), kwargs = (
+            coord._hub_connectivity_issues.async_sync.call_args.args,
+            coord._hub_connectivity_issues.async_sync.call_args.kwargs,
+        )
+        assert records == []
+        assert kwargs["unreachable_ids"] == {hub_connectivity_issue_id(100, 200)}
 
     def test_hub_model_rides_the_record_to_the_repairs_card(self):
         """The card names the model, so it has to survive the translation step.
@@ -1783,7 +1863,7 @@ class TestSyncHubConnectivityIssues:
         DeviceInfo carries, so the card and the device page cannot disagree.
         """
         coord, _ = _make_coord()
-        coord._hub_disconnect_poll_counts = {(100, 200): _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS - 1}
+        coord._hub_disconnect_since = {(100, 200): self._seconds_ago(coord, 400)}
         hub = _make_hub(mid=200)
         hub["hid"] = 100
         hub["model"] = "HWG023WBRF-V2"
@@ -1801,7 +1881,7 @@ class TestSyncHubConnectivityIssues:
         parentheses on the card.
         """
         coord, _ = _make_coord()
-        coord._hub_disconnect_poll_counts = {(100, 200): _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS - 1}
+        coord._hub_disconnect_since = {(100, 200): self._seconds_ago(coord, 400)}
         hub = _make_hub(mid=200)
         hub["hid"] = 100
         hub["model"] = ""
@@ -1812,17 +1892,18 @@ class TestSyncHubConnectivityIssues:
         (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
         assert records[0].model is None
 
-    def test_unknown_state_emits_no_record_and_leaves_the_counter_untouched(self):
+    def test_unknown_state_emits_no_record_and_leaves_the_window_untouched(self):
         """An unknown state is not evidence about the hub in either direction."""
         coord, _ = _make_coord()
-        coord._hub_disconnect_poll_counts = {(100, 200): 2}
+        window_start = self._seconds_ago(coord, 60)
+        coord._hub_disconnect_since = {(100, 200): window_start}
         hub = _make_hub(mid=200)
         hub["hid"] = 100
         hub_connectivity = {200: {"state": _coord_module.HUB_CONNECTIVITY_UNKNOWN}}
 
         _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
 
-        assert coord._hub_disconnect_poll_counts == {(100, 200): 2}
+        assert coord._hub_disconnect_since == {(100, 200): window_start}
         (records,), kwargs = (
             coord._hub_connectivity_issues.async_sync.call_args.args,
             coord._hub_connectivity_issues.async_sync.call_args.kwargs,
@@ -1839,13 +1920,13 @@ class TestSyncHubConnectivityIssues:
 
         _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], {})
 
-        assert coord._hub_disconnect_poll_counts == {}
+        assert coord._hub_disconnect_since == {}
         (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
         kwargs = coord._hub_connectivity_issues.async_sync.call_args.kwargs
         assert records == []
         assert kwargs["unreachable_ids"] == {hub_connectivity_issue_id(100, 200)}
 
-    def test_bluetooth_wrapper_record_contributes_no_record_and_no_counter(self):
+    def test_bluetooth_wrapper_record_contributes_no_record_and_no_window(self):
         """The Bluetooth wrapper carries no cloud connection to report on."""
         coord, _ = _make_coord()
         wrapper_hub = {
@@ -1862,7 +1943,7 @@ class TestSyncHubConnectivityIssues:
 
         _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [wrapper_hub], hub_connectivity)
 
-        assert coord._hub_disconnect_poll_counts == {}
+        assert coord._hub_disconnect_since == {}
         (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
         assert records == []
 
@@ -3187,7 +3268,7 @@ class TestOrphanedKeyCounterIsInertOnExistingSurfaces:
 
 
 class TestHubConnectivitySurvivesDeviceListOutage:
-    """An active hub-connectivity issue and its debounce counter must survive a
+    """An active hub-connectivity issue and its window start must survive a
     poll in which the device list itself came back empty, mirroring
     TestSilentIssueSurvivesHubOutage's device-list-door regression for the
     not-reporting lifecycle."""
@@ -3218,14 +3299,18 @@ class TestHubConnectivitySurvivesDeviceListOutage:
         return coord, client
 
     @pytest.mark.asyncio
-    async def test_an_empty_device_list_leaves_the_counter_and_issue_untouched(self):
+    async def test_an_empty_device_list_leaves_the_window_and_issue_untouched(self):
         """getDeviceByHid answering with an empty data array must not wipe the
-        debounce counter or let the stale sweep reap a still-valid issue.
+        window start or let the stale sweep reap a still-valid issue.
 
         Below-threshold disconnected polls call the idempotent clear
         unconditionally (mirroring the not-reporting lifecycle), so the
         assertion is a delta across the outage poll rather than an absolute
         zero: the outage poll itself must add no further delete calls.
+
+        This hub reports no change timestamp, so the window is measured from
+        the first poll that observed it disconnected and the clock has to be
+        advanced deliberately to cross the threshold.
         """
         coord, client = self._build()
 
@@ -3233,8 +3318,11 @@ class TestHubConnectivitySurvivesDeviceListOutage:
             patch.object(_repairs_module.ir, "async_create_issue") as create,
             patch.object(_repairs_module.ir, "async_delete_issue") as delete,
         ):
-            for _ in range(3):
-                await _run(coord)
+            await _run(coord)
+            assert create.call_count == 0
+
+            coord._time_source.advance(_coord_module.HUB_DISCONNECT_DEBOUNCE_SECONDS + 1)
+            await _run(coord)
             assert create.call_count == 1
             deletes_before_outage = delete.call_count
 
@@ -3243,9 +3331,9 @@ class TestHubConnectivitySurvivesDeviceListOutage:
 
             assert delete.call_count == deletes_before_outage
             assert self.HUB_ISSUE_ID in coord._hub_connectivity_issues._active
-            # The counter has to survive too, or the hub restarts its debounce
-            # from zero and the card disappears for three more polls.
-            assert coord._hub_disconnect_poll_counts
+            # The window start has to survive too, or the hub restarts its
+            # debounce and the card disappears for another three minutes.
+            assert coord._hub_disconnect_since
 
             client.get_devices_by_hid.return_value = [self._hub()]
             await _run(coord)
@@ -3312,12 +3400,22 @@ class TestHubConnectivitySurvivesPartialHubShrink:
         hass = MagicMock()
         hass.data = {}
 
-        return _coord_module.RainPointCoordinator(hass, client, entry), client
+        return _coord_module.RainPointCoordinator(hass, client, entry, time_source=_FakeClock()), client
+
+    @staticmethod
+    def _cross_the_threshold(coordinator):
+        """Move the injected clock past the durational threshold.
+
+        These hubs report no change timestamp, so their windows are measured
+        from the first poll that observed them disconnected and nothing
+        crosses the threshold until the clock is advanced deliberately.
+        """
+        coordinator._time_source.advance(_coord_module.HUB_DISCONNECT_DEBOUNCE_SECONDS + 1)
 
     @pytest.mark.asyncio
-    async def test_a_shrunken_device_list_leaves_the_missing_hubs_counter_and_issue_untouched(self):
+    async def test_a_shrunken_device_list_leaves_the_missing_hubs_window_and_issue_untouched(self):
         """A hub missing from a non-empty device list keeps its
-        disconnect counter and its connectivity card through the gap.
+        disconnect window start and its connectivity card through the gap.
 
         Asserted by the issue id never appearing among the deletes made
         during the gap poll specifically (an index slice of the mock's call
@@ -3339,8 +3437,9 @@ class TestHubConnectivitySurvivesPartialHubShrink:
             await coordinator.async_config_entry_first_refresh()
 
             self._set_connected(client, hub_a_connected="0", hub_b_connected="1")
-            for _ in range(_coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS):
-                await coordinator.async_refresh()
+            await coordinator.async_refresh()
+            self._cross_the_threshold(coordinator)
+            await coordinator.async_refresh()
             assert create.call_count == 1
 
             # Hub A drops out of the device list entirely; hub B stays.
@@ -3352,7 +3451,7 @@ class TestHubConnectivitySurvivesPartialHubShrink:
             deleted_ids_during_gap = {call.args[2] for call in delete.call_args_list[calls_before_gap:]}
             assert hub_a_issue_id not in deleted_ids_during_gap
             assert hub_a_issue_id in coordinator._hub_connectivity_issues._active
-            assert (100, self.HUB_A_MID) in coordinator._hub_disconnect_poll_counts
+            assert (100, self.HUB_A_MID) in coordinator._hub_disconnect_since
 
     @pytest.mark.asyncio
     async def test_a_missing_hub_holds_its_last_known_connectivity_record(self):
@@ -3378,11 +3477,23 @@ class TestHubConnectivitySurvivesPartialHubShrink:
             assert _coord_module.hub_connectivity_record(coordinator, 999999) == {}
 
     @pytest.mark.asyncio
-    async def test_a_held_disconnected_record_on_a_missing_hub_does_not_advance_the_debounce(self):
-        """A held disconnected record on a hub that is also missing
-        this poll must not advance the debounce, or a card would raise from
-        evidence the poll never contained."""
+    async def test_a_device_list_gap_that_spans_the_threshold_raises_nothing(self):
+        """The failure mode a poll count could not have had, so it is proven
+        rather than assumed.
+
+        Under a poll count, a hub the loop never iterates cannot advance.
+        Under a clock, elapsed time runs through the gap whether or not any
+        poll observes the hub, and the only thing stopping a raise is that a
+        hub absent from the device list never reaches the loop body at all.
+        So: hub A opens a window, drops out of a still non-empty device list,
+        and the clock crosses the threshold while it is gone. No card, because
+        no poll in that stretch contained a disconnected tri-state for it.
+        When it returns still reporting the same outage, that poll does
+        contain one and the card raises immediately, since the window it
+        opened before the gap is genuinely more than three minutes old.
+        """
         coordinator, client = self._build(hub_a_connected="1", hub_b_connected="1")
+        hub_a_issue_id = hub_connectivity_issue_id(100, self.HUB_A_MID)
 
         with (
             patch.object(_repairs_module.ir, "async_create_issue") as create,
@@ -3392,22 +3503,36 @@ class TestHubConnectivitySurvivesPartialHubShrink:
 
             self._set_connected(client, hub_a_connected="0", hub_b_connected="1")
             await coordinator.async_refresh()
-            assert coordinator._hub_disconnect_poll_counts[(100, self.HUB_A_MID)] == 1
+            window_start = coordinator._hub_disconnect_since[(100, self.HUB_A_MID)]
             assert create.call_count == 0
 
             client.get_devices_by_hid.return_value = [self._hub(self.HUB_B_MID, "HubB")]
             self._set_connected(client, hub_a_connected=None, hub_b_connected="1")
+            self._cross_the_threshold(coordinator)
             for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS):
                 await coordinator.async_refresh()
 
-            assert coordinator._hub_disconnect_poll_counts[(100, self.HUB_A_MID)] == 1
+            # The clock is well past the threshold and the window start is
+            # untouched, so the suppression is the enumeration door doing its
+            # job rather than the window not having opened.
+            assert coordinator._hub_disconnect_since[(100, self.HUB_A_MID)] == window_start
             assert create.call_count == 0
+
+            client.get_devices_by_hid.return_value = [
+                self._hub(self.HUB_A_MID, "HubA"),
+                self._hub(self.HUB_B_MID, "HubB"),
+            ]
+            self._set_connected(client, hub_a_connected="0", hub_b_connected="1")
+            await coordinator.async_refresh()
+
+            assert create.call_count == 1
+            assert create.call_args.args[2] == hub_a_issue_id
 
     @pytest.mark.asyncio
     async def test_a_missing_hub_released_after_the_window_clears_its_connectivity_card(self):
         """The release rule on the connectivity surface: one absence past
-        HUB_ABSENT_DEBOUNCE_POLLS and the counter key is gone, a delete fires for
-        hub_connectivity_issue_id, and the held record stops being carried
+        HUB_ABSENT_DEBOUNCE_POLLS and the window start is gone, a delete fires
+        for hub_connectivity_issue_id, and the held record stops being carried
         into coordinator.data["hub_connectivity"].
 
         Asserted by issue id within each poll's own slice of delete calls,
@@ -3426,8 +3551,9 @@ class TestHubConnectivitySurvivesPartialHubShrink:
             await coordinator.async_config_entry_first_refresh()
 
             self._set_connected(client, hub_a_connected="0", hub_b_connected="1")
-            for _ in range(_coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS):
-                await coordinator.async_refresh()
+            await coordinator.async_refresh()
+            self._cross_the_threshold(coordinator)
+            await coordinator.async_refresh()
             assert create.call_count == 1
 
             client.get_devices_by_hid.return_value = [self._hub(self.HUB_B_MID, "HubB")]
@@ -3445,7 +3571,7 @@ class TestHubConnectivitySurvivesPartialHubShrink:
 
             deleted_ids_on_release = {call.args[2] for call in delete.call_args_list[calls_before_release:]}
             assert hub_a_issue_id in deleted_ids_on_release
-            assert (100, self.HUB_A_MID) not in coordinator._hub_disconnect_poll_counts
+            assert (100, self.HUB_A_MID) not in coordinator._hub_disconnect_since
             assert self.HUB_A_MID not in coordinator.data["hub_connectivity"]
 
     @pytest.mark.asyncio
@@ -3501,8 +3627,8 @@ class TestHubConnectivitySurvivesPartialHubShrink:
 
         Suppression is scoped to the hub that actually went missing. Hub A
         vanishing from the device list must not stop hub B, which is still
-        listed and still reporting, from advancing its own disconnect
-        debounce and raising its own card. A global guard would freeze B and
+        listed and still reporting, from opening its own disconnect window
+        and raising its own card. A global guard would freeze B and
         would still pass every other test in this class, since all of them
         assert only about A.
         """
@@ -3519,12 +3645,13 @@ class TestHubConnectivitySurvivesPartialHubShrink:
             # listed but starts reporting disconnected on the same poll.
             client.get_devices_by_hid.return_value = [self._hub(self.HUB_B_MID, "HubB")]
             self._set_connected(client, hub_a_connected=None, hub_b_connected="0")
-            for _ in range(_coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS):
-                await coordinator.async_refresh()
+            await coordinator.async_refresh()
+            self._cross_the_threshold(coordinator)
+            await coordinator.async_refresh()
 
             created_ids = {call.args[2] for call in create.call_args_list}
             assert hub_b_issue_id in created_ids
-            assert coordinator._hub_disconnect_poll_counts[(100, self.HUB_B_MID)] == _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS
+            assert (100, self.HUB_B_MID) in coordinator._hub_disconnect_since
             # And A really was in its gap for the whole of it, so the
             # assertion above is about scoping rather than about A having
             # already been released.
@@ -3558,7 +3685,7 @@ class TestHubConnectivitySurvivesPartialHubShrink:
             # Nothing is being debounced, which is what routes the empty list
             # below into the shrink branch rather than the total-outage one.
             assert not coordinator._silent_poll_counts
-            assert not coordinator._hub_disconnect_poll_counts
+            assert not coordinator._hub_disconnect_since
 
             client.get_devices_by_hid.return_value = []
             client.get_multiple_device_status.return_value = []
@@ -3590,7 +3717,7 @@ def _set_hub_connected(client, value, time_ms=None):
     client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [entry]}]
 
 
-def _build_hub_connectivity_coord(connected_value="1", time_ms=None):
+def _build_hub_connectivity_coord(connected_value="1", time_ms=None, time_source=None):
     """Return (coordinator, client) wired the way __init__.py wires it.
 
     Shared by every hub connectivity class that drives a real construct ->
@@ -3601,6 +3728,11 @@ def _build_hub_connectivity_coord(connected_value="1", time_ms=None):
     consecutive polls would raise its own issue on those same mocks at
     exactly the poll asserted to be the only create call. Do not declare a
     sub-device here.
+
+    The coordinator always gets a controllable clock, freshly built when the
+    caller supplies none, so no class here can accidentally measure the
+    durational hub-disconnect window against real wall time. Reach it as
+    coordinator._time_source to advance it between refreshes.
     """
     client = AsyncMock()
     client.get_devices_by_hid.return_value = [
@@ -3622,25 +3754,45 @@ def _build_hub_connectivity_coord(connected_value="1", time_ms=None):
     hass = MagicMock()
     hass.data = {}
 
-    return _coord_module.RainPointCoordinator(hass, client, entry), client
+    clock = _FakeClock() if time_source is None else time_source
+    return _coord_module.RainPointCoordinator(hass, client, entry, time_source=clock), client
 
 
 class TestHubConnectivityDebounceRealTimeline:
     """Drives the real coordinator construct -> first refresh -> repeated
-    refresh sequence, asserting between every step, rather than proving the
-    debounce from an injected already-past-threshold coordinator.data
-    snapshot -- the specific pattern that shipped two critical defects under
-    100% branch coverage in a prior phase."""
+    refresh sequence with an injected clock advanced between the steps,
+    asserting between every one, rather than proving the debounce from an
+    injected already-past-threshold coordinator.data snapshot -- the specific
+    pattern that shipped two critical defects under 100% branch coverage in a
+    prior phase.
+
+    Both window-start paths are driven here: the cloud-timestamp one, where
+    the window is measured from the moment the cloud itself recorded the
+    change, and the absent-timestamp one, where it is measured from the first
+    poll that observed the disconnected tri-state.
+    """
+
+    _ISSUE_ID = hub_connectivity_issue_id(100, 200)
 
     _build = staticmethod(_build_hub_connectivity_coord)
     _set_connected = staticmethod(_set_hub_connected)
 
+    @staticmethod
+    def _deleted_ids_since(delete, index):
+        """The issue ids deleted after a recorded point in the mock's history."""
+        return {call.args[2] for call in delete.call_args_list[index:]}
+
     @pytest.mark.asyncio
-    async def test_three_consecutive_disconnected_polls_raise_exactly_one_issue(self):
-        """The full debounce lifecycle: raise once at the threshold, no second
-        raise while it stays down, clear and reset on recovery, and prove the
-        reset is real by crossing the threshold again from zero."""
-        coordinator, client = self._build(connected_value="1")
+    async def test_the_window_runs_from_the_clouds_own_change_time(self):
+        """The whole lifecycle on the cloud-timestamp path.
+
+        A disconnect the cloud stamped at T0 raises nothing at T0+60 and
+        nothing at T0+179, raises exactly one card at T0+181, and raises no
+        second one at T0+400. The card's own placeholder is asserted rather
+        than the record behind it, because that string is what the user reads.
+        """
+        clock = _FakeClock()
+        coordinator, client = self._build(connected_value="1", time_source=clock)
 
         with (
             patch.object(_repairs_module.ir, "async_create_issue") as create,
@@ -3649,79 +3801,154 @@ class TestHubConnectivityDebounceRealTimeline:
             await coordinator.async_config_entry_first_refresh()
             assert create.call_count == 0
 
-            self._set_connected(client, "0")
-            await coordinator.async_refresh()  # poll 1 disconnected: counter 1
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            # The cloud records the edge now; the poll that reports it lands a
+            # minute later, which is what makes the window start earlier than
+            # anything this process observed.
+            disconnected_at = clock.now
+            self._set_connected(client, "0", time_ms=clock.ms())
+
+            clock.advance(60)
+            await coordinator.async_refresh()
             assert create.call_count == 0
+            assert coordinator._hub_disconnect_since[(100, 200)] == disconnected_at
 
-            await coordinator.async_refresh()  # poll 2 disconnected: counter 2
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            clock.advance(119)  # T0 + 179: still inside the window
+            deletes_before = len(delete.call_args_list)
+            await coordinator.async_refresh()
             assert create.call_count == 0
+            # Neither raises nor clears: the id goes into unreachable_ids, so
+            # a card raised by some other route would survive this poll.
+            assert self._ISSUE_ID not in self._deleted_ids_since(delete, deletes_before)
 
-            await coordinator.async_refresh()  # poll 3 disconnected: counter 3 -> raise
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            clock.advance(2)  # T0 + 181: the first poll past the threshold
+            await coordinator.async_refresh()
             assert create.call_count == 1
-            _hass, _domain, issue_id = create.call_args.args
-            assert issue_id == hub_connectivity_issue_id(100, 200)
+            assert create.call_args.args[2] == self._ISSUE_ID
+            assert create.call_args.kwargs["translation_placeholders"]["offline_for"] == "3 minutes"
 
-            await coordinator.async_refresh()  # poll 4 disconnected: no second raise
-            assert create.call_count == 1
-
-            self._set_connected(client, "1")
-            deletes_before_recovery = delete.call_count
-            await coordinator.async_refresh()  # poll 5 connected: clears and resets
-            assert delete.call_count > deletes_before_recovery
-            assert create.call_count == 1
-            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
-
-            self._set_connected(client, "0")
-            await coordinator.async_refresh()  # poll 6 disconnected: counter restarts at 1
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            clock.advance(219)  # T0 + 400: no second raise
+            await coordinator.async_refresh()
             assert create.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_unknown_poll_neither_raises_nor_advances_the_counter(self):
+    async def test_a_disconnect_with_no_cloud_change_time_runs_from_first_observation(self):
+        """The absent-timestamp path, and the reason it is a setdefault.
+
+        Older firmware omits the change time, so the window starts at the
+        first poll that saw the hub disconnected. A later poll inside the
+        window must leave that stamp exactly where it is: re-stamping would
+        restart the window on every poll and the card would never appear.
+        """
+        clock = _FakeClock()
+        coordinator, client = self._build(connected_value="1", time_source=clock)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+
+            self._set_connected(client, "0")
+            first_observation = clock.now
+            await coordinator.async_refresh()
+            assert coordinator._hub_disconnect_since[(100, 200)] == first_observation
+            assert create.call_count == 0
+
+            clock.advance(179)
+            await coordinator.async_refresh()
+            assert coordinator._hub_disconnect_since[(100, 200)] == first_observation
+            assert create.call_count == 0
+
+            clock.advance(2)
+            await coordinator.async_refresh()
+            assert create.call_count == 1
+            assert create.call_args.args[2] == self._ISSUE_ID
+
+    @pytest.mark.asyncio
+    async def test_a_reconnect_inside_the_window_restarts_it_rather_than_resuming(self):
+        """Recovery drops the window start, and the next outage gets a fresh
+        three minutes rather than inheriting the elapsed time of the last one."""
+        clock = _FakeClock()
+        coordinator, client = self._build(connected_value="1", time_source=clock)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            await coordinator.async_config_entry_first_refresh()
+
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()
+            clock.advance(120)
+            await coordinator.async_refresh()
+            assert create.call_count == 0
+
+            self._set_connected(client, "1")
+            deletes_before_recovery = delete.call_count
+            clock.advance(10)
+            await coordinator.async_refresh()
+            assert delete.call_count > deletes_before_recovery
+            assert (100, 200) not in coordinator._hub_disconnect_since
+
+            # A fresh outage 170 seconds later. Had the first window survived
+            # the reconnect, the poll below would be measuring 300 seconds and
+            # would raise; measuring its own 100 it must not.
+            clock.advance(170)
+            self._set_connected(client, "0")
+            await coordinator.async_refresh()
+            clock.advance(100)
+            await coordinator.async_refresh()
+            assert create.call_count == 0
+
+            clock.advance(81)
+            await coordinator.async_refresh()
+            assert create.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_poll_neither_raises_nor_moves_the_window(self):
         """A poll whose connected id is missing entirely is not evidence about
         the hub in either direction, driven across a real refresh sequence."""
-        coordinator, client = self._build(connected_value="1")
+        clock = _FakeClock()
+        coordinator, client = self._build(connected_value="1", time_source=clock)
 
         with patch.object(_repairs_module.ir, "async_create_issue") as create:
             await coordinator.async_config_entry_first_refresh()
 
             self._set_connected(client, "0")
             await coordinator.async_refresh()
-            await coordinator.async_refresh()
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            window_start = coordinator._hub_disconnect_since[(100, 200)]
             assert create.call_count == 0
 
             client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
-            await coordinator.async_refresh()  # unknown: counter must not move
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            clock.advance(_coord_module.HUB_DISCONNECT_DEBOUNCE_SECONDS + 1)
+            await coordinator.async_refresh()  # unknown: no raise, window untouched
+            assert coordinator._hub_disconnect_since[(100, 200)] == window_start
             assert create.call_count == 0
 
+            # The window was running all along; the unknown poll simply
+            # declined to read it, so the next disconnected poll raises.
             self._set_connected(client, "0")
-            await coordinator.async_refresh()  # counter resumes from where it left off
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            await coordinator.async_refresh()
             assert create.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_restart_while_still_disconnected_does_not_clear_the_issue(self):
+    async def test_restart_with_no_cloud_change_time_restarts_the_window_without_clearing(self):
         """A reload or restart mid-outage must not delete a still-accurate card.
 
-        The debounce counter and the manager's active set are both
-        per-instance, so a second coordinator built while the hub is still
-        down starts counting from one again. If those below-threshold polls
-        emitted a non-disconnected record, the unconditional clear in
-        repairs.py could not tell them apart from a genuine recovery and would
-        delete a card describing an outage that is still happening, leaving
-        the user with no notice until the new instance re-crossed the
-        threshold two polls later.
+        On this path the window start is this instance's own first
+        observation, so a second coordinator built while the hub is still down
+        starts its window again and needs a fresh three minutes. If the polls
+        inside that gap emitted a non-disconnected record, the unconditional
+        clear in repairs.py could not tell them apart from a genuine recovery
+        and would delete a card describing an outage that is still happening.
 
         Driven as a real timeline across two coordinator instances sharing one
-        pair of issue-registry mocks, because the defect only exists in the
-        seam between them and is invisible to any single-instance test.
+        clock and one pair of issue-registry mocks, because the defect only
+        exists in the seam between them and is invisible to any
+        single-instance test.
         """
-        first, first_client = self._build(connected_value="1")
+        clock = _FakeClock()
+        first, first_client = self._build(connected_value="1", time_source=clock)
 
         with (
             patch.object(_repairs_module.ir, "async_create_issue") as create,
@@ -3729,36 +3956,60 @@ class TestHubConnectivityDebounceRealTimeline:
         ):
             await first.async_config_entry_first_refresh()
             self._set_connected(first_client, "0")
-            for _ in range(_coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS):
-                await first.async_refresh()
+            await first.async_refresh()
+            clock.advance(_coord_module.HUB_DISCONNECT_DEBOUNCE_SECONDS + 1)
+            await first.async_refresh()
             assert create.call_count == 1
             deletes_before_restart = delete.call_count
 
-            # The restart: a brand new coordinator, hub still reporting "0".
-            second, second_client = self._build(connected_value="0")
-            assert second._hub_disconnect_poll_counts == {}
+            # The restart: a brand new coordinator on the same clock, hub
+            # still reporting "0" and still carrying no change time.
+            second, _second_client = self._build(connected_value="0", time_source=clock)
+            assert second._hub_disconnect_since == {}
 
             await second.async_config_entry_first_refresh()
-            assert second._hub_disconnect_poll_counts[(100, 200)] == 1
+            assert second._hub_disconnect_since[(100, 200)] == clock.now
             assert delete.call_count == deletes_before_restart
+            assert create.call_count == 1
 
+            clock.advance(179)
             await second.async_refresh()
-            assert second._hub_disconnect_poll_counts[(100, 200)] == 2
             assert delete.call_count == deletes_before_restart
+            assert create.call_count == 1
 
-            # Once the new instance confirms the outage itself it re-asserts
-            # the issue rather than having spent the gap with the card gone.
+            # Once the new instance has measured the outage itself it
+            # re-asserts the issue rather than having spent the gap with the
+            # card gone.
+            clock.advance(2)
             await second.async_refresh()
-            assert second._hub_disconnect_poll_counts[(100, 200)] == _coord_module.HUB_DISCONNECT_DEBOUNCE_POLLS
             assert delete.call_count == deletes_before_restart
             assert create.call_count == 2
 
-            # Recovery still clears, so suppressing the clear below threshold
-            # did not cost the only path that legitimately removes the card.
-            self._set_connected(second_client, "1")
-            await second.async_refresh()
-            assert delete.call_count > deletes_before_restart
-            assert (100, 200) not in second._hub_disconnect_poll_counts
+    @pytest.mark.asyncio
+    async def test_restart_with_a_cloud_change_time_raises_on_the_first_refresh(self):
+        """The restart survival that comes free from measuring cloud time.
+
+        A coordinator built while a hub has already been down for hours reads
+        the cloud's own change moment on its very first refresh, so the window
+        is already met and the card is raised with no gap at all. This is new
+        behaviour: the poll-counted window could only ever start again from
+        zero here, leaving the user without a notice for two more polls.
+        """
+        clock = _FakeClock()
+        hours_ago = clock.ms(offset_seconds=-26_220)  # 7h 17m
+        coordinator, _client = self._build(connected_value="0", time_ms=hours_ago, time_source=clock)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue"),
+        ):
+            await coordinator.async_config_entry_first_refresh()
+
+            assert create.call_count == 1
+            assert create.call_args.args[2] == self._ISSUE_ID
+            # The floor the copy states, in the coarsest unit that stays true:
+            # "7 hours" rather than a minute count nobody would read.
+            assert create.call_args.kwargs["translation_placeholders"]["offline_for"] == "7 hours"
 
 
 class TestPollOnlyHubConnectivityParity:
@@ -3799,14 +4050,15 @@ class TestPollOnlyHubConnectivityParity:
             assert result is polled
 
     @pytest.mark.asyncio
-    async def test_full_raise_clear_reset_cycle_matches_phase_16_with_the_guard_inert(self):
-        """Connected; three disconnected polls raise exactly one card; a
-        fourth raises no second card; recovery clears and resets the
-        counter; a fresh outage crosses the threshold again from zero --
-        the same lifecycle TestHubConnectivityDebounceRealTimeline pins,
-        composed here as one proof that the ordering guard changed none
+    async def test_full_raise_clear_reset_cycle_matches_the_debounce_with_the_guard_inert(self):
+        """Connected; a disconnect crosses the window and raises exactly one
+        card; a later poll raises no second card; recovery clears and drops
+        the window start; a fresh outage crosses the window again from its own
+        start -- the same lifecycle TestHubConnectivityDebounceRealTimeline
+        pins, composed here as one proof that the ordering guard changed none
         of it."""
-        coordinator, client = self._build(connected_value="1")
+        clock = _FakeClock()
+        coordinator, client = self._build(connected_value="1", time_source=clock)
         guard_calls: list[tuple[dict, dict]] = []
 
         with (
@@ -3818,47 +4070,52 @@ class TestPollOnlyHubConnectivityParity:
             assert create.call_count == 0
 
             self._set_connected(client, "0")
-            await coordinator.async_refresh()  # poll 1 disconnected: counter 1
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            await coordinator.async_refresh()  # the window opens
+            assert (100, 200) in coordinator._hub_disconnect_since
             assert create.call_count == 0
 
-            await coordinator.async_refresh()  # poll 2 disconnected: counter 2
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            clock.advance(179)
+            await coordinator.async_refresh()  # still inside the window
             assert create.call_count == 0
 
-            await coordinator.async_refresh()  # poll 3 disconnected: counter 3 -> raise
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            clock.advance(2)
+            await coordinator.async_refresh()  # past the window -> raise
             assert create.call_count == 1
             _hass, _domain, issue_id = create.call_args.args
             assert issue_id == hub_connectivity_issue_id(100, 200)
 
-            await coordinator.async_refresh()  # poll 4 disconnected: no second raise
+            clock.advance(120)
+            await coordinator.async_refresh()  # no second raise
             assert create.call_count == 1
 
             self._set_connected(client, "1")
             deletes_before_recovery = delete.call_count
-            await coordinator.async_refresh()  # poll 5 connected: clears and resets
+            clock.advance(120)
+            await coordinator.async_refresh()  # recovery clears and drops the window
             assert delete.call_count > deletes_before_recovery
             assert create.call_count == 1
-            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert (100, 200) not in coordinator._hub_disconnect_since
 
             self._set_connected(client, "0")
-            await coordinator.async_refresh()  # poll 6 disconnected: counter restarts at 1
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
-            await coordinator.async_refresh()  # poll 7: counter 2
-            await coordinator.async_refresh()  # poll 8: counter 3 -> raise again
+            clock.advance(120)
+            await coordinator.async_refresh()  # a fresh window opens
+            assert (100, 200) in coordinator._hub_disconnect_since
+            assert create.call_count == 1
+            clock.advance(181)
+            await coordinator.async_refresh()  # and is crossed -> raise again
             assert create.call_count == 2
 
         self._assert_guard_always_returned_polled(guard_calls)
 
     @pytest.mark.asyncio
-    async def test_unknown_poll_and_absent_status_move_neither_counter_nor_card_with_the_guard_inert(self):
+    async def test_unknown_poll_and_absent_status_move_neither_window_nor_card_with_the_guard_inert(self):
         """An unknown poll (connected id missing entirely) is not evidence in
         either direction; an absent status (both fetch paths fail
         transiently) yields the unknown tri-state, never disconnected --
-        Phase 16's absent-never-coerced-to-disconnected rule, unaffected by
+        the absent-never-coerced-to-disconnected rule, unaffected by
         the guard when there is no push history to hold anything against."""
-        coordinator, client = self._build(connected_value="1")
+        clock = _FakeClock()
+        coordinator, client = self._build(connected_value="1", time_source=clock)
         guard_calls: list[tuple[dict, dict]] = []
 
         with (
@@ -3869,14 +4126,14 @@ class TestPollOnlyHubConnectivityParity:
 
             self._set_connected(client, "0")
             await coordinator.async_refresh()
-            await coordinator.async_refresh()
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            window_start = coordinator._hub_disconnect_since[(100, 200)]
             assert create.call_count == 0
 
             # Unknown: the connected id is missing entirely this poll.
             client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
+            clock.advance(120)
             await coordinator.async_refresh()
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert coordinator._hub_disconnect_since[(100, 200)] == window_start
             assert create.call_count == 0
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
 
@@ -3884,18 +4141,18 @@ class TestPollOnlyHubConnectivityParity:
             # this hub's status was never obtained at all.
             client.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
             client.get_device_status.side_effect = aiohttp.ClientError("boom")
+            clock.advance(120)
             await coordinator.async_refresh()
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            assert coordinator._hub_disconnect_since[(100, 200)] == window_start
             assert create.call_count == 0
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTIVITY_UNKNOWN
 
-            # The counter resumes from where it left off, proving neither
-            # gap moment reset or advanced it.
+            # The window was running through both gap moments, so the next
+            # disconnected poll reads it as long past the threshold and raises.
             client.get_multiple_device_status.side_effect = None
             client.get_device_status.side_effect = None
             self._set_connected(client, "0")
             await coordinator.async_refresh()
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
             assert create.call_count == 1
 
         self._assert_guard_always_returned_polled(guard_calls)
@@ -3903,9 +4160,9 @@ class TestPollOnlyHubConnectivityParity:
 
 class TestHubConnectivityPushClearInterleavedTimeline:
     """Raise and push-clear interleaved over a real driven timeline: raising the card
-    stays poll-counted only, a pushed reconnect clears it and the counter
-    immediately, and a hub that goes down again starts a fresh three-poll
-    count. Companion to tests/test_valve.py's
+    stays driven by the poll's own reconcile, a pushed reconnect clears it and
+    the window start immediately, and a hub that goes down again starts a
+    fresh window. Companion to tests/test_valve.py's
     TestValveAvailabilityPushedReconnect, which carries every valve-
     availability and hub_connected-attribute assertion for the same pushed
     edge instead of duplicating them here.
@@ -3938,14 +4195,15 @@ class TestHubConnectivityPushClearInterleavedTimeline:
         _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, connected, changed_ts)
 
     @pytest.mark.asyncio
-    async def test_pushed_reconnect_clears_immediately_and_the_next_outage_restarts_the_count(self):
-        """The full interleaved sequence: three disconnected polls raise the
-        card, a pushed reconnect clears it and the counter before any further
-        poll, back-to-back pushed disconnects flip the entity but raise
-        nothing and touch no counter, and a fresh three-poll outage is
-        required to raise the card a second time -- proving the counter
+    async def test_pushed_reconnect_clears_immediately_and_the_next_outage_restarts_the_window(self):
+        """The full interleaved sequence: a disconnect crosses the window and
+        raises the card, a pushed reconnect clears it and the window start
+        before any further poll, back-to-back pushed disconnects flip the
+        entity but raise nothing and open no window, and a fresh full window
+        is required to raise the card a second time -- proving the window
         genuinely restarted rather than resumed."""
-        coordinator, client = self._build(connected_value="1")
+        clock = _FakeClock()
+        coordinator, client = self._build(connected_value="1", time_source=clock)
 
         with (
             patch.object(_repairs_module.ir, "async_create_issue") as create,
@@ -3955,53 +4213,53 @@ class TestHubConnectivityPushClearInterleavedTimeline:
             assert create.call_count == 0
 
             self._set_connected(client, "0")
-            await coordinator.async_refresh()  # poll 1 disconnected: counter 1
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            await coordinator.async_refresh()  # the window opens
+            assert (100, 200) in coordinator._hub_disconnect_since
             assert create.call_count == 0
 
-            await coordinator.async_refresh()  # poll 2 disconnected: counter 2
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            clock.advance(179)
+            await coordinator.async_refresh()  # still inside the window
             assert create.call_count == 0
 
-            await coordinator.async_refresh()  # poll 3 disconnected: counter 3 -> raise
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            clock.advance(2)
+            await coordinator.async_refresh()  # past the window -> raise
             assert create.call_count == 1
 
             # The pushed reconnect: cleared before any further poll runs.
             deletes_before_push = delete.call_count
             self._push_hub_edge(coordinator, True, self._RECONNECT_TS)
             assert delete.call_count == deletes_before_push + 1
-            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert (100, 200) not in coordinator._hub_disconnect_since
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
 
             # A pushed disconnect delivered mid-sequence flips the entity
-            # immediately but must not touch the counter or raise a card, no
+            # immediately but must not open a window or raise a card, no
             # matter how many arrive back to back.
             self._push_hub_edge(coordinator, False, self._DISCONNECT_TS_1)
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
-            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert (100, 200) not in coordinator._hub_disconnect_since
             assert create.call_count == 1
 
             self._push_hub_edge(coordinator, False, self._DISCONNECT_TS_2)
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
-            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert (100, 200) not in coordinator._hub_disconnect_since
             assert create.call_count == 1
 
-            # The second outage: three fresh disconnected polls are required
-            # to raise again, proving the counter genuinely restarted at
-            # zero rather than resuming from wherever the pushed edges left
-            # it.
+            # The second outage: a fresh full window is required to raise
+            # again, proving the window genuinely restarted rather than
+            # resuming from wherever the pushed edges left it.
             self._set_connected(client, "0")
-            await coordinator.async_refresh()  # poll 4 disconnected: counter 1
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
+            clock.advance(120)
+            await coordinator.async_refresh()  # a fresh window opens
+            assert (100, 200) in coordinator._hub_disconnect_since
             assert create.call_count == 1
 
-            await coordinator.async_refresh()  # poll 5 disconnected: counter 2
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
+            clock.advance(179)
+            await coordinator.async_refresh()  # still inside the fresh window
             assert create.call_count == 1
 
-            await coordinator.async_refresh()  # poll 6 disconnected: counter 3 -> raise again
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            clock.advance(2)
+            await coordinator.async_refresh()  # past it -> raise again
             assert create.call_count == 2
 
 
@@ -4919,40 +5177,56 @@ class TestApplyHubPushUpdate:
         assert coord.data["hub_connectivity"][200]["state_raw"] is None
         assert coord.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
 
-    def test_dropped_push_leaves_hub_disconnect_poll_counts_untouched(self):
-        """A drop must not touch the counter or the issue set either way,
+    def test_dropped_push_leaves_the_hub_disconnect_window_untouched(self):
+        """A drop must not touch the window start or the issue set either way,
         regardless of whether the frame it dropped was connected or not."""
         hub = _push_hub()
         coord = _seed_push_coord(hub, sensors={})
-        coord._hub_disconnect_poll_counts[(100, 200)] = 2
+        window_start = coord._time_source() - timedelta(seconds=60)
+        coord._hub_disconnect_since[(100, 200)] = window_start
 
         _APPLY_HUB(coord, 999, False, 1717200000000)
 
-        assert coord._hub_disconnect_poll_counts.get((100, 200)) == 2
+        assert coord._hub_disconnect_since.get((100, 200)) == window_start
         coord._hub_connectivity_issues.async_clear.assert_not_called()
 
-    def test_connected_edge_pops_the_counter_and_clears_the_issue_once(self):
-        """A pushed connected edge against a hub whose counter
-        reads 2 pops that key and clears the Repairs card exactly once."""
+    def test_connected_edge_pops_the_window_and_clears_the_issue_once(self):
+        """A pushed connected edge against a hub with an open window drops
+        that key and clears the Repairs card exactly once."""
         hub = _push_hub()
         coord = _seed_push_coord(hub, sensors={})
-        coord._hub_disconnect_poll_counts[(100, 200)] = 2
+        coord._hub_disconnect_since[(100, 200)] = coord._time_source() - timedelta(seconds=60)
 
         _APPLY_HUB(coord, 200, True, 1717200000000)
 
-        assert (100, 200) not in coord._hub_disconnect_poll_counts
+        assert (100, 200) not in coord._hub_disconnect_since
         coord._hub_connectivity_issues.async_clear.assert_called_once_with(100, 200)
 
-    def test_disconnected_edge_leaves_the_counter_and_issue_untouched(self):
-        """Raising the card stays poll-counted only, so a pushed
-        disconnect must never increment the counter or clear anything."""
+    def test_disconnected_edge_leaves_the_window_and_issue_untouched(self):
+        """The window is opened by the poll's own reconcile alone, so a pushed
+        disconnect must never move a window start or clear anything."""
         hub = _push_hub()
         coord = _seed_push_coord(hub, sensors={})
-        coord._hub_disconnect_poll_counts[(100, 200)] = 2
+        window_start = coord._time_source() - timedelta(seconds=60)
+        coord._hub_disconnect_since[(100, 200)] = window_start
 
         _APPLY_HUB(coord, 200, False, 1717200000000)
 
-        assert coord._hub_disconnect_poll_counts[(100, 200)] == 2
+        assert coord._hub_disconnect_since[(100, 200)] == window_start
+        coord._hub_connectivity_issues.async_clear.assert_not_called()
+
+    def test_a_pushed_disconnected_edge_opens_no_window_at_all(self):
+        """The other half of the same rule, and the one a seeded key hides: a
+        pushed disconnect against a hub with no open window must leave the map
+        empty rather than stamping a start of its own. Otherwise a flapping
+        push could raise a card the poll never corroborated."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={})
+        assert coord._hub_disconnect_since == {}
+
+        _APPLY_HUB(coord, 200, False, 1717200000000)
+
+        assert coord._hub_disconnect_since == {}
         coord._hub_connectivity_issues.async_clear.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -5314,9 +5588,13 @@ class TestHubConnectivityGuardComposition:
     shares the same ir.async_create_issue/async_delete_issue mocks these
     tests assert call counts against."""
 
-    _NEWER_TS = 1785523062039
-    _OLDER_TS = 1785521850011
-    _EVEN_NEWER_TS = _NEWER_TS + 5000
+    # Named relative to the injected clock rather than as raw epoch literals,
+    # because the durational window makes each one's distance from "now" the
+    # whole point: the pushed moment is deliberately older than the threshold
+    # so the composed raise happens on the first lagging poll.
+    _PUSH_OFFSET = -300
+    _LAGGING_OFFSET = -1500
+    _CATCH_UP_OFFSET = -60
 
     _build = staticmethod(_build_hub_connectivity_coord)
     _set_connected = staticmethod(_set_hub_connected)
@@ -5324,10 +5602,10 @@ class TestHubConnectivityGuardComposition:
     @pytest.mark.asyncio
     async def test_held_pushed_connected_against_lagging_disconnected_polls_raises_no_card(self):
         """Direction one: a held pushed connected record leaves
-        _hub_disconnect_poll_counts without an incremented entry for that
-        hub across three consecutive lagging disconnected polls, and raises
-        no card."""
-        coordinator, client = self._build()
+        _hub_disconnect_since without an entry for that hub across three
+        consecutive lagging disconnected polls, and raises no card."""
+        clock = _FakeClock()
+        coordinator, client = self._build(time_source=clock)
 
         with (
             patch.object(_repairs_module.ir, "async_create_issue") as create,
@@ -5336,28 +5614,33 @@ class TestHubConnectivityGuardComposition:
             await coordinator.async_config_entry_first_refresh()
             assert create.call_count == 0
 
-            _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, True, self._NEWER_TS)
+            _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, True, clock.ms(self._PUSH_OFFSET))
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
 
             for _ in range(3):
-                self._set_connected(client, "0", time_ms=self._OLDER_TS)
+                self._set_connected(client, "0", time_ms=clock.ms(self._LAGGING_OFFSET))
+                clock.advance(120)
                 await coordinator.async_refresh()
 
-            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert (100, 200) not in coordinator._hub_disconnect_since
             assert create.call_count == 0
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
 
     @pytest.mark.asyncio
-    async def test_held_pushed_disconnected_against_lagging_connected_polls_raises_on_the_third(self):
+    async def test_held_pushed_disconnected_older_than_the_window_raises_on_the_first_lagging_poll(self):
         """Direction two, the mirror, and the one most worth pinning: a held
-        pushed disconnected record drives the poll-counted debounce even
-        though no poll independently observed the hub as disconnected. The
-        counter reaches 1, 2, then 3 across three lagging connected polls,
-        a card is raised exactly once on the third, and a fourth poll whose
-        connected time has advanced past the pushed moment ends the hold,
-        wins whole, clears the card and removes the counter key -- proving
-        the hold is bounded by the REST timestamp rather than permanent."""
-        coordinator, client = self._build()
+        pushed disconnected record drives the durational debounce even though
+        no poll independently observed the hub as disconnected. Because the
+        guard writes the held changed_at into the record it returns, that held
+        moment is also the window start, so a held moment already older than
+        the threshold raises on the very first lagging poll rather than
+        needing several. A later poll whose connected time has advanced past
+        the pushed moment ends the hold, wins whole, clears the card and
+        removes the window start, proving the hold is bounded by the REST
+        timestamp rather than permanent."""
+        clock = _FakeClock()
+        coordinator, client = self._build(time_source=clock)
+        pushed_at = clock.ms(self._PUSH_OFFSET)
 
         with (
             patch.object(_repairs_module.ir, "async_create_issue") as create,
@@ -5366,20 +5649,13 @@ class TestHubConnectivityGuardComposition:
             await coordinator.async_config_entry_first_refresh()
             assert create.call_count == 0
 
-            _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, False, self._NEWER_TS)
+            _coord_module.RainPointCoordinator.apply_hub_push_update(coordinator, 200, False, pushed_at)
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_DISCONNECTED
 
-            self._set_connected(client, "1", time_ms=self._OLDER_TS)
-            await coordinator.async_refresh()  # poll 1: held disconnected, counter 1
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 1
-            assert create.call_count == 0
+            self._set_connected(client, "1", time_ms=clock.ms(self._LAGGING_OFFSET))
+            await coordinator.async_refresh()
 
-            await coordinator.async_refresh()  # poll 2: held disconnected, counter 2
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 2
-            assert create.call_count == 0
-
-            await coordinator.async_refresh()  # poll 3: held disconnected, counter 3 -> raise
-            assert coordinator._hub_disconnect_poll_counts[(100, 200)] == 3
+            assert coordinator._hub_disconnect_since[(100, 200)] == _coord_module._status_entry_time({"time": pushed_at})
             assert create.call_count == 1
             _hass, _domain, issue_id = create.call_args.args
             assert issue_id == hub_connectivity_issue_id(100, 200)
@@ -5388,11 +5664,11 @@ class TestHubConnectivityGuardComposition:
             # has advanced past the pushed disconnect moment, so the guard
             # stops holding and the connected record wins whole.
             deletes_before = delete.call_count
-            self._set_connected(client, "1", time_ms=self._EVEN_NEWER_TS)
-            await coordinator.async_refresh()  # poll 4: wins whole, clears
+            self._set_connected(client, "1", time_ms=clock.ms(self._CATCH_UP_OFFSET))
+            await coordinator.async_refresh()
 
             assert coordinator.data["hub_connectivity"][200]["state"] == _coord_module.HUB_CONNECTED
-            assert (100, 200) not in coordinator._hub_disconnect_poll_counts
+            assert (100, 200) not in coordinator._hub_disconnect_since
             assert delete.call_count > deletes_before
 
 
@@ -5468,11 +5744,11 @@ class TestHubConnectivityPushDuringInFlightPoll:
         assert record["state"] == _coord_module.HUB_DISCONNECTED
         assert record["changed_at"] == expected_changed_at
 
-        # _hub_disconnect_poll_counts stays consistent with the record this
-        # same poll just wrote: exactly one poll has now reconciled against a
-        # disconnected record for this hub, matching the state above rather
-        # than a stale count left over from a snapshot the push never reached.
-        assert coordinator._hub_disconnect_poll_counts.get((100, 200)) == 1
+        # _hub_disconnect_since stays consistent with the record this same
+        # poll just wrote: the window start is the pushed moment itself,
+        # matching the state above rather than a stale value left over from a
+        # snapshot the push never reached.
+        assert coordinator._hub_disconnect_since.get((100, 200)) == _coord_module._status_entry_time({"time": self._PUSH_TS})
 
 
 class TestHubPushTracerEndToEnd:
