@@ -19,6 +19,9 @@ from custom_components.rainpoint.api import (
 from custom_components.rainpoint.api.utils import (
     _is_ascii_payload,
     _parse_ascii_rssi,
+    _RecordSummary,
+    _redact_identifier,
+    _redact_secret,
     _safe_key,
     _split_prefix,
     _summarize_record,
@@ -729,3 +732,114 @@ class TestSummarizeRecord:
         """An empty body still says which shape it was."""
         assert _summarize_record({}) == "dict(n=0) keys=[]"
         assert _summarize_record([]) == "list(n=0) keys=[]"
+
+
+class TestRedactIdentifier:
+    """An identifier is rendered as its length alone, with no source characters."""
+
+    def test_no_character_of_the_input_survives(self):
+        """The whole point: unlike _redact_secret, there is no last-4 tail."""
+        rendered = _redact_identifier("MAC-A84674BB91F0&a3QrDxYPTM2")
+        assert rendered == "len=28"
+        for fragment in ("MAC", "A84674BB91F0", "a3QrDxYPTM2", "PTM2", "&"):
+            assert fragment not in rendered
+
+    def test_short_and_empty_values_are_named_not_echoed(self):
+        """A short identifier must not fall through to printing itself."""
+        assert _redact_identifier("ab") == "len=2"
+        assert _redact_identifier("") == "<empty>"
+        assert _redact_identifier(None) == "<empty>"
+
+    def test_it_differs_from_redact_secret_on_the_same_input(self):
+        """Pins the distinction, so the two are not merged back together later.
+
+        _redact_secret keeps last-4 so a reader can tell which credential is in
+        play, which is a fair trade for a secret and the wrong one for an
+        identifier.
+        """
+        value = "SEKRIT-value-9f3a"
+        assert _redact_secret(value) == "len=17 last4=9f3a"
+        assert _redact_identifier(value) == "len=17"
+
+
+class TestSummaryIsBounded:
+    """A summary is bounded on both axes, because a cloud response is not."""
+
+    def test_key_count_is_capped_and_the_omission_is_stated(self):
+        """A wide record renders a capped key list plus a count of what was dropped."""
+        record = {f"field{i:03d}": i for i in range(100)}
+        rendered = _summarize_record(record)
+        # The true width is still reported, so the cap never disguises the size.
+        assert rendered.startswith("dict(n=100) keys=[")
+        assert rendered.endswith(",+68 more]")
+        assert rendered.count(",") == 32  # 31 separators between 32 kept keys, plus the marker
+
+    def test_list_items_walked_are_capped_and_the_scan_is_stated(self):
+        """A long list is not walked in full, and says so rather than implying it was."""
+        record = [{f"key{i}": i} for i in range(500)]
+        rendered = _summarize_record(record)
+        assert rendered.startswith("list(n=500) keys=[")
+        assert rendered.endswith(" scanned=50")
+
+    def test_a_short_list_carries_no_scanned_marker(self):
+        """The marker appears only when it is true, so ordinary output stays clean."""
+        rendered = _summarize_record([{"a": 1}, {"b": 2}])
+        assert rendered == "list(n=2) keys=[a,b]"
+        assert "scanned" not in rendered
+
+    def test_a_record_at_exactly_the_cap_is_not_marked(self):
+        """Off-by-one guard on both caps."""
+        assert ",+" not in _summarize_record({f"f{i:02d}": i for i in range(32)})
+        assert "scanned" not in _summarize_record([{"a": 1}] * 50)
+
+    def test_duplicate_sanitised_keys_collapse_rather_than_repeating(self):
+        """Two keys that sanitise to the same token render once, not twice."""
+        assert _summarize_record({"a\nb": 1, "a\tb": 2}) == "dict(n=2) keys=[a?b]"
+
+
+class TestRecordSummaryIsLazy:
+    """The summary is built when a log record is formatted, not when it is passed."""
+
+    def test_nothing_is_rendered_until_the_object_is_formatted(self, monkeypatch):
+        """Constructing the wrapper must not touch the record at all.
+
+        This is what keeps the cost off every user's poll when debug logging is
+        off: a log call's arguments are evaluated whether or not the record
+        survives level filtering.
+        """
+        calls = []
+
+        def _spy(record):
+            calls.append(record)
+            return "summary"
+
+        monkeypatch.setattr("custom_components.rainpoint.api.utils._summarize_record", _spy)
+        wrapper = _RecordSummary({"deviceName": "MAC-A84674BB91F0"})
+        assert calls == []
+        assert str(wrapper) == "summary"
+        assert len(calls) == 1
+
+    def test_it_renders_the_same_string_summarize_record_would(self):
+        """The wrapper is a deferral, not a different format."""
+        record = {"mid": 1, "deviceName": "MAC-A84674BB91F0"}
+        assert str(_RecordSummary(record)) == _summarize_record(record)
+
+    def test_repr_matches_str_so_a_percent_r_line_is_safe_too(self):
+        """A log line written with %r must not fall back to the object repr."""
+        record = {"productKey": "a3QrDxYPTM2"}
+        assert repr(_RecordSummary(record)) == _summarize_record(record)
+        assert "a3QrDxYPTM2" not in repr(_RecordSummary(record))
+
+    def test_a_debug_call_with_debug_off_never_builds_the_summary(self, caplog):
+        """The end-to-end property, asserted through a real logger."""
+        logger = logging.getLogger("custom_components.rainpoint.api.utils")
+        calls = []
+
+        class _Counting(_RecordSummary):
+            def __str__(self):
+                calls.append(1)
+                return "summary"
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.api.utils"):
+            logger.debug("record %s", _Counting({"a": 1}))
+        assert calls == []

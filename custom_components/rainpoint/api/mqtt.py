@@ -51,7 +51,7 @@ from ..const import (
     MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT,
 )
 from .client import RainPointClient
-from .utils import _redact_secret
+from .utils import _redact_identifier, _redact_secret
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -684,7 +684,7 @@ class RainPointMqttClient:
         # changed without naming the device.
         _LOGGER.debug(
             "RainPoint MQTT connecting: username=%s client_id=%s",
-            _redact_secret(username),
+            _redact_identifier(username),
             _redact_secret(client_id),
         )
 
