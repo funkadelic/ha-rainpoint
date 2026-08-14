@@ -76,11 +76,15 @@ _SUMMARY_KEY_SAFE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ
 _SUMMARY_MAX_KEYS = 32
 _SUMMARY_MAX_ITEMS = 50
 
+# Rendered in place of a value that is absent or empty. One constant so the
+# three renderers cannot drift onto different spellings of the same idea.
+_EMPTY_MARKER = "<empty>"
+
 
 def _redact_secret(value: str | None) -> str:
     """Render a secret as length + last-4 only -- never the raw value."""
     if not value:
-        return "<empty>"
+        return _EMPTY_MARKER
     if len(value) <= 4:
         return f"len={len(value)} <short>"
     return f"len={len(value)} last4={value[-4:]}"
@@ -97,7 +101,7 @@ def _redact_identifier(value: str | None) -> str:
     integration otherwise keeps out of logs entirely.
     """
     if not value:
-        return "<empty>"
+        return _EMPTY_MARKER
     return f"len={len(value)}"
 
 
@@ -107,7 +111,7 @@ def _safe_key(key: object) -> str:
     cleaned = "".join(c if c in _SUMMARY_KEY_SAFE_CHARS else "?" for c in text[:_SUMMARY_KEY_MAX_LEN])
     if len(text) > _SUMMARY_KEY_MAX_LEN:
         cleaned += "~"
-    return cleaned or "<empty>"
+    return cleaned or _EMPTY_MARKER
 
 
 def _summarize_record(record: object) -> str:
