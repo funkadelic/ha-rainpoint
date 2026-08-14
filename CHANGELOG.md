@@ -2,6 +2,15 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.17.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.16.0...v1.17.0) (2026-08-14)
+
+
+### Added
+
+* include your device names in downloaded diagnostics ([#174](https://github.com/funkadelic/ha-rainpoint/issues/174)) ([ab01a62](https://github.com/funkadelic/ha-rainpoint/commit/ab01a6284264536916324ec7df7da576fb664402))
+* **number:** refuse a zone duration change while that zone is watering ([#173](https://github.com/funkadelic/ha-rainpoint/issues/173)) ([1716f1a](https://github.com/funkadelic/ha-rainpoint/commit/1716f1a360116db1decdaccc8c722ee1697a9444))
+* **repairs:** prompt to remove unused entities on a working device ([#170](https://github.com/funkadelic/ha-rainpoint/issues/170)) ([6d1930e](https://github.com/funkadelic/ha-rainpoint/commit/6d1930e4b8d32469521252fec2b24d0ac83256f5))
+
 ## [1.16.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.15.0...v1.16.0) (2026-08-12)
 
 
