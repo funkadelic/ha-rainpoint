@@ -810,3 +810,75 @@ class TestDeviceIdentityMap:
         assert result["hubs"][0]["name"] == HUB_LABEL
         assert result["sensors"]["182509_236547_1"]["model"] == "HTV245FRF"
         assert result["hub_connectivity"] == {236547: {"state": "connected", "changed_at": None}}
+
+    @pytest.mark.asyncio
+    async def test_a_migrated_hub_row_matching_the_poll_reads_hub_and_true(self, _registry_rows):
+        _registry_rows.append(_device("hub_182509_236547"))
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["devices"]["hub_182509_236547"]["kind"] == "hub"
+        assert result["devices"]["hub_182509_236547"]["in_current_poll"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_migrated_hub_row_against_a_different_mid_reads_false(self, _registry_rows):
+        _registry_rows.append(_device("hub_182509_236547"))
+        coordinator = _make_coordinator(hubs=[_hub_record(mid=999999)], sensors={"182509_999999_1": _sensor_entry(mid=999999)})
+        hass, entry = _make_hass(coordinator=coordinator)
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["devices"]["hub_182509_236547"]["in_current_poll"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_legacy_hid_only_row_matches_any_hub_in_that_home(self, _registry_rows):
+        _registry_rows.append(_device("hub_182509"))
+        hubs = [_hub_record(mid=236547), _hub_record(mid=999999)]
+        sensors = {"182509_236547_1": _sensor_entry(mid=236547), "182509_999999_1": _sensor_entry(mid=999999)}
+        hass, entry = _make_hass(coordinator=_make_coordinator(hubs=hubs, sensors=sensors))
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["devices"]["hub_182509"]["in_current_poll"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_legacy_and_a_migrated_row_for_the_same_home_stay_two_distinct_entries(self, _registry_rows):
+        _registry_rows.append(_device("hub_182509"))
+        _registry_rows.append(_device("hub_182509_236547"))
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert "hub_182509" in result["devices"]
+        assert "hub_182509_236547" in result["devices"]
+        assert result["devices"]["hub_182509"] is not result["devices"]["hub_182509_236547"]
+
+    @pytest.mark.asyncio
+    async def test_a_hub_prefixed_identifier_of_neither_shape_reads_hub_and_false(self, _registry_rows):
+        _registry_rows.append(_device("hub_a_b_c"))
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["devices"]["hub_a_b_c"]["kind"] == "hub"
+        assert result["devices"]["hub_a_b_c"]["in_current_poll"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_no_domain_identifier_gets_an_unrecognised_entry(self, _registry_rows):
+        device = MagicMock()
+        device.identifiers = {("other_integration", "whatever")}
+        device.name = "Something Else"
+        device.name_by_user = None
+        device.id = "device-row-9"
+        _registry_rows.append(device)
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["devices"]["unrecognised_device-row-9"] == {
+            "kind": "unrecognised",
+            "name": "Something Else",
+            "name_by_user": None,
+            "in_current_poll": False,
+        }
