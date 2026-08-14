@@ -5,6 +5,33 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.17.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.16.0...v1.17.0) (2026-08-14)
 
 
+### What's new
+
+**Unused entity rows can now be cleaned up**
+
+- When a device stays on your account and reports normally but some of its entity rows sit permanently unavailable, Home Assistant now raises a **Settings → Repairs** card offering to remove them.
+- The card lists what it would remove, up to ten entities plus a count of any beyond that, so you can check the list against the device page first. **Cancel** leaves everything alone.
+- Watering zones are never offered, so a zone you have not run yet is safe either way. Removing entities also removes the history recorded against them, which cannot be undone.
+- Both this card and the existing left-over-device card now name the device and its hub by the names you gave them in Home Assistant, so two cards at once can be told apart without matching an address against a device page.
+
+**Changing a zone's run duration while it is already running now shows an error message**
+
+- Setting a new run duration on a zone that is currently watering is refused with an explanation, instead of appearing to work while the hardware runs to the old value.
+- The change is not saved, so set it again once the run ends.
+- One quirk worth knowing: the number box may keep showing what you typed until you reload the page. The saved duration and the run in progress are both unaffected.
+
+**Downloaded diagnostics now include your device names**
+
+- A diagnostics file downloaded from the RainPoint entry now opens with a list of your devices, each carrying the name you gave it in Home Assistant.
+- Previously the readings in that file were labeled only by the account's internal numbers, so working out which section described which device meant matching those numbers against your device pages by hand.
+- Nothing extra is exposed. Your password, tokens, email address and hardware addresses are removed exactly as before.
+
+**Also in this release**
+
+- **Integrations page:** RainPoint now appears under "Services" instead of "Hubs", and the button that adds another account reads "Add service". This is a wording change only, and nothing about your devices or automations changes.
+- **README:** the valve hub row now names the per-zone run duration and water used sensors it was missing.
+
+
 ### Added
 
 * include your device names in downloaded diagnostics ([#174](https://github.com/funkadelic/ha-rainpoint/issues/174)) ([ab01a62](https://github.com/funkadelic/ha-rainpoint/commit/ab01a6284264536916324ec7df7da576fb664402))
