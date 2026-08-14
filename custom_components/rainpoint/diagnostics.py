@@ -51,6 +51,7 @@ so it needed no new review of its own.
 from __future__ import annotations
 
 import logging
+from collections.abc import Container
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
@@ -350,7 +351,7 @@ def _entry_store(hass: HomeAssistant, config_entry: ConfigEntry) -> dict:
     return (hass.data.get(DOMAIN) or {}).get(config_entry.entry_id) or {}
 
 
-def _row_in_current_poll(identifier: str, dumped_hubs: list[dict], sensor_keys) -> bool:
+def _row_in_current_poll(identifier: str, dumped_hubs: list[dict], sensor_keys: Container[str]) -> bool:
     """Return whether a device row's identifier has a counterpart in this poll.
 
     A sub-device identifier is tested by membership in `sensor_keys`, the
@@ -377,7 +378,12 @@ def _row_in_current_poll(identifier: str, dumped_hubs: list[dict], sensor_keys) 
     return identifier in sensor_keys
 
 
-def _device_identity_map(hass: HomeAssistant, config_entry: ConfigEntry, dumped_hubs: list[dict], sensor_keys) -> dict[str, dict]:
+def _device_identity_map(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    dumped_hubs: list[dict],
+    sensor_keys: Container[str],
+) -> dict[str, dict]:
     """Return this config entry's device registry rows, keyed by DOMAIN identifier.
 
     The key is whatever `_domain_sensor_key` returns for the row, which is a
