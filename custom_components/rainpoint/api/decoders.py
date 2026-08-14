@@ -1596,7 +1596,7 @@ _FLOW_LITRES_PER_COUNT = 0.1
 
 # Litres per minute per raw STA_VFLOW count. The app renders the same value to
 # one decimal, which fixes the resolution at a tenth, and the one capture taken
-# while water was running reported 49 against a run averaging several litres a
+# while water was running reported 49 against a run averaging several liters a
 # minute. A hundredth would put that run at 0.49 L/min, which the same frame's
 # own completed-run figures contradict.
 _FLOW_RATE_LPM_PER_COUNT = 0.1
@@ -1616,7 +1616,7 @@ def decode_flow_meter(raw: str) -> dict:
     account for exactly the twelve dpCodes the catalog declares for model code
     80 with nothing left over.
 
-    Volumes arrive as tenths of a litre and durations as whole seconds. The
+    Volumes arrive as tenths of a liter and durations as whole seconds. The
     "current" pair reads zero whenever no run is in progress, which is the
     state the RainPoint app renders as "--", so those two entities sit at zero
     between runs rather than going unknown.

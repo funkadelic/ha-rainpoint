@@ -889,7 +889,7 @@ class RainPointFlowRateSensor(RainPointSensorBase):
 
     The only entity here without a shipped unique ID, because the placeholder
     decoder never surfaced a rate at all. The meter reports it to a tenth of a
-    litre per minute, matching what the RainPoint app displays.
+    liter per minute, matching what the RainPoint app displays.
     """
 
     _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE

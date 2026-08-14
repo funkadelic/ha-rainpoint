@@ -2171,7 +2171,7 @@ class TestFlowMeterDecoder:
 
         Asserted as a set rather than one value at a time because their mutual
         consistency is the evidence for the rate scale factor. A hundredth of a
-        litre per minute would put this run at 0.49 L/min, which its own
+        liter per minute would put this run at 0.49 L/min, which its own
         volume and duration contradict.
         """
         result = decode_flow_meter(FLOWMETER_FLOWING_HEX)
