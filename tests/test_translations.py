@@ -31,6 +31,21 @@ from custom_components.rainpoint.repairs import (
 
 _PLACEHOLDER_RE = re.compile(r"{(\w+)}")
 
+_MANIFEST_PATH = Path(rainpoint_pkg.__file__).parent / "manifest.json"
+
+_ACCEPTED_INTEGRATION_TYPES = {
+    "entity",
+    "device",
+    "hardware",
+    "helper",
+    "hub",
+    "service",
+    "system",
+    "virtual",
+}
+
+_SETTLED_INTEGRATION_TYPE = "service"
+
 
 def _load_en_translations() -> dict:
     """Parse en.json, resolved through the installed package.
@@ -449,3 +464,38 @@ class TestOptionsFormPushDefaultCopy:
         step = self._init_step()
         assert "off by default" in step["data_description"]["generic_entities_enabled"]
         assert "off by default" in step["data_description"]["generic_control_enabled"]
+
+
+class TestHubWordingNamesHardwareOnly:
+    """Guards against a sweep across the word hub that reaches copy naming real hardware.
+
+    This integration genuinely has hubs: HWG023WBRF-V2 and its siblings are
+    real hub hardware, and the three Repairs card bodies correctly name it in
+    a bullet. The account itself is not a hub, and the fix for that is a
+    single metadata field (manifest.json's integration_type). Any change that
+    reaches the prose naming real hub hardware, in the shipped translations or
+    in the README, is a regression rather than part of that fix.
+    """
+
+    def test_the_hub_bullet_appears_exactly_three_times_in_shipped_translations(self):
+        """One occurrence per issue body that names a device's parent hub:
+        the not-reporting body, the leftover-entities body and the
+        orphaned-entities body."""
+        blob = json.dumps(_load_en_translations())
+        assert blob.count("- **Hub:** {hub_name}") == 3
+
+    def test_the_manifest_integration_type_is_the_settled_value(self):
+        """Pinned directly, so a later revert to the manifest fails a test
+        here rather than passing silently."""
+        manifest = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+        assert manifest["integration_type"] == _SETTLED_INTEGRATION_TYPE
+        assert manifest["integration_type"] in _ACCEPTED_INTEGRATION_TYPES
+
+    def test_the_readme_hub_count_is_unchanged(self):
+        """A tripwire against a bulk edit, not a claim about how many times
+        the document discusses hubs: this counts substring matches of "hub"
+        case-insensitively across the whole file, including the ones inside
+        repository host names in the badge URLs."""
+        readme_path = Path(rainpoint_pkg.__file__).parent.parent.parent / "README.md"
+        blob = readme_path.read_text(encoding="utf-8")
+        assert len(re.findall("hub", blob, re.IGNORECASE)) == 67
