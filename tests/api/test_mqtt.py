@@ -961,11 +961,18 @@ class TestConnectCallbackHandling:
 
 
 def test_module_defines_to_redact_and_redact_helper():
-    """TO_REDACT + _redact() are established from the first credential-issuing commit."""
+    """TO_REDACT + a redaction helper are established from the first credential-issuing commit.
+
+    The helper was this module's own _redact() until it and client.py's
+    byte-identical _redact_secret() were collapsed into one shared
+    implementation in api/utils.py. What this test pins is unchanged: the
+    module reaches a redaction helper with the length-plus-last-4 behaviour,
+    and TO_REDACT still names deviceSecret.
+    """
     assert "deviceSecret" in mqtt_module.TO_REDACT
-    assert mqtt_module._redact("SEKRIT-value-9f3a") == "len=17 last4=9f3a"
-    assert mqtt_module._redact(None) == "<empty>"
-    assert mqtt_module._redact("ab") == "len=2 <short>"
+    assert mqtt_module._redact_secret("SEKRIT-value-9f3a") == "len=17 last4=9f3a"
+    assert mqtt_module._redact_secret(None) == "<empty>"
+    assert mqtt_module._redact_secret("ab") == "len=2 <short>"
 
 
 class TestPahoAutoReconnectDisabled:

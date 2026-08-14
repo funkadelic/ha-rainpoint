@@ -70,15 +70,6 @@ class RainPointThrottledError(RainPointApiError):
         self.retry_after = retry_after
 
 
-def _redact_secret(value: str | None) -> str:
-    """Render a secret as length + last-4 only -- never the raw value."""
-    if not value:
-        return "<empty>"
-    if len(value) <= 4:
-        return f"len={len(value)} <short>"
-    return f"len={len(value)} last4={value[-4:]}"
-
-
 class RainPointClient:
     def __init__(self, area_code: str, email: str, password: str, session: aiohttp.ClientSession):
         self._area_code = area_code

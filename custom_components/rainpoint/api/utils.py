@@ -56,6 +56,64 @@ _SUB_POWER_MODE_WIRE_VALUES = {
     "02": "2",
 }
 
+# Longest cloud-supplied key rendered into a log summary before it is cut. A
+# key is metadata rather than a value, but it still arrives from a payload
+# nobody here controls, so it gets a bound like any other untrusted string.
+_SUMMARY_KEY_MAX_LEN = 40
+
+# Keys are rendered through this whitelist rather than escaped, because the
+# set of characters a legitimate JSON key needs here is small and known. A
+# newline or an ANSI escape smuggled into a key name would otherwise forge log
+# lines in the file a user is about to paste into a public issue.
+_SUMMARY_KEY_SAFE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
+
+
+def _redact_secret(value: str | None) -> str:
+    """Render a secret as length + last-4 only -- never the raw value."""
+    if not value:
+        return "<empty>"
+    if len(value) <= 4:
+        return f"len={len(value)} <short>"
+    return f"len={len(value)} last4={value[-4:]}"
+
+
+def _safe_key(key: object) -> str:
+    """Render one cloud-supplied key name, bounded and stripped to a safe charset."""
+    text = str(key)
+    cleaned = "".join(c if c in _SUMMARY_KEY_SAFE_CHARS else "?" for c in text[:_SUMMARY_KEY_MAX_LEN])
+    if len(text) > _SUMMARY_KEY_MAX_LEN:
+        cleaned += "~"
+    return cleaned or "<empty>"
+
+
+def _summarize_record(record: object) -> str:
+    """Render a cloud record as its shape and key names, never its values.
+
+    This is the shape every log line on a cloud-record path uses instead of
+    dumping the record itself. Summarising rather than redacting field by
+    field is deliberate: a redaction list has to be maintained against a
+    payload nobody here controls, and it fails silently the first time the
+    vendor adds a field. A key-and-count summary has the opposite failure
+    mode, because a new field shows up as a name with no value attached.
+
+    Nested values are counted, not walked. A list reports its length and the
+    union of its items' keys, so a status response reads as "n=4" plus the
+    field set rather than four device records in full.
+    """
+    if record is None:
+        return "<none>"
+    if isinstance(record, dict):
+        keys = ",".join(sorted(_safe_key(k) for k in record))
+        return f"dict(n={len(record)}) keys=[{keys}]"
+    if isinstance(record, (list, tuple)):
+        union: set[str] = set()
+        for item in record:
+            if isinstance(item, dict):
+                union.update(_safe_key(k) for k in item)
+        keys = ",".join(sorted(union))
+        return f"list(n={len(record)}) keys=[{keys}]"
+    return f"<{type(record).__name__}>"
+
 
 def _parse_rainpoint_payload(raw: str) -> bytes:
     """Parse a RainPoint hex payload and return bytes."""

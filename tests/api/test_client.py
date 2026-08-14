@@ -13,7 +13,8 @@ import pytest
 
 import custom_components.rainpoint.api.product_catalog as product_catalog
 from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointThrottledError
-from custom_components.rainpoint.api.client import _SESSION_REJECTED_CODES, _USER_AGENT, _redact_secret
+from custom_components.rainpoint.api.client import _SESSION_REJECTED_CODES, _USER_AGENT
+from custom_components.rainpoint.api.utils import _redact_secret
 from tests.helpers import make_mock_session_client, mock_json_response
 
 # scripts/ is not a package (it's a standalone maintainer-tool directory, not
