@@ -346,13 +346,24 @@ def _row_in_current_poll(identifier: str, dumped_hubs: list[dict], sensor_keys) 
     A sub-device identifier is tested by membership in `sensor_keys`, the
     current poll's `sensors` mapping key view.
 
-    Task-slice note: a hub-prefixed identifier is not yet resolved by this
-    function; it always answers False for one here. That is a functionality
-    gap on this one branch, not an architectural one, and the signature this
-    function carries does not change once the branch is filled in.
+    A hub-prefixed identifier goes through `_hub_identity` and, for either
+    accepted shape, `_matches_hub` against the caller's already-dumped hub
+    list rather than a second call to `_hub_dump`. The hid-only legacy row
+    matching every hub in its home, rather than none, is the same answer
+    `_hub_scoped_payload` already gives the identical ambiguous identifier on
+    the device dump path; reusing `_matches_hub`'s existing `mid is None`
+    branch keeps one reading of that shape across the module. A three-valued
+    flag (true/false/null) was rejected because it would give the legacy
+    shape its own reading, which is exactly the drift one reading is meant to
+    prevent. A `hub_`-prefixed identifier that is neither accepted shape
+    answers False, since `_hub_identity` gives it no identity to test.
     """
     if identifier.startswith(HUB_IDENTIFIER_PREFIX):
-        return False
+        identity = _hub_identity(identifier)
+        if identity is None:
+            return False
+        hid, mid = identity
+        return any(_matches_hub(hub, hid, mid) for hub in dumped_hubs)
     return identifier in sensor_keys
 
 
@@ -373,9 +384,15 @@ def _device_identity_map(hass: HomeAssistant, config_entry: ConfigEntry, dumped_
     leftover verdicts belong to `repairs.py` and carry conditions this flag
     does not evaluate.
 
-    Task-slice note: every resolved row here reads `kind: "sub_device"` and a
-    row whose key is None is skipped rather than given an entry; a later slice
-    of this function routes hub and unrecognised rows correctly.
+    A row whose `_domain_sensor_key` answer is None still gets an entry rather
+    than being skipped, keyed `unrecognised_{row.id}` and carrying
+    `kind: "unrecognised"`. Such a row has no DOMAIN identifier to be keyed
+    by, so the registry row id is the only stable handle it has, and saying so
+    beats omitting it, the same instinct the device dump follows when it
+    declines to return a payload that reads as nothing wrong here. Its
+    `in_current_poll` is False because a row with no identifier has nothing to
+    test membership with, which is the honest reading of absent from this
+    poll.
     """
     _, rows = _fetch_registry_rows(dr.async_get, dr.async_entries_for_config_entry, hass, config_entry, "the device identity map")
     devices: dict[str, dict] = {}
@@ -383,9 +400,16 @@ def _device_identity_map(hass: HomeAssistant, config_entry: ConfigEntry, dumped_
         try:
             key = _domain_sensor_key(row)
             if key is None:
+                devices[f"unrecognised_{getattr(row, 'id', None)}"] = {
+                    "kind": "unrecognised",
+                    "name": getattr(row, "name", None),
+                    "name_by_user": getattr(row, "name_by_user", None),
+                    "in_current_poll": False,
+                }
                 continue
+            kind = "hub" if key.startswith(HUB_IDENTIFIER_PREFIX) else "sub_device"
             devices[key] = {
-                "kind": "sub_device",
+                "kind": kind,
                 "name": getattr(row, "name", None),
                 "name_by_user": getattr(row, "name_by_user", None),
                 "in_current_poll": _row_in_current_poll(key, dumped_hubs, sensor_keys),
