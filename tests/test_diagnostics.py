@@ -27,6 +27,7 @@ from custom_components.rainpoint.diagnostics import (
     _select_allowed,
     async_get_config_entry_diagnostics,
     async_get_device_diagnostics,
+    async_redact_data,
 )
 
 REDACTED = "**REDACTED**"
@@ -882,3 +883,122 @@ class TestDeviceIdentityMap:
             "name_by_user": None,
             "in_current_poll": False,
         }
+
+
+class TestDeviceIdentityMapEdges:
+    """The edges the probe surfaced, plus the map's disclosure boundary.
+
+    Distinctive literals throughout, the same idiom `TestUserChosenNamesSurvive`
+    already uses, so a survival or absence assertion made by walking every
+    scalar cannot match by accident.
+    """
+
+    @pytest.mark.asyncio
+    async def test_zero_registry_rows_still_emits_an_empty_mapping(self):
+        """The key is always present; an absent key is a different claim."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert "devices" in result
+        assert result["devices"] == {}
+
+    @pytest.mark.asyncio
+    async def test_the_map_keys_come_back_sorted_regardless_of_registry_order(self, _registry_rows):
+        forward = [_device("182509_236547_1"), _device("hub_182509_236547"), _device("hub_182509")]
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+        _registry_rows.extend(forward)
+        forward_result = await async_get_config_entry_diagnostics(hass, entry)
+
+        _registry_rows.clear()
+        _registry_rows.extend(reversed(forward))
+        reversed_result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert list(forward_result["devices"]) == sorted(forward_result["devices"])
+        assert list(forward_result["devices"]) == list(reversed_result["devices"])
+
+    @pytest.mark.asyncio
+    async def test_a_non_ascii_name_by_user_survives_byte_for_byte(self, _registry_rows):
+        _registry_rows.append(_device("182509_236547_1", name_by_user="Jardin Trasero"))
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["devices"]["182509_236547_1"]["name_by_user"] == "Jardin Trasero"
+
+    @pytest.mark.asyncio
+    async def test_a_cjk_name_by_user_survives_byte_for_byte(self, _registry_rows):
+        _registry_rows.append(_device("182509_236547_1", name_by_user="前庭阀门"))
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["devices"]["182509_236547_1"]["name_by_user"] == "前庭阀门"
+
+    @pytest.mark.asyncio
+    async def test_a_name_matching_a_redaction_set_key_name_survives_as_a_value(self, _registry_rows):
+        """The redactor matches key names and never values."""
+        _registry_rows.append(_device("182509_236547_1", name="password"))
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["devices"]["182509_236547_1"]["name"] == "password"
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_both_name_fields_unset_emits_both_keys_as_null(self, _registry_rows):
+        _registry_rows.append(_device("182509_236547_1", name=None, name_by_user=None))
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        entry_row = result["devices"]["182509_236547_1"]
+        assert entry_row["name"] is None
+        assert entry_row["name_by_user"] is None
+        assert set(entry_row) == {"kind", "name", "name_by_user", "in_current_poll"}
+
+    def test_a_redaction_set_key_nested_inside_a_devices_entry_is_blanked(self):
+        """Proves the map sits inside the single redaction pass, without touching production code."""
+        payload = {
+            "devices": {
+                "182509_236547_1": {
+                    "kind": "sub_device",
+                    "name": "HTV245FRF",
+                    "name_by_user": "Front Lawn Valve",
+                    "in_current_poll": True,
+                    "deviceName": "MAC-A84674BB91F0",
+                }
+            }
+        }
+
+        redacted = async_redact_data(payload, TO_REDACT)
+
+        entry_row = redacted["devices"]["182509_236547_1"]
+        assert entry_row["deviceName"] == REDACTED
+        assert entry_row["kind"] == "sub_device"
+        assert entry_row["name"] == "HTV245FRF"
+        assert entry_row["name_by_user"] == "Front Lawn Valve"
+        assert entry_row["in_current_poll"] is True
+
+    @pytest.mark.asyncio
+    async def test_no_caplog_record_carries_a_registry_or_user_set_name(self, caplog, monkeypatch):
+        _registry_rows_success = [_device("182509_236547_1", name="HTV245FRF", name_by_user="Front Lawn Valve")]
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        with caplog.at_level("DEBUG"):
+            monkeypatch.setattr(
+                "custom_components.rainpoint.diagnostics.dr.async_entries_for_config_entry",
+                lambda registry, entry_id: list(_registry_rows_success),
+            )
+            await async_get_config_entry_diagnostics(hass, entry)
+
+            monkeypatch.setattr(
+                "custom_components.rainpoint.diagnostics.dr.async_entries_for_config_entry",
+                MagicMock(side_effect=RuntimeError("boom")),
+            )
+            await async_get_config_entry_diagnostics(hass, entry)
+
+        for record in caplog.records:
+            assert "Front Lawn Valve" not in record.getMessage()
+            assert "Jardin Trasero" not in record.getMessage()
+            assert HUB_LABEL not in record.getMessage()
