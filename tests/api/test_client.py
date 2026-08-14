@@ -2654,3 +2654,145 @@ class TestGetSubscribeStatus:
     def test_redact_secret_long_value(self):
         """A secret longer than 4 chars is rendered as length + last-4 only."""
         assert _redact_secret("SEKRIT-value-9f3a") == "len=17 last4=9f3a"
+
+
+class TestLoginDoesNotLogTheAccountEmail:
+    """The account email never reaches the log, at any level.
+
+    This integration's support flow asks users to paste debug logs into public
+    GitHub issues. An email tied to a real person is worth more to an attacker,
+    and more harmful to that user, than any device identifier in the file, and
+    the login line used to print it on every login.
+    """
+
+    @pytest.mark.asyncio
+    async def test_successful_login_never_emits_the_email(self, caplog):
+        """The email is absent from a login that works."""
+        client = _make_client()
+        client._session.post = MagicMock(return_value=_mock_response(_login_json_body()))
+
+        with caplog.at_level(logging.DEBUG):
+            await client._login()
+
+        assert "test@example.com" not in caplog.text
+        # The login path really ran, so the assertion above is not passing on
+        # an empty log.
+        assert "RainPoint login request" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_failed_login_never_emits_the_email_or_the_response_body(self, caplog):
+        """A failure logs neither the email nor the body that echoes it back."""
+        client = _make_client()
+        body = {"code": 1002, "msg": "bad password", "data": {"phoneOrEmail": "test@example.com"}}
+        client._session.post = MagicMock(return_value=_mock_response(body))
+
+        with caplog.at_level(logging.DEBUG), pytest.raises(RainPointApiError):
+            await client._login()
+
+        assert "test@example.com" not in caplog.text
+        assert "bad password" not in caplog.text
+        assert "Login failed response" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_login_line_still_carries_the_codes_that_diagnose_it(self, caplog):
+        """Dropping the email did not leave the line without diagnostic value."""
+        client = _make_client()
+        client._session.post = MagicMock(return_value=_mock_response(_login_json_body()))
+
+        with caplog.at_level(logging.DEBUG):
+            await client._login()
+
+        line = next(r.message for r in caplog.records if "RainPoint login request" in r.message)
+        assert "areaCode=1" in line
+        assert "appCode=" in line
+
+
+class TestCloudResponsesAreSummarisedNotDumped:
+    """Every cloud response body reaches the log as shape and key names only.
+
+    Summarising rather than redacting field by field is the point: a redaction
+    list has to be maintained against a payload nobody here controls and fails
+    silently the first time the vendor adds a field.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_devices_by_hid_logs_field_names_and_no_values(self, caplog):
+        """The identifiers observed leaking on real hardware do not survive."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        body = {
+            "code": 0,
+            "data": [
+                {
+                    "mid": 236547,
+                    "deviceName": "MAC-A84674BB91F0",
+                    "productKey": "a3QrDxYPTM2",
+                    "iotId": "jDQNeV92iFixCU42PDtUk0k0d4",
+                    "name": "Norms Back Garden Hub",
+                }
+            ],
+        }
+        client._session.get = MagicMock(return_value=_mock_response(body))
+
+        with caplog.at_level(logging.DEBUG):
+            await client.get_devices_by_hid(182509)
+
+        emitted = caplog.text
+        for identifier in ("MAC-A84674BB91F0", "a3QrDxYPTM2", "jDQNeV92iFixCU42PDtUk0k0d4", "Norms Back Garden Hub"):
+            assert identifier not in emitted, f"{identifier!r} reached the log"
+        # The field names survive, which is what makes the line worth keeping.
+        assert "deviceName" in emitted
+        assert "productKey" in emitted
+
+    @pytest.mark.asyncio
+    async def test_multiple_device_status_logs_neither_request_nor_response_values(self, caplog):
+        """The request payload named each device; it is now a count."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        body = {"code": 0, "data": [{"mid": 236547, "iotId": "jDQNeV92iFixCU42", "status": []}]}
+        client._session.post = MagicMock(return_value=_mock_response(body))
+
+        with caplog.at_level(logging.DEBUG):
+            await client.get_multiple_device_status(
+                [{"mid": 236547, "deviceName": "MAC-A84674BB91F0", "productKey": "a3QrDxYPTM2"}]
+            )
+
+        emitted = caplog.text
+        assert "MAC-A84674BB91F0" not in emitted
+        assert "a3QrDxYPTM2" not in emitted
+        assert "jDQNeV92iFixCU42" not in emitted
+        assert "devices=1" in emitted
+
+    @pytest.mark.asyncio
+    async def test_a_field_the_vendor_adds_shows_up_by_name_with_no_value(self, caplog):
+        """The property that a redaction list could not have given us.
+
+        An unrecognised field is not in any allow-list or deny-list, and it
+        still reaches the log as a name and never as a value. This is the
+        regression that would fire if someone replaced the summary with
+        field-by-field redaction.
+        """
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        body = {"code": 0, "data": [{"aFieldNobodyHasSeenBefore": "leaked-canary-value"}]}
+        client._session.get = MagicMock(return_value=_mock_response(body))
+
+        with caplog.at_level(logging.DEBUG):
+            await client.get_devices_by_hid(182509)
+
+        assert "aFieldNobodyHasSeenBefore" in caplog.text
+        assert "leaked-canary-value" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_failed_response_body_is_summarised_too(self, caplog):
+        """The failure path dumped the whole body, which is where msg strings live."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        body = {"code": 1004, "msg": "session displaced for MAC-A84674BB91F0"}
+        client._session.get = MagicMock(return_value=_mock_response(body))
+
+        with caplog.at_level(logging.DEBUG), pytest.raises(RainPointApiError):
+            await client.get_devices_by_hid(182509)
+
+        assert "MAC-A84674BB91F0" not in caplog.text
+        assert "getDeviceByHid failed response" in caplog.text
