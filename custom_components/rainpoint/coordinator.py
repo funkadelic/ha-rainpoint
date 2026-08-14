@@ -97,8 +97,27 @@ class _AbsentStatus(dict):
     """
 
 
-# The single module-level instance every absent-status call site shares.
-STATUS_ABSENT = _AbsentStatus({"subDeviceStatus": []})
+def _absent_status() -> _AbsentStatus:
+    """Build a fresh absent-status marker.
+
+    A factory rather than the module-level singleton this used to be. The
+    singleton was stored into status_by_mid[mid] and so reached
+    coordinator.data["status"] for every absent hub at once, all of them
+    holding one object. Nothing mutated it, so nothing was broken, but a
+    future consumer appending to status[mid]["subDeviceStatus"] would have
+    polluted every absent hub simultaneously and the symptom would have read
+    as cross-hub contamination rather than as a mutation bug.
+
+    Note that a shallow copy would not have been enough to make sharing safe:
+    dict(marker) copies the mapping but leaves "subDeviceStatus" pointing at
+    the same list, so the inner list is the part that actually needed to stop
+    being shared. Each call gets its own dict and its own list.
+
+    Callers still detect it with isinstance(status, _AbsentStatus), never by
+    identity, which is what lets this be a factory at all.
+    """
+    return _AbsentStatus({"subDeviceStatus": []})
+
 
 # The coordinator data["type"] value for a sub-device the hub lists but no
 # status response has ever mentioned. Deliberately distinct from "unknown":
@@ -1184,9 +1203,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # Merely "no prior status recorded for this mid to merge into yet" --
         # unrelated to the absent-vs-omitted distinction, which concerns
         # the fetch layer's status_by_mid, not this push-side merge target.
-        # STATUS_ABSENT's contents are the same shape, so reusing the shared
-        # sentinel here is equivalent and avoids a second copy of the literal.
-        mid_status = dict(status.get(mid, STATUS_ABSENT))
+        # The absent marker's contents are the same shape, so it doubles as
+        # the "nothing recorded yet" default here. Built fresh like everywhere
+        # else, so no absent-status object is ever shared between call sites.
+        mid_status = dict(status.get(mid, _absent_status()))
         sub_status = list(mid_status.get("subDeviceStatus", []))
         for index, existing in enumerate(sub_status):
             # Skipped rather than indexed, for the same reason apply_push_update
@@ -1247,10 +1267,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
             for hub in hubs:
                 mid = hub["mid"]
-                # STATUS_ABSENT is an unreachable safety net once _fetch_status_by_mid
-                # covers every hub mid: a mid genuinely missing here would mean
-                # its status was never obtained this poll, not that it arrived empty.
-                status = status_by_mid.get(mid, STATUS_ABSENT)
+                # An unreachable safety net once _fetch_status_by_mid covers
+                # every hub mid: a mid genuinely missing here would mean its
+                # status was never obtained this poll, not that it arrived empty.
+                status = status_by_mid.get(mid, _absent_status())
                 if isinstance(status, _AbsentStatus):
                     absent_hubs.append(hub)
                 # The Bluetooth wrapper record has no cloud connection to report
@@ -1506,7 +1526,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 # This hub's status was not obtained this poll -- an outage, not
                 # evidence that it reported nobody -- so it must contribute no
                 # silent entries for any of its children.
-                status_by_mid[mid] = STATUS_ABSENT
+                status_by_mid[mid] = _absent_status()
         return status_by_mid
 
     def _notify_unknown_model(

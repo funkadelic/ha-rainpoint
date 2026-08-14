@@ -1338,7 +1338,7 @@ class TestSilentSubDeviceEndToEnd:
 
     @pytest.mark.asyncio
     async def test_fallback_transport_error_records_status_absent(self):
-        """A transport error in the per-hub fallback records STATUS_ABSENT, not an
+        """A transport error in the per-hub fallback records an absent marker, not an
         arrived-empty status, so the hub-outage distinction survives one level
         below _async_update_data (D-05/D-06)."""
         coord, client = _make_coord()
@@ -1347,7 +1347,41 @@ class TestSilentSubDeviceEndToEnd:
 
         result = await _coord_module.RainPointCoordinator._fallback_per_hub_status(coord, [hub])
 
-        assert result[301] is _coord_module.STATUS_ABSENT
+        # isinstance, not identity: the absent marker is built per call now,
+        # so there is no shared object to compare against.
+        assert isinstance(result[301], _coord_module._AbsentStatus)
+
+    @pytest.mark.asyncio
+    async def test_two_absent_hubs_do_not_share_one_marker(self):
+        """Each absent hub gets its own marker, down to the inner list.
+
+        The marker used to be a single module-level instance, so every absent
+        hub in coordinator.data["status"] held the same object. Nothing mutated
+        it, so nothing was broken, but a consumer appending to one hub's
+        subDeviceStatus would have appended to every absent hub's at once, and
+        the symptom would have read as cross-hub contamination rather than as a
+        mutation bug.
+
+        The inner list is the half that matters and the half a shallow copy
+        would miss: dict(marker) gives a new mapping still pointing at the same
+        list, so identity is asserted on the list as well as on the dict.
+        """
+        coord, client = _make_coord()
+        hubs = [_make_hub(mid=301), _make_hub(mid=302)]
+        client.get_device_status.side_effect = aiohttp.ClientError("boom")
+
+        result = await _coord_module.RainPointCoordinator._fallback_per_hub_status(coord, hubs)
+
+        first, second = result[301], result[302]
+        assert isinstance(first, _coord_module._AbsentStatus)
+        assert isinstance(second, _coord_module._AbsentStatus)
+        assert first is not second
+        assert first["subDeviceStatus"] is not second["subDeviceStatus"]
+
+        # The property that actually matters, exercised rather than inferred.
+        first["subDeviceStatus"].append({"id": "D1"})
+        assert second["subDeviceStatus"] == []
+        assert _coord_module._absent_status()["subDeviceStatus"] == []
 
     @pytest.mark.asyncio
     async def test_mid_omitted_from_successful_multi_status_is_filled_arrived_empty(self):
@@ -1498,8 +1532,8 @@ class TestHubConnectivity:
         assert record["state"] == _coord_module.HUB_DISCONNECTED
 
     def test_absent_status_yields_unknown_with_no_other_fields(self):
-        """STATUS_ABSENT never coerces to disconnected; it is unknown with no timestamp or raw value."""
-        record = _coord_module._read_hub_connectivity(_coord_module.STATUS_ABSENT)
+        """An absent marker never coerces to disconnected; it is unknown with no timestamp or raw value."""
+        record = _coord_module._read_hub_connectivity(_coord_module._absent_status())
         assert record == {
             "state": _coord_module.HUB_CONNECTIVITY_UNKNOWN,
             "changed_at": None,
@@ -5569,7 +5603,7 @@ class TestGuardHubConnectivityOrder:
         """The unknown record from an absent status wins whole -- Phase 16's
         absent-never-disconnected rule is not something this guard may
         quietly change."""
-        polled = _coord_module._read_hub_connectivity(_coord_module.STATUS_ABSENT)
+        polled = _coord_module._read_hub_connectivity(_coord_module._absent_status())
         prior = {
             "state": _coord_module.HUB_CONNECTED,
             "changed_at": SAMPLE_HUB_RECONNECT_CHANGED_AT_ISO,
