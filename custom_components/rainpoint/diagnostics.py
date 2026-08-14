@@ -34,20 +34,33 @@ human wrote (the hub and sub-device `name`, the coordinator entry's `hub_name`
 and `sub_name`, and the home's `homeName`). The logging house style is stricter
 on purpose, because a log line is emitted without anyone asking for it, where a
 dump is downloaded deliberately by someone who can open the file before sending
-it. `tests/test_diagnostics.py::TestUserChosenNamesSurvive` pins this so the
-next edit to `TO_REDACT` has to mean it.
+it. `tests/test_diagnostics.py::TestUserChosenNamesSurvive` and
+`TestDeviceIdentityMapEdges` pin this so the next edit to `TO_REDACT` has to
+mean it.
+
+The entry dump's top-level `devices` map carries the same pair, Home
+Assistant's own `name` and `name_by_user` for every device row this config
+entry owns. That pair is what Home Assistant knows about a device, not what
+the cloud sent, which is why it sits in its own section rather than inside one
+of the allow-listed record dicts above; the sensor and hub sections describe
+what the cloud reported, and this one describes what the owner sees. The pair
+passes the disclosure rule already set for the device-scoped dump unchanged,
+so it needed no new review of its own.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Container
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceEntry
 
-from . import _domain_sensor_key, _hub_identity
+from . import _domain_sensor_key, _fetch_registry_rows, _hub_identity
 from .const import (
     CONF_AREA_CODE,
     CONF_GENERIC_CONTROL_ENABLED,
@@ -58,6 +71,8 @@ from .const import (
     HUB_IDENTIFIER_PREFIX,
     VERSION,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 # Values replaced with a redaction marker wherever they appear, at any depth.
 #
@@ -336,19 +351,108 @@ def _entry_store(hass: HomeAssistant, config_entry: ConfigEntry) -> dict:
     return (hass.data.get(DOMAIN) or {}).get(config_entry.entry_id) or {}
 
 
+def _row_in_current_poll(identifier: str, dumped_hubs: list[dict], sensor_keys: Container[str]) -> bool:
+    """Return whether a device row's identifier has a counterpart in this poll.
+
+    A sub-device identifier is tested by membership in `sensor_keys`, the
+    current poll's `sensors` mapping key view.
+
+    A hub-prefixed identifier goes through `_hub_identity` and, for either
+    accepted shape, `_matches_hub` against the caller's already-dumped hub
+    list rather than a second call to `_hub_dump`. The hid-only legacy row
+    matching every hub in its home, rather than none, is the same answer
+    `_hub_scoped_payload` already gives the identical ambiguous identifier on
+    the device dump path; reusing `_matches_hub`'s existing `mid is None`
+    branch keeps one reading of that shape across the module. A three-valued
+    flag (true/false/null) was rejected because it would give the legacy
+    shape its own reading, which is exactly the drift one reading is meant to
+    prevent. A `hub_`-prefixed identifier that is neither accepted shape
+    answers False, since `_hub_identity` gives it no identity to test.
+    """
+    if identifier.startswith(HUB_IDENTIFIER_PREFIX):
+        identity = _hub_identity(identifier)
+        if identity is None:
+            return False
+        hid, mid = identity
+        return any(_matches_hub(hub, hid, mid) for hub in dumped_hubs)
+    return identifier in sensor_keys
+
+
+def _device_identity_map(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    dumped_hubs: list[dict],
+    sensor_keys: Container[str],
+) -> dict[str, dict]:
+    """Return this config entry's device registry rows, keyed by DOMAIN identifier.
+
+    The key is whatever `_domain_sensor_key` returns for the row, which is a
+    mixed shape by design: `hub_{hid}` or `hub_{hid}_{mid}` for a hub row and
+    `{hid}_{mid}_{addr}` for a sub-device row, exactly what the device dump
+    already routes on. Two dumps read the identifier the same way.
+
+    The map carries no parsed join key. A reader holding `hub_{hid}_{mid}`
+    recovers `hid` and `mid` from the key itself to reach the `hubs` list and
+    the `hub_connectivity` mapping; a parsed component that disagrees with the
+    key it was parsed from is worse than a join the reader makes in their head.
+
+    `in_current_poll` is true when this poll carried a counterpart for the row.
+    False means absent from this poll, and never dead. Aged-out and leftover
+    verdicts belong to `repairs.py` and carry conditions this flag does not
+    evaluate.
+
+    A row whose `_domain_sensor_key` answer is None still gets an entry rather
+    than being skipped, keyed `unrecognised_{row.id}` and carrying
+    `kind: "unrecognised"`. Such a row has no DOMAIN identifier to be keyed
+    by, so the registry row id is the only stable handle it has, and saying so
+    beats omitting it, the same instinct the device dump follows when it
+    declines to return a payload that reads as nothing wrong here. Its
+    `in_current_poll` is False because a row with no identifier has nothing to
+    test membership with, which is the honest reading of absent from this
+    poll.
+    """
+    _, rows = _fetch_registry_rows(dr.async_get, dr.async_entries_for_config_entry, hass, config_entry, "the device identity map")
+    devices: dict[str, dict] = {}
+    for row in rows:
+        try:
+            key = _domain_sensor_key(row)
+            if key is None:
+                devices[f"unrecognised_{getattr(row, 'id', None)}"] = {
+                    "kind": "unrecognised",
+                    "name": getattr(row, "name", None),
+                    "name_by_user": getattr(row, "name_by_user", None),
+                    "in_current_poll": False,
+                }
+                continue
+            kind = "hub" if key.startswith(HUB_IDENTIFIER_PREFIX) else "sub_device"
+            devices[key] = {
+                "kind": kind,
+                "name": getattr(row, "name", None),
+                "name_by_user": getattr(row, "name_by_user", None),
+                "in_current_poll": _row_in_current_poll(key, dumped_hubs, sensor_keys),
+            }
+        except Exception as exc:
+            _LOGGER.debug("Could not resolve a device identity map row %s: %s", getattr(row, "id", None), exc)
+    return {key: devices[key] for key in sorted(devices)}
+
+
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, config_entry: ConfigEntry) -> dict[str, Any]:
     """Return diagnostics for the whole config entry."""
     entry_store = _entry_store(hass, config_entry)
     coordinator = entry_store.get("coordinator")
     data = (getattr(coordinator, "data", None) or {}) if coordinator else {}
 
+    hubs = [_hub_dump(hub) for hub in data.get("hubs") or []]
+    sensors = {key: _sensor_dump(entry) for key, entry in (data.get("sensors") or {}).items()}
+
     payload = {
         "integration": {"domain": DOMAIN, "version": VERSION},
         "entry": _entry_dump(config_entry),
         "coordinator": _coordinator_dump(coordinator) if coordinator else {"set_up": False},
         "push": _push_dump(entry_store),
-        "hubs": [_hub_dump(hub) for hub in data.get("hubs") or []],
-        "sensors": {key: _sensor_dump(entry) for key, entry in (data.get("sensors") or {}).items()},
+        "devices": _device_identity_map(hass, config_entry, hubs, sensors.keys()),
+        "hubs": hubs,
+        "sensors": sensors,
         "hub_connectivity": data.get("hub_connectivity") or {},
     }
     return async_redact_data(payload, TO_REDACT)

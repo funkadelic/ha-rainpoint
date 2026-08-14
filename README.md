@@ -16,7 +16,7 @@ This integration supports RainPoint Smart+ device families, including:
 
 | Family | Examples | Entities Created |
 | ------ | -------- | ---------------- |
-| Valve hubs | HTV245FRF, HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV0540FRF | Valve per zone, duration number per zone |
+| Valve hubs | HTV245FRF, HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
 | Soil sensors | HCS021FRF, HCS026FRF (tested device), HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
@@ -243,6 +243,8 @@ If a generic reading turns out to be right (or wrong) for your device, that is w
 Home Assistant can write out a diagnostics file describing what this integration last received from RainPoint and what it made of it. It is the single most useful thing to attach to a bug report, and it saves a round trip asking you for details.
 
 Go to **Settings → Devices & Services → RainPoint**, open the three-dot menu on the RainPoint entry and choose **Download diagnostics**. Every device page carries the same option in its own menu, which is the one to use when only one device is misbehaving.
+
+The file opens with a list of your devices, each carrying the name you gave it in Home Assistant, so you can tell which section describes which device.
 
 Removed before the file is written: your password, your login tokens, your email address, your hardware's MAC addresses, and the cloud's own device credentials and product keys. Kept on purpose: the names of your devices, your hub and your home as they appear in the app, the name you gave a device in Home Assistant, and the account-internal numbers this integration uses to tell one device from another. Nothing in that second list authenticates anything, and without it the file cannot say which device a section describes, which is the only reason to download it. Read the file before you attach it to a public issue if any of that is something you would rather not post. Only Home Assistant administrators can download it.
 
