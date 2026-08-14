@@ -416,9 +416,7 @@ class RainPointClient:
             if resp.status != 200:
                 raise RainPointApiError(f"multipleDeviceStatus HTTP {resp.status}")
             data = await resp.json()
-        _LOGGER.debug(
-            "API response: get_multiple_device_status code=%s %s", data.get("code"), _RecordSummary(data.get("data"))
-        )
+        _LOGGER.debug("API response: get_multiple_device_status code=%s %s", data.get("code"), _RecordSummary(data.get("data")))
         if data.get("code") != 0:
             self._maybe_invalidate_token(data.get("code"), request_token)
             _LOGGER.debug("multipleDeviceStatus failed response: %s", _RecordSummary(data))
