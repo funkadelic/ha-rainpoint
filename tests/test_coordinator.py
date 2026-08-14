@@ -214,10 +214,12 @@ class TestCoordinatorUpdate:
     async def test_no_cloud_log_line_repeats_an_identifier_at_debug(self, caplog):
         """No line the poll emits at DEBUG carries a cloud identifier or free-text name.
 
-        The module rule is that log lines on the cloud-record paths carry only
-        keys and integer counts. This asserts the rule against the whole poll
+        The rule on the cloud-record paths is keys, integer counts and the
+        hardware model, and nothing else. This asserts it against the whole poll
         rather than one line, so a future line added anywhere in the path has to
-        clear it too.
+        clear it too. That whole-poll shape is what caught the MQTT connect
+        line's username and the per-home discovery line's model list, neither of
+        which the entry that prompted this work had named.
         """
         coord, client = _make_coord()
         hub = _make_hub(model="HWG023WBRF-V2")
@@ -232,10 +234,10 @@ class TestCoordinatorUpdate:
             await _run(coord)
 
         emitted = caplog.text
-        # Scoped to device identifiers and user-chosen names. The model string
-        # is deliberately not asserted on here: the unsupported-model report
-        # block prints it on purpose, so that is a separate decision rather than
-        # something this guard should quietly force.
+        # Per-unit and addressing identifiers, plus the user's own name for the
+        # hub. None may appear. productKey is in this list rather than treated
+        # as product-scoped: it is a cloud addressing identifier and it travels
+        # with deviceName in the same payloads.
         for identifier in (
             "MAC-A84674BB91F0",
             "a3QrDxYPTM2",
@@ -243,7 +245,13 @@ class TestCoordinatorUpdate:
             "Norms Back Garden Hub",
         ):
             assert identifier not in emitted, f"{identifier!r} reached the log"
-        # The poll did run, so the assertions above are not passing on an empty log.
+        # The model is the one deliberate exemption, settled 2026-08-14: it names
+        # a product line rather than a unit, and the unsupported-model report
+        # block exists to put it in front of the user for a new-device issue.
+        # Asserted positively so the exemption is a decision recorded in code,
+        # not an accident nobody notices either way.
+        assert "HWG023WBRF-V2" in emitted, "the model exemption is intentional; see the log-discipline rule"
+        # The poll did run, so the negative assertions are not passing on an empty log.
         assert "Raw hub record" in emitted
 
     @pytest.mark.asyncio
