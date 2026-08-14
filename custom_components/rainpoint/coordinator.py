@@ -2298,14 +2298,22 @@ class RainPointCoordinator(DataUpdateCoordinator):
         makes a below-threshold disconnected=False record any less of a lie.
 
         On the unknown tri-state (including a hub whose mid is altogether
-        missing from hub_connectivity) no record is emitted and the window
-        start is left untouched in both directions; the hub's issue id is added
-        to a per-poll unreachable_ids set so the reconcile below suppresses
-        clearing it. This is a one-directional asymmetry: unknown suppresses
-        clearing and never suppresses raising, because a hub whose
-        connectivity is unknown produces no disconnected record to raise from
-        in the first place. unreachable_ids is a local built fresh every call,
-        never manager state.
+        missing from hub_connectivity) no record is emitted, any running
+        window start is dropped, and the hub's issue id is added to a per-poll
+        unreachable_ids set so the reconcile below suppresses clearing it.
+        This is a one-directional asymmetry: unknown suppresses clearing and
+        never suppresses raising, because a hub whose connectivity is unknown
+        produces no disconnected record to raise from in the first place.
+        unreachable_ids is a local built fresh every call, never manager
+        state.
+
+        Dropping the window start is a deliberate reversal of what the poll
+        count did here, and the reason is the mechanism rather than a change
+        of mind. A count could only advance on an observed disconnect, so
+        carrying it across an unknown poll was free; wall time advances on its
+        own, so carrying a start across one lets the window keep growing
+        through a reconnect that poll was too blind to see. The full sequence
+        it prevents is in the branch's own comment below.
 
         missing_hub_keys names the enumeration door alongside the unknown
         tri-state above: a hub absent from hubs is never iterated by the
@@ -2378,14 +2386,23 @@ class RainPointCoordinator(DataUpdateCoordinator):
                     # restart the window every poll and never raise.
                     since = self._hub_disconnect_since.setdefault(key, now)
                 else:
-                    # Written unconditionally rather than through setdefault,
-                    # so a cloud edge a later poll revises is honoured. This
-                    # only ever moves the window start earlier in practice: a
-                    # hub first observed without a timestamp is stamped at
-                    # observation, and a real edge that arrives afterwards
-                    # predates that observation.
-                    since = cloud_moment
-                    self._hub_disconnect_since[key] = cloud_moment
+                    # Floored against whatever start this key already carries,
+                    # so the window can only ever move earlier. A later cloud
+                    # edge is still honoured on a key with no start yet, which
+                    # is what lets a restart mid-outage measure from the real
+                    # edge, but it can never push a running window forward.
+                    #
+                    # The floor is what keeps this branch honest on firmware
+                    # nobody here has captured. Every observed hub reports the
+                    # moment the connection changed, so re-reading it each poll
+                    # returns the same instant. A firmware whose entry carried
+                    # the moment of the report instead would hand back a newer
+                    # instant every poll, restarting the window forever and
+                    # raising no card at all, which is worse than the poll
+                    # count this replaced: that one always raised eventually.
+                    prior = self._hub_disconnect_since.get(key)
+                    since = cloud_moment if prior is None else min(prior, cloud_moment)
+                    self._hub_disconnect_since[key] = since
                 # A changed_at in the future (cloud clock skew) yields a
                 # negative elapsed, which fails the comparison below and
                 # suppresses the card. That is the safe direction, so it
@@ -2405,6 +2422,24 @@ class RainPointCoordinator(DataUpdateCoordinator):
                     )
                 )
             else:
+                # An unknown tri-state drops any running window start. Under
+                # the poll count this branch deliberately left the counter
+                # alone, because a count only ever advanced on an observed
+                # disconnect and could not run on its own. A wall-clock window
+                # can: an unknown poll hides whatever happened during it, so a
+                # start kept across one keeps accruing time through a reconnect
+                # nobody saw, and the next disconnect then raises a card
+                # claiming an outage that already ended. Restarting costs a
+                # delayed raise and never invents one, which is the direction
+                # this whole surface is built to fail in.
+                #
+                # It costs nothing on the path every observed hub takes: the
+                # cloud's own change moment is re-read on the next disconnected
+                # poll, so a genuinely continuous outage raises again straight
+                # away. Only the no-change-time fallback pays, and there an
+                # alternating unknown and disconnected sequence never matures.
+                # That is the safe half of the same trade.
+                self._hub_disconnect_since.pop(key, None)
                 unreachable_ids.add(hub_connectivity_issue_id(hid, mid))
 
         self._hub_connectivity_issues.async_sync(records, unreachable_ids=unreachable_ids)
