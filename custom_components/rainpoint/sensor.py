@@ -77,6 +77,12 @@ from .hub_entities import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Icons shared by more than one entity class. Named here so a water reading and
+# a run-length reading keep the same glyph wherever they appear, rather than
+# drifting apart one literal at a time.
+_ICON_WATER = "mdi:water"
+_ICON_DURATION = "mdi:timer-outline"
+
 # HCS device variants that share an entity layout with one of the canonical
 # RainPoint sensor models. Resolving through this map lets the dispatch chain
 # below stay flat: each variant is rebound to its base model before the if/elif
@@ -921,7 +927,7 @@ class RainPointFlowCurrentUsedSensor(RainPointSensorBase):
     _attr_native_unit_of_measurement = UnitOfVolume.LITERS
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 1
-    _attr_icon = "mdi:water"
+    _attr_icon = _ICON_WATER
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -940,7 +946,7 @@ class RainPointFlowCurrentDurationSensor(RainPointSensorBase):
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:timer-outline"
+    _attr_icon = _ICON_DURATION
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -963,7 +969,7 @@ class RainPointFlowLastUsedSensor(RainPointSensorBase):
     _attr_native_unit_of_measurement = UnitOfVolume.LITERS
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 1
-    _attr_icon = "mdi:water"
+    _attr_icon = _ICON_WATER
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -982,7 +988,7 @@ class RainPointFlowLastUsedDurationSensor(RainPointSensorBase):
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:timer-outline"
+    _attr_icon = _ICON_DURATION
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -1631,7 +1637,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
     _attr_native_unit_of_measurement = UnitOfVolume.GALLONS
     _attr_state_class = None
     _attr_suggested_display_precision = 2
-    _attr_icon = "mdi:water"
+    _attr_icon = _ICON_WATER
 
     def __init__(
         self,
@@ -1705,7 +1711,7 @@ class RainPointZoneRunDurationSensor(RainPointZoneSensorBase):
     _attr_suggested_unit_of_measurement = UnitOfTime.MINUTES
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
-    _attr_icon = "mdi:timer-outline"
+    _attr_icon = _ICON_DURATION
 
     def __init__(
         self,
@@ -1864,7 +1870,7 @@ class RainPointHicRunDurationSensor(RainPointHic801wSensorBase):
     _attr_suggested_unit_of_measurement = UnitOfTime.MINUTES
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
-    _attr_icon = "mdi:timer-outline"
+    _attr_icon = _ICON_DURATION
 
     def __init__(
         self,
