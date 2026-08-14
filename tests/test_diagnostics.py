@@ -1002,3 +1002,18 @@ class TestDeviceIdentityMapEdges:
             assert "Front Lawn Valve" not in record.getMessage()
             assert "Jardin Trasero" not in record.getMessage()
             assert HUB_LABEL not in record.getMessage()
+
+    @pytest.mark.asyncio
+    async def test_one_malformed_row_does_not_stop_the_rest_of_the_walk(self, _registry_rows):
+        """`row.identifiers` not being iterable is caught per row, matching every other registry walk in this package."""
+        malformed = MagicMock()
+        malformed.identifiers = None
+        malformed.id = "device-row-bad"
+        _registry_rows.append(malformed)
+        _registry_rows.append(_device("182509_236547_1"))
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert "182509_236547_1" in result["devices"]
+        assert all(not key.startswith("unrecognised_device-row-bad") for key in result["devices"])
