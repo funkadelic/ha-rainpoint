@@ -34,8 +34,18 @@ human wrote (the hub and sub-device `name`, the coordinator entry's `hub_name`
 and `sub_name`, and the home's `homeName`). The logging house style is stricter
 on purpose, because a log line is emitted without anyone asking for it, where a
 dump is downloaded deliberately by someone who can open the file before sending
-it. `tests/test_diagnostics.py::TestUserChosenNamesSurvive` pins this so the
-next edit to `TO_REDACT` has to mean it.
+it. `tests/test_diagnostics.py::TestUserChosenNamesSurvive` and
+`TestDeviceIdentityMapEdges` pin this so the next edit to `TO_REDACT` has to
+mean it.
+
+The entry dump's top-level `devices` map carries the same pair, Home
+Assistant's own `name` and `name_by_user` for every device row this config
+entry owns. That pair is what Home Assistant knows about a device, not what
+the cloud sent, which is why it sits in its own section rather than inside one
+of the allow-listed record dicts above; the sensor and hub sections describe
+what the cloud reported, and this one describes what the owner sees. The pair
+passes the disclosure rule already set for the device-scoped dump unchanged,
+so it needed no new review of its own.
 """
 
 from __future__ import annotations
