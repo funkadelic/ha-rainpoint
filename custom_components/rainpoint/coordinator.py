@@ -2250,6 +2250,43 @@ class RainPointCoordinator(DataUpdateCoordinator):
             key: since for key, since in self._hub_disconnect_since.items() if key in live_keys or key in missing_hub_keys
         }
 
+    def _hub_disconnect_window_start(self, key: tuple[Any, int], connectivity: dict, now: datetime) -> datetime:
+        """Return, and store, the moment this hub's current outage started.
+
+        Split out of _sync_hub_connectivity_issues' disconnected arm so that
+        arm reads as one flat step alongside the other two tri-states. The
+        two paths below are the same two the caller's docstring describes,
+        and the choice between them is the only thing that happens here: the
+        elapsed measurement and the threshold comparison stay with the caller,
+        because they are what decides whether a record is emitted.
+        """
+        cloud_moment = _changed_at_datetime(connectivity)
+        if cloud_moment is None:
+            # No cloud change time: measure from the first poll that
+            # observed this hub disconnected, and keep that stamp on
+            # every later poll. setdefault rather than an assignment
+            # is the whole debounce on this path -- re-stamping would
+            # restart the window every poll and never raise.
+            return self._hub_disconnect_since.setdefault(key, now)
+        # Floored against whatever start this key already carries,
+        # so the window can only ever move earlier. A later cloud
+        # edge is still honoured on a key with no start yet, which
+        # is what lets a restart mid-outage measure from the real
+        # edge, but it can never push a running window forward.
+        #
+        # The floor is what keeps this branch honest on firmware
+        # nobody here has captured. Every observed hub reports the
+        # moment the connection changed, so re-reading it each poll
+        # returns the same instant. A firmware whose entry carried
+        # the moment of the report instead would hand back a newer
+        # instant every poll, restarting the window forever and
+        # raising no card at all, which is worse than the poll
+        # count this replaced: that one always raised eventually.
+        prior = self._hub_disconnect_since.get(key)
+        since = cloud_moment if prior is None else min(prior, cloud_moment)
+        self._hub_disconnect_since[key] = since
+        return since
+
     def _sync_hub_connectivity_issues(
         self,
         hubs: list[dict],
@@ -2275,7 +2312,8 @@ class RainPointCoordinator(DataUpdateCoordinator):
         for under three minutes raises nothing. The window start is the
         cloud's own change moment where the record carries one, and
         otherwise the first poll that observed the disconnected tri-state
-        (see the two-path note below). Below the threshold the hub's issue id
+        (_hub_disconnect_window_start picks between the two; the note below
+        says why the difference does not matter here). Below the threshold the hub's issue id
         goes into unreachable_ids instead, exactly as the unknown tri-state
         does, so those polls neither raise nor clear. Emitting a
         disconnected=False record there would be a lie, because a "not yet
@@ -2377,32 +2415,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
                     )
                 )
             elif state == HUB_DISCONNECTED:
-                cloud_moment = _changed_at_datetime(connectivity)
-                if cloud_moment is None:
-                    # No cloud change time: measure from the first poll that
-                    # observed this hub disconnected, and keep that stamp on
-                    # every later poll. setdefault rather than an assignment
-                    # is the whole debounce on this path -- re-stamping would
-                    # restart the window every poll and never raise.
-                    since = self._hub_disconnect_since.setdefault(key, now)
-                else:
-                    # Floored against whatever start this key already carries,
-                    # so the window can only ever move earlier. A later cloud
-                    # edge is still honoured on a key with no start yet, which
-                    # is what lets a restart mid-outage measure from the real
-                    # edge, but it can never push a running window forward.
-                    #
-                    # The floor is what keeps this branch honest on firmware
-                    # nobody here has captured. Every observed hub reports the
-                    # moment the connection changed, so re-reading it each poll
-                    # returns the same instant. A firmware whose entry carried
-                    # the moment of the report instead would hand back a newer
-                    # instant every poll, restarting the window forever and
-                    # raising no card at all, which is worse than the poll
-                    # count this replaced: that one always raised eventually.
-                    prior = self._hub_disconnect_since.get(key)
-                    since = cloud_moment if prior is None else min(prior, cloud_moment)
-                    self._hub_disconnect_since[key] = since
+                # Class-level dispatch: test_coordinator.py drives this method
+                # with a SimpleNamespace standing in for self, which carries no
+                # bound methods of its own.
+                since = RainPointCoordinator._hub_disconnect_window_start(self, key, connectivity, now)
                 # A changed_at in the future (cloud clock skew) yields a
                 # negative elapsed, which fails the comparison below and
                 # suppresses the card. That is the safe direction, so it
