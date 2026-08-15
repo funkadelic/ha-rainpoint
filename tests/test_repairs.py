@@ -1123,6 +1123,7 @@ def _make_orphan_record(
     hub_device_name=None,
     leftover=False,
     entity_ids=(),
+    offered_pairs=(),
 ):
     """Build an OrphanedEntitiesRecord with sensible defaults for one key.
 
@@ -1142,6 +1143,11 @@ def _make_orphan_record(
     entity_ids defaults to empty, which is what the departed-key shape always
     carries and what a still-present record whose ids could not be resolved
     carries too.
+
+    offered_pairs defaults to empty, which is what a record for a key with no
+    readable adder carries. Most tests here are about what the card renders,
+    and the offer is not rendered; the ones about what the confirm may take
+    pass their own.
     """
     return OrphanedEntitiesRecord(
         entry_id=entry_id,
@@ -1158,6 +1164,7 @@ def _make_orphan_record(
         hub_device_name=hub_device_name,
         leftover=leftover,
         entity_ids=entity_ids,
+        offered_pairs=offered_pairs,
     )
 
 
@@ -1210,7 +1217,7 @@ class TestRainPointOrphanedEntityIssues:
         create, _delete = issue_mocks
         manager = RainPointOrphanedEntityIssues(MagicMock())
 
-        manager.async_sync([_make_orphan_record()])
+        manager.async_sync([_make_orphan_record(offered_pairs=(("valve", "rainpoint_100_200_1_zone1"),))])
 
         create.assert_called_once()
         _hass, domain, issue_id = create.call_args.args
@@ -1220,8 +1227,17 @@ class TestRainPointOrphanedEntityIssues:
         assert kwargs["is_fixable"] is True
         assert kwargs["severity"] == repairs.ir.IssueSeverity.WARNING
         assert kwargs["translation_key"] == ORPHANED_ENTITIES_ISSUE_ID_PREFIX
-        assert kwargs["data"] == {"entry_id": "e1", "sensor_key": "100_200_1"}
-        assert "is_persistent" not in kwargs
+        # The offer rides under the departed shape's own key, so a flow that
+        # misread its shape finds nothing rather than the other shape's ceiling.
+        assert kwargs["data"] == {
+            "entry_id": "e1",
+            "sensor_key": "100_200_1",
+            "orphaned_pairs": [["valve", "rainpoint_100_200_1_zone1"]],
+        }
+        # Persistent, which is what carries that offer across a restart. Without
+        # it IssueEntry.to_json drops `data` and the restored card would have
+        # nothing for its confirm to be held to.
+        assert kwargs["is_persistent"] is True
         placeholders = kwargs["translation_placeholders"]
         assert placeholders["device_name"] == "Front Valve"
         assert placeholders["model"] == "HTV245FRF"
@@ -1395,63 +1411,94 @@ class TestRainPointOrphanedEntityIssues:
         create.assert_called_once()
         assert [r.getMessage() for r in caplog.records if "Could not reconcile the orphaned entities issue" in r.getMessage()]
 
-    def test_unload_withdraws_every_card_this_instance_raised(self, issue_mocks, caplog):
-        """A card raised before a reload survives it, because the issue
-        registry is not per config entry. Every structure that could clear it
-        afterwards is rebuilt empty, and a key that has left the hub's
-        enumeration can never be mentioned by a fresh record, so the stale-set
-        sweep has nothing to sweep and the card is stuck for good."""
+    def test_only_the_departed_key_shape_is_persistent(self, issue_mocks):
+        """Persistence is per shape, and both halves are load bearing.
+
+        The departed-key card has nothing left to rebuild it, so it persists
+        and its offer rides along in the data dict Home Assistant serializes
+        for a persistent issue. The still-present card must not: its offer is a
+        ceiling over a re-derivation that reads a per-session debounce window,
+        so a restored one would sit there holding a Submit that could take
+        nothing until that window refilled, which is the same lie from the
+        other side. It does not need persisting either, because its rows come
+        from the registries and its device is reporting, so a fresh session
+        raises it again by itself.
+        """
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+
+        manager.async_sync(
+            [
+                _make_orphan_record(sensor_key="100_200_1"),
+                _make_orphan_record(sensor_key="100_200_2", leftover=True, entity_ids=("sensor.unused",)),
+            ]
+        )
+
+        by_id = {call.args[2]: call.kwargs for call in create.call_args_list}
+        assert by_id[orphaned_entities_issue_id("100_200_1", "e1")]["is_persistent"] is True
+        assert by_id[orphaned_entities_issue_id("100_200_2", "e1")]["is_persistent"] is False
+
+    def test_unload_withdraws_the_still_present_card_and_keeps_the_departed_one(self, issue_mocks, caplog):
+        """The shape split, asserted on both halves in one unload.
+
+        Keeping the departed card is what the persisted offer bought: it can be
+        acted on after the reload, so withdrawing it would throw away the only
+        surface its rows have.
+
+        Withdrawing the still-present card is not an oversight left behind by
+        that change, and asserting only the first half is how the regression got
+        in. is_persistent governs survival across a *restart*; the issue
+        registry is in-memory and not per entry, so leaving this one up means it
+        survives a *reload* while the debounce window its confirm re-derives
+        against is rebuilt empty, and its Submit then resolves to nothing while
+        Home Assistant deletes it anyway.
+        """
         _create, delete = issue_mocks
         manager = RainPointOrphanedEntityIssues(MagicMock())
-        manager.async_sync([_make_orphan_record(), _make_orphan_record(sensor_key="100_200_2")])
+        manager.async_sync(
+            [
+                _make_orphan_record(sensor_key="100_200_1"),
+                _make_orphan_record(sensor_key="100_200_2", leftover=True, entity_ids=("sensor.unused",)),
+            ]
+        )
         delete.reset_mock()
 
         with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
-            manager.async_clear_all()
+            manager.async_withdraw_rebuildable_cards()
 
-        assert sorted(call.args[2] for call in delete.call_args_list) == [
-            orphaned_entities_issue_id("100_200_1", "e1"),
-            orphaned_entities_issue_id("100_200_2", "e1"),
-        ]
-        assert manager._active == set()
+        assert [call.args[2] for call in delete.call_args_list] == [orphaned_entities_issue_id("100_200_2", "e1")]
+        # The departed card keeps its active mark too, so a later reconcile can
+        # still clear it when the device comes back.
+        assert manager._active == {orphaned_entities_issue_id("100_200_1", "e1")}
         messages = [r.getMessage() for r in caplog.records]
-        # Withdrawn, not resolved: nothing about either device changed.
-        withdrawn = [r for r in caplog.records if "withdrawing the orphaned entities repair issue" in r.getMessage()]
-        assert len(withdrawn) == 2
+        withdrawn = [r for r in caplog.records if "withdrawing the unused entities repair issue" in r.getMessage()]
+        assert len(withdrawn) == 1
+        assert {r.levelno for r in withdrawn} == {logging.INFO}
+        # It comes back on its own, so the line says so and says nothing about
+        # the entity registry. That sentence belonged to the departed card,
+        # which is no longer withdrawn here.
+        assert "served their window after the reload" in withdrawn[0].getMessage()
+        assert not [m for m in messages if "by hand" in m]
         assert not [m for m in messages if "lists this device again" in m]
         assert not [m for m in messages if "No leftover entities remain" in m]
-        # Warning, unlike the other two clear reasons, and the level is the
-        # assertion rather than incidental. A recovery and a removal both end
-        # with nothing left to offer; a withdrawal ends with the rows still
-        # registered and no surface left to offer them through, so it is the
-        # only one of the three that leaves the user with work to do. The line
-        # has to say so.
-        assert {r.levelno for r in withdrawn} == {logging.WARNING}
-        assert all("remove them from the entity registry by hand" in r.getMessage() for r in withdrawn)
 
-    def test_a_withdrawn_still_present_card_says_it_comes_back(self, issue_mocks, caplog):
-        """The withdrawal costs the two shapes different things.
+    def test_a_card_whose_shape_cannot_be_read_is_left_alone_on_unload(self, issue_mocks):
+        """The unreadable-shape direction, chosen rather than fallen into.
 
-        The departed-key card is raised from this session's adder ledgers, and
-        the same fact that makes it unclearable after a reload makes it
-        unraisable, so its rows are stranded and its line says so at warning.
-        The still-present card is derived from the entity registry, which
-        survives the reload, so its rows are offered again once they re-serve
-        their window. README.md tells the user exactly that, and a warning here
-        would contradict the shipped docs.
+        Leaving a still-present card up costs one misleading Submit; withdrawing
+        a departed one costs the only record of which rows were on offer. So an
+        unreadable shape keeps the card.
         """
-        _create, _delete = issue_mocks
+        _create, delete = issue_mocks
         manager = RainPointOrphanedEntityIssues(MagicMock())
-        manager.async_sync([_make_orphan_record(leftover=True, entity_ids=("sensor.left_over_row",))])
+        manager.async_sync([_make_orphan_record(leftover=True, entity_ids=("sensor.unused",))])
+        delete.reset_mock()
+        # What a published record whose data could not be read looks like.
+        manager._published[orphaned_entities_issue_id("100_200_1", "e1")] = {}
 
-        with caplog.at_level(logging.INFO, logger="custom_components.rainpoint.repairs"):
-            manager.async_clear_all()
+        manager.async_withdraw_rebuildable_cards()
 
-        withdrawn = [r for r in caplog.records if "withdrawing" in r.getMessage()]
-        assert len(withdrawn) == 1
-        assert withdrawn[0].levelno == logging.INFO
-        assert "served their window after the reload" in withdrawn[0].getMessage()
-        assert "by hand" not in withdrawn[0].getMessage()
+        delete.assert_not_called()
 
     def test_a_held_leftover_card_is_not_cleared_as_a_removal_either(self, issue_mocks):
         """The hold covers both routes out of the reconcile.
@@ -1502,7 +1549,7 @@ class TestRainPointOrphanedEntityIssues:
         _create, delete = issue_mocks
         manager = RainPointOrphanedEntityIssues(MagicMock())
 
-        manager.async_clear_all()
+        manager.async_withdraw_rebuildable_cards()
 
         delete.assert_not_called()
 
@@ -1890,7 +1937,9 @@ class TestRainPointOrphanedEntitiesRepairFlow:
         raise on the way into a dialog the user has already opened."""
         flow = await async_create_fix_flow(MagicMock(), "some_id", None)
         flow.hass = _flow_hass()
-        assert (await flow.async_step_confirm({}))["type"] == "create_entry"
+        # No entry id to resolve, so no executor: it aborts rather than
+        # completing, which is what stops Home Assistant deleting the card.
+        assert (await flow.async_step_confirm({}))["type"] == "abort"
 
     @pytest.mark.asyncio
     async def test_opening_the_card_shows_a_form_and_removes_nothing(self):
@@ -1912,9 +1961,11 @@ class TestRainPointOrphanedEntitiesRepairFlow:
 
         result = await flow.async_step_confirm({})
 
-        # No form was shown, so the flow has no snapshot to hand over and the
-        # executor falls back to its own re-derivation.
-        assert calls == [("100_200_1", False, None)]
+        # No form was shown, so the flow has been shown nothing and hands the
+        # executor an empty ceiling. Home Assistant always shows the form
+        # first, so this is the invariant asserted where it cannot be skipped
+        # rather than a case anyone has seen.
+        assert calls == [("100_200_1", False, frozenset())]
         assert result["type"] == "create_entry"
 
     @pytest.mark.asyncio
@@ -1923,9 +1974,9 @@ class TestRainPointOrphanedEntitiesRepairFlow:
         its own by carrying no marker.
 
         The executor's two scopes are not variations of one another: one takes
-        the whole of the session's ledger for the key and releases the device
-        row, the other takes only the rows that are still dead at the moment of
-        the confirm. Left to infer the shape, an executor reads a still-present
+        the offer as the scope outright and releases the device row, the other
+        intersects it with the rows that are still dead at the moment of the
+        confirm. Left to infer the shape, an executor reads a still-present
         card whose rows all recovered as the departed one, and deletes every
         entity of a device that is on the account and reporting.
         """
@@ -1935,11 +1986,11 @@ class TestRainPointOrphanedEntitiesRepairFlow:
         await _make_flow(_flow_hass(leftover_remover), leftover=True).async_step_confirm({})
         await _make_flow(_flow_hass(departed_remover)).async_step_confirm({})
 
-        # A submit that never showed a dialog has been shown nothing, so the
-        # still-present shape carries an empty ceiling into it and takes
-        # nothing; the departed shape carries no ceiling, having none to carry.
+        # A submit that never showed a dialog has been shown nothing, so both
+        # shapes carry an empty ceiling into it and take nothing. Only the shape
+        # flag distinguishes the two calls, which is the whole assertion.
         assert leftover_calls == [("100_200_1", True, frozenset())]
-        assert departed_calls == [("100_200_1", False, None)]
+        assert departed_calls == [("100_200_1", False, frozenset())]
 
     @pytest.mark.asyncio
     async def test_the_flow_never_deletes_the_issue_itself(self, issue_mocks):
@@ -1954,21 +2005,25 @@ class TestRainPointOrphanedEntitiesRepairFlow:
         delete.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_a_torn_down_entry_store_leaves_the_step_returning_normally(self, caplog):
-        """A flow submitted after its config entry unloaded finds nothing."""
+    async def test_a_torn_down_entry_store_aborts_rather_than_completing(self, caplog):
+        """A flow submitted while its config entry is unloaded finds nothing.
+
+        Aborting is what keeps the card: Home Assistant deletes a fixable issue
+        on any non-abort result, and for a departed key that deletion is
+        permanent, since no fresh session can raise the card again."""
         flow = _make_flow(_flow_hass(with_entry=False))
 
         with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.repairs"):
             result = await flow.async_step_confirm({})
 
-        assert result["type"] == "create_entry"
+        assert result["type"] == "abort"
         assert [r.getMessage() for r in caplog.records if "No orphaned entity remover" in r.getMessage()]
 
     @pytest.mark.asyncio
-    async def test_a_missing_remover_leaves_the_step_returning_normally(self):
+    async def test_a_missing_remover_aborts_rather_than_completing(self):
         """The entry store exists but nothing published a remover into it."""
         flow = _make_flow(_flow_hass(with_remover=False))
-        assert (await flow.async_step_confirm({}))["type"] == "create_entry"
+        assert (await flow.async_step_confirm({}))["type"] == "abort"
 
     @pytest.mark.asyncio
     async def test_a_remover_that_raises_does_not_break_the_dialog(self, caplog):
@@ -2102,16 +2157,34 @@ class TestTheOfferTheDialogWasShown:
         """
         assert _snapshot_offered_pairs(_FakeIssue({}, {"leftover_pairs": [list(PAIR)]}), leftover_shape=True) == frozenset({PAIR})
 
-    def test_a_departed_key_card_offers_no_pairs_at_all(self):
-        """That shape's scope comes from the session's ledgers, so there is
-        nothing to hold it to and None says exactly that. The shape is what
-        answers it, rather than the absence of a pair list, so a still-present
-        card can never reach the no-ceiling answer by failing a read."""
-        assert _snapshot_offered_pairs(_FakeIssue({}, {"entry_id": "e1"}), leftover_shape=False) is None
+    def test_a_departed_key_card_reads_its_own_offer_key(self):
+        """Each shape publishes under its own key and reads back its own.
 
-    def test_no_issue_on_the_departed_shape_yields_no_ceiling(self):
-        """That shape removes from the ledgers and never reads this at all."""
-        assert _snapshot_offered_pairs(None, leftover_shape=False) is None
+        The two carry different authority over what gets deleted: the
+        still-present offer is a ceiling over a fresh re-derivation, the
+        departed-key offer is the scope outright. Under one shared key a flow
+        that misread its shape would swap the weaker reading for the stronger
+        one silently; under two it finds nothing and removes nothing.
+        """
+        issue = _FakeIssue({}, {"entry_id": "e1", "orphaned_pairs": [["valve", "rainpoint_100_200_1_zone1"]]})
+
+        assert _snapshot_offered_pairs(issue, leftover_shape=False) == frozenset({("valve", "rainpoint_100_200_1_zone1")})
+        # The same issue read as the other shape finds no key of its own.
+        assert _snapshot_offered_pairs(issue, leftover_shape=True) == frozenset()
+
+    def test_a_departed_key_card_with_no_offer_takes_nothing(self):
+        """A card that names no pairs is a card offering nothing.
+
+        This used to answer None, meaning "fall back to the session's ledgers".
+        A restored card has no ledger behind it, so that fallback would have
+        let it take whatever a live key's ledger happened to hold.
+        """
+        assert _snapshot_offered_pairs(_FakeIssue({}, {"entry_id": "e1"}), leftover_shape=False) == frozenset()
+
+    def test_no_issue_on_the_departed_shape_takes_nothing(self):
+        """An unreadable card is a card the user was shown nothing from, on
+        either shape."""
+        assert _snapshot_offered_pairs(None, leftover_shape=False) == frozenset()
 
     def test_an_unreadable_issue_on_the_still_present_shape_takes_nothing(self):
         """The failure route that used to widen instead of narrowing.
@@ -2252,16 +2325,22 @@ class TestTheOfferTheDialogWasShown:
         assert SECOND_PAIR not in calls[0][2]
 
     @pytest.mark.asyncio
-    async def test_a_departed_key_confirm_carries_no_ceiling(self):
-        """That shape ignores the offer entirely, and passing an empty set
-        rather than None would read as a ceiling of nothing."""
+    async def test_a_departed_key_confirm_carries_the_offer_its_card_named(self):
+        """The offer reaches the executor as the scope, not as a hint.
+
+        A departed-key card can outlive the session that raised it, so the
+        pairs in front of the user are the whole of what its Submit may take.
+        """
         calls, remover = _recording_remover()
         registry = MagicMock()
-        registry.async_get_issue.return_value = _FakeIssue({"entity_count": "1"}, {"entry_id": "e1"})
+        registry.async_get_issue.return_value = _FakeIssue(
+            {"entity_count": "1"},
+            {"entry_id": "e1", "orphaned_pairs": [["valve", "rainpoint_100_200_1_zone1"]]},
+        )
         flow = _make_flow(_flow_hass(remover))
 
         with patch.object(repairs.ir, "async_get", return_value=registry):
             await flow.async_step_init()
             await flow.async_step_confirm({})
 
-        assert calls == [("100_200_1", False, None)]
+        assert calls == [("100_200_1", False, frozenset({("valve", "rainpoint_100_200_1_zone1")}))]

@@ -631,6 +631,19 @@ class _FakeRepairsFlow:
         """Return the created entry as plain data."""
         return {"type": "create_entry", "title": title, "data": data}
 
+    def async_abort(self, *, reason, description_placeholders=None):
+        """Return the abort as plain data.
+
+        Carries the same keyword-only signature as
+        data_entry_flow.FlowHandler.async_abort, so a flow that aborts is
+        exercised at the real call shape rather than at a stub's. The
+        distinction between this and async_create_entry is behavioural rather
+        than cosmetic: Home Assistant's repairs flow manager deletes a fixable
+        issue on any non-abort result, so a step that aborts is a step whose
+        card survives.
+        """
+        return {"type": "abort", "reason": reason, "description_placeholders": description_placeholders}
+
 
 sys.modules["homeassistant.components.repairs"].RepairsFlow = _FakeRepairsFlow
 

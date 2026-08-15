@@ -169,7 +169,7 @@ RainPoint sometimes moves a device to a different parent record on its side, whi
 
 Home Assistant raises "A device's entities are left over from an older listing" once the old listing has been absent from thirty consecutive checks, roughly an hour at the default two-minute polling interval. The window is deliberately long, and it pauses entirely while the device's hub is itself missing from your account listing, so a cloud-side blip cannot strand a healthy device's entities.
 
-One thing to know before deferring this one: the card is withdrawn when the integration reloads or Home Assistant restarts, and it is not raised again, because the old listing is gone from your account and nothing is left to notice its entities. Removing them after that means removing them by hand under **Settings → Devices & services → Entities**.
+This card keeps until you answer it. Reloading the integration or restarting Home Assistant leaves it where it is, still scoped to exactly the entities it was raised for, so deferring it costs you nothing and you can come back to it whenever you like. It goes on its own only if RainPoint starts listing the old device again, in which case there is nothing left to remove.
 
 ### The device is still here, but some of its entities are not
 
@@ -177,7 +177,7 @@ A device can stay on your account and report normally while some of its entity r
 
 Home Assistant raises "A device has unused entities" only once the rows have looked that way on every one of the last thirty checks. Those checks are counted as your devices report rather than on a clock, and with push enabled a check happens whenever a device sends a reading, so the real wait depends on how chatty your devices are. Restarting Home Assistant or reloading the integration starts the count again from zero, and a check that could not run leaves it where it was.
 
-This card names the entities it would remove, up to ten of them and a count of any beyond that, so you can check the list against the device page before deciding. It can still offer a row that is only temporarily quiet, because a reading that has not arrived since the last restart looks the same from inside the integration as one that is gone for good. Two things are never offered here: watering zones, so a zone you have not run yet is safe either way, and anything on a device that has stopped reporting altogether, which gets its own card saying so instead. **Cancel** leaves everything alone. Unlike the card above, this one comes back after a reload if the rows still look unused.
+This card names the entities it would remove, up to ten of them and a count of any beyond that, so you can check the list against the device page before deciding. It can still offer a row that is only temporarily quiet, because a reading that has not arrived since the last restart looks the same from inside the integration as one that is gone for good. Two things are never offered here: watering zones, so a zone you have not run yet is safe either way, and anything on a device that has stopped reporting altogether, which gets its own card saying so instead. **Cancel** leaves everything alone. Unlike the card above, this one is rebuilt rather than kept: reloading the integration or restarting Home Assistant sends it away, and it returns once the rows have looked unused for thirty checks again.
 
 ### Neither card removes anything on its own
 
