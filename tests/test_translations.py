@@ -193,7 +193,7 @@ class TestHubDisconnectedIssuePlaceholderParity:
             mid=200,
             hub_name="Hub1",
             disconnected=True,
-            missed_polls=3,
+            offline_seconds=194,
             model="HWG023WBRF-V2",
         )
         with patch.object(repairs.ir, "async_create_issue") as create:
@@ -498,4 +498,4 @@ class TestHubWordingNamesHardwareOnly:
         repository host names in the badge URLs."""
         readme_path = Path(rainpoint_pkg.__file__).parent.parent.parent / "README.md"
         blob = readme_path.read_text(encoding="utf-8")
-        assert len(re.findall("hub", blob, re.IGNORECASE)) == 67
+        assert len(re.findall("hub", blob, re.IGNORECASE)) == 68

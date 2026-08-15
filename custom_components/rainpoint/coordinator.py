@@ -1,6 +1,6 @@
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from collections.abc import Set as AbstractSet
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -112,40 +112,61 @@ SILENT_DATA_TYPE = "silent"
 # single-poll transient omission without hiding a genuinely silent device.
 SILENT_DEBOUNCE_POLLS = 3
 
-# Derived rather than independently tuned, so the coordinator holds one
-# debounce concept instead of two that could drift apart. The same roughly
-# six-minute window at the default scan interval absorbs a single blip
-# without being too late to be a useful discovery surface for a hub that has
-# genuinely fallen off the RainPoint cloud.
-HUB_DISCONNECT_DEBOUNCE_POLLS = SILENT_DEBOUNCE_POLLS
+# Wall time a hub must have been reported disconnected before its Repairs
+# card may be offered.
+#
+# Deliberately not derived from SILENT_DEBOUNCE_POLLS the way the alias below
+# is, because this window is measured against the cloud's own change
+# timestamp rather than against poll cadence. Two things follow from that and
+# neither is available to a poll count: it survives a restart for free on any
+# firmware that reports a change time, and it does not drift when the scan
+# interval changes.
+#
+# Why 180 rather than the 360 a three-poll window produced at the default
+# cadence. The cloud's own disconnect detection was measured at roughly six
+# minutes (physical power cut 22:35 local, cloud edge 22:41:03, 2026-08-01),
+# so the cloud edge is already the flap filter and anything added here is
+# latency on an already-slow signal. Ten days of recorder history over this
+# surface hold four connectivity edges and no flap at all, so the longer
+# window was guarding against something never observed while hiding every
+# outage that ended inside about six minutes end to end.
+HUB_DISCONNECT_DEBOUNCE_SECONDS = 180
 
-# Derived for the same reason HUB_DISCONNECT_DEBOUNCE_POLLS is: one debounce
-# concept, one place to retune. Reads differently at its use site, though: it
-# counts how many consecutive absences from the device list stay provisional,
-# so the comparison there is "<=" (absences one through this value suppress,
-# the next one releases), where HUB_DISCONNECT_DEBOUNCE_POLLS's comparison is
-# "<" (a raise fires once the count reaches the threshold).
+# Still an alias of SILENT_DEBOUNCE_POLLS, and now on its own terms rather
+# than by inheritance: it absorbs a transient device-list shrink over the
+# same roughly six-minute window at the default scan interval that the
+# silence window covers, so retuning either should move both.
+#
+# Reads differently at its use site, though: it counts how many consecutive
+# absences from the device list stay provisional, so the comparison there is
+# "<=" (absences one through this value suppress, the next one releases),
+# where ORPHANED_KEY_DEBOUNCE_POLLS's comparison is ">=" (a verdict fires
+# once the count reaches the threshold).
+#
+# The hub-disconnect window used to be the third member of this family and
+# has left it: it is wall time measured against the cloud's own change
+# timestamp now, not a poll count, so there is nothing left here to alias it
+# back to.
 HUB_ABSENT_DEBOUNCE_POLLS = SILENT_DEBOUNCE_POLLS
 
 # Consecutive polls a sensor key must stay absent from the hub's subDevices
 # enumeration before its leftover entities can be offered for removal.
 #
 # Deliberately its own literal, and deliberately NOT aliased from or derived
-# from SILENT_DEBOUNCE_POLLS, HUB_DISCONNECT_DEBOUNCE_POLLS or
-# HUB_ABSENT_DEBOUNCE_POLLS the way those three are from each other. Those
-# three gate a Repairs card, which is cheap and reversible; this one gates
-# offering the destruction of entities and their recorder history, so reusing
-# a threshold tuned against the cheap cost model would import a cost model
-# that does not apply here. A later retune of the shared debounce must not
-# move this threshold with it, which a derived value or a multiple would do
-# silently.
+# from SILENT_DEBOUNCE_POLLS or HUB_ABSENT_DEBOUNCE_POLLS the way those two
+# are from each other. Those gate a Repairs card, which is cheap and
+# reversible; this one gates offering the destruction of entities and their
+# recorder history, so reusing a threshold tuned against the cheap cost model
+# would import a cost model that does not apply here. A later retune of the
+# shared debounce must not move this threshold with it, which a derived value
+# or a multiple would do silently.
 #
-# Reads at its use site the way HUB_DISCONNECT_DEBOUNCE_POLLS does, not the
-# way HUB_ABSENT_DEBOUNCE_POLLS does: the comparison is ">=", so a key ages
-# out on its 30th consecutive absence (about an hour at the 120s
-# DEFAULT_SCAN_INTERVAL). That is the raise-fires reading rather than the
-# stays-provisional reading, and it is the single most likely thing a later
-# reader will "correct" in the wrong direction.
+# The comparison at its use site is ">=", so a key ages out on its 30th
+# consecutive absence (about an hour at the 120s DEFAULT_SCAN_INTERVAL). That
+# is the verdict-fires reading rather than the stays-provisional reading
+# HUB_ABSENT_DEBOUNCE_POLLS carries at its own use site above, and it is the
+# single most likely thing a later reader will "correct" in the wrong
+# direction.
 ORPHANED_KEY_DEBOUNCE_POLLS = 30
 
 # Hub-level cloud connectivity tri-state. Absent is never coerced to
@@ -613,19 +634,21 @@ def _guard_hub_connectivity_order(polled: dict, prior: dict | None) -> dict:
     guarded record returned here is what _sync_hub_connectivity_issues
     reconciles against, so the guard composes with the poll-side debounce
     in both directions. When a held pushed connected state is kept against
-    a lagging disconnected poll, the reconcile sees connected and pops the
-    counter. When a held pushed disconnected state is kept against a
-    lagging connected poll, the reconcile sees disconnected and increments,
-    and because the guard writes the held changed_at into the record it
-    returns, the hold repeats on every following poll until the REST view's
-    own connected time advances past the held moment. Three such polls
-    therefore raise a card that no poll independently observed as
-    disconnected. That is the intended consequence of treating a newer held
-    value as fresher than a lagging poll, and it is not the push path
-    incrementing a counter: apply_hub_push_update never touches
-    _hub_disconnect_poll_counts on a disconnected edge, the poll reconcile
-    counts the guarded record it was handed. A later reader should not read
-    this as a defect in the push path and "fix" it by exempting held
+    a lagging disconnected poll, the reconcile sees connected and drops the
+    window start. When a held pushed disconnected state is kept against a
+    lagging connected poll, the reconcile sees disconnected and opens a
+    window, and because the guard writes the held changed_at into the record
+    it returns, that held moment is also the window start and the hold
+    repeats on every following poll until the REST view's own connected time
+    advances past it. A single such poll therefore raises a card that no
+    poll independently observed as disconnected, as soon as the held moment
+    is itself older than HUB_DISCONNECT_DEBOUNCE_SECONDS -- there is no
+    count left to run down first. That is the intended consequence of
+    treating a newer held value as fresher than a lagging poll, and it is
+    not the push path opening a window: apply_hub_push_update never touches
+    _hub_disconnect_since on a disconnected edge, the poll reconcile
+    measures the guarded record it was handed. A later reader should not
+    read this as a defect in the push path and "fix" it by exempting held
     records from the reconcile.
     """
     prior_moment = _changed_at_datetime(prior)
@@ -828,10 +851,31 @@ def _build_sensor_entry(
     }
 
 
+def _utcnow() -> datetime:
+    """Return the current moment as an aware UTC datetime.
+
+    The coordinator's default clock, replaceable through its constructor so
+    a test can drive the durational hub-disconnect window across a real
+    construct-then-refresh timeline without sleeping. Injection rather than a
+    module global patched in place, matching the two other places this
+    project already injects a clock: a timeline test that forgot the patch
+    would measure real wall time, never cross the threshold, and pass while
+    proving nothing.
+    """
+    return datetime.now(UTC)
+
+
 class RainPointCoordinator(DataUpdateCoordinator):
     """Coordinator for RainPoint polling."""
 
-    def __init__(self, hass: HomeAssistant, client: RainPointClient, entry):
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        client: RainPointClient,
+        entry,
+        *,
+        time_source: Callable[[], datetime] = _utcnow,
+    ):
         super().__init__(
             hass,
             _LOGGER,
@@ -842,11 +886,19 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._client = client
         self._entry = entry
         self._hids = entry.data.get(CONF_HIDS, [])
+        self._time_source = time_source
         self._notified_unknown_models: set[tuple[str | None, int | None]] = set()
         self._last_valve_command_at: dict[tuple[str, int], datetime] = {}
         self._silent_poll_counts: dict[str, int] = {}
         self._silent_issues = RainPointSilentDeviceIssues(hass)
-        self._hub_disconnect_poll_counts: dict[tuple[Any, int], int] = {}
+        # When each still-disconnected hub's current disconnect window
+        # started: the cloud's own change moment where the hub reports one,
+        # otherwise the first poll that observed the disconnected tri-state.
+        # One aware UTC datetime per (hid, mid), written only by the poll's
+        # disconnected branch, popped by its connected branch and by a pushed
+        # connected edge, and pruned against the live and provisionally
+        # missing hub keys.
+        self._hub_disconnect_since: dict[tuple[Any, int], datetime] = {}
         self._hub_connectivity_issues = RainPointHubConnectivityIssues(hass)
         # Cross-poll hub-enumeration memory: the (hid, mid) of every real hub
         # the last trusted poll listed, plus any hub still within its
@@ -858,8 +910,8 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # would need, which resolves entity-registry rows against
         # coordinator.data["sensors"]. Living outside self.data accepts less
         # instance-attribute-versus-self.data skew than
-        # _hub_disconnect_poll_counts does, because only the poll (never a
-        # push) ever writes this state.
+        # _hub_disconnect_since does, because only the poll (never a push)
+        # ever writes this state.
         self._last_poll_hub_keys: set[tuple[Any, int]] = set()
         self._hub_absent_poll_counts: dict[tuple[Any, int], int] = {}
         # Cross-poll sub-device-enumeration memory: every sensor key the last
@@ -974,13 +1026,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
         The ordering guard below decides whether the pushed
         edge is applied at all. On a connected edge that is applied, this
-        method also explicitly pops `_hub_disconnect_poll_counts` and calls
+        method also explicitly pops `_hub_disconnect_since` and calls
         `_hub_connectivity_issues.async_clear`: the merge is
         copy-on-write over coordinator data and touches neither, so clearing
         has to be explicit here, exactly as apply_push_update already does
         for the silent-device pair. A pushed disconnected edge leaves both
-        untouched: raising the card stays poll-counted only, so "3
-        consecutive polls" keeps meaning literally that.
+        untouched: the window start is written by the poll's own reconcile
+        alone, so the card is still only ever raised from a disconnected
+        tri-state a poll observed.
         """
         data = self.data
         if not data:
@@ -1074,12 +1127,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # cloud already says is back is safe and self-correcting -- the
             # next poll re-raises if it was wrong -- while raising early is
             # not, which is the flap-raises-a-card case the poll-side
-            # debounce already rejects. So a pushed disconnected edge leaves both the
-            # counter and the issue untouched: the counter stays
-            # poll-counted only, so "3 consecutive polls" keeps meaning
-            # literally that and the coordinator holds one debounce concept
-            # rather than two.
-            self._hub_disconnect_poll_counts.pop((hub["hid"], mid), None)
+            # debounce already rejects. So a pushed disconnected edge leaves
+            # both the window start and the issue untouched: the window is
+            # opened by the poll's own reconcile alone, so a card is still
+            # only ever raised from a disconnected tri-state a poll observed,
+            # and the coordinator holds one debounce concept rather than two.
+            self._hub_disconnect_since.pop((hub["hid"], mid), None)
             self._hub_connectivity_issues.async_clear(hub["hid"], mid)
 
         # Notify listeners WITHOUT async_set_updated_data so the poll interval
@@ -1266,7 +1319,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         covers both the not-reporting and the hub-connectivity state, since
         an empty device list is the same outage for both.
         """
-        if hubs or not (self._silent_poll_counts or self._hub_disconnect_poll_counts):
+        if hubs or not (self._silent_poll_counts or self._hub_disconnect_since):
             # Must run first, inside this guard, and only for a non-empty
             # device list. An empty list is a total outage and freezes the
             # enumeration memory entirely: no counter advances and
@@ -1340,7 +1393,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 "Device list came back empty while %d sub-device(s) and %d hub(s) were being "
                 "tracked; treating it as an outage and leaving connectivity state untouched",
                 len(self._silent_poll_counts),
-                len(self._hub_disconnect_poll_counts),
+                len(self._hub_disconnect_since),
             )
 
     async def _collect_hubs(self) -> list[dict]:
@@ -1780,13 +1833,14 @@ class RainPointCoordinator(DataUpdateCoordinator):
         _last_poll_hub_keys and _hub_absent_poll_counts do not, so the first
         poll after a restart has no prior list, sees nothing missing, and
         clears normally. This is pre-existing on every poll-counted surface
-        in this file -- _silent_poll_counts, _hub_disconnect_poll_counts and
-        the empty-list guard all reset the same way on a fresh instance, and
-        _sync_hub_connectivity_issues' own docstring already reasons about
-        it -- so this method introduces no new instance of it. Fixing it
-        means seeding this state from the issue registry at setup, which
-        lands better alongside a time-based debounce, where a cloud
-        timestamp survives a restart for free.
+        in this file -- _silent_poll_counts and the empty-list guard both
+        reset the same way on a fresh instance -- so this method introduces
+        no new instance of it. Fixing it means seeding this state from the
+        issue registry at setup. The hub-disconnect window is the one surface
+        that no longer needs that, because it is measured against the cloud's
+        own change timestamp and so survives a restart wherever the firmware
+        reports one; _sync_hub_connectivity_issues' own docstring reasons
+        about the path that still does not.
 
         This map answers a different question from an orphaned-entity sweep:
         it remembers hub enumeration to decide whether a poll is
@@ -1821,7 +1875,8 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # consecutive absences stay provisional, so absences one through
             # the threshold suppress and the next one releases. This is the
             # single most likely thing a later reader will "fix" incorrectly
-            # by copying HUB_DISCONNECT_DEBOUNCE_POLLS's "<" comparison.
+            # by copying the verdict-fires comparison
+            # ORPHANED_KEY_DEBOUNCE_POLLS uses at its own use site.
             if count <= HUB_ABSENT_DEBOUNCE_POLLS:
                 self._hub_absent_poll_counts[key] = count
                 provisional_keys.add(key)
@@ -2040,9 +2095,9 @@ class RainPointCoordinator(DataUpdateCoordinator):
             count = self._orphaned_key_poll_counts.get(key, 0) + 1
             self._orphaned_key_poll_counts[key] = count
             # ">=" here, not "<=": this threshold counts polls until the card
-            # can be offered, which is HUB_DISCONNECT_DEBOUNCE_POLLS' reading,
-            # not the stays-provisional reading HUB_ABSENT_DEBOUNCE_POLLS
-            # carries at its own use site above.
+            # can be offered, so the verdict fires once the count reaches it.
+            # That is not the stays-provisional reading
+            # HUB_ABSENT_DEBOUNCE_POLLS carries at its own use site above.
             if count >= ORPHANED_KEY_DEBOUNCE_POLLS:
                 aged_out.add(key)
                 if key not in previously_aged_out:
@@ -2177,22 +2232,60 @@ class RainPointCoordinator(DataUpdateCoordinator):
     def _prune_hub_connectivity_state(
         self, hubs: list[dict], *, missing_hub_keys: frozenset[tuple[Any, int]] = frozenset()
     ) -> None:
-        """Drop any hub-disconnect debounce counter for a hub no longer listed.
+        """Drop any hub-disconnect window start for a hub no longer listed.
 
         A hub removed from the account (unpaired, home restructured) must not
-        accumulate a counter forever, mirroring _prune_silent_state's
+        hold a window start forever, mirroring _prune_silent_state's
         reasoning for sub-devices.
 
         missing_hub_keys must be passed explicitly rather than derived here:
         live_keys is built from hubs, and a hub absent from hubs is never
-        iterated, so without this parameter a missing hub's counter is wiped
-        on the very first missing poll and the freeze _prune_silent_state
-        applies to a silent child fails on the connectivity side.
+        iterated, so without this parameter a missing hub's window start is
+        wiped on the very first missing poll and the freeze
+        _prune_silent_state applies to a silent child fails on the
+        connectivity side.
         """
         live_keys = {(hub["hid"], hub["mid"]) for hub in hubs if is_hub_record(hub)}
-        self._hub_disconnect_poll_counts = {
-            key: count for key, count in self._hub_disconnect_poll_counts.items() if key in live_keys or key in missing_hub_keys
+        self._hub_disconnect_since = {
+            key: since for key, since in self._hub_disconnect_since.items() if key in live_keys or key in missing_hub_keys
         }
+
+    def _hub_disconnect_window_start(self, key: tuple[Any, int], connectivity: dict, now: datetime) -> datetime:
+        """Return, and store, the moment this hub's current outage started.
+
+        Split out of _sync_hub_connectivity_issues' disconnected arm so that
+        arm reads as one flat step alongside the other two tri-states. The
+        two paths below are the same two the caller's docstring describes,
+        and the choice between them is the only thing that happens here: the
+        elapsed measurement and the threshold comparison stay with the caller,
+        because they are what decides whether a record is emitted.
+        """
+        cloud_moment = _changed_at_datetime(connectivity)
+        if cloud_moment is None:
+            # No cloud change time: measure from the first poll that
+            # observed this hub disconnected, and keep that stamp on
+            # every later poll. setdefault rather than an assignment
+            # is the whole debounce on this path -- re-stamping would
+            # restart the window every poll and never raise.
+            return self._hub_disconnect_since.setdefault(key, now)
+        # Floored against whatever start this key already carries,
+        # so the window can only ever move earlier. A later cloud
+        # edge is still honoured on a key with no start yet, which
+        # is what lets a restart mid-outage measure from the real
+        # edge, but it can never push a running window forward.
+        #
+        # The floor is what keeps this branch honest on firmware
+        # nobody here has captured. Every observed hub reports the
+        # moment the connection changed, so re-reading it each poll
+        # returns the same instant. A firmware whose entry carried
+        # the moment of the report instead would hand back a newer
+        # instant every poll, restarting the window forever and
+        # raising no card at all, which is worse than the poll
+        # count this replaced: that one always raised eventually.
+        prior = self._hub_disconnect_since.get(key)
+        since = cloud_moment if prior is None else min(prior, cloud_moment)
+        self._hub_disconnect_since[key] = since
+        return since
 
     def _sync_hub_connectivity_issues(
         self,
@@ -2208,34 +2301,57 @@ class RainPointCoordinator(DataUpdateCoordinator):
         wrapper record is skipped via is_hub_record, the same gate every other
         hub-level surface uses.
 
-        On the connected tri-state the debounce counter is popped back to
-        zero and a non-disconnected record is emitted, which is the one and
-        only path that clears a raised issue.
+        On the connected tri-state the hub's disconnect window start is
+        dropped and a non-disconnected record is emitted, which is the one
+        and only path that clears a raised issue.
 
-        On the disconnected tri-state the counter is incremented, and a
-        record is emitted only once the counter reaches
-        HUB_DISCONNECT_DEBOUNCE_POLLS -- this is the debounce itself, and it
-        is why one or two consecutive disconnected polls raise nothing.
-        Below the threshold the hub's issue id goes into unreachable_ids
-        instead, exactly as the unknown tri-state does, so those polls
-        neither raise nor clear. Emitting a disconnected=False record there
-        would be a lie: the counter is per-instance, so a hub that is still
-        down across a restart or a reload starts counting from one again, and
-        a "not yet confirmed" record is indistinguishable from a "confirmed
-        connected" one by the time it reaches the unconditional clear in
-        repairs.py. That would delete a still-accurate card and take two more
-        polls to re-raise it. _build_silent_subdevice makes the same choice
-        for the same reason: say nothing until the debounce has decided.
+        On the disconnected tri-state a window start is established and the
+        elapsed wall time measured against it; a record is emitted only once
+        that elapsed time reaches HUB_DISCONNECT_DEBOUNCE_SECONDS. This is
+        the debounce itself, and it is why a hub that has been reported down
+        for under three minutes raises nothing. The window start is the
+        cloud's own change moment where the record carries one, and
+        otherwise the first poll that observed the disconnected tri-state
+        (_hub_disconnect_window_start picks between the two; the note below
+        says why the difference does not matter here). Below the threshold the hub's issue id
+        goes into unreachable_ids instead, exactly as the unknown tri-state
+        does, so those polls neither raise nor clear. Emitting a
+        disconnected=False record there would be a lie, because a "not yet
+        confirmed" record is indistinguishable from a "confirmed connected"
+        one by the time it reaches the unconditional clear in repairs.py, so
+        it would delete a still-accurate card and take a further window to
+        re-raise it. _build_silent_subdevice makes the same choice for the
+        same reason: say nothing until the debounce has decided.
+
+        That reason does not depend on which of the two window-start paths
+        a given hub takes, and it is worth saying which is which, because the
+        restart behaviour differs and the earlier poll-counted version had
+        only one of them. On the absent-timestamp path the window start is
+        this instance's own first observation, so a hub still down across a
+        restart or a reload starts its window again and needs a fresh three
+        minutes. On the cloud-timestamp path the window start comes from the
+        cloud rather than from this process, so a coordinator built while a
+        hub has already been down for longer than the threshold can raise on
+        its very first refresh with no gap at all. Both are correct; neither
+        makes a below-threshold disconnected=False record any less of a lie.
 
         On the unknown tri-state (including a hub whose mid is altogether
-        missing from hub_connectivity) no record is emitted and the counter is
-        left untouched in both directions; the hub's issue id is instead added
-        to a per-poll unreachable_ids set so the reconcile below suppresses
-        clearing it. This is a one-directional asymmetry: unknown suppresses
-        clearing and never suppresses raising, because a hub whose
-        connectivity is unknown produces no disconnected record to raise from
-        in the first place. unreachable_ids is a local built fresh every call,
-        never manager state.
+        missing from hub_connectivity) no record is emitted, any running
+        window start is dropped, and the hub's issue id is added to a per-poll
+        unreachable_ids set so the reconcile below suppresses clearing it.
+        This is a one-directional asymmetry: unknown suppresses clearing and
+        never suppresses raising, because a hub whose connectivity is unknown
+        produces no disconnected record to raise from in the first place.
+        unreachable_ids is a local built fresh every call, never manager
+        state.
+
+        Dropping the window start is a deliberate reversal of what the poll
+        count did here, and the reason is the mechanism rather than a change
+        of mind. A count could only advance on an observed disconnect, so
+        carrying it across an unknown poll was free; wall time advances on its
+        own, so carrying a start across one lets the window keep growing
+        through a reconnect that poll was too blind to see. The full sequence
+        it prevents is in the branch's own comment below.
 
         missing_hub_keys names the enumeration door alongside the unknown
         tri-state above: a hub absent from hubs is never iterated by the
@@ -2243,13 +2359,17 @@ class RainPointCoordinator(DataUpdateCoordinator):
         reaches unreachable_ids without help -- a missing hub does not fall
         out through the unknown branch for free. Seeding unreachable_ids
         with each missing hub's id, and skipping
-        self._hub_disconnect_poll_counts for those keys entirely, has to
+        self._hub_disconnect_since for those keys entirely, has to
         happen before the loop touches any hub the missing set does not
         name, so a held disconnected record on a hub that is also missing
-        this poll cannot advance the debounce: doing so would raise a card
-        from evidence the poll never contained, the connectivity-side
-        statement of the same rule _prune_silent_state applies to a silent
-        child. missing_hub_keys and the keys reachable from hubs are
+        this poll cannot raise: doing so would raise a card from evidence
+        the poll never contained, the connectivity-side statement of the
+        same rule _prune_silent_state applies to a silent child. This door
+        carries more weight than it did under a poll count, because elapsed
+        wall time keeps running through a device-list gap whether or not any
+        poll observes the hub; the loop never iterating a missing hub is the
+        whole of what stops a card raising out of that gap.
+        missing_hub_keys and the keys reachable from hubs are
         disjoint by construction -- a key is only missing when it is absent
         from hubs -- so this seeding can never collide with the loop's own
         verdicts. The empty-list guard in _reconcile_repairs_surfaces
@@ -2259,6 +2379,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
         """
         records: list[HubConnectivityRecord] = []
         unreachable_ids: set[str] = {hub_connectivity_issue_id(hid, mid) for hid, mid in missing_hub_keys}
+        # Read once, before the loop, so every hub in one poll is measured
+        # against one instant rather than against a clock that moves between
+        # them.
+        now = self._time_source()
 
         for hub in hubs:
             if not is_hub_record(hub):
@@ -2273,24 +2397,34 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # Same field the hub's own DeviceInfo carries, so the card names the
             # model the user sees on the device page rather than a second string.
             hub_model = hub.get("model") or None
-            state = (hub_connectivity.get(mid) or {}).get("state")
+            # Hoisted so the tri-state and the change moment below come from
+            # one lookup rather than two that could disagree.
+            connectivity = hub_connectivity.get(mid) or {}
+            state = connectivity.get("state")
 
             if state == HUB_CONNECTED:
-                self._hub_disconnect_poll_counts.pop(key, None)
+                self._hub_disconnect_since.pop(key, None)
                 records.append(
                     HubConnectivityRecord(
                         hid=hid,
                         mid=mid,
                         hub_name=hub_name,
                         disconnected=False,
-                        missed_polls=0,
+                        offline_seconds=0,
                         model=hub_model,
                     )
                 )
             elif state == HUB_DISCONNECTED:
-                count = self._hub_disconnect_poll_counts.get(key, 0) + 1
-                self._hub_disconnect_poll_counts[key] = count
-                if count < HUB_DISCONNECT_DEBOUNCE_POLLS:
+                # Class-level dispatch: test_coordinator.py drives this method
+                # with a SimpleNamespace standing in for self, which carries no
+                # bound methods of its own.
+                since = RainPointCoordinator._hub_disconnect_window_start(self, key, connectivity, now)
+                # A changed_at in the future (cloud clock skew) yields a
+                # negative elapsed, which fails the comparison below and
+                # suppresses the card. That is the safe direction, so it
+                # needs no branch of its own.
+                offline_seconds = int((now - since).total_seconds())
+                if offline_seconds < HUB_DISCONNECT_DEBOUNCE_SECONDS:
                     unreachable_ids.add(hub_connectivity_issue_id(hid, mid))
                     continue
                 records.append(
@@ -2299,11 +2433,29 @@ class RainPointCoordinator(DataUpdateCoordinator):
                         mid=mid,
                         hub_name=hub_name,
                         disconnected=True,
-                        missed_polls=count,
+                        offline_seconds=offline_seconds,
                         model=hub_model,
                     )
                 )
             else:
+                # An unknown tri-state drops any running window start. Under
+                # the poll count this branch deliberately left the counter
+                # alone, because a count only ever advanced on an observed
+                # disconnect and could not run on its own. A wall-clock window
+                # can: an unknown poll hides whatever happened during it, so a
+                # start kept across one keeps accruing time through a reconnect
+                # nobody saw, and the next disconnect then raises a card
+                # claiming an outage that already ended. Restarting costs a
+                # delayed raise and never invents one, which is the direction
+                # this whole surface is built to fail in.
+                #
+                # It costs nothing on the path every observed hub takes: the
+                # cloud's own change moment is re-read on the next disconnected
+                # poll, so a genuinely continuous outage raises again straight
+                # away. Only the no-change-time fallback pays, and there an
+                # alternating unknown and disconnected sequence never matures.
+                # That is the safe half of the same trade.
+                self._hub_disconnect_since.pop(key, None)
                 unreachable_ids.add(hub_connectivity_issue_id(hid, mid))
 
         self._hub_connectivity_issues.async_sync(records, unreachable_ids=unreachable_ids)

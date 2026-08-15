@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import custom_components.rainpoint.coordinator as _coord_module
 from custom_components.rainpoint import repairs
 from custom_components.rainpoint.const import (
     DOMAIN,
@@ -33,6 +34,7 @@ from custom_components.rainpoint.repairs import (
     RainPointSilentDeviceIssues,
     SilentDeviceRecord,
     _format_entity_list,
+    _format_offline_duration,
     _sanitize_placeholder,
     _snapshot_offered_pairs,
     async_create_fix_flow,
@@ -479,6 +481,47 @@ class TestFormatEntityList:
         assert rendered.splitlines() == ["  - `sensor.good_row`", "  - and 1 more"]
 
 
+class TestFormatOfflineDuration:
+    """The hub card's duration is a floor stated once and never re-rendered,
+    so every branch of the formatter has to read correctly on its own."""
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [
+            (180, "3 minutes"),
+            (194, "3 minutes"),
+            (3599, "59 minutes"),
+            (3600, "1 hour"),
+            (7199, "1 hour"),
+            (7200, "2 hours"),
+            (26_220, "7 hours"),
+            (86_399, "23 hours"),
+            (86_400, "1 day"),
+            (172_799, "1 day"),
+            (172_800, "2 days"),
+        ],
+    )
+    def test_the_coarsest_unit_that_still_reads_as_a_floor(self, seconds, expected):
+        """Whole units only, rounded down, and the plural agrees with the
+        number in every branch. Rounding down is what keeps the copy's "at
+        least" true for the whole life of a card that is never re-rendered."""
+        assert _format_offline_duration(seconds) == expected
+
+    def test_the_singular_minute_branch_exists_even_though_the_threshold_hides_it(self):
+        """Unreachable through the debounce, which never raises under 180
+        seconds, and covered anyway: a later retune of that threshold must not
+        be the thing that discovers this branch says "1 minutes"."""
+        assert _format_offline_duration(60) == "1 minute"
+
+    def test_the_threshold_keeps_the_minute_plural_honest_on_a_first_raise(self):
+        """A card raised straight off the debounce always reads in whole
+        minutes and always plural, because the threshold is at least two
+        minutes. Pinned here so a retune below 120 seconds fails a test rather
+        than shipping "1 minutes" to a user."""
+        assert _coord_module.HUB_DISCONNECT_DEBOUNCE_SECONDS >= 120
+        assert _format_offline_duration(_coord_module.HUB_DISCONNECT_DEBOUNCE_SECONDS).endswith("minutes")
+
+
 class TestSilentDeviceIssueId:
     """The issue id doubles as the per-device dedup key, so its shape is a contract."""
 
@@ -756,14 +799,20 @@ class TestUnreachableIdsAreNotCleared:
         assert delete.call_count == 0
 
 
-def _make_hub_record(hid=100, mid=200, hub_name="Hub1", disconnected=True, missed_polls=3, model: str | None = "HWG023WBRF-V2"):
-    """Build a HubConnectivityRecord with sensible defaults for one hub."""
+def _make_hub_record(
+    hid=100, mid=200, hub_name="Hub1", disconnected=True, offline_seconds=194, model: str | None = "HWG023WBRF-V2"
+):
+    """Build a HubConnectivityRecord with sensible defaults for one hub.
+
+    The default elapsed time is a plausible first raise: just past the 180
+    second threshold, which the card renders as a whole-minute floor.
+    """
     return HubConnectivityRecord(
         hid=hid,
         mid=mid,
         hub_name=hub_name,
         disconnected=disconnected,
-        missed_polls=missed_polls,
+        offline_seconds=offline_seconds,
         model=model,
     )
 
@@ -796,10 +845,10 @@ class TestRainPointHubConnectivityIssues:
         assert kwargs["severity"] == repairs.ir.IssueSeverity.WARNING
         assert kwargs["translation_key"] == HUB_CONNECTIVITY_ISSUE_ID_PREFIX
         placeholders = kwargs["translation_placeholders"]
-        assert set(placeholders) == {"hub_name", "model", "missed_polls"}
+        assert set(placeholders) == {"hub_name", "model", "offline_for"}
         assert placeholders["hub_name"] == "Hub1"
         assert placeholders["model"] == "HWG023WBRF-V2"
-        assert placeholders["missed_polls"] == "3"
+        assert placeholders["offline_for"] == "3 minutes"
 
     def test_absent_model_falls_back_rather_than_rendering_blank_parens(self, issue_mocks):
         """A hub record with no model must still render a readable card.

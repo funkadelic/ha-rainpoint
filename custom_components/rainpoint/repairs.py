@@ -420,6 +420,33 @@ def _format_entity_list(entity_ids: Iterable[str], limit: int = _ENTITY_LIST_LIM
     return "\n".join(lines)
 
 
+def _format_offline_duration(seconds: int) -> str:
+    """Render an elapsed-seconds count as a single whole coarse unit.
+
+    Coarse on purpose, and always a floor. The hub connectivity card is
+    raised once and never re-rendered while it stays up, so whatever
+    duration it carries is frozen at the raise moment: a precise figure
+    would age into a falsehood within minutes, while a whole-unit floor the
+    copy introduces with "at least" stays true for the whole life of the
+    card.
+
+    Three units rather than one, because the two ways a window can start
+    produce very different magnitudes. A card that follows a live disconnect
+    is raised close to the threshold and reads in minutes. A card raised on
+    a coordinator's first refresh, for a hub that was already down and whose
+    firmware reports a change time, is measured from the cloud's own edge
+    and can be hours or days old.
+    """
+    days = seconds // 86400
+    if days:
+        return f"{days} day" if days == 1 else f"{days} days"
+    hours = seconds // 3600
+    if hours:
+        return f"{hours} hour" if hours == 1 else f"{hours} hours"
+    minutes = seconds // 60
+    return f"{minutes} minute" if minutes == 1 else f"{minutes} minutes"
+
+
 class RainPointSilentDeviceIssues:
     """Raises and clears one Repairs issue per silent sub-device.
 
@@ -1307,7 +1334,7 @@ class HubConnectivityRecord:
     mid: int
     hub_name: str | None
     disconnected: bool
-    missed_polls: int
+    offline_seconds: int
     model: str | None = None
 
 
@@ -1400,7 +1427,9 @@ class RainPointHubConnectivityIssues:
                 translation_placeholders={
                     "hub_name": _sanitize_placeholder(record.hub_name),
                     "model": _sanitize_placeholder(record.model),
-                    "missed_polls": str(record.missed_polls),
+                    # This integration's own arithmetic rendered as words,
+                    # never cloud text, so it needs no sanitizing pass.
+                    "offline_for": _format_offline_duration(record.offline_seconds),
                 },
             )
             # Marked active only once the registry accepted it. Marking before
@@ -1410,10 +1439,10 @@ class RainPointHubConnectivityIssues:
             # session.
             self._active.add(issue_id)
             _LOGGER.warning(
-                "RainPoint hub hid=%s mid=%s has been unreachable from the cloud for at least %s polls; raising repair issue",
+                "RainPoint hub hid=%s mid=%s has been unreachable from the cloud for at least %s seconds; raising repair issue",
                 record.hid,
                 record.mid,
-                record.missed_polls,
+                record.offline_seconds,
             )
         except Exception as issue_exc:
             _LOGGER.debug(

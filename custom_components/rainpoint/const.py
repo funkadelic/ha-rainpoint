@@ -214,13 +214,31 @@ PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX = "push_last_message"
 # non-functional continuously past the dead-after threshold, so worst-case
 # latency to a raised issue is dead-after plus at most one grace window.
 #
+# What the dead-after value bounds, stated plainly because assuming otherwise
+# sends a reader here for the wrong problem: it bounds loss of the session to
+# the cloud broker, not loss of a hub. The MQTT session is to the broker
+# rather than to the hub, so a hub can be off the cloud entirely while the
+# channel stays healthy, and this constant will never fire for it. A hub going
+# offline surfaces through its own connectivity record and its own Repairs
+# card, on a window measured in the coordinator; nothing in this block moves
+# that latency, so do not reach for these values when a hub outage surfaces
+# late.
+#
 # Known limitation: a channel that stays TCP-connected but silently stops
 # delivering data (a subscription detached cloud-side) is NOT flagged, because
 # from message-absence alone it is indistinguishable from a healthy but idle
 # channel (no device activity legitimately means no pushes). Detecting that would
-# need an active probe/heartbeat; it is out of scope for this cut. Values are a
-# conservative first cut chosen without field reconnect data (the renewal cycle
-# is ~570s) and are expected to be tuned once real outage data exists.
+# need an active probe/heartbeat; it is out of scope for this cut.
+#
+# Both values now have a measured justification and were deliberately left
+# alone when the hub-disconnect window was retuned, so this is a settled
+# question rather than an open one. 900 is roughly 1.76 times the 510 second
+# credential renewal interval, so the channel is flagged after about two
+# consecutive renewal failures rather than after a single one that the next
+# renewal would have repaired. The 180 second message grace is sized to bridge
+# the roughly 300 millisecond bounce while the supervisor swaps sessions at a
+# renewal boundary, with room to spare and none of it stacking onto the
+# dead-after clock.
 PUSH_WATCHDOG_SCAN_INTERVAL_SECONDS = 60
 PUSH_WATCHDOG_DEAD_AFTER_SECONDS = 900
 PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS = 180
