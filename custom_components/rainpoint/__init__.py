@@ -1450,9 +1450,11 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         The snapshot drops a row that went dead while it sat open, which the
         re-derivation alone would take: the sweep goes on running under an open
         dialog, so a second row can finish its window and republish the card
-        while the text in front of the user still describes one row. None means
-        the flow had no snapshot to give, and leaves the re-derivation as the
-        whole scope, which is what this path did before the snapshot existed.
+        while the text in front of the user still describes one row. An empty
+        offer is therefore an empty scope rather than a fallback to the bare
+        re-derivation: that fallback existed while a caller could leave the
+        snapshot out, and it went when both shapes started carrying one. The
+        comment at the intersection itself says why.
 
         On the departed-key shape the snapshot is the scope, with no
         re-derivation to intersect against, because a card restored from the
