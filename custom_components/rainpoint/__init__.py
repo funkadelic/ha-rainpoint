@@ -1121,8 +1121,18 @@ def _ledger_pairs_and_descriptors(entry_store: dict) -> tuple[dict[str, set[tupl
             # accessor and there is nothing to iterate directly, so SIM118's
             # "drop the .keys()" advice does not apply here.
             for key in ledger.keys():  # noqa: SIM118
-                pairs.setdefault(key, set()).update((domain, unique_id) for unique_id in ledger.unique_ids_for(key))
-                descriptors.setdefault(key, ledger.descriptor_for(key))
+                # Both halves are read before either is stored, so an accessor
+                # that raises on one key leaves neither half holding it. The
+                # record builder indexes descriptors by the keys it finds in
+                # pairs, without a guard of its own, so a key present in one and
+                # missing from the other is a KeyError that costs the whole
+                # sweep rather than this adder's keys. That is the degradation
+                # the per-adder guard below exists to prevent, and filling the
+                # two dicts in sequence quietly reintroduced it.
+                key_pairs = {(domain, unique_id) for unique_id in ledger.unique_ids_for(key)}
+                descriptor = ledger.descriptor_for(key)
+                pairs.setdefault(key, set()).update(key_pairs)
+                descriptors.setdefault(key, descriptor)
         except Exception as exc:
             _LOGGER.debug("Skipping an unreadable late adder while building orphaned entity records: %s", exc)
     return pairs, descriptors

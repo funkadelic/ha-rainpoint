@@ -953,6 +953,35 @@ class _BrokenAdder:
         raise RuntimeError("cannot forget")
 
 
+class _PartiallyReadableAdder:
+    """An adder whose ledger names a key and then refuses to describe it.
+
+    The shape _BrokenAdder cannot express. That one raises before the gather
+    loop reaches any key at all, so both halves of the gathered state stay
+    empty and agree by accident. This one answers for a key and fails halfway
+    through it, which is the only way a key can end up recorded in one half
+    and missing from the other.
+    """
+
+    domain = "sensor"
+
+    def __init__(self, key: str):
+        """Hold one key whose ids read cleanly and whose descriptor does not."""
+        self.ledger = SimpleNamespace(
+            keys=lambda: frozenset({key}),
+            unique_ids_for=lambda _key: frozenset({"half-recorded"}),
+            descriptor_for=self._refuse,
+        )
+
+    def _refuse(self, key):
+        """Fail on the descriptor half alone, once the ids have been read."""
+        raise RuntimeError("no descriptor")
+
+    def forget(self, key, kept_ids=frozenset()):
+        """Never reached, and carries the production signature regardless."""
+        raise RuntimeError("cannot forget")
+
+
 class _UnresolvableAdder:
     """An adder the resolve half cannot read, but whose forget would succeed.
 
@@ -1053,6 +1082,24 @@ class TestOrphanedSweepGuards:
         good = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity("z1")], "valve")
         good.collect(SENSOR_KEY, {"addr": ADDR, "model": "M", "sub_name": "S", "hub_name": "H"})
         store = {LATE_ADDER_STORE_KEY: [_BrokenAdder(), good]}
+
+        records = _build_orphaned_entity_records(store, ENTRY_ID, frozenset({SENSOR_KEY}))
+
+        assert [(r.sensor_key, r.entity_count, r.orphaned) for r in records] == [(SENSOR_KEY, 1, True)]
+
+    def test_an_adder_that_fails_mid_key_does_not_abort_the_record_build(self):
+        """The same promise at the one point it was not kept.
+
+        The gather fills two dicts, and the record builder indexes the second
+        by the keys it finds in the first, without a guard of its own. An
+        adder that answers for a key and then raises describing it used to
+        leave that key in the first dict alone, so the builder raised a
+        KeyError and the whole sweep was lost rather than this adder's keys.
+        """
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        good = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [_ledger_entity("z1")], "valve")
+        good.collect(SENSOR_KEY, {"addr": ADDR, "model": "M", "sub_name": "S", "hub_name": "H"})
+        store = {LATE_ADDER_STORE_KEY: [_PartiallyReadableAdder("half_key"), good]}
 
         records = _build_orphaned_entity_records(store, ENTRY_ID, frozenset({SENSOR_KEY}))
 
