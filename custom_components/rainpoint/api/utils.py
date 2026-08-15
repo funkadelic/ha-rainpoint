@@ -504,6 +504,34 @@ def _splice_sub_power_mode(param: object, mode: str) -> str | None:
     return _SUB_PARAM_DELIMITER.join(spliced_tokens)
 
 
+def _parse_wide_entry(data: list[int], i: int) -> tuple[int, list[int], int] | None:
+    """Read the wide-form record whose header byte is ``data[i]``.
+
+    Returns ``(field, value_bytes, next_index)``, or None when the frame ends
+    inside the record: either an extended-escape header with no index byte
+    after it, or a value the stream is too short to carry whole. Returning
+    None for a value cut short is what keeps a caller from reading the low
+    bytes of a little-endian number as the number itself.
+    """
+    header = data[i]
+    extra_len = header & 3
+    span = extra_len + 2  # header byte + (extra_len + 1) value bytes
+    index5 = (header >> 2) & 31
+    if index5 <= 30:
+        field = index5 + 8
+    else:
+        # Extended escape: the field index is carried in the following byte,
+        # which takes the header byte's place in the span.
+        i += 1
+        if i >= len(data):
+            return None
+        field = (data[i] & 0xFF) + 39
+    chunk = data[i : i + span]
+    if len(chunk) != span:
+        return None
+    return field, chunk[1:], i + span
+
+
 def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
     """Walk the self-describing byte stream into structural entries.
 
@@ -517,7 +545,9 @@ def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
         the extended escape where the real index lives in the next byte.
 
     Returns ``{"dp_id", "field", "value_bytes"}`` dicts (value_bytes excludes
-    the header byte).
+    the header byte). A trailing record the frame ends inside is dropped rather
+    than returned short, so a caller reading it gets no value instead of a
+    wrong one.
     """
     entries: list[dict] = []
     i = 0
@@ -537,22 +567,13 @@ def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
             i += 1
             continue
 
-        extra_len = header & 3
-        span = extra_len + 2  # header byte + (extra_len + 1) value bytes
-        index5 = (header >> 2) & 31
-        if index5 <= 30:
-            field = index5 + 8
-            chunk = data[i : i + span]
-            i += span
-        else:
-            # Extended escape: the field index is carried in the following byte.
-            i += 1
-            if i >= n:
-                break
-            field = (data[i] & 0xFF) + 39
-            chunk = data[i : i + span]
-            i += span
-        entries.append({"dp_id": dp_id, "field": field, "value_bytes": chunk[1:]})
+        parsed = _parse_wide_entry(data, i)
+        if parsed is None:
+            # The frame ended inside this record. Nothing past it is decodable
+            # either, since the walk has no length to resume from.
+            break
+        field, value_bytes, i = parsed
+        entries.append({"dp_id": dp_id, "field": field, "value_bytes": value_bytes})
     return entries
 
 

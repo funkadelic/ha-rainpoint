@@ -17,6 +17,8 @@ from custom_components.rainpoint.api import (
     _splice_sub_power_mode,
 )
 from custom_components.rainpoint.api.utils import (
+    _find_field_int,
+    _find_field_value,
     _is_ascii_payload,
     _parse_ascii_rssi,
     _RecordSummary,
@@ -348,6 +350,37 @@ class TestSplitPrefixCommaTruncation:
     def test_no_hash_prefix_returns_raw_body_uppercased(self):
         """A payload with no '#' is returned as-is (uppercased, comma-truncated)."""
         assert _split_prefix("aabb") == ("AABB", False)
+
+
+class TestParseEntriesTruncation:
+    """A record the frame ends inside must read absent, never short.
+
+    Wide values are little-endian, so a chunk cut short carries the low bytes
+    of the real value and decodes to a plausible-looking wrong number rather
+    than to something obviously broken. These pin the drop.
+    """
+
+    def test_complete_wide_record_reads_its_whole_value(self):
+        """The uncut record is the control: all four value bytes are read."""
+        assert _find_field_int(bytes.fromhex("B301020304"), 20) == 0x04030201
+
+    def test_record_cut_inside_its_value_reads_absent(self):
+        """One byte short of its declared span, the record yields no value."""
+        assert _find_field_int(bytes.fromhex("B3010203"), 20) is None
+
+    def test_earlier_complete_record_survives_a_truncated_tail(self):
+        """Dropping the cut record does not discard what was read before it."""
+        b = bytes.fromhex("CB07000000" + "B3010203")
+        assert _find_field_int(b, 26) == 7
+        assert _find_field_int(b, 20) is None
+
+    def test_escape_form_record_cut_inside_its_value_reads_absent(self):
+        """The extended-index form is cut short the same way and drops too."""
+        assert _find_field_value(bytes.fromhex("FF0F0D901E"), 54) is None
+
+    def test_dp_id_prefixed_record_cut_inside_its_value_reads_absent(self):
+        """An 11# frame's dp_id byte does not exempt the record from the check."""
+        assert _find_field_int(bytes.fromhex("17B3010203"), 20, dp_id_prefixed=True) is None
 
 
 class TestParseHubBroadcastFlag:

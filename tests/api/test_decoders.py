@@ -2006,6 +2006,10 @@ class TestDecodeHic801w:
         repr rather than of any particular byte, since the old form rendered
         values such as b'\\x03\\xff\\x03' that share no text with the payload's
         own hex.
+
+        A frame cut inside a record reads the field as missing rather than as
+        a short width, because the parser drops a record it cannot read whole
+        instead of handing back the low bytes of the value.
         """
         truncated = "10#" + SAMPLE_HIC801W_STATION3_PAYLOAD[3:][:truncate_to]
 
@@ -2014,7 +2018,27 @@ class TestDecodeHic801w:
 
         assert result["decoder"] == "hic801w_error"
         assert field_name in result["error"]
-        assert result["error"].endswith("3 bytes")
+        assert result["error"].endswith("missing")
+
+        everything = result["error"] + "\n".join(self._format_exc_text(r) for r in caplog.records)
+        assert "b'" not in everything
+        assert 'b"' not in everything
+        assert "\\x" not in everything
+
+    def test_width_check_reports_a_narrow_but_whole_record_as_its_width(self, caplog):
+        """A complete record narrower than the field needs reports that width.
+
+        Distinct from the truncated frames above: here the record declares two
+        value bytes and carries both, so it is read whole and rejected on the
+        width the decoder needs rather than dropped as unreadable. Header 0xAD
+        is STA_DURATION declared two bytes wide.
+        """
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.decoders"):
+            result = decode_hic801w("10#AD3C00")
+
+        assert result["decoder"] == "hic801w_error"
+        assert "STA_DURATION" in result["error"]
+        assert result["error"].endswith("2 bytes")
 
         everything = result["error"] + "\n".join(self._format_exc_text(r) for r in caplog.records)
         assert "b'" not in everything
