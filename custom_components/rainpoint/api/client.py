@@ -14,6 +14,8 @@ from datetime import UTC, datetime, timedelta
 
 import aiohttp
 
+from .utils import _RecordSummary
+
 _LOGGER = logging.getLogger(__name__)
 
 # When the cloud throttles the login endpoint -- an HTTP 403 block or a
@@ -68,15 +70,6 @@ class RainPointThrottledError(RainPointApiError):
     def __init__(self, message: str, retry_after: float) -> None:
         super().__init__(message)
         self.retry_after = retry_after
-
-
-def _redact_secret(value: str | None) -> str:
-    """Render a secret as length + last-4 only -- never the raw value."""
-    if not value:
-        return "<empty>"
-    if len(value) <= 4:
-        return f"len={len(value)} <short>"
-    return f"len={len(value)} last4={value[-4:]}"
 
 
 class RainPointClient:
@@ -270,7 +263,13 @@ class RainPointClient:
             "deviceId": device_id,
         }
 
-        _LOGGER.debug("RainPoint login request for %s with appCode=%s", self._email, self._app_code)
+        # The account email is deliberately absent. This integration's support
+        # flow asks users to paste debug logs into public GitHub issues, and an
+        # email tied to a real person is worth more to an attacker, and more
+        # harmful to that user, than any device identifier in the file. The
+        # areaCode and appCode are what actually diagnose a failing login, and
+        # the success and failure lines below say whether it worked.
+        _LOGGER.debug("RainPoint login request with areaCode=%s appCode=%s", self._area_code, self._app_code)
 
         login_headers = {
             "Content-Type": "application/json",
@@ -297,7 +296,7 @@ class RainPointClient:
                 f"Login rate-limited (code 9993); cooling down {_LOGIN_COOLDOWN_SECONDS}s", _LOGIN_COOLDOWN_SECONDS
             )
         if code != 0 or "data" not in data:
-            _LOGGER.debug("Login failed response: %s", data)
+            _LOGGER.debug("Login failed response: %s", _RecordSummary(data))
             raise RainPointApiError(f"Login failed: code {code}")
 
         # A clean login clears any prior throttle state.
@@ -338,10 +337,10 @@ class RainPointClient:
             if resp.status != 200:
                 raise RainPointApiError(f"list_homes HTTP {resp.status}")
             data = await resp.json()
-        _LOGGER.debug("API response: list_homes data=%s", data)
+        _LOGGER.debug("API response: list_homes code=%s %s", data.get("code"), _RecordSummary(data.get("data")))
         if data.get("code") != 0:
             self._maybe_invalidate_token(data.get("code"), request_token)
-            _LOGGER.debug("list_homes failed response: %s", data)
+            _LOGGER.debug("list_homes failed response: %s", _RecordSummary(data))
             raise RainPointApiError(f"list_homes failed: code {data.get('code')}")
         return data.get("data", [])
 
@@ -371,7 +370,7 @@ class RainPointClient:
         _LOGGER.debug("API response: get_product_catalog code=%s", data.get("code"))
         if data.get("code") != 0:
             self._maybe_invalidate_token(data.get("code"), request_token)
-            _LOGGER.debug("get_product_catalog failed response: %s", data)
+            _LOGGER.debug("get_product_catalog failed response: %s", _RecordSummary(data))
             raise RainPointApiError(f"get_product_catalog failed: code {data.get('code')}")
         payload = data.get("data") or []
         if isinstance(payload, dict):
@@ -391,10 +390,10 @@ class RainPointClient:
             if resp.status != 200:
                 raise RainPointApiError(f"getDeviceByHid HTTP {resp.status}")
             data = await resp.json()
-        _LOGGER.debug("API response: get_devices_by_hid data=%s", data)
+        _LOGGER.debug("API response: get_devices_by_hid code=%s %s", data.get("code"), _RecordSummary(data.get("data")))
         if data.get("code") != 0:
             self._maybe_invalidate_token(data.get("code"), request_token)
-            _LOGGER.debug("getDeviceByHid failed response: %s", data)
+            _LOGGER.debug("getDeviceByHid failed response: %s", _RecordSummary(data))
             raise RainPointApiError(f"getDeviceByHid failed: code {data.get('code')}")
         return data.get("data", [])
 
@@ -411,16 +410,16 @@ class RainPointClient:
             )
 
         payload = {"devices": device_list}
-        _LOGGER.debug("API call: get_multiple_device_status URL=%s payload=%s", url, payload)
+        _LOGGER.debug("API call: get_multiple_device_status URL=%s devices=%d", url, len(device_list))
         request_token = self._token
         async with self._session.post(url, json=payload, headers=self._auth_headers()) as resp:
             if resp.status != 200:
                 raise RainPointApiError(f"multipleDeviceStatus HTTP {resp.status}")
             data = await resp.json()
-        _LOGGER.debug("API response: get_multiple_device_status data=%s", data)
+        _LOGGER.debug("API response: get_multiple_device_status code=%s %s", data.get("code"), _RecordSummary(data.get("data")))
         if data.get("code") != 0:
             self._maybe_invalidate_token(data.get("code"), request_token)
-            _LOGGER.debug("multipleDeviceStatus failed response: %s", data)
+            _LOGGER.debug("multipleDeviceStatus failed response: %s", _RecordSummary(data))
             raise RainPointApiError(f"multipleDeviceStatus failed: code {data.get('code')}")
 
         # Convert response format to match individual device status format
@@ -443,10 +442,10 @@ class RainPointClient:
             if resp.status != 200:
                 raise RainPointApiError(f"getDeviceStatus HTTP {resp.status}")
             data = await resp.json()
-        _LOGGER.debug("API response: get_device_status data=%s", data)
+        _LOGGER.debug("API response: get_device_status code=%s %s", data.get("code"), _RecordSummary(data.get("data")))
         if data.get("code") != 0:
             self._maybe_invalidate_token(data.get("code"), request_token)
-            _LOGGER.debug("getDeviceStatus failed response: %s", data)
+            _LOGGER.debug("getDeviceStatus failed response: %s", _RecordSummary(data))
             raise RainPointApiError(f"getDeviceStatus failed: code {data.get('code')}")
         return data.get("data", {})
 
@@ -665,21 +664,21 @@ class RainPointClient:
             if resp.status != 200:
                 raise RainPointApiError(f"controlWorkMode HTTP {resp.status}")
             data = await resp.json()
-        _LOGGER.debug("API response: control_work_mode data=%s", data)
+        _LOGGER.debug("API response: control_work_mode code=%s %s", data.get("code"), _RecordSummary(data.get("data")))
 
         code = data.get("code")
         if code == 4:
             # Code 4 = device already in requested state or transitioning, not fatal
-            _LOGGER.info("controlWorkMode: device already in requested state (code 4, idempotent): %s", data)
+            _LOGGER.info("controlWorkMode: device already in requested state (code 4, idempotent): %s", _RecordSummary(data))
         elif code != 0:
             self._maybe_invalidate_token(code, request_token)
-            _LOGGER.debug("controlWorkMode failed response: %s", data)
+            _LOGGER.debug("controlWorkMode failed response: %s", _RecordSummary(data))
             raise RainPointApiError(f"controlWorkMode failed: code {code}")
         resp_data = data.get("data")
         if isinstance(resp_data, dict):
             state = resp_data.get("state")
             if state is None:
-                _LOGGER.warning("controlWorkMode: 'data' dict has no 'state' key; full data: %s", resp_data)
+                _LOGGER.warning("controlWorkMode: 'data' dict has no 'state' key; %s", _RecordSummary(resp_data))
             return state
         if isinstance(resp_data, str):
             return resp_data

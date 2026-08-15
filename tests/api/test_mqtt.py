@@ -318,6 +318,34 @@ class TestSecretRedaction:
         assert FAKE_DEVICE_SECRET not in caplog.text
         assert derived_password not in caplog.text
 
+    @pytest.mark.asyncio
+    async def test_no_log_line_emits_the_device_name_or_product_key(self, caplog):
+        """The connect line logs the username, which is "<deviceName>&<productKey>".
+
+        Redacting it with the secret helper was not enough: that helper keeps the
+        last four characters, and for this value those are the tail of the
+        productKey. It goes through the identifier helper instead, which renders
+        a length and nothing else.
+        """
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        creds = _fake_creds(device_name="MAC-A84674BB91F0", product_key="a3QrDxYPTM2")
+        client = _make_mqtt_client(hass, fake_paho, creds=creds)
+
+        with caplog.at_level(logging.DEBUG):
+            await client.async_start()
+            await _settle()
+            await client.async_disconnect()
+
+        emitted = caplog.text
+        assert "MAC-A84674BB91F0" not in emitted
+        assert "a3QrDxYPTM2" not in emitted
+        # The tail specifically, which is what a last-4 redaction would have left.
+        assert "PTM2" not in emitted
+        # The line still ran, so the assertions above are not passing on an empty log.
+        assert "RainPoint MQTT connecting" in emitted
+
 
 def _captured_push_payload(subdevices, ts=1784707302285):
     """Build a realistic captured-shape push payload from the confirmed envelope.
@@ -961,11 +989,18 @@ class TestConnectCallbackHandling:
 
 
 def test_module_defines_to_redact_and_redact_helper():
-    """TO_REDACT + _redact() are established from the first credential-issuing commit."""
+    """TO_REDACT + a redaction helper are established from the first credential-issuing commit.
+
+    The helper was this module's own _redact() until it and client.py's
+    byte-identical _redact_secret() were collapsed into one shared
+    implementation in api/utils.py. What this test pins is unchanged: the
+    module reaches a redaction helper with the length-plus-last-4 behaviour,
+    and TO_REDACT still names deviceSecret.
+    """
     assert "deviceSecret" in mqtt_module.TO_REDACT
-    assert mqtt_module._redact("SEKRIT-value-9f3a") == "len=17 last4=9f3a"
-    assert mqtt_module._redact(None) == "<empty>"
-    assert mqtt_module._redact("ab") == "len=2 <short>"
+    assert mqtt_module._redact_secret("SEKRIT-value-9f3a") == "len=17 last4=9f3a"
+    assert mqtt_module._redact_secret(None) == "<empty>"
+    assert mqtt_module._redact_secret("ab") == "len=2 <short>"
 
 
 class TestPahoAutoReconnectDisabled:

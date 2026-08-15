@@ -1,7 +1,6 @@
 """Tests for RainPointCoordinator: data fetching, decoder dispatch, fallback, and error handling."""
 
 import asyncio
-import json
 import logging
 import re
 import types
@@ -178,43 +177,102 @@ class TestCoordinatorUpdate:
         assert "sensors" in result
 
     @pytest.mark.asyncio
-    async def test_raw_hub_record_logged_at_debug(self, caplog):
-        """At DEBUG level, the full raw hub record is dumped for field discovery."""
+    async def test_raw_hub_record_logs_field_names_and_no_field_values(self, caplog):
+        """At DEBUG the hub record reaches the log as its key set, never its values.
+
+        This line used to json.dumps the whole record, which is what put the hub
+        MAC, deviceName, productKey and every param blob into logs users are
+        asked to paste into public issues. The discovery purpose survives: a
+        field the vendor adds still shows up, by name.
+        """
         coord, client = _make_coord()
         hub = _make_hub(model="HWG023WBRF-V2")
-        # Only the serialized record can carry this; model and mid reach the log
-        # line as their own arguments, so asserting on them alone would not prove
-        # the whole hub record was dumped.
+        # A value that only the record itself can carry, so its absence proves
+        # values are gone rather than merely that this particular key is.
         hub["rfChannel"] = "canary-7"
+        hub["deviceName"] = "MAC-A84674BB91F0"
+        hub["productKey"] = "a3QrDxYPTM2"
         client.get_devices_by_hid.return_value = [hub]
         client.get_multiple_device_status.return_value = _make_status()
 
         with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.coordinator"):
             await _run(coord)
 
-        assert any(
-            "Raw hub record" in r.message and "HWG023WBRF-V2" in r.message and "canary-7" in r.message for r in caplog.records
-        )
+        raw = [r.message for r in caplog.records if "Raw hub record" in r.message]
+        assert raw, "the line is still emitted at DEBUG"
+        line = raw[0]
+        # The field names survive, which is the whole diagnostic value.
+        assert "rfChannel" in line
+        assert "deviceName" in line
+        # None of their values does, including the model string.
+        assert "canary-7" not in line
+        assert "MAC-A84674BB91F0" not in line
+        assert "a3QrDxYPTM2" not in line
+        assert "HWG023WBRF-V2" not in line
 
     @pytest.mark.asyncio
-    async def test_raw_hub_record_not_logged_above_debug(self, caplog):
-        """Above DEBUG, the raw hub record dump is skipped (guarded json.dumps).
+    async def test_no_cloud_log_line_repeats_an_identifier_at_debug(self, caplog):
+        """No line the poll emits at DEBUG carries a cloud identifier or free-text name.
 
-        Asserting that json.dumps never runs is what proves the guard skipped the
-        serialization; an absent log record alone would also be satisfied by the
-        logger filtering a record whose arguments had already been evaluated.
+        The rule on the cloud-record paths is keys, integer counts and the
+        hardware model, and nothing else. This asserts it against the whole poll
+        rather than one line, so a future line added anywhere in the path has to
+        clear it too. That whole-poll shape is what caught the MQTT connect
+        line's username and the per-home discovery line's model list, neither of
+        which the entry that prompted this work had named.
+        """
+        coord, client = _make_coord()
+        hub = _make_hub(model="HWG023WBRF-V2")
+        hub["deviceName"] = "MAC-A84674BB91F0"
+        hub["productKey"] = "a3QrDxYPTM2"
+        hub["iotId"] = "jDQNeV92iFixCU42PDtUk0k0d4"
+        hub["name"] = "Norms Back Garden Hub"
+        client.get_devices_by_hid.return_value = [hub]
+        client.get_multiple_device_status.return_value = _make_status()
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.coordinator"):
+            await _run(coord)
+
+        emitted = caplog.text
+        # Per-unit and addressing identifiers, plus the user's own name for the
+        # hub. None may appear. productKey is in this list rather than treated
+        # as product-scoped: it is a cloud addressing identifier and it travels
+        # with deviceName in the same payloads.
+        for identifier in (
+            "MAC-A84674BB91F0",
+            "a3QrDxYPTM2",
+            "jDQNeV92iFixCU42PDtUk0k0d4",
+            "Norms Back Garden Hub",
+        ):
+            assert identifier not in emitted, f"{identifier!r} reached the log"
+        # The model is the one deliberate exemption, settled 2026-08-14: it names
+        # a product line rather than a unit, and the unsupported-model report
+        # block exists to put it in front of the user for a new-device issue.
+        # Asserted positively so the exemption is a decision recorded in code,
+        # not an accident nobody notices either way.
+        assert "HWG023WBRF-V2" in emitted, "the model exemption is intentional; see the log-discipline rule"
+        # The poll did run, so the negative assertions are not passing on an empty log.
+        assert "Raw hub record" in emitted
+
+    @pytest.mark.asyncio
+    async def test_raw_hub_record_not_summarised_above_debug(self, caplog):
+        """Above DEBUG the summary is never built, not merely never emitted.
+
+        Asserting that _summarize_record never runs is what proves the guard
+        skipped the work; an absent log record alone would also be satisfied by
+        the logger filtering a record whose arguments had already been built.
         """
         coord, client = _make_coord()
         client.get_devices_by_hid.return_value = [_make_hub(model="HWG023WBRF-V2")]
         client.get_multiple_device_status.return_value = _make_status()
 
         with (
-            patch.object(_coord_module.json, "dumps", wraps=json.dumps) as dumps,
+            patch.object(_coord_module, "_summarize_record", wraps=_coord_module._summarize_record) as summarize,
             caplog.at_level(logging.INFO, logger="custom_components.rainpoint.coordinator"),
         ):
             await _run(coord)
 
-        assert dumps.call_count == 0
+        assert summarize.call_count == 0
         assert not any("Raw hub record" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio

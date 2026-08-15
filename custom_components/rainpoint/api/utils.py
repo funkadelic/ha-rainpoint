@@ -56,6 +56,135 @@ _SUB_POWER_MODE_WIRE_VALUES = {
     "02": "2",
 }
 
+# Longest cloud-supplied key rendered into a log summary before it is cut. A
+# key is metadata rather than a value, but it still arrives from a payload
+# nobody here controls, so it gets a bound like any other untrusted string.
+_SUMMARY_KEY_MAX_LEN = 40
+
+# Keys are rendered through this whitelist rather than escaped, because the
+# set of characters a legitimate JSON key needs here is small and known. A
+# newline or an ANSI escape smuggled into a key name would otherwise forge log
+# lines in the file a user is about to paste into a public issue.
+_SUMMARY_KEY_SAFE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
+
+# Caps on what one summary may render. A cloud response is not size-bounded by
+# anything this integration controls, and the summary is a string built into a
+# log record, so both the number of keys named and the number of list items
+# walked to collect them are held to a limit. Exceeding either is reported in
+# the output rather than hidden, so a truncated summary never reads as a
+# complete one.
+_SUMMARY_MAX_KEYS = 32
+_SUMMARY_MAX_ITEMS = 50
+
+# Rendered in place of a value that is absent or empty. One constant so the
+# three renderers cannot drift onto different spellings of the same idea.
+_EMPTY_MARKER = "<empty>"
+
+
+def _redact_secret(value: str | None) -> str:
+    """Render a secret as length + last-4 only -- never the raw value."""
+    if not value:
+        return _EMPTY_MARKER
+    if len(value) <= 4:
+        return f"len={len(value)} <short>"
+    return f"len={len(value)} last4={value[-4:]}"
+
+
+def _redact_identifier(value: str | None) -> str:
+    """Render an identifier as its length alone -- no suffix, no source characters.
+
+    Deliberately not _redact_secret. That helper keeps the last four characters
+    so a reader can tell which credential is in play, which is a fair trade for
+    a secret nobody can act on without the rest of it. It is the wrong trade for
+    an identifier: the MQTT username is "<deviceName>&<productKey>", so its last
+    four characters are the tail of a cloud device identifier that this
+    integration otherwise keeps out of logs entirely.
+    """
+    if not value:
+        return _EMPTY_MARKER
+    return f"len={len(value)}"
+
+
+def _safe_key(key: object) -> str:
+    """Render one cloud-supplied key name, bounded and stripped to a safe charset."""
+    text = str(key)
+    cleaned = "".join(c if c in _SUMMARY_KEY_SAFE_CHARS else "?" for c in text[:_SUMMARY_KEY_MAX_LEN])
+    if len(text) > _SUMMARY_KEY_MAX_LEN:
+        cleaned += "~"
+    return cleaned or _EMPTY_MARKER
+
+
+def _summarize_record(record: object) -> str:
+    """Render a cloud record as its shape and key names, never its values.
+
+    This is the shape every log line on a cloud-record path uses instead of
+    dumping the record itself. Summarising rather than redacting field by
+    field is deliberate: a redaction list has to be maintained against a
+    payload nobody here controls, and it fails silently the first time the
+    vendor adds a field. A key-and-count summary has the opposite failure
+    mode, because a new field shows up as a name with no value attached.
+
+    Nested values are counted, not walked. A list reports its length and the
+    union of its items' keys, so a status response reads as "n=4" plus the
+    field set rather than four device records in full.
+
+    Output is bounded on both axes. The reported n is always the true length,
+    but at most _SUMMARY_MAX_ITEMS items are walked to collect keys and at most
+    _SUMMARY_MAX_KEYS names are rendered, because nothing here controls how
+    large a cloud response can be.
+    """
+    if record is None:
+        return "<none>"
+    if isinstance(record, dict):
+        return f"dict(n={len(record)}) keys=[{_render_keys(record)}]"
+    if isinstance(record, (list, tuple)):
+        walked = record[:_SUMMARY_MAX_ITEMS]
+        union: set[object] = set()
+        for item in walked:
+            if isinstance(item, dict):
+                union.update(item)
+        # Only stated when it is true, so an ordinary summary is not cluttered
+        # by a marker that always reads the same.
+        scanned = f" scanned={len(walked)}" if len(record) > len(walked) else ""
+        return f"list(n={len(record)}) keys=[{_render_keys(union)}]{scanned}"
+    return f"<{type(record).__name__}>"
+
+
+def _render_keys(keys) -> str:
+    """Render a key collection as a sorted, deduplicated, count-capped name list."""
+    safe = sorted({_safe_key(k) for k in keys})
+    if len(safe) <= _SUMMARY_MAX_KEYS:
+        return ",".join(safe)
+    kept = safe[:_SUMMARY_MAX_KEYS]
+    return ",".join(kept) + f",+{len(safe) - _SUMMARY_MAX_KEYS} more"
+
+
+class _RecordSummary:
+    """A _summarize_record call deferred until something actually formats it.
+
+    Log call arguments are evaluated whether or not the record survives level
+    filtering, so a bare _summarize_record(...) inside a _LOGGER.debug(...) does
+    its work on every poll even with debug logging off. Wrapping it means the
+    string is built only when a handler formats the record, which is the whole
+    difference between a debug aid and a cost every user pays.
+
+    Use this at log call sites. Call _summarize_record directly only when the
+    string is wanted right now.
+    """
+
+    __slots__ = ("_record",)
+
+    def __init__(self, record: object) -> None:
+        self._record = record
+
+    def __str__(self) -> str:
+        """Render the summary, at format time rather than at call time."""
+        return _summarize_record(self._record)
+
+    def __repr__(self) -> str:
+        """Match __str__ so %r and %s agree in a log line."""
+        return _summarize_record(self._record)
+
 
 def _parse_rainpoint_payload(raw: str) -> bytes:
     """Parse a RainPoint hex payload and return bytes."""

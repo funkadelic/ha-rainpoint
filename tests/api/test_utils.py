@@ -16,7 +16,16 @@ from custom_components.rainpoint.api import (
     _splice_hub_broadcast_param,
     _splice_sub_power_mode,
 )
-from custom_components.rainpoint.api.utils import _is_ascii_payload, _parse_ascii_rssi, _split_prefix
+from custom_components.rainpoint.api.utils import (
+    _is_ascii_payload,
+    _parse_ascii_rssi,
+    _RecordSummary,
+    _redact_identifier,
+    _redact_secret,
+    _safe_key,
+    _split_prefix,
+    _summarize_record,
+)
 from tests.payload_samples import (
     HWS019WRF_V2_PAYLOAD,
     MOISTURE_FULL_ASCII_PAYLOAD,
@@ -647,3 +656,190 @@ class TestSpliceSubPowerModeMalformedMatrix:
             for param in [p.values[0] for p in _MALFORMED_SUB_PARAMS]:
                 _splice_sub_power_mode(param, "1")
         assert caplog.records == []
+
+
+class TestSafeKey:
+    """A cloud-supplied key name is bounded and stripped before it reaches a log line."""
+
+    def test_ordinary_key_passes_through_unchanged(self):
+        """The common case costs the reader nothing."""
+        assert _safe_key("deviceName") == "deviceName"
+        assert _safe_key("sub_device-1.x") == "sub_device-1.x"
+
+    def test_control_characters_are_replaced_not_escaped(self):
+        """A newline in a key cannot forge a second log line."""
+        assert _safe_key("evil\nkey") == "evil?key"
+        # The bracket goes too: the whitelist keeps only what a real key needs,
+        # so a colour escape loses both its ESC and its bracket.
+        assert _safe_key("esc\x1b[31m") == "esc??31m"
+
+    def test_overlong_key_is_truncated_and_marked(self):
+        """A long key is cut at the bound and flagged so the cut is visible."""
+        rendered = _safe_key("k" * 100)
+        assert rendered == "k" * 40 + "~"
+
+    def test_non_string_key_is_rendered_not_raised(self):
+        """An integer key is a legal JSON-decoded key and must not blow up the log call."""
+        assert _safe_key(7) == "7"
+
+    def test_empty_key_is_named_rather_than_blank(self):
+        """An empty key renders as a marker, so it is not invisible in the output."""
+        assert _safe_key("") == "<empty>"
+
+
+class TestSummarizeRecord:
+    """Cloud records reach the log as shape plus key names, never as values."""
+
+    def test_dict_reports_count_and_sorted_keys_without_values(self):
+        """The identifiers this integration was found leaking do not survive the summary."""
+        rendered = _summarize_record({"mid": 236547, "deviceName": "MAC-A84674BB91F0", "productKey": "a3QrDxYPTM2"})
+        assert rendered == "dict(n=3) keys=[deviceName,mid,productKey]"
+        assert "MAC-A84674BB91F0" not in rendered
+        assert "a3QrDxYPTM2" not in rendered
+        assert "236547" not in rendered
+
+    def test_list_reports_length_and_the_union_of_item_keys(self):
+        """A status response reads as a count plus a field set, not as its records."""
+        rendered = _summarize_record([{"mid": 1, "status": []}, {"mid": 2, "iotId": "jDQNeV92iFixCU42"}])
+        assert rendered == "list(n=2) keys=[iotId,mid,status]"
+        assert "jDQNeV92iFixCU42" not in rendered
+
+    def test_nested_values_are_counted_rather_than_walked(self):
+        """A nested payload contributes its parent key only, never its own contents."""
+        rendered = _summarize_record({"data": {"param": "SECRET-BLOB", "sid": "D1"}})
+        assert rendered == "dict(n=1) keys=[data]"
+        assert "SECRET-BLOB" not in rendered
+
+    def test_list_of_non_dicts_reports_its_length_with_no_keys(self):
+        """A bare list still yields a count, which is the useful half."""
+        assert _summarize_record([1, 2, 3]) == "list(n=3) keys=[]"
+
+    def test_tuple_is_summarised_like_a_list(self):
+        """Tuples arrive from internal callers and must not fall through to <tuple>."""
+        assert _summarize_record(({"a": 1},)) == "list(n=1) keys=[a]"
+
+    def test_none_and_scalars_render_as_markers_never_as_their_value(self):
+        """A scalar body is named by type, so a raw token can never be the summary."""
+        assert _summarize_record(None) == "<none>"
+        assert _summarize_record("a-raw-token") == "<str>"
+        assert _summarize_record(7) == "<int>"
+
+    def test_key_sanitising_applies_inside_the_summary(self):
+        """The key bound is enforced through the summary, not only when called directly."""
+        assert _summarize_record({"bad\nkey": 1}) == "dict(n=1) keys=[bad?key]"
+
+    def test_empty_dict_and_empty_list_are_distinguishable(self):
+        """An empty body still says which shape it was."""
+        assert _summarize_record({}) == "dict(n=0) keys=[]"
+        assert _summarize_record([]) == "list(n=0) keys=[]"
+
+
+class TestRedactIdentifier:
+    """An identifier is rendered as its length alone, with no source characters."""
+
+    def test_no_character_of_the_input_survives(self):
+        """The whole point: unlike _redact_secret, there is no last-4 tail."""
+        rendered = _redact_identifier("MAC-A84674BB91F0&a3QrDxYPTM2")
+        assert rendered == "len=28"
+        for fragment in ("MAC", "A84674BB91F0", "a3QrDxYPTM2", "PTM2", "&"):
+            assert fragment not in rendered
+
+    def test_short_and_empty_values_are_named_not_echoed(self):
+        """A short identifier must not fall through to printing itself."""
+        assert _redact_identifier("ab") == "len=2"
+        assert _redact_identifier("") == "<empty>"
+        assert _redact_identifier(None) == "<empty>"
+
+    def test_it_differs_from_redact_secret_on_the_same_input(self):
+        """Pins the distinction, so the two are not merged back together later.
+
+        _redact_secret keeps last-4 so a reader can tell which credential is in
+        play, which is a fair trade for a secret and the wrong one for an
+        identifier.
+        """
+        value = "SEKRIT-value-9f3a"
+        assert _redact_secret(value) == "len=17 last4=9f3a"
+        assert _redact_identifier(value) == "len=17"
+
+
+class TestSummaryIsBounded:
+    """A summary is bounded on both axes, because a cloud response is not."""
+
+    def test_key_count_is_capped_and_the_omission_is_stated(self):
+        """A wide record renders a capped key list plus a count of what was dropped."""
+        record = {f"field{i:03d}": i for i in range(100)}
+        rendered = _summarize_record(record)
+        # The true width is still reported, so the cap never disguises the size.
+        assert rendered.startswith("dict(n=100) keys=[")
+        assert rendered.endswith(",+68 more]")
+        assert rendered.count(",") == 32  # 31 separators between 32 kept keys, plus the marker
+
+    def test_list_items_walked_are_capped_and_the_scan_is_stated(self):
+        """A long list is not walked in full, and says so rather than implying it was."""
+        record = [{f"key{i}": i} for i in range(500)]
+        rendered = _summarize_record(record)
+        assert rendered.startswith("list(n=500) keys=[")
+        assert rendered.endswith(" scanned=50")
+
+    def test_a_short_list_carries_no_scanned_marker(self):
+        """The marker appears only when it is true, so ordinary output stays clean."""
+        rendered = _summarize_record([{"a": 1}, {"b": 2}])
+        assert rendered == "list(n=2) keys=[a,b]"
+        assert "scanned" not in rendered
+
+    def test_a_record_at_exactly_the_cap_is_not_marked(self):
+        """Off-by-one guard on both caps."""
+        assert ",+" not in _summarize_record({f"f{i:02d}": i for i in range(32)})
+        assert "scanned" not in _summarize_record([{"a": 1}] * 50)
+
+    def test_duplicate_sanitised_keys_collapse_rather_than_repeating(self):
+        """Two keys that sanitise to the same token render once, not twice."""
+        assert _summarize_record({"a\nb": 1, "a\tb": 2}) == "dict(n=2) keys=[a?b]"
+
+
+class TestRecordSummaryIsLazy:
+    """The summary is built when a log record is formatted, not when it is passed."""
+
+    def test_nothing_is_rendered_until_the_object_is_formatted(self, monkeypatch):
+        """Constructing the wrapper must not touch the record at all.
+
+        This is what keeps the cost off every user's poll when debug logging is
+        off: a log call's arguments are evaluated whether or not the record
+        survives level filtering.
+        """
+        calls = []
+
+        def _spy(record):
+            calls.append(record)
+            return "summary"
+
+        monkeypatch.setattr("custom_components.rainpoint.api.utils._summarize_record", _spy)
+        wrapper = _RecordSummary({"deviceName": "MAC-A84674BB91F0"})
+        assert calls == []
+        assert str(wrapper) == "summary"
+        assert len(calls) == 1
+
+    def test_it_renders_the_same_string_summarize_record_would(self):
+        """The wrapper is a deferral, not a different format."""
+        record = {"mid": 1, "deviceName": "MAC-A84674BB91F0"}
+        assert str(_RecordSummary(record)) == _summarize_record(record)
+
+    def test_repr_matches_str_so_a_percent_r_line_is_safe_too(self):
+        """A log line written with %r must not fall back to the object repr."""
+        record = {"productKey": "a3QrDxYPTM2"}
+        assert repr(_RecordSummary(record)) == _summarize_record(record)
+        assert "a3QrDxYPTM2" not in repr(_RecordSummary(record))
+
+    def test_a_debug_call_with_debug_off_never_builds_the_summary(self, caplog):
+        """The end-to-end property, asserted through a real logger."""
+        logger = logging.getLogger("custom_components.rainpoint.api.utils")
+        calls = []
+
+        class _Counting(_RecordSummary):
+            def __str__(self):
+                calls.append(1)
+                return "summary"
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.api.utils"):
+            logger.debug("record %s", _Counting({"a": 1}))
+        assert calls == []

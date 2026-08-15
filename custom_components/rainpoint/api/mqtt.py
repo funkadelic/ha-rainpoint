@@ -51,6 +51,7 @@ from ..const import (
     MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT,
 )
 from .client import RainPointClient
+from .utils import _redact_identifier, _redact_secret
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,15 +64,6 @@ class RainPointMqttError(Exception):
 # Established here from the first credential-issuing commit so redaction is a
 # drop-in when diagnostics.py arrives, never a retrofit.
 TO_REDACT = {"deviceSecret", "mqtt_password", "client_id"}
-
-
-def _redact(value: str | None) -> str:
-    """Render a secret as length + last-4 only -- never the raw value."""
-    if not value:
-        return "<empty>"
-    if len(value) <= 4:
-        return f"len={len(value)} <short>"
-    return f"len={len(value)} last4={value[-4:]}"
 
 
 def _subdevice_updates(inner) -> list[tuple[str, str, int]]:
@@ -685,10 +677,15 @@ class RainPointMqttClient:
         sign_content = f"clientId{device_name}deviceName{device_name}productKey{product_key}timestamp{timestamp_ms}"
         password = hmac.new(device_secret.encode(), sign_content.encode(), hashlib.sha1).hexdigest()
 
+        # The username is "<deviceName>&<productKey>", so logging it in the
+        # clear puts the hub's MAC-derived name into a file users are asked to
+        # paste into public issues. It is redacted like the client_id beside
+        # it, which keeps the length signal that tells a reader the credential
+        # changed without naming the device.
         _LOGGER.debug(
             "RainPoint MQTT connecting: username=%s client_id=%s",
-            username,
-            _redact(client_id),
+            _redact_identifier(username),
+            _redact_secret(client_id),
         )
 
         # The supervisor is the sole reconnect authority -- paho

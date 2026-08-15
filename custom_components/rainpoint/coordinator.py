@@ -1,4 +1,3 @@
-import json
 import logging
 import re
 from collections.abc import Iterable
@@ -18,6 +17,7 @@ from homeassistant.helpers.update_coordinator import (
 from .api import (
     RainPointApiError,
     RainPointClient,
+    _summarize_record,
     decode_co2,
     decode_flowmeter,
     decode_generic,
@@ -1212,7 +1212,18 @@ class RainPointCoordinator(DataUpdateCoordinator):
             )
 
             _LOGGER.info("Coordinator update complete: %d hubs, %d sensors", len(hubs), len(decoded_sensors))
-            _LOGGER.debug(debug_with_version("Final data: hubs=%s, sensors=%s"), hubs, list(decoded_sensors.keys()))
+            # hubs is summarised rather than dumped: the raw records carry
+            # deviceName, productKey and every cloud field beside them. The
+            # sensor keys are this integration's own composed
+            # {hid}_{mid}_{addr}, not cloud free text, so they stay. Gated like
+            # the hub-record line below, because both arguments are built
+            # eagerly whether or not the record is ever emitted.
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    debug_with_version("Final data: hubs=%s, sensors=%s"),
+                    _summarize_record(hubs),
+                    list(decoded_sensors.keys()),
+                )
 
             return {
                 "hubs": hubs,
@@ -1339,22 +1350,25 @@ class RainPointCoordinator(DataUpdateCoordinator):
         _LOGGER.info("Updating data for HIDs: %s", homes)
         for hid in homes:
             devices = await self._client.get_devices_by_hid(hid)
-            _LOGGER.info("Found %d devices for HID %s: %s", len(devices), hid, [d.get("model", "unknown") for d in devices])
+            _LOGGER.info("Found %d devices for HID %s", len(devices), hid)
             for hub in devices:
                 hub_copy = dict(hub)
                 hub_copy["hid"] = hid
                 # All devices are RainPoint hardware
                 hub_copy["brand"] = "RainPoint"
-                # Full raw hub record, for diagnosing hub-level fields (RF channel,
-                # firmware, etc.) that the integration does not yet surface. Gated so
-                # the json.dumps cost is only paid when debug logging is on.
+                # The hub record's shape, for diagnosing which hub-level fields
+                # (RF channel, firmware, etc.) the cloud is sending that the
+                # integration does not yet surface. This used to dump the whole
+                # record, which put the hub MAC, deviceName, productKey, iotId
+                # and every param blob into the log. The key set answers the
+                # same question -- a field the vendor adds shows up as a name --
+                # without carrying a single value, and the model string goes
+                # with it because it is cloud free text on a cloud-record path.
+                # Still gated: the summary is far cheaper than the json.dumps it
+                # replaces, but it is built eagerly as a call argument, so the
+                # gate is what keeps it off the hot path when debug is off.
                 if _LOGGER.isEnabledFor(logging.DEBUG):
-                    _LOGGER.debug(
-                        "Raw hub record model=%s mid=%s: %s",
-                        hub.get("model"),
-                        hub.get("mid"),
-                        json.dumps(hub, default=str, sort_keys=True),
-                    )
+                    _LOGGER.debug("Raw hub record mid=%s: %s", hub.get("mid"), _summarize_record(hub))
                 hubs.append(hub_copy)
         return hubs
 
@@ -1555,7 +1569,13 @@ class RainPointCoordinator(DataUpdateCoordinator):
             status_entry,
         )
         sensor_entry = _build_sensor_entry(hub, sub, mid, addr, status_entry, decoded)
-        _LOGGER.debug(debug_with_version("Sensor entity key=%s info=%s"), sensor_key, sensor_entry)
+        # The entry itself is never dumped: it carries device_name, product_key,
+        # hub_name, sub_name, model and the raw status payload. The key is this
+        # integration's own {hid}_{mid}_{addr}, so it stays as the thing that
+        # makes the line greppable against an entity. Gated because this runs
+        # once per sub-device per poll and the summary is built eagerly.
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(debug_with_version("Sensor entity key=%s info=%s"), sensor_key, _summarize_record(sensor_entry))
         return sensor_key, sensor_entry
 
     def _preserve_recent_valve_command_state(
