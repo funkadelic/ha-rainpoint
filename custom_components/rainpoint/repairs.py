@@ -760,11 +760,13 @@ def async_withdraw_entry_cards(hass: HomeAssistant, entry_id: str) -> None:
     prefix = f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_{entry_id}_"
     try:
         registry = ir.async_get(hass)
-        # Materialized before deleting, because the delete mutates the mapping
-        # this is derived from. Sorted so the log reads the same way twice.
+        # sorted() is what materializes this, and it has to stay materialized:
+        # the delete loop below mutates the very mapping the comprehension
+        # reads, so a lazy generator would be iterating it as it shrank. The
+        # sort also makes the log read the same way twice.
         issue_ids = sorted(
             issue_id
-            for (domain, issue_id), issue in list(registry.issues.items())
+            for (domain, issue_id), issue in registry.issues.items()
             if domain == DOMAIN and issue_id.startswith(prefix) and _issue_belongs_to_entry(issue, entry_id)
         )
     except Exception as exc:

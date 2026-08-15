@@ -1,6 +1,6 @@
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Any, Literal
 
 import voluptuous as vol
@@ -1795,6 +1795,86 @@ def _take_doomed_rows(registry, rows, doomed) -> tuple[int, set[tuple[str, str]]
     return removed, failed
 
 
+def _drop_removed_bookkeeping(
+    sensor_key: str,
+    resolved: list,
+    ledger_pairs: Collection[tuple[str, str]],
+    doomed: frozenset[tuple[str, str]],
+    failed: set[tuple[str, str]],
+) -> None:
+    """Drop the late adders' bookkeeping for a departed key, holding what survived.
+
+    Split out of _remove_orphaned_key_rows' departed-key half so the sweep
+    reads as its two steps, the device row and then the ledgers, rather than
+    as one nested block. Reached only from there, and only on the
+    departed-key shape: on the still-present shape every line here would be
+    wrong rather than merely unnecessary, which is why the shape test stays
+    with the caller and this is never called speculatively.
+
+    Forgotten at the same moment the rows go, and only then. It still runs
+    when the sweep removed nothing, because a row that was already absent
+    from the fetch leaves the bookkeeping as the only thing left to correct.
+    An id whose removal was attempted and raised is held rather than
+    released: that row is still registered and still holds its unique_id, and
+    releasing it would let a returning device offer a live unique_id a second
+    time, which Home Assistant rejects outright.
+
+    Held per id rather than per key wherever the adder's own bookkeeping can
+    express it, which is not uniform across the three. LateEntityAdder, which
+    serves the valve and number platforms, is id-indexed on both halves, so a
+    partial failure costs it only the ids it names and a returning key gets
+    every other entity back without a reload. _LateSensorEntityAdder's two
+    add-once marks are the sensor key itself, so it holds a key with any
+    failed row whole; that is the coarser cost and the recoverable one, since
+    a returning key gains nothing there until a reload while releasing a live
+    id is a collision Home Assistant answers by dropping the entity.
+
+    kept_ids is scoped by the adder's declared domain, which over-approximates
+    only if two adders ever come to share one. That errs in the safe
+    direction: the extra ids are held rather than released, and the ledger
+    keeps only ids the key actually holds.
+    """
+    if failed:
+        _LOGGER.warning(
+            "Kept the bookkeeping for %d leftover row(s) under sensor key %s: they could not be removed and still "
+            "hold their unique ids, so the card is offered again and a retry can take them. If the device returns "
+            "first, reload the integration or it will come back with an incomplete entity set",
+            len(failed),
+            sensor_key,
+        )
+    # A ledger id this sweep never attempted is held exactly like one it
+    # attempted and failed, and for the identical reason: its row is still
+    # registered and still holds its unique_id. The two arrive here by
+    # different routes, which is why neither can stand in for the other. A
+    # failure is a row this sweep reached for and could not take; an
+    # untouched pair is a row the card never named, because the ledger
+    # gained it after the card was raised or because the adder's domain was
+    # unreadable at the moment the offer was published. Forgetting either
+    # one would release a live unique_id, which Home Assistant answers by
+    # dropping the returning entity.
+    #
+    # Empty in the ordinary case, on both shapes: the still-present shape
+    # resolves no ledger pairs at all, and on the departed-key shape the
+    # offer is built from the same ledgers this reads back.
+    untouched = frozenset(ledger_pairs) - doomed
+    if untouched:
+        _LOGGER.debug(
+            "Holding the bookkeeping for %d ledger row(s) under sensor key %s that this card never offered",
+            len(untouched),
+            sensor_key,
+        )
+    held = failed | untouched
+    # resolved rather than adders: see the note at its construction. An adder
+    # the resolve loop skipped kept every row it holds, so it keeps its
+    # bookkeeping too.
+    for adder in resolved:
+        try:
+            kept_ids = frozenset(unique_id for domain, unique_id in held if domain == adder.domain)
+            adder.forget(sensor_key, kept_ids)
+        except Exception as exc:
+            _LOGGER.debug("Could not forget sensor key %s on a late adder: %s", sensor_key, exc)
+
+
 def _remove_orphaned_key_rows(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -1898,68 +1978,7 @@ def _remove_orphaned_key_rows(
         # still needs the entity ids it resolved from; moving the device removal
         # ahead of the entity removals would make the emptiness test trivially
         # false and take nothing at all.
-        #
-        # Forgotten at the same moment the rows go, and only then. It still runs
-        # when this sweep removed nothing, because a row that was already absent
-        # from the fetch leaves the bookkeeping as the only thing left to correct.
-        # An id whose removal was attempted and raised is held rather than
-        # released: that row is still registered and still holds its unique_id, and
-        # releasing it would let a returning device offer a live unique_id a second
-        # time, which Home Assistant rejects outright.
-        #
-        # Held per id rather than per key wherever the adder's own bookkeeping can
-        # express it, which is not uniform across the three. LateEntityAdder, which
-        # serves the valve and number platforms, is id-indexed on both halves, so a
-        # partial failure costs it only the ids it names and a returning key gets
-        # every other entity back without a reload. _LateSensorEntityAdder's two
-        # add-once marks are the sensor key itself, so it holds a key with any
-        # failed row whole; that is the coarser cost and the recoverable one, since
-        # a returning key gains nothing there until a reload while releasing a live
-        # id is a collision Home Assistant answers by dropping the entity.
-        #
-        # kept_ids is scoped by the adder's declared domain, which over-approximates
-        # only if two adders ever come to share one. That errs in the safe
-        # direction: the extra ids are held rather than released, and the ledger
-        # keeps only ids the key actually holds.
-        if failed:
-            _LOGGER.warning(
-                "Kept the bookkeeping for %d leftover row(s) under sensor key %s: they could not be removed and still "
-                "hold their unique ids, so the card is offered again and a retry can take them. If the device returns "
-                "first, reload the integration or it will come back with an incomplete entity set",
-                len(failed),
-                sensor_key,
-            )
-        # A ledger id this sweep never attempted is held exactly like one it
-        # attempted and failed, and for the identical reason: its row is still
-        # registered and still holds its unique_id. The two arrive here by
-        # different routes, which is why neither can stand in for the other. A
-        # failure is a row this sweep reached for and could not take; an
-        # untouched pair is a row the card never named, because the ledger
-        # gained it after the card was raised or because the adder's domain was
-        # unreadable at the moment the offer was published. Forgetting either
-        # one would release a live unique_id, which Home Assistant answers by
-        # dropping the returning entity.
-        #
-        # Empty in the ordinary case, on both shapes: the still-present shape
-        # resolves no ledger pairs at all, and on the departed-key shape the
-        # offer is built from the same ledgers this reads back.
-        untouched = frozenset(ledger_pairs) - doomed
-        if untouched:
-            _LOGGER.debug(
-                "Holding the bookkeeping for %d ledger row(s) under sensor key %s that this card never offered",
-                len(untouched),
-                sensor_key,
-            )
-        held = failed | untouched
-        # resolved rather than adders: see the note at its construction. An adder
-        # the resolve loop skipped kept every row it holds, so it keeps its
-        # bookkeeping too.
-        for adder in resolved:
-            try:
-                kept_ids = frozenset(unique_id for domain, unique_id in held if domain == adder.domain)
-                adder.forget(sensor_key, kept_ids)
-            except Exception as exc:
-                _LOGGER.debug("Could not forget sensor key %s on a late adder: %s", sensor_key, exc)
+        _drop_removed_bookkeeping(sensor_key, resolved, ledger_pairs, doomed, failed)
 
     # Carries the key and an integer count only, never a cloud-supplied
     # string, matching the log discipline the coordinator's counting side uses.
