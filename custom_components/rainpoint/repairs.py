@@ -648,13 +648,25 @@ class OrphanedEntitiesRecord:
     entity_ids: tuple[str, ...] = ()
     # The exact (domain, unique_id) pairs this card is offering, carried into
     # the issue's data dict so the flow behind it can snapshot what was on
-    # offer at the moment the dialog was shown. It is a ceiling and never a
-    # scope: the confirm still re-derives which rows are dead right now, and
-    # intersects that with this. A pair that recovered between the two drops
-    # out of the derivation, and a pair that went dead after the dialog opened
-    # is not in here, so neither can be taken. Sorted by the caller so an
-    # unchanged offer publishes an unchanged value and the dedup holds.
-    leftover_pairs: tuple[tuple[str, str], ...] = ()
+    # offer at the moment the dialog was shown. Both shapes fill it, and what
+    # the confirm does with it differs by shape rather than by field.
+    #
+    # On the still-present shape it is a ceiling and never a scope: the confirm
+    # re-derives which rows are dead right now and intersects that with this. A
+    # pair that recovered between the two drops out of the derivation, and a
+    # pair that went dead after the dialog opened is not in here, so neither can
+    # be taken.
+    #
+    # On the departed-key shape it is the scope outright, because a card that
+    # outlived its own session has no ledger left to re-derive from. That is
+    # what the persisted card buys and what it costs: the offer the user is
+    # reading is the whole authority, so it may only ever be narrowed by the
+    # live guards at confirm time (the key must still be gone, and each row must
+    # still be in the registry), never widened by anything.
+    #
+    # Sorted by the caller so an unchanged offer publishes an unchanged value
+    # and the dedup holds.
+    offered_pairs: tuple[tuple[str, str], ...] = ()
     # Which of the two shapes produced this record, and therefore which body
     # the card renders. False is the departed-key shape: RainPoint has stopped
     # listing the device. True is the still-present shape: the device is on the
@@ -691,6 +703,82 @@ def orphaned_entities_issue_id(sensor_key: str, entry_id: str) -> str:
     delete a card the other raised and never consented to.
     """
     return f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_{entry_id}_{sensor_key}"
+
+
+def _issue_belongs_to_entry(issue, entry_id: str) -> bool:
+    """Return True unless this card names a config entry other than the given one.
+
+    The second half of the withdrawal's scoping, and the half that does not
+    rest on an assumption. The prefix test before it reads
+    f"{PREFIX}_{entry_id}_" against an id built as f"{PREFIX}_{entry_id}_{key}",
+    which is exact only while no entry id can be another entry id followed by an
+    underscore. Home Assistant's own ids make that true today (a generated ULID
+    is Crockford base32, a legacy one is uuid4 hex, and neither alphabet
+    contains an underscore), but nothing enforces it and the code was stating it
+    as a safety property. An entry id of ``e1_2`` would otherwise have entry
+    ``e1``'s removal withdraw ``e1_2``'s cards.
+
+    So the card's own published ``entry_id`` decides, which is the same value
+    the fix flow reads to find the entry it may act on. A card carrying no
+    readable entry id falls back to the prefix, which is the pre-existing
+    behaviour and is what an issue written before this key existed would hit.
+    """
+    try:
+        published = (getattr(issue, "data", None) or {}).get("entry_id")
+    except Exception as exc:
+        _LOGGER.debug("Could not read the entry id a leftover entities card names: %s", exc)
+        return True
+    return published is None or published == entry_id
+
+
+@callback
+def async_withdraw_entry_cards(hass: HomeAssistant, entry_id: str) -> None:
+    """Withdraw one config entry's leftover-entity cards, without its manager.
+
+    The removal-path counterpart of RainPointOrphanedEntityIssues.async_clear_all,
+    and it exists because Home Assistant unloads a config entry before it
+    removes it. By the time the removal hook runs, the manager that raised these
+    cards is gone along with hass.data's entry store, so the only handle left on
+    them is the issue registry itself.
+
+    Reached through the id rather than through anything the entry still holds.
+    Every id this manager raises is prefixed with the entry's own id, and an
+    entry id carries no underscore of its own, so the prefix test cannot reach
+    across to a second RainPoint entry resolving the same home and the same
+    sensor keys. That scoping is the same property orphaned_entities_issue_id
+    was given the entry id for.
+
+    Only this integration's fixable cards are in range: the domain is matched as
+    well as the prefix, and the two non-fixable managers use prefixes of their
+    own. Their cards need no withdrawal here anyway, because they are rebuilt
+    from every poll and a removed entry simply stops polling.
+
+    Never raises. This runs on Home Assistant's removal path, where an exception
+    would surface as a failed integration removal, and a card left standing is
+    the lesser of the two outcomes.
+    """
+    prefix = f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_{entry_id}_"
+    try:
+        registry = ir.async_get(hass)
+        # Materialized before deleting, because the delete mutates the mapping
+        # this is derived from. Sorted so the log reads the same way twice.
+        issue_ids = sorted(
+            issue_id
+            for (domain, issue_id), issue in list(registry.issues.items())
+            if domain == DOMAIN and issue_id.startswith(prefix) and _issue_belongs_to_entry(issue, entry_id)
+        )
+    except Exception as exc:
+        _LOGGER.debug("Could not read the issue registry while removing entry %s; leaving its cards: %s", entry_id, exc)
+        return
+    for issue_id in issue_ids:
+        try:
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+            _LOGGER.info(
+                "This config entry is being removed; withdrawing its leftover entities repair issue (id=%s)",
+                issue_id,
+            )
+        except Exception as exc:
+            _LOGGER.debug("Failed to withdraw the leftover entities repair issue (id=%s): %s", issue_id, exc)
 
 
 class RainPointOrphanedEntityIssues:
@@ -771,46 +859,43 @@ class RainPointOrphanedEntityIssues:
         return bool(((self._published.get(issue_id) or {}).get("data") or {}).get("leftover"))
 
     @callback
-    def async_clear_all(self) -> None:
-        """Withdraw every card this instance raised, on config entry unload.
+    def async_withdraw_rebuildable_cards(self) -> None:
+        """Withdraw the still-present cards this instance raised, on unload.
 
         Every id in the active set carries this entry's own id, so this
         withdraws only what this entry raised even when a second RainPoint
         entry resolves the same home and therefore the same sensor keys.
 
-        This manager is the one that needs it, and the reason is that its
-        record source is session-scoped bookkeeping rather than the current
-        poll. Its two siblings rebuild their records from every poll's
-        coordinator data, so a stale id is always mentioned again after a
-        reload and the stale-set sweep clears it. A departed sensor key cannot
-        be mentioned again: it is absent from the hub's enumeration, so no
-        fresh adder ledger ever records it and no record is ever built for it.
+        **Shape-scoped, and the scoping is the whole point.** The unload
+        withdrawal used to take both shapes, because neither could be acted on
+        after a reload. The departed-key shape no longer needs it: it carries
+        its own offer in the issue's data, so a card that outlives its session
+        still has a scope and a Submit that means something, and withdrawing it
+        would throw away the only surface its rows have.
 
-        Without this, a card raised before a reload survives it -- the issue
-        registry is not per entry, and only is_persistent decides survival
-        across a restart -- while the fresh manager's active set, the fresh
-        adder ledgers and the fresh absence counters all know nothing about it.
-        Nothing could then clear it, and its Submit button resolved to an
-        executor that removes nothing while Home Assistant deleted the card
-        anyway, telling the user leftover entities had been removed when they
-        had not.
+        The still-present shape still needs it, and dropping it here was a
+        regression worth naming. ``is_persistent`` governs survival across a
+        *restart*; the issue registry is in-memory and not per entry, so a
+        non-persistent card survives a *reload* untouched. Its confirm
+        re-derives against a debounce window that a reload rebuilds empty, so a
+        card left standing offers a Submit that resolves to nothing while Home
+        Assistant deletes it anyway -- the exact lie the withdrawal exists to
+        prevent, reached from the other side. It loses nothing by going: its
+        rows come from the registries, so the fresh session raises it again
+        once they have re-served their window.
 
-        Withdrawn rather than resolved: nothing about the device changed. The
-        next session does not raise it again either, for exactly the reason
-        nothing could have cleared it. A departed key is absent from every
-        fresh ledger, so no fresh record mentions it, so no raise is ever
-        reached for it. The leftover rows therefore survive the reload with no
-        surface left to offer them, and removing them then means removing them
-        from the entity registry by hand.
+        A card whose shape cannot be read is left alone. That is the safe
+        direction here: leaving a still-present card up costs the user one
+        misleading Submit, while withdrawing a departed one costs them the only
+        record of which rows were ever on offer.
 
-        That is the deliberate trade, and it is the better half of a choice
-        with no clean side: the alternative is a card that outlives its own
-        scope, whose Submit resolves to an executor with nothing left to act on
-        and which Home Assistant deletes anyway, telling the user leftover
-        entities were removed when they were not.
+        Config entry *removal* is a different fact and takes both shapes, through
+        async_withdraw_entry_cards, because Home Assistant unloads before it
+        removes and this manager no longer exists by then.
         """
         for issue_id in sorted(self._active):
-            self._clear_issue(issue_id, reason=_CLEAR_REASON_UNLOADED)
+            if self._published_is_leftover(issue_id):
+                self._clear_issue(issue_id, reason=_CLEAR_REASON_UNLOADED)
 
     def _raise_issue(self, issue_id: str, record: OrphanedEntitiesRecord) -> None:
         """Raise one key's fixable issue, at most once per active period.
@@ -848,10 +933,44 @@ class RainPointOrphanedEntityIssues:
         that could not name a row still removes it, and a row renamed after the
         card was raised is still removed under whatever id it now carries.
 
-        is_persistent is deliberately not passed. The default False means the
-        issue registry does not restore this card across a restart, so no
-        stale card can outlive the session that raised it, and the sweep
-        simply raises it again once the key ages out in the new session.
+        is_persistent is chosen per shape, and the old blanket answer was half
+        wrong in a way worth recording, because the module argued both sides of
+        it. The justification for leaving it at its default was that the sweep
+        "simply raises it again once the key ages out in the new session". That
+        is true of the still-present shape and false of the departed-key one,
+        and async_clear_all's own docstring states the opposite correctly a few
+        lines above: a departed key is absent from the hub's enumeration, so no
+        fresh ledger records it, no fresh record mentions it, and no raise is
+        ever reached for it. A card that was never restored and could never be
+        re-raised left the user's leftover rows with no surface at all.
+
+        **The departed-key shape persists.** What makes restoring it safe is
+        that the offer travels with it: IssueEntry.to_json serializes ``data``
+        only for a persistent issue, so the (domain, unique_id) pairs published
+        above come back with the card, and its confirm is held to exactly them.
+        Without that, a restored card's Submit would resolve to an executor with
+        an empty ledger and remove nothing while Home Assistant deleted the card
+        anyway, which is the precise lie the withdrawal used to exist to
+        prevent.
+
+        **The still-present shape does not, and persisting it would reintroduce
+        that same lie from the other side.** Its offer is a ceiling rather than
+        a scope: the confirm re-derives which rows are dead right now and
+        intersects. That derivation reads a per-session debounce window, which
+        is empty after a restart, so a restored card would sit there with a
+        Submit that could take nothing until the window refilled. It does not
+        need persisting either, because it is the shape that really does come
+        back on its own: its rows are derived from the entity and device
+        registries, and its device is on the account and reporting, so a fresh
+        session re-enters it in its own ledgers and raises the card again.
+
+        A restored card is still clearable, which is the other half of the
+        trade. The manager's active set is deliberately not seeded from the
+        registry at setup: seeding it would hand every restored card to the
+        stale-set sweep on the first update, which mentions none of them, and
+        delete the lot. Instead a restored card is cleared by the one event that
+        should clear it, the device coming back, which puts its key in a fresh
+        ledger and produces a record with orphaned False.
 
         The dedup is reconciled against the issue registry rather than trusted
         on its own, which is where this diverges from its two non-fixable
@@ -887,20 +1006,43 @@ class RainPointOrphanedEntityIssues:
         aged-out key is by definition absent from it.
         """
         # The leftover marker is added only on the shape that carries it, so
-        # the departed-key card's data dict stays byte-identical to what it has
-        # always been and no flow reading it back has to learn a new key.
+        # its absence is what makes the departed-key shape the right reading for
+        # a flow that finds no such key rather than a default standing in for a
+        # missing one.
         data: dict[str, Any] = {"entry_id": record.entry_id, "sensor_key": record.sensor_key}
+        # What this card is offering, for the flow to snapshot when it shows the
+        # dialog. It rides in `data` rather than in the placeholders because it
+        # is not rendered: the placeholders name entity ids for a human to read
+        # and stop at ten of them, while this is the whole offer, keyed the only
+        # way a removal is ever keyed. Publishing it here also puts it inside
+        # the dedup below, so a card whose offer has changed republishes even
+        # where every rendered value stayed the same.
+        #
+        # The two shapes publish it under two different keys, and that is the
+        # point rather than an accident of naming. The confirm treats the
+        # still-present offer as a ceiling over a fresh re-derivation and the
+        # departed-key offer as the scope outright, so the two carry different
+        # authority over what gets deleted. Under one shared key, a flow that
+        # misread its own shape would silently swap the weaker reading for the
+        # stronger one. Under two, that same mistake finds no key at all,
+        # snapshots nothing and removes nothing, which is the direction every
+        # other uncertainty on this path resolves in.
+        #
+        # Published as a list of two-element lists rather than the record's own
+        # tuple of tuples, and that is about the storage rather than the taste.
+        # IssueEntry.data is typed dict[str, str | int | float | None] and a
+        # persistent issue's data is written to .storage, so this integration is
+        # putting a structure into a persisted file whose schema it does not
+        # own. orjson does serialize tuples to arrays today, which is exactly
+        # the kind of accident that holds until it does not; publishing the
+        # JSON-native shape means what goes in is what comes back, and the
+        # sorted ordering the dedup relies on survives either way.
+        offered = [[domain, unique_id] for domain, unique_id in record.offered_pairs]
         if record.leftover:
             data["leftover"] = True
-            # What this card is offering, for the flow to snapshot when it
-            # shows the dialog. It rides in `data` rather than in the
-            # placeholders because it is not rendered: the placeholders name
-            # entity ids for a human to read and stop at ten of them, while
-            # this is the whole offer, keyed the only way a removal is ever
-            # keyed. Publishing it here also puts it inside the dedup below,
-            # so a card whose offer has changed republishes even where every
-            # rendered value stayed the same.
-            data["leftover_pairs"] = record.leftover_pairs
+            data["leftover_pairs"] = offered
+        else:
+            data["orphaned_pairs"] = offered
         # Everything the registry is asked to render, assembled before the
         # dedup rather than after it, because the dedup's question is whether
         # any of it has moved since this card was last published.
@@ -969,6 +1111,11 @@ class RainPointOrphanedEntityIssues:
                 DOMAIN,
                 issue_id,
                 is_fixable=True,
+                # Per shape, for the reasons above: the departed-key card has
+                # nothing left to rebuild it, the still-present one rebuilds
+                # itself and would restore holding a Submit that could take
+                # nothing until its debounce window refilled.
+                is_persistent=not record.leftover,
                 severity=ir.IssueSeverity.WARNING,
                 **published,
             )
@@ -1069,33 +1216,24 @@ class RainPointOrphanedEntityIssues:
                         issue_id,
                     )
             elif reason == _CLEAR_REASON_UNLOADED:
-                # A withdrawal costs the two shapes different things, and only
-                # one of them strands anything. The departed-key card is raised
-                # from this session's adder ledgers, and the same fact that
-                # makes it unclearable after a reload makes it unraisable, so
-                # its rows are left with no surface at all and the line has to
-                # name the manual step. The still-present card is derived from
-                # the entity registry, which survives the reload, so its rows
-                # are offered again once they re-serve their window. That is
-                # what README.md tells the user, and a warning here would
-                # contradict it.
+                # One line rather than the two shapes this used to need, because
+                # only one shape reaches it now. The unload withdrawal takes the
+                # still-present cards alone (see
+                # async_withdraw_rebuildable_cards), and this is the shape that
+                # strands nothing: its rows are derived from the registries, so
+                # the fresh session offers them again once they have re-served
+                # their window. The departed-key card's old line named a manual
+                # entity-registry step because withdrawing it really did leave
+                # the user with no surface; that card is no longer withdrawn
+                # here, so that sentence has no occasion.
                 #
-                # Neither can become noise: was_active gates both, so they fire
-                # only where a card was genuinely up at unload, at most once per
-                # withdrawn card.
-                if was_leftover:
-                    _LOGGER.info(
-                        "Unloading this config entry; withdrawing the unused entities repair issue (id=%s). "
-                        "Its rows are offered again once they have served their window after the reload",
-                        issue_id,
-                    )
-                else:
-                    _LOGGER.warning(
-                        "Unloading this config entry; withdrawing the orphaned entities repair issue (id=%s). "
-                        "Its leftover entity rows are still registered and will not be offered again after the reload; "
-                        "remove them from the entity registry by hand",
-                        issue_id,
-                    )
+                # Cannot become noise: was_active gates it, so it fires only
+                # where a card was genuinely up, at most once per withdrawn card.
+                _LOGGER.info(
+                    "Unloading this config entry; withdrawing the unused entities repair issue (id=%s). "
+                    "Its rows are offered again once they have served their window after the reload",
+                    issue_id,
+                )
             else:
                 _LOGGER.info(
                     "No leftover entities remain to offer; clearing the orphaned entities repair issue (id=%s)",
@@ -1109,37 +1247,41 @@ class RainPointOrphanedEntityIssues:
             )
 
 
-def _snapshot_offered_pairs(issue, *, leftover_shape: bool) -> frozenset[tuple[str, str]] | None:
+def _snapshot_offered_pairs(issue, *, leftover_shape: bool) -> frozenset[tuple[str, str]]:
     """Read the exact pairs a card is offering, as they stand right now.
 
-    None means there is no offer to hold the removal to, and the shape the
-    caller names is the only route to it. The departed-key card carries no pair
-    list at all, because its scope comes from the session's ledgers rather than
-    from a registry scan, so there is nothing here to constrain and the confirm
-    falls back to those ledgers as it always has.
+    Both shapes have an offer and both are read here; the shape decides only
+    which key it was published under. That split is the point rather than an
+    accident of naming, and it is described where the two are written, in
+    _raise_issue. Reading the wrong key finds nothing, which lands on the same
+    empty answer every other failure here lands on.
 
-    Every outcome on the still-present shape is a set, the failures included,
-    and that is the whole contract this exists to keep. Its confirm may take
-    only what its dialog was shown, so a card whose offer cannot be read is not
-    a card with no offer: the offer exists and is unknown, the answer is an
-    empty ceiling, and Submit takes nothing rather than falling back to a
-    re-derivation no dialog was ever held to. That covers an issue that could
-    not be read at all, one whose data raises, and one whose pair list is
-    missing or unreadable. A pair that does not survive normalization is
-    dropped for the same reason rather than repaired. Narrower is the safe
-    direction on a surface whose Submit deletes recorder history: the cost of
-    dropping one is that a genuinely dead row waits for the next card, and the
-    cost of inventing one is a row the user never approved.
+    Every outcome is a set, the failures included, and that is the whole
+    contract this exists to keep. A confirm may take only what its dialog was
+    shown, so a card whose offer cannot be read is not a card with no offer:
+    the offer exists and is unknown, the answer is an empty ceiling, and Submit
+    takes nothing. That covers an issue that could not be read at all, one whose
+    data raises, and one whose pair list is missing or unreadable. A pair that
+    does not survive normalization is dropped for the same reason rather than
+    repaired. Narrower is the safe direction on a surface whose Submit deletes
+    recorder history: the cost of dropping one is that a genuinely dead row
+    waits for the next card, and the cost of inventing one is a row the user
+    never approved.
+
+    The departed-key shape used to answer None here, meaning "no offer, fall
+    back to the session's ledgers". It no longer can. A card restored from the
+    issue registry has no ledger behind it, so the ledgers are not a fallback
+    for it, they are simply empty; and a shape that answered None would let a
+    restored card's Submit take whatever a *live* key's ledger happened to hold
+    instead. One set for both shapes is what closes that.
 
     The whole read sits inside the guard, the attribute included. ``getattr``'s
     default covers a missing ``data`` and nothing else, so an entry that raises
     on the attribute would otherwise propagate out of the flow step that shows
     the dialog and leave the user with a broken one.
     """
-    if not leftover_shape:
-        return None
     try:
-        offered = (getattr(issue, "data", None) or {}).get("leftover_pairs")
+        offered = (getattr(issue, "data", None) or {}).get("leftover_pairs" if leftover_shape else "orphaned_pairs")
     except Exception as exc:
         _LOGGER.debug("Could not read what the orphaned entities card is offering: %s", exc)
         return frozenset()
@@ -1180,17 +1322,18 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         # What the card was offering at the moment this flow showed its dialog,
         # filled in by that step and read by the submit that follows it.
         #
-        # The still-present shape starts at an empty ceiling rather than at
-        # None, which is the same answer every failed read on that shape gives:
-        # a submit that somehow arrived without the dialog having been shown
-        # has been shown nothing, so it may take nothing. Home Assistant always
-        # shows the form first, so this is the invariant stated where it cannot
-        # be skipped rather than a case anyone has seen. None belongs to the
-        # departed-key shape alone, which removes from the session's ledgers
-        # and never consults an offer.
-        self._offered_pairs: frozenset[tuple[str, str]] | None = (
-            frozenset() if bool((data or {}).get("leftover", False)) else None
-        )
+        # Both shapes start at an empty ceiling, which is the same answer every
+        # failed read gives: a submit that somehow arrived without the dialog
+        # having been shown has been shown nothing, so it may take nothing. Home
+        # Assistant always shows the form first, so this is the invariant stated
+        # where it cannot be skipped rather than a case anyone has seen.
+        #
+        # The departed-key shape used to start at None, meaning "consult no
+        # offer, remove whatever this session's ledgers hold for the key". A
+        # card can now outlive the session that raised it, and for a restored
+        # one those ledgers are empty rather than authoritative, so there is no
+        # shape left for which an absent offer is the safe reading.
+        self._offered_pairs: frozenset[tuple[str, str]] = frozenset()
 
     @property
     def _sensor_key(self) -> str:
@@ -1222,9 +1365,21 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         """Show the confirmation form, then remove on submit.
 
         Showing the form removes nothing; only a submitted form does.
+
+        A submit that could not reach an executor aborts rather than completing,
+        and the distinction is the card's survival. Home Assistant's repairs
+        flow manager deletes a fixable issue on any non-abort result, so
+        returning an entry here after removing nothing destroys the card. For a
+        still-present key that costs one waiting period; for a departed key it
+        is permanent, since the persisted card is the only record of which rows
+        were on offer and no fresh session can raise it again. The executor is
+        published by the config entry's own setup, so it is missing exactly when
+        the entry is unloaded, disabled or retrying setup -- states the user can
+        leave, and the card has to still be there when they do.
         """
         if user_input is not None:
-            self._remove_rows()
+            if not self._remove_rows():
+                return self.async_abort(reason="removal_unavailable")
             return self.async_create_entry(data={})
         # One read of the issue feeds both halves of what the dialog promises:
         # the text the user reads and the offer that text describes. Reading it
@@ -1270,13 +1425,21 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
             _LOGGER.debug("Could not read the orphaned entities issue placeholders: %s", exc)
             return None
 
-    def _remove_rows(self) -> None:
+    def _remove_rows(self) -> bool:
         """Call this config entry's removal executor for this key and this shape.
 
+        Returns whether the executor was reached at all, which the caller turns
+        into an abort. False is not "removed nothing": an executor that ran and
+        legitimately found nothing in scope returns True here, because the card
+        genuinely has been answered and its own log line says what happened.
+        False is only the case where there was nothing to answer it with.
+
         The executor is published by the config entry's own setup, so a flow
-        submitted after that entry was torn down finds nothing and removes
+        submitted while that entry is unloaded, disabled or retrying setup finds
         nothing. Guarded rather than allowed to raise, because an exception
-        here surfaces as a broken repair dialog.
+        here surfaces as a broken repair dialog. An executor that raised counts
+        as reached: it may have removed rows before it failed, so re-offering
+        the same card would be offering rows that are already gone.
 
         The card's shape goes with the key, because the executor's two scopes
         are not variations of one another and it cannot recover the shape from
@@ -1300,11 +1463,12 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
             remover = self.hass.data[DOMAIN][entry_id]["orphan_entity_remover"]
         except Exception as exc:
             _LOGGER.debug("No orphaned entity remover is registered for entry %s: %s", entry_id, exc)
-            return
+            return False
         try:
             remover(self._sensor_key, leftover_shape=self._leftover_shape, offered_pairs=self._offered_pairs)
         except Exception as exc:
             _LOGGER.debug("Removing the entities for sensor key %s failed: %s", self._sensor_key, exc)
+        return True
 
 
 async def async_create_fix_flow(hass: HomeAssistant, issue_id: str, data: dict | None) -> RepairsFlow:

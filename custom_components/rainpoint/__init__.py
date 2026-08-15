@@ -32,7 +32,12 @@ from .const import (
 )
 from .coordinator import ORPHANED_KEY_DEBOUNCE_POLLS, SILENT_DATA_TYPE, first_hub_record, is_hub_record
 from .entity import late_adders
-from .repairs import OrphanedEntitiesRecord, RainPointOrphanedEntityIssues, async_sync_push_hub_identity_issue
+from .repairs import (
+    OrphanedEntitiesRecord,
+    RainPointOrphanedEntityIssues,
+    async_sync_push_hub_identity_issue,
+    async_withdraw_entry_cards,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -246,6 +251,34 @@ def _read_current_sensors(coordinator, consequence: str) -> dict:
     except Exception as exc:
         _LOGGER.debug("Coordinator data unreadable; %s: %s", consequence, exc)
         return {}
+
+
+def _enumerated_keys_or_none(coordinator) -> frozenset[str] | None:
+    """Return the keys the last device list enumerated, or None if unknown.
+
+    The removal confirm's own reader, and the thing it must not be is a read of
+    ``coordinator.data["sensors"]``. The question this guard asks is whether
+    RainPoint still lists the addr whose rows are about to be deleted, which is
+    exactly what the orphan counter counts, and ``sensors`` is a different fact:
+    a device that has merely gone quiet leaves ``sensors`` for up to
+    SILENT_DEBOUNCE_POLLS polls while still being enumerated. A guard reading
+    ``sensors`` therefore reads a briefly quiet device as departed and clears
+    the way to deleting a live device's rows and their recorder history. The
+    coordinator's own docstring rules that conflation out for the counter; this
+    is the same rule applied to the guard that has to agree with it.
+
+    Everything uncertain answers None, which the caller turns into "remove
+    nothing": a coordinator that is absent, that raises, that has no accessor at
+    all, that has not yet carried a device list, or that answers with something
+    other than a set of keys. An empty frozenset is a real observation of an
+    enumeration with nothing in it and is not the same answer.
+    """
+    try:
+        keys = coordinator.enumerated_sensor_keys() if coordinator is not None else None
+    except Exception as exc:
+        _LOGGER.debug("Could not read the enumeration while confirming a removal; removing nothing: %s", exc)
+        return None
+    return frozenset(keys) if isinstance(keys, (set, frozenset)) else None
 
 
 def _read_current_hubs(coordinator) -> list | None:
@@ -1005,18 +1038,24 @@ def _build_orphaned_entity_records(
 
     ``leftover_entity_ids`` carries the entity ids the still-present shape's
     card names, keyed the same way. It reaches the record for display and for
-    nothing else; ``leftover_pairs`` remains the only thing the removal is ever
-    keyed on. The departed-key shape carries no ids at all, because its scope
-    comes from the adder ledgers, which record unique ids rather than entity
-    ids, and resolving those would mean walking the entity registry from a
-    function that deliberately reads no registry.
+    nothing else; the offered pairs remain the only thing the removal is ever
+    keyed on. The departed-key shape carries no entity ids at all, because the
+    adder ledgers record unique ids rather than entity ids, and resolving those
+    would mean walking the entity registry from a function that deliberately
+    reads no registry.
+
+    Both shapes now publish their offer, and the departed-key half of that is
+    what lets its card survive a restart: the ledgers this reads are gone by the
+    next session, so an offer that was never written down could never be honoured
+    afterwards. See RainPointOrphanedEntityIssues._raise_issue for what each
+    shape's offer then authorizes.
     """
-    unique_ids, descriptors = _ledger_ids_and_descriptors(entry_store)
+    ledger_pairs, descriptors = _ledger_pairs_and_descriptors(entry_store)
     leftover_pairs = leftover_pairs or {}
     device_names = device_names or {}
     leftover_entity_ids = leftover_entity_ids or {}
     records = []
-    for key, ids in unique_ids.items():
+    for key, key_ledger_pairs in ledger_pairs.items():
         # An aged-out key wins where both would apply. The two cannot in fact
         # coincide: the leftover derivation requires the key to be in the
         # current poll's sensors, while an aged-out key is by definition absent
@@ -1029,10 +1068,16 @@ def _build_orphaned_entity_records(
                 entry_id,
                 key,
                 descriptors[key],
-                ids,
                 leftover=leftover,
                 orphaned=key in aged_out or leftover,
-                offered_pairs=leftover_pairs.get(key, frozenset()),
+                # One field, filled from whichever derivation the verdict above
+                # named. The still-present shape offers the registry-derived
+                # dead rows; the departed-key shape offers everything this
+                # session's adders recorded for a key the hub has stopped
+                # listing. Passing one or the other here is what keeps the count
+                # the card renders and the pairs its Submit is held to from ever
+                # coming from two different places.
+                offered_pairs=leftover_pairs.get(key, frozenset()) if leftover else key_ledger_pairs,
                 device_names=device_names,
                 entity_ids=leftover_entity_ids.get(key, ()),
             )
@@ -1040,36 +1085,53 @@ def _build_orphaned_entity_records(
     return records
 
 
-def _ledger_ids_and_descriptors(entry_store: dict) -> tuple[dict[str, set[str]], dict[str, dict]]:
-    """Return every unique id and descriptor this session's adders recorded, by key.
+def _ledger_pairs_and_descriptors(entry_store: dict) -> tuple[dict[str, set[tuple[str, str]]], dict[str, dict]]:
+    """Return every (domain, unique_id) pair and descriptor this session's adders recorded, by key.
 
     The whole of what the departed-key shape may ever act on, gathered in one
     pass over the adders so the record builder above is left with the part that
     is about deciding a card. Guarded per adder rather than around the loop: one
     unreadable adder costs its own keys and no others, which is the same
     degradation the builder had when this ran inline.
+
+    Pairs rather than the bare unique ids this used to return, and the reason is
+    that the card now publishes its offer. Entity registry uniqueness is per
+    domain, so a unique id alone is a partial identifier; the departed-key
+    card's offer is what its confirm is held to, including after a restart that
+    left no ledger behind, so it has to be keyed the same way the removal is.
+    _resolve_doomed_rows builds the same pair for one key at removal time and
+    the two spellings have to keep agreeing, which is why both take the domain
+    from the adder that recorded the id and from nowhere else.
+
+    An adder whose domain is not a usable string contributes nothing rather than
+    a half-formed pair. That narrows the offer instead of widening it: its rows
+    go unoffered until a session that can read it, which is the direction every
+    uncertainty on this path resolves in.
     """
-    unique_ids: dict[str, set[str]] = {}
+    pairs: dict[str, set[tuple[str, str]]] = {}
     descriptors: dict[str, dict] = {}
     for adder in late_adders(entry_store):
         try:
             ledger = adder.ledger
+            domain = adder.domain
+            if not isinstance(domain, str) or not domain:
+                _LOGGER.debug("Skipping a late adder with no usable domain while building orphaned entity records")
+                continue
             # The ledger is a class, not a mapping: keys() is its own named
             # accessor and there is nothing to iterate directly, so SIM118's
             # "drop the .keys()" advice does not apply here.
             for key in ledger.keys():  # noqa: SIM118
-                unique_ids.setdefault(key, set()).update(ledger.unique_ids_for(key))
+                pairs.setdefault(key, set()).update((domain, unique_id) for unique_id in ledger.unique_ids_for(key))
                 descriptors.setdefault(key, ledger.descriptor_for(key))
         except Exception as exc:
             _LOGGER.debug("Skipping an unreadable late adder while building orphaned entity records: %s", exc)
-    return unique_ids, descriptors
+    return pairs, descriptors
 
 
 def _orphaned_entity_record(
     entry_id: str,
     key: str,
     descriptor: dict,
-    ids,
     *,
     leftover: bool,
     orphaned: bool,
@@ -1092,7 +1154,12 @@ def _orphaned_entity_record(
         model=descriptor.get("model"),
         sub_name=descriptor.get("sub_name"),
         hub_name=descriptor.get("hub_name"),
-        entity_count=len(offered_pairs) if leftover else len(ids),
+        # One expression for both shapes, and it is the same set the confirm is
+        # held to. The departed-key shape used to count the ledger's bare unique
+        # ids instead, which is the same number only while no two domains
+        # record one id for a key; the count the user approves and the pairs
+        # Submit acts on may not disagree even in the case nobody has built yet.
+        entity_count=len(offered_pairs),
         missed_polls=LEFTOVER_ROW_DEBOUNCE_UPDATES if leftover else ORPHANED_KEY_DEBOUNCE_POLLS,
         orphaned=orphaned,
         # Absent from a descriptor written before this key was stamped, and a
@@ -1110,7 +1177,7 @@ def _orphaned_entity_record(
         # dialog to be held to. Sorted rather than taken in set order so that an
         # offer which has not changed publishes an identical value, and the
         # card's dedup keeps holding.
-        leftover_pairs=tuple(sorted(offered_pairs)) if leftover else (),
+        offered_pairs=tuple(sorted(offered_pairs)),
     )
 
 
@@ -1290,7 +1357,7 @@ def _log_empty_scope_counts(coordinator, sensor_key: str, derived, offered_pairs
         "%s were on the card, and the key is %sin this update's sensors",
         sensor_key,
         len(derived),
-        "unknown" if offered_pairs is None else len(frozenset(offered_pairs)),
+        len(frozenset(offered_pairs)),
         "" if sensor_key in _read_current_sensors(coordinator, "confirming a removal") else "not ",
     )
 
@@ -1326,18 +1393,29 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
     # previous session was looking at.
     leftover_counts: dict[tuple[str, tuple[str, str]], int] = {}
 
-    def _remove(sensor_key: str, *, leftover_shape: bool = True, offered_pairs=None) -> int:
+    def _remove(sensor_key: str, *, leftover_shape: bool = True, offered_pairs=frozenset()) -> int:
         """Remove this config entry's rows for one sensor key, in one named shape.
 
         ``leftover_shape`` is the card's own shape, carried here from the
         issue's data dict rather than inferred from anything this function
         derives. The two scopes are not variations of one another: the
-        departed-key shape resolves the whole of this session's ledger for the
-        key and releases the device row behind it, while the still-present
-        shape may only ever take the exact rows that are still dead at this
-        moment. Inferring the shape from an empty derived set would collapse
-        the second into the first precisely when every offered row had
-        recovered, which is the one case where nothing at all should be taken.
+        departed-key shape takes the rows its card offered and releases the
+        device row behind it, while the still-present shape may only ever take
+        the exact rows that are still dead at this moment. Inferring the shape
+        from an empty derived set would collapse the second into the first
+        precisely when every offered row had recovered, which is the one case
+        where nothing at all should be taken.
+
+        The departed-key shape gets one live guard of its own, and it is the
+        counterpart of the other shape's re-derivation. The card can now outlive
+        the session that raised it, so a device that came back while the card
+        sat in the issue registry has to be checked for here rather than assumed
+        away. The sweep does clear such a card, on the update that first sees
+        the key in a fresh ledger, but a Submit can arrive before that update
+        does. A key that is in the current poll's sensors at all -- reporting or
+        silent, since a silent device is paired rather than departed -- takes
+        nothing, because "RainPoint no longer lists this device" is the whole
+        premise of the card the user just approved.
 
         On the still-present shape the scope is re-derived here, at the moment
         of deletion, rather than replayed from whatever the card was raised
@@ -1355,7 +1433,8 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         this whole surface promises cannot happen.
 
         ``offered_pairs`` is what the card was offering when the dialog opened,
-        and the scope is the intersection of the two. Each half answers a
+        and both shapes are held to it. On the still-present shape the scope is
+        the intersection of it and the re-derivation, and each half answers a
         failure the other cannot. The re-derivation drops a row that recovered
         while the dialog sat open, which the snapshot alone would still take.
         The snapshot drops a row that went dead while it sat open, which the
@@ -1365,22 +1444,49 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         the flow had no snapshot to give, and leaves the re-derivation as the
         whole scope, which is what this path did before the snapshot existed.
 
+        On the departed-key shape the snapshot is the scope, with no
+        re-derivation to intersect against, because a card restored from the
+        issue registry has no ledger behind it to re-derive from. That is what
+        the persisted card trades: Phase 21's guarantee was "no row this
+        session's adders did not emit", and it is now "no row this card did not
+        name". Both are exact-pair lists and neither reasons about what a
+        unique_id looks like; the second is simply anchored to what the user was
+        shown rather than to the session that showed it.
+
         It fetches its own device rows rather than sharing the periodic sweep's:
         this runs once, on a human's confirm, at a moment displaced from
         whatever update last ran the sweep, so reusing a stale fetch here
         would re-derive the removal scope against device rows that may no
         longer be current. The departed-key shape needs no such fetch, because
-        its scope comes from the ledgers alone.
+        its scope is the offer it was handed.
 
         The default is the still-present shape, which is the narrower of the
         two and the only safe answer for a caller that did not say: it takes
         only rows it has just re-derived as dead and never releases a device
         row. Defaulting to the departed-key shape instead would let an
-        unstated shape delete every entity this session recorded for a key and
-        release the device row of a device that never left the account.
+        unstated shape take a whole card's offer and release the device row of a
+        device that never left the account.
         """
         if not leftover_shape:
-            return _remove_orphaned_key_rows(hass, entry, sensor_key)
+            enumerated = _enumerated_keys_or_none(coordinator)
+            if enumerated is None:
+                # A failure to look rather than a verdict, and the two may not
+                # collapse on the shape whose default answer deletes. The
+                # still-present shape already spells this distinction out
+                # through ``blind``; this is the same one.
+                _LOGGER.warning(
+                    "Could not read the enumeration while confirming the removal for sensor key %s, so this "
+                    "confirm removes nothing. Its card is offered again while the rows are still there",
+                    sensor_key,
+                )
+                return 0
+            if sensor_key in enumerated:
+                _LOGGER.info(
+                    "Sensor key %s is listed by its hub again; its removal card is stale and this confirm removes nothing",
+                    sensor_key,
+                )
+                return 0
+            return _remove_orphaned_key_rows(hass, entry, sensor_key, offered_pairs=offered_pairs)
         device_registry, device_rows = _fetch_registry_rows(
             dr.async_get, dr.async_entries_for_config_entry, hass, entry, "the confirmed removal's device lookup"
         )
@@ -1392,14 +1498,19 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
             )
             or {}
         ).get(sensor_key, frozenset())
-        scope = derived if offered_pairs is None else derived & frozenset(offered_pairs)
+        # Always intersected, never replaced. This used to fall back to the bare
+        # re-derivation when no offer was supplied, which was the one removal on
+        # this surface held to nothing a user had been shown. Both shapes now
+        # always carry an offer, so the fallback had no caller left and was
+        # simply a widening default waiting for one.
+        scope = derived & frozenset(offered_pairs)
         if not scope:
             _log_empty_scope_counts(coordinator, sensor_key, derived, offered_pairs)
         return _remove_orphaned_key_rows(
             hass,
             entry,
             sensor_key,
-            leftover_pairs=scope,
+            offered_pairs=scope,
             leftover_shape=True,
         )
 
@@ -1418,29 +1529,36 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
     entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
     @callback
-    def _withdraw_cards() -> None:
-        """Withdraw this entry's orphan cards as it unloads.
+    def _withdraw_rebuildable_cards() -> None:
+        """Withdraw this entry's still-present cards as it unloads.
 
-        The issue registry is not per config entry and only is_persistent
-        decides survival across a restart, so a card raised before a reload
-        survives the reload while every structure that could clear it is
-        rebuilt empty: the manager's active set, the adder ledgers whose
-        contents are the only record source here, and the coordinator's
-        absence counters. A departed key is absent from the hub's enumeration,
-        so no fresh ledger can record it and no fresh record can mention it,
-        which leaves the stale-set sweep with nothing to sweep. The card would
-        then sit there for the life of the install offering a Submit that
-        resolves to an executor with nothing in scope.
+        Shape-scoped, and the departed-key half is what changed. That card used
+        to be withdrawn here too, because its record source was the session's
+        adder ledgers and a departed key is absent from every fresh one, so a
+        card that outlived the reload could be neither cleared nor acted on. It
+        now carries its own offer in the issue registry, so a restored one has a
+        scope and a Submit that mean something, and withdrawing it would throw
+        away the only surface its rows have.
+
+        The still-present card is withdrawn exactly as before, and skipping it
+        would be a regression rather than a simplification. is_persistent
+        governs survival across a restart; the issue registry is in-memory and
+        not per entry, so a non-persistent card survives a reload untouched
+        while the debounce window its confirm re-derives against is rebuilt
+        empty. Left up, it offers a Submit that resolves to nothing while Home
+        Assistant deletes the card anyway. It loses nothing by going: its rows
+        come from the registries, so the fresh session raises it again once they
+        have re-served their window.
 
         Never raises: this runs on the unload path, where an exception would
         block the teardown of everything registered after it.
         """
         try:
-            manager.async_clear_all()
+            manager.async_withdraw_rebuildable_cards()
         except Exception as exc:
-            _LOGGER.debug("Could not withdraw the orphaned entity cards on unload: %s", exc)
+            _LOGGER.debug("Could not withdraw the unused entity cards on unload: %s", exc)
 
-    entry.async_on_unload(_withdraw_cards)
+    entry.async_on_unload(_withdraw_rebuildable_cards)
 
 
 def _device_row_for_sensor_key(rows, sensor_key: str):
@@ -1514,7 +1632,18 @@ def _resolve_doomed_rows(adders, sensor_key: str) -> tuple[set[tuple[str, str]],
     resolved: list = []
     for adder in adders:
         try:
-            doomed.update((adder.domain, unique_id) for unique_id in adder.ledger.unique_ids_for(sensor_key))
+            domain = adder.domain
+            # The same gate _ledger_pairs_and_descriptors applies when it builds
+            # the offer, applied here so the two spellings of "this adder's pairs
+            # for this key" genuinely agree rather than only being asserted to.
+            # An unusable domain yields no pair either side: there, the rows go
+            # unoffered; here, the adder stays out of `resolved` and keeps its
+            # bookkeeping. Both hold rather than release, which is the direction
+            # a half-formed pair has to resolve in on a path that deletes.
+            if not isinstance(domain, str) or not domain:
+                _LOGGER.debug("Skipping a late adder with no usable domain while resolving sensor key %s", sensor_key)
+                continue
+            doomed.update((domain, unique_id) for unique_id in adder.ledger.unique_ids_for(sensor_key))
         except Exception as exc:
             _LOGGER.debug("Skipping an unreadable late adder while resolving sensor key %s: %s", sensor_key, exc)
             continue
@@ -1599,9 +1728,16 @@ def _log_empty_removal_scope(sensor_key: str, *, leftover_shape: bool) -> None:
     is left holding rather than the wording. The still-present shape strands
     nothing: the device is on the account and reporting, so a row that really is
     dead is offered again on the next card. The departed-key shape strands its
-    rows outright, because the card outlived the session whose ledgers named
-    them and the same fact that makes it unclearable makes it unraisable, so
-    that one names the manual step and is logged at warning.
+    rows for as long as the card stays gone, which is now until the next
+    session raises one rather than for good.
+
+    That is why the departed line no longer names a manual entity-registry
+    step. It used to, and correctly: the card was withdrawn on unload and could
+    never be raised again, so an empty confirm was the user's last chance at
+    those rows. The card is persistent now and carries its own offer, so an
+    empty scope here means this confirm found nothing, not that nothing will
+    ever be offered again. Telling the user to go to the registry by hand would
+    be sending them to do work the next card will do for them.
 
     Either way this runs where Home Assistant has already deleted the fixable
     issue on flow completion: the user pressed a button that said it would
@@ -1620,8 +1756,8 @@ def _log_empty_removal_scope(sensor_key: str, *, leftover_shape: bool) -> None:
         )
         return
     _LOGGER.warning(
-        "Nothing in scope for sensor key %s; its leftover entity rows were not removed. "
-        "The card outlived the session that recorded them, so remove them from the entity registry by hand",
+        "Nothing was in scope for sensor key %s by the time its removal was confirmed, so no entity was "
+        "removed and its device row was left alone. Its card is offered again while the rows are still there",
         sensor_key,
     )
 
@@ -1663,7 +1799,7 @@ def _remove_orphaned_key_rows(
     hass: HomeAssistant,
     entry: ConfigEntry,
     sensor_key: str,
-    leftover_pairs=frozenset(),
+    offered_pairs=frozenset(),
     *,
     leftover_shape: bool = False,
 ) -> int:
@@ -1672,25 +1808,27 @@ def _remove_orphaned_key_rows(
     The only removal executor on this path, reached only from the fix flow's
     confirm step, which is reached only after a human submits the form.
 
-    Two scopes, never both at once, and the caller says which by passing
-    ``leftover_shape`` rather than by leaving anything to be inferred. False is
-    the departed-key shape and is exactly what this function has always done:
-    the rows in scope are the ones this session's adders recorded for this key,
-    and no foreign row can satisfy that. True is the still-present shape, and
-    ``leftover_pairs`` becomes the scope outright, because none of those pairs
-    is in any ledger and resolving them from the ledgers would yield nothing at
-    all.
+    ``offered_pairs`` is the scope on both shapes, and the caller has already
+    narrowed it to what its own shape allows: the still-present shape hands in
+    the intersection of the card's offer with a fresh re-derivation, and the
+    departed-key shape hands in the card's offer after checking the key has not
+    returned. Nothing here widens either of them.
 
-    The shape is a parameter and not a reading of ``leftover_pairs`` because
-    the two are not interchangeable at the one point where it matters. An empty
-    pair set on the still-present shape is a real and expected outcome: the
-    confirm re-derives the scope, so a card whose every offered row came back
-    to life before the user pressed Submit resolves to nothing. Reading that
-    emptiness as the departed-key shape would answer it by deleting every
-    entity this session recorded for the key and releasing the device row of a
-    device that is on the account and reporting. So an empty scope on this
-    shape removes nothing and releases nothing, which is the whole of what is
-    left to do once every row has recovered.
+    That is a change on the departed-key shape, which used to resolve the whole
+    of this session's ledger for the key. The ledgers are still read, but only
+    to decide whose bookkeeping may be dropped below, because a card can now
+    outlive the session that raised it and a restored one has no ledger at all.
+    The guarantee moves with it, from "no row this session's adders emitted" to
+    "no row this card named"; both are exact-pair lists and neither reasons
+    about the shape of a unique_id.
+
+    ``leftover_shape`` still has to be a parameter rather than a reading of the
+    pairs, because the two shapes are not interchangeable at the points below
+    where they diverge. An empty scope is a real and expected outcome on either
+    of them -- every offered row recovered, or the key came back -- and the
+    device-row release and the ledger bookkeeping belong to the departed shape
+    alone. Inferring the shape from emptiness would release the device row of a
+    device that is on the account and reporting.
 
     Scoped by two independent guards either way: the registry lookup is
     config-entry scoped, so there is no whole-registry scan, and every removal
@@ -1712,16 +1850,20 @@ def _remove_orphaned_key_rows(
         _LOGGER.debug("Entry store unreadable; removing nothing for sensor key %s: %s", sensor_key, exc)
         return 0
 
+    doomed = frozenset(offered_pairs or ())
     if leftover_shape:
-        # The registry-derived pair list replaces the ledger-derived one rather
-        # than adding to it. `resolved` is empty on purpose and is what leaves
-        # the forget loop below a no-op: not one of these pairs is in any
-        # adder's bookkeeping, so there is nothing to drop, and dropping
-        # anything would release unique ids that live entities on this present
-        # device still hold.
-        doomed, resolved = frozenset(leftover_pairs or ()), []
+        # `resolved` is empty on purpose and is what leaves the forget loop
+        # below a no-op: not one of these pairs is in any adder's bookkeeping,
+        # so there is nothing to drop, and dropping anything would release
+        # unique ids that live entities on this present device still hold.
+        ledger_pairs, resolved = frozenset(), []
     else:
-        doomed, resolved = _resolve_doomed_rows(late_adders(entry_store), sensor_key)
+        # Read for the bookkeeping rather than for the scope. `resolved` is the
+        # only population the forget below may touch, and `ledger_pairs` is what
+        # tells that forget which of an adder's ids this sweep never attempted.
+        # A restored card has no ledger for its key, so both come back empty and
+        # the forget is correctly a no-op: there is no bookkeeping left to drop.
+        ledger_pairs, resolved = _resolve_doomed_rows(late_adders(entry_store), sensor_key)
 
     if not doomed:
         _log_empty_removal_scope(sensor_key, leftover_shape=leftover_shape)
@@ -1787,12 +1929,34 @@ def _remove_orphaned_key_rows(
                 len(failed),
                 sensor_key,
             )
+        # A ledger id this sweep never attempted is held exactly like one it
+        # attempted and failed, and for the identical reason: its row is still
+        # registered and still holds its unique_id. The two arrive here by
+        # different routes, which is why neither can stand in for the other. A
+        # failure is a row this sweep reached for and could not take; an
+        # untouched pair is a row the card never named, because the ledger
+        # gained it after the card was raised or because the adder's domain was
+        # unreadable at the moment the offer was published. Forgetting either
+        # one would release a live unique_id, which Home Assistant answers by
+        # dropping the returning entity.
+        #
+        # Empty in the ordinary case, on both shapes: the still-present shape
+        # resolves no ledger pairs at all, and on the departed-key shape the
+        # offer is built from the same ledgers this reads back.
+        untouched = frozenset(ledger_pairs) - doomed
+        if untouched:
+            _LOGGER.debug(
+                "Holding the bookkeeping for %d ledger row(s) under sensor key %s that this card never offered",
+                len(untouched),
+                sensor_key,
+            )
+        held = failed | untouched
         # resolved rather than adders: see the note at its construction. An adder
         # the resolve loop skipped kept every row it holds, so it keeps its
         # bookkeeping too.
         for adder in resolved:
             try:
-                kept_ids = frozenset(unique_id for domain, unique_id in failed if domain == adder.domain)
+                kept_ids = frozenset(unique_id for domain, unique_id in held if domain == adder.domain)
                 adder.forget(sensor_key, kept_ids)
             except Exception as exc:
                 _LOGGER.debug("Could not forget sensor key %s on a late adder: %s", sensor_key, exc)
@@ -2410,6 +2574,26 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Withdraw this entry's leftover-entity cards as the entry is removed.
+
+    Home Assistant's removal hook, and the only withdrawal path left. These
+    cards are persistent, so nothing else deletes them: a reload leaves them
+    standing on purpose, and a restart restores them along with the offer their
+    Submit is held to. Removal is the one event that makes an offer meaningless,
+    because the rows it names go with the config entry.
+
+    Reached through repairs' registry scan rather than through the issue
+    manager, because Home Assistant unloads before it removes: by now the
+    manager and the entry store have both gone, and the issue registry is the
+    only place these cards still exist.
+
+    The two non-fixable card families need nothing here. They are rebuilt from
+    every poll, are not persistent, and a removed entry simply stops polling.
+    """
+    async_withdraw_entry_cards(hass, entry.entry_id)
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

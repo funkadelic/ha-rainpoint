@@ -26,10 +26,12 @@ from custom_components.rainpoint import (
     _build_orphaned_entity_records,
     _device_row_for_sensor_key,
     _device_row_is_empty,
+    _ledger_pairs_and_descriptors,
     _read_aged_out_keys,
     _remove_orphaned_key_rows,
     _sync_orphaned_entity_issues,
     _sync_orphaned_entity_issues_on_updates,
+    async_remove_entry,
     repairs,
 )
 from custom_components.rainpoint import coordinator as coordinator_module
@@ -192,7 +194,7 @@ def _ledger_entity(unique_id):
 
 
 @contextmanager
-def _patched_issue_registry():
+def _patched_issue_registry(restored: dict | None = None):
     """Patch the issue registry so create and delete really change what it holds.
 
     The three functions are one mechanism. Mocking the two writers while
@@ -202,9 +204,18 @@ def _patched_issue_registry():
     fixable issue itself when its flow finishes. So the double has to model the
     registry rather than only record calls.
 
+    ``restored`` seeds the registry with cards that were already there when this
+    session started, keyed by issue id and carrying the ``data`` dict Home
+    Assistant would have reloaded for a persistent issue. That is what a restart
+    looks like from inside the integration: no raise happened in this session,
+    and the only thing the card still knows about itself is what was serialized.
+    Left None, the registry starts empty, which is every other session here.
+
     Yields the (create, delete) mocks, which still record every call.
     """
-    held: dict[tuple[str, str], object] = {}
+    held: dict[tuple[str, str], object] = {
+        (DOMAIN, issue_id): SimpleNamespace(translation_placeholders={}, data=data) for issue_id, data in (restored or {}).items()
+    }
 
     def _create(hass, domain, issue_id, **kwargs):
         """Record the raised card the way the registry would hold it.
@@ -272,33 +283,49 @@ class TestOrphanedKeyEndToEnd:
             await coordinator.async_refresh()
             assert create.call_count == 1
 
-        issue_id = create.call_args.args[2]
-        kwargs = create.call_args.kwargs
-        assert issue_id == orphaned_entities_issue_id(SENSOR_KEY, ENTRY_ID)
-        assert issue_id == f"orphaned_device_entities_{ENTRY_ID}_{SENSOR_KEY}"
-        assert kwargs["is_fixable"] is True
-        assert kwargs["translation_key"] == "orphaned_device_entities"
-        assert kwargs["data"] == {"entry_id": ENTRY_ID, "sensor_key": SENSOR_KEY}
-        assert kwargs["translation_placeholders"]["entity_count"] == "2"
-        assert kwargs["translation_placeholders"]["missed_polls"] == str(ORPHANED_KEY_DEBOUNCE_POLLS)
+            issue_id = create.call_args.args[2]
+            kwargs = create.call_args.kwargs
+            assert issue_id == orphaned_entities_issue_id(SENSOR_KEY, ENTRY_ID)
+            assert issue_id == f"orphaned_device_entities_{ENTRY_ID}_{SENSOR_KEY}"
+            assert kwargs["is_fixable"] is True
+            # Persistent, so the card and the offer inside it survive a restart.
+            assert kwargs["is_persistent"] is True
+            assert kwargs["translation_key"] == "orphaned_device_entities"
+            # The offer rides in the data dict, keyed the way the removal is
+            # keyed and sorted so an unchanged offer republishes an unchanged
+            # value. It is what a restored card's confirm is held to.
+            assert kwargs["data"] == {
+                "entry_id": ENTRY_ID,
+                "sensor_key": SENSOR_KEY,
+                # Lists rather than tuples, because this rides in a persisted
+                # issue whose storage schema this integration does not own.
+                "orphaned_pairs": [["valve", ZONE_1_UNIQUE_ID], ["valve", ZONE_2_UNIQUE_ID]],
+            }
+            assert kwargs["translation_placeholders"]["entity_count"] == "2"
+            assert kwargs["translation_placeholders"]["missed_polls"] == str(ORPHANED_KEY_DEBOUNCE_POLLS)
 
-        adder = hass.data[DOMAIN][ENTRY_ID][LATE_ADDER_STORE_KEY][0]
-        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_1_UNIQUE_ID, ZONE_2_UNIQUE_ID})
+            adder = hass.data[DOMAIN][ENTRY_ID][LATE_ADDER_STORE_KEY][0]
+            assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_1_UNIQUE_ID, ZONE_2_UNIQUE_ID})
 
-        flow = await async_create_fix_flow(hass, issue_id, kwargs["data"])
-        flow.hass = hass
+            flow = await async_create_fix_flow(hass, issue_id, kwargs["data"])
+            flow.hass = hass
 
-        with (
-            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
-            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
-        ):
-            shown = await flow.async_step_init()
-            assert shown["type"] == "form"
-            assert shown["step_id"] == "confirm"
-            # Opening the card removes nothing.
-            assert removed == []
+            # The issue registry patch stays up for the confirm, which is not
+            # bookkeeping: the departed-key confirm now reads its own card back
+            # to learn what it was offering, exactly as the still-present one
+            # does, so a flow run against an unreadable registry is a flow with
+            # an empty ceiling that removes nothing.
+            with (
+                patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+                patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+            ):
+                shown = await flow.async_step_init()
+                assert shown["type"] == "form"
+                assert shown["step_id"] == "confirm"
+                # Opening the card removes nothing.
+                assert removed == []
 
-            result = await flow.async_step_confirm({})
+                result = await flow.async_step_confirm({})
 
         assert result["type"] == "create_entry"
         assert sorted(removed) == ["valve.zone1", "valve.zone2"]
@@ -311,6 +338,164 @@ class TestOrphanedKeyEndToEnd:
         assert SENSOR_KEY not in adder.ledger.keys()  # noqa: SIM118 -- a named accessor, not a mapping
         assert ZONE_1_UNIQUE_ID not in adder._emitted
         assert ZONE_2_UNIQUE_ID not in adder._emitted
+
+    @pytest.mark.asyncio
+    async def test_a_card_restored_into_a_session_that_never_saw_the_device_still_removes_its_rows(self):
+        """The timeline this whole change exists for, and the one no other test
+        here reaches.
+
+        Every other end-to-end confirm runs inside the session that raised the
+        card, where the adder ledgers still hold the key and would carry the
+        removal on their own. That is precisely the session a restored card does
+        not have. Here the card is raised in one session and confirmed in a
+        second that never listed the device, never emitted an entity for it and
+        therefore holds no ledger entry for its key -- which is what a restart
+        after the device departed actually looks like, and what the persisted
+        offer is for.
+
+        Driven as two real sessions rather than by injecting a card into one,
+        because the property is entirely about what the second session does
+        *not* have.
+        """
+        # Session one: the device is listed, its entities are emitted, then it
+        # leaves the enumeration and ages out into a card.
+        first, hass_one, entry_one, client = _build_timeline()
+        _captured, async_add_entities = _capturing_add_entities()
+
+        with _patched_issue_registry() as (create, _delete):
+            await first.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass_one, entry_one, first)
+            await valve_async_setup_entry(hass_one, entry_one, async_add_entities)
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                await first.async_refresh()
+            assert create.call_count == 1
+            issue_id = create.call_args.args[2]
+            # This is the whole of what survives the restart, and it is a plain
+            # JSON structure because a persistent issue's data is serialized.
+            persisted_data = create.call_args.kwargs["data"]
+
+        assert persisted_data["orphaned_pairs"] == [["valve", ZONE_1_UNIQUE_ID], ["valve", ZONE_2_UNIQUE_ID]]
+
+        # Session two: a fresh coordinator, hass and entry store, over a hub
+        # that has never listed the child. Entity creation is one-shot from the
+        # first refresh, so no adder emits for the departed key and no ledger
+        # in this session mentions it.
+        second, hass_two, entry_two, client_two = _build_timeline()
+        client_two.get_devices_by_hid.return_value = _hub_record(with_child=False)
+        removed, async_get, async_entries = _make_entity_registry()
+        _captured_two, async_add_entities_two = _capturing_add_entities()
+
+        # The card is already in the registry when this session starts, holding
+        # nothing but what was serialized. Nothing here raises it.
+        with _patched_issue_registry({issue_id: persisted_data}) as (create_two, _delete_two):
+            await second.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass_two, entry_two, second)
+            await valve_async_setup_entry(hass_two, entry_two, async_add_entities_two)
+
+            # The premise: this session knows nothing about the key. Asserted
+            # rather than assumed, because a session that did hold it would let
+            # the old ledger-derived path pass this test.
+            assert _offer_of(hass_two) == frozenset()
+            assert SENSOR_KEY not in second.data["sensors"]
+            # And nothing in this session re-raised it, so the card the user is
+            # looking at is the restored one and nothing else.
+            assert create_two.call_count == 0
+
+            flow = await async_create_fix_flow(hass_two, issue_id, persisted_data)
+            flow.hass = hass_two
+
+            with (
+                patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+                patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+            ):
+                shown = await flow.async_step_init()
+                assert shown["step_id"] == "confirm"
+                assert removed == []
+                result = await flow.async_step_confirm({})
+
+        # The rows go, on the strength of the offer alone.
+        assert result["type"] == "create_entry"
+        assert sorted(removed) == ["valve.zone1", "valve.zone2"]
+        # And only those: the unrelated same-entry row and the foreign-entry row
+        # are as untouched here as they are inside the raising session.
+        assert "valve.unrelated" not in removed
+        assert "valve.foreign" not in removed
+
+    @pytest.mark.asyncio
+    async def test_a_device_that_returns_under_an_open_dialog_survives_the_confirm(self, caplog):
+        """The guard that came with the persistent card, driven in order.
+
+        A departed-key card can now outlive the session that raised it, so the
+        premise it was raised on -- RainPoint no longer lists this device --
+        has to be rechecked at the moment of deletion rather than assumed to
+        still hold. The sweep does clear such a card on the update that first
+        sees the key again, but a Submit can arrive before that update does,
+        and the dialog in front of the user still says the device is gone.
+
+        Driven rather than asserted on an end state, because the property is
+        entirely an ordering one: age out, raise, open the dialog, let the
+        device come back, then submit. Injecting a card and a live key at once
+        would pass against an executor that never rechecks anything.
+        """
+        coordinator, hass, entry, client = _build_timeline()
+        removed, async_get, async_entries = _make_entity_registry()
+        _captured, async_add_entities = _capturing_add_entities()
+
+        with _patched_issue_registry() as (create, _delete):
+            await coordinator.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            await valve_async_setup_entry(hass, entry, async_add_entities)
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                await coordinator.async_refresh()
+            assert create.call_count == 1
+            issue_id = create.call_args.args[2]
+            # The offer is real, so an executor that skipped the guard would
+            # have had two rows to take.
+            assert len(create.call_args.kwargs["data"]["orphaned_pairs"]) == 2
+
+            flow = await async_create_fix_flow(hass, issue_id, create.call_args.kwargs["data"])
+            flow.hass = hass
+
+            with (
+                patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+                patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+            ):
+                shown = await flow.async_step_init()
+                assert shown["step_id"] == "confirm"
+
+                # The device comes back while the dialog sits open, listed by
+                # its hub again but not yet reporting: the cloud returns no
+                # status for it, which is what a device that has just been
+                # re-paired or re-keyed looks like for its first few polls.
+                #
+                # This is the case a guard reading coordinator.data["sensors"]
+                # gets wrong, and it is why the guard reads the enumeration
+                # instead. A quiet device is absent from `sensors` for up to
+                # SILENT_DEBOUNCE_POLLS polls while still being enumerated, so
+                # that guard would read it as departed and clear the way to
+                # deleting the live device's rows and their history.
+                client.get_devices_by_hid.return_value = _hub_record(with_child=True)
+                # A well-formed status response that simply carries nothing for
+                # the addr, which is how a re-listed device presents before its
+                # first reading arrives.
+                client.get_multiple_device_status.return_value = [{"mid": MID, "subDeviceStatus": []}]
+                await coordinator.async_refresh()
+                assert SENSOR_KEY not in coordinator.data["sensors"]
+                assert SENSOR_KEY in coordinator.enumerated_sensor_keys()
+
+                with caplog.at_level(logging.INFO, logger="custom_components.rainpoint"):
+                    result = await flow.async_step_confirm({})
+
+        assert result["type"] == "create_entry"
+        # Nothing taken, and the breadcrumb says why: Home Assistant deletes
+        # the card on any non-abort result, so without this line a confirm that
+        # correctly removed nothing is indistinguishable from one that worked.
+        assert removed == []
+        assert [r for r in caplog.records if "is listed by its hub again" in r.getMessage()]
 
     @pytest.mark.asyncio
     async def test_a_confirm_that_removed_nothing_gets_its_card_back_on_the_next_poll(self):
@@ -367,7 +552,7 @@ class TestOrphanedKeyEndToEnd:
             patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
             patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
         ):
-            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 0
+            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, offered_pairs=_offer_of(hass)) == 0
 
         assert removed == []
 
@@ -720,6 +905,35 @@ class TestOrphanedCardLifecycle:
             assert create.call_count == 0
 
 
+def _offer_of(hass, *pairs) -> frozenset[tuple[str, str]]:
+    """Return the offer the caller states, having checked production agrees.
+
+    The removal executor is held to what its card offered rather than to
+    whatever the ledgers hold at confirm time, because a persisted card can
+    outlive the session that raised it. So these tests have to hand it an offer,
+    and where that offer comes from decides what they can catch.
+
+    An earlier version derived it by calling the same function the record
+    builder calls. That made every one of these assertions tautological about
+    the offer: "the executor took what production would have offered" cannot
+    fail if production computed both halves. The offer is stated by the caller
+    here instead, so each test says which rows its card named.
+
+    The derivation still runs, as a cross-check rather than as the source: if
+    the stated offer and the one the record builder would publish ever diverge,
+    that is either a test describing a card nobody would raise or a builder that
+    has drifted, and both are worth failing on at the moment they appear rather
+    than at the end-to-end tests much later.
+    """
+    stated = frozenset(pairs)
+    store = (hass.data.get(DOMAIN) or {}).get(ENTRY_ID) or {}
+    built, _descriptors = _ledger_pairs_and_descriptors(store)
+    assert frozenset(built.get(SENSOR_KEY, frozenset())) == stated, (
+        "this test states an offer the record builder would not publish for the same ledgers"
+    )
+    return stated
+
+
 class _BrokenAdder:
     """An adder whose ledger raises, standing in for a malformed platform."""
 
@@ -770,6 +984,26 @@ class _UnresolvableAdder:
         call raise TypeError into the per-adder guard, leaving the log empty
         and the assertion green for the wrong reason.
         """
+        self.forgotten.append((key, kept_ids))
+
+
+class _NamelessAdder:
+    """An adder whose domain reads cleanly and is not a usable string.
+
+    Distinct from _UnresolvableAdder, whose domain raises. This one answers,
+    and answers with something no (domain, unique_id) pair can be built from,
+    which is the case a bare try/except never reaches.
+    """
+
+    def __init__(self, domain=None):
+        """Hold one recorded id under a domain that cannot key a pair."""
+        self.ledger = EmittedEntityLedger()
+        self.ledger.record(SENSOR_KEY, {}, [_ledger_entity(ZONE_2_UNIQUE_ID)])
+        self.domain = domain
+        self.forgotten: list[tuple[str, frozenset]] = []
+
+    def forget(self, key, kept_ids=frozenset()):
+        """Record the forget, so a released id would be visible."""
         self.forgotten.append((key, kept_ids))
 
 
@@ -862,27 +1096,151 @@ class TestOrphanedSweepGuards:
 
         assert manager_cls.return_value.async_sync.call_count == 3
 
-    def test_the_cards_are_withdrawn_when_the_config_entry_unloads(self):
-        """A card that outlives a reload can never be cleared again, because
-        every structure that could clear it is rebuilt empty and a departed key
-        can never be mentioned by a fresh record."""
-        coordinator = MagicMock()
+    @pytest.mark.parametrize("domain", [None, ""])
+    def test_an_adder_with_no_usable_domain_offers_none_of_its_rows(self, caplog, domain):
+        """A pair needs a domain, so an adder that cannot supply one supplies
+        no pairs.
+
+        Entity registry uniqueness is per domain, so half a pair is not a
+        partial identifier, it is a wrong one. Dropping the adder narrows the
+        offer, which is the direction every uncertainty on this path takes: its
+        rows go unoffered until a session that can read it, rather than being
+        offered under a guessed domain that could name somebody else's row.
+        """
+        good = LateEntityAdder(
+            SimpleNamespace(data={"sensors": {}}), lambda ents: None, lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)], "valve"
+        )
+        good.collect(SENSOR_KEY, {})
+        nameless = _NamelessAdder(domain)
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [nameless, good]}}})
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint"):
+            offer = _offer_of(hass, ("valve", ZONE_1_UNIQUE_ID))
+
+        # The readable adder's row is offered; its neighbour's is not, and the
+        # neighbour costs it nothing.
+        assert offer == frozenset({("valve", ZONE_1_UNIQUE_ID)})
+        assert [r for r in caplog.records if "late adder with no usable domain" in r.getMessage()]
+
+    @staticmethod
+    def _remover_over(coordinator):
+        """Publish the removal executor for a coordinator and hand it back."""
         hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {}}})
         entry = MagicMock()
         entry.entry_id = ENTRY_ID
-
-        with patch("custom_components.rainpoint.RainPointOrphanedEntityIssues") as manager_cls:
+        with patch("custom_components.rainpoint.RainPointOrphanedEntityIssues"):
             _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
-            manager_cls.return_value.async_clear_all.assert_not_called()
+        return hass.data[DOMAIN][ENTRY_ID]["orphan_entity_remover"]
 
-            # The unload hook is the second thing registered, after the
-            # listener's own remover.
-            for call in entry.async_on_unload.call_args_list:
-                call.args[0]()
+    @pytest.mark.parametrize(
+        ("answer", "why"),
+        [
+            (None, "no poll has carried a device list yet"),
+            (["100_200_1"], "the answer is not a set"),
+            ("100_200_1", "the answer is a bare string, whose membership test would pass by substring"),
+        ],
+    )
+    def test_a_confirm_that_cannot_read_the_enumeration_removes_nothing(self, caplog, answer, why):
+        """The direction this guard resolves in, on the reader it must not share.
 
-        manager_cls.return_value.async_clear_all.assert_called_once()
+        The two registry sweeps use a reader that answers {} for both "the poll
+        listed nothing" and "I could not look", which is right where the worst
+        case is a row left alone. Here the question is whether RainPoint still
+        lists this addr, and a collapsed answer means "it does not", so an
+        unreadable coordinator would read as confirmation that the device is
+        gone and the deletion would proceed on it.
+        """
+        coordinator = MagicMock()
+        coordinator.enumerated_sensor_keys.return_value = answer
+        remover = self._remover_over(coordinator)
 
-    def test_a_withdrawal_that_raises_does_not_block_the_unload(self, caplog):
+        with (
+            caplog.at_level(logging.WARNING, logger="custom_components.rainpoint"),
+            patch("custom_components.rainpoint._remove_orphaned_key_rows") as executor,
+        ):
+            taken = remover(SENSOR_KEY, leftover_shape=False, offered_pairs=frozenset({("valve", ZONE_1_UNIQUE_ID)}))
+
+        assert taken == 0, why
+        # The executor is never reached at all, so this cannot be satisfied by
+        # an executor that happens to resolve an empty scope.
+        executor.assert_not_called()
+        assert [r for r in caplog.records if "Could not read the enumeration" in r.getMessage()]
+
+    def test_a_coordinator_that_raises_on_the_enumeration_removes_nothing(self, caplog):
+        """The same direction, reached by an exception rather than a value.
+
+        A torn-down coordinator raises rather than answering None, and that
+        route may not be the one that resolves toward deleting.
+        """
+        coordinator = MagicMock()
+        coordinator.enumerated_sensor_keys.side_effect = RuntimeError("coordinator gone")
+        remover = self._remover_over(coordinator)
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint"),
+            patch("custom_components.rainpoint._remove_orphaned_key_rows") as executor,
+        ):
+            assert remover(SENSOR_KEY, leftover_shape=False, offered_pairs=frozenset()) == 0
+
+        executor.assert_not_called()
+        assert [r for r in caplog.records if "Could not read the enumeration while confirming" in r.getMessage()]
+
+    def test_an_empty_enumeration_is_an_observation_and_lets_the_removal_run(self, caplog):
+        """The other side of the three-valued read, which is what stops it
+        degrading into "never remove anything".
+
+        A hub that genuinely lists no sub-devices is a real observation that
+        this key is not among them, and it is the ordinary state of the account
+        this card exists for. Collapsing it with the unreadable case would make
+        the guard block the very removal it was added to permit.
+        """
+        coordinator = MagicMock()
+        coordinator.enumerated_sensor_keys.return_value = frozenset()
+        remover = self._remover_over(coordinator)
+
+        with patch("custom_components.rainpoint._remove_orphaned_key_rows", return_value=2) as executor:
+            assert remover(SENSOR_KEY, leftover_shape=False, offered_pairs=frozenset({("valve", ZONE_1_UNIQUE_ID)})) == 2
+
+        executor.assert_called_once()
+
+    def test_an_adder_with_no_usable_domain_keeps_its_bookkeeping_through_a_removal(self, caplog):
+        """The resolve half of the same gate the offer half applies.
+
+        The two build the same (domain, unique_id) pairs from the same ledgers,
+        so an adder one of them skips and the other does not is a disagreement
+        about what this key's rows even are. Both skip it, and skipping means
+        holding: its ids stay in its ledger, so a returning device cannot be
+        offered a unique_id whose row is still registered.
+        """
+        removed, async_get, async_entries = _make_entity_registry()
+        good = LateEntityAdder(
+            SimpleNamespace(data={"sensors": {}}),
+            lambda ents: None,
+            lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID)],
+            "valve",
+        )
+        good.collect(SENSOR_KEY, {})
+        nameless = _NamelessAdder()
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [nameless, good]}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint"),
+        ):
+            assert (
+                _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, offered_pairs=_offer_of(hass, ("valve", ZONE_1_UNIQUE_ID)))
+                == 1
+            )
+
+        assert removed == ["valve.zone1"]
+        # Never resolved, so never forgotten, so its id is still held.
+        assert nameless.forgotten == []
+        assert nameless.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_2_UNIQUE_ID})
+        assert [r for r in caplog.records if "no usable domain while resolving" in r.getMessage()]
+
+    def test_an_unreadable_manager_does_not_block_the_unload(self, caplog):
         """Everything registered after this hook still has to be torn down."""
         coordinator = MagicMock()
         hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {}}})
@@ -890,14 +1248,38 @@ class TestOrphanedSweepGuards:
         entry.entry_id = ENTRY_ID
 
         with patch("custom_components.rainpoint.RainPointOrphanedEntityIssues") as manager_cls:
-            manager_cls.return_value.async_clear_all.side_effect = RuntimeError("registry down")
+            manager_cls.return_value.async_withdraw_rebuildable_cards.side_effect = RuntimeError("registry down")
             _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
 
             with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint"):
                 for call in entry.async_on_unload.call_args_list:
                     call.args[0]()
 
-        assert [r.getMessage() for r in caplog.records if "Could not withdraw the orphaned entity cards" in r.getMessage()]
+        assert [r for r in caplog.records if "Could not withdraw the unused entity cards" in r.getMessage()]
+
+    def test_the_unload_hook_asks_for_the_rebuildable_cards_only(self):
+        """The wiring half of the shape-scoped withdrawal.
+
+        Which cards actually go is the manager's decision and is asserted
+        against a real one in test_repairs; what this pins is that the unload
+        path asks the shape-scoped question at all. Calling the old
+        withdraw-everything method here would take the departed-key cards with
+        it and undo the persistence.
+        """
+        coordinator = MagicMock()
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {}}})
+        entry = MagicMock()
+        entry.entry_id = ENTRY_ID
+
+        with patch("custom_components.rainpoint.RainPointOrphanedEntityIssues") as manager_cls:
+            _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
+            manager_cls.return_value.async_withdraw_rebuildable_cards.assert_not_called()
+
+            # Every hook this registers, fired.
+            for call in entry.async_on_unload.call_args_list:
+                call.args[0]()
+
+        manager_cls.return_value.async_withdraw_rebuildable_cards.assert_called_once()
 
     def test_an_unreadable_entry_store_removes_nothing(self):
         """The remover's first guard, reached by a flow submitted after its
@@ -905,21 +1287,29 @@ class TestOrphanedSweepGuards:
         hass = SimpleNamespace(data={})
         entry = SimpleNamespace(entry_id=ENTRY_ID)
 
-        assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 0
+        assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, offered_pairs=_offer_of(hass)) == 0
 
     def test_a_card_with_nothing_in_scope_says_so_rather_than_returning_silently(self, caplog):
         """Home Assistant deletes a fixable issue once its flow finishes, so a
-        confirm with no ledger entry behind it looks to the user exactly like a
-        successful removal. The log line is the only breadcrumb left."""
+        confirm that took nothing looks to the user exactly like a successful
+        removal. The log line is the only breadcrumb left.
+
+        It no longer names a manual entity-registry step, and that is the
+        change rather than a rewording: the card is persistent and carries its
+        own offer, so an empty scope means this confirm found nothing, not that
+        nothing will be offered again.
+        """
         coordinator = SimpleNamespace(data={"sensors": {}})
         adder = LateEntityAdder(coordinator, lambda ents: None, lambda k, i: [], "valve")
         hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
         entry = SimpleNamespace(entry_id=ENTRY_ID)
 
         with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint"):
-            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 0
+            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, offered_pairs=_offer_of(hass)) == 0
 
-        assert [r.getMessage() for r in caplog.records if "Nothing in scope for sensor key" in r.getMessage()]
+        said = [r.getMessage() for r in caplog.records if "Nothing was in scope for sensor key" in r.getMessage()]
+        assert said
+        assert not [m for m in said if "by hand" in m]
 
     def test_one_malformed_adder_does_not_stop_the_others_being_resolved(self):
         """The per-adder guard on the resolve half, and on the forget half.
@@ -940,10 +1330,58 @@ class TestOrphanedSweepGuards:
             patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
             patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
         ):
-            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 2
+            assert (
+                _remove_orphaned_key_rows(
+                    hass,
+                    entry,
+                    SENSOR_KEY,
+                    offered_pairs=_offer_of(hass, ("valve", ZONE_1_UNIQUE_ID), ("valve", ZONE_2_UNIQUE_ID)),
+                )
+                == 2
+            )
 
         assert removed == ["valve.zone1", "valve.zone2"]
         assert good.ledger.unique_ids_for(SENSOR_KEY) == frozenset()
+
+    def test_a_ledger_row_this_card_never_offered_keeps_its_bookkeeping(self, caplog):
+        """The hold that the offer-scoped confirm made necessary.
+
+        The scope is now the card's offer rather than the whole of the ledger,
+        so the two can differ: a ledger that gained a row after the card was
+        raised holds an id this sweep never reached for. That row is still
+        registered and still holds its unique_id, exactly like one whose
+        removal was attempted and raised, so releasing it would let a returning
+        device offer a live unique_id a second time. A forget keyed on the
+        failures alone would release it.
+        """
+        removed, async_get, async_entries = _make_entity_registry()
+        coordinator = SimpleNamespace(data={"sensors": {}})
+        adder = LateEntityAdder(
+            coordinator,
+            lambda ents: None,
+            lambda k, i: [_ledger_entity(ZONE_1_UNIQUE_ID), _ledger_entity(ZONE_2_UNIQUE_ID)],
+            "valve",
+        )
+        adder.collect(SENSOR_KEY, {})
+        hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}})
+        entry = SimpleNamespace(entry_id=ENTRY_ID)
+
+        # The card named one of the two rows; the second joined the ledger
+        # after it was raised.
+        offer = frozenset({("valve", ZONE_1_UNIQUE_ID)})
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint"),
+        ):
+            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, offered_pairs=offer) == 1
+
+        # Exactly the offered row went, and the unoffered one kept both its
+        # registry row and its place in the ledger.
+        assert removed == ["valve.zone1"]
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_2_UNIQUE_ID})
+        assert [r for r in caplog.records if "never offered" in r.getMessage()]
 
     def test_an_adder_the_resolve_half_skipped_is_never_forgotten(self):
         """The two loops have to agree about which adders they skipped.
@@ -966,7 +1404,10 @@ class TestOrphanedSweepGuards:
             patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
             patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
         ):
-            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 1
+            assert (
+                _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, offered_pairs=_offer_of(hass, ("valve", ZONE_1_UNIQUE_ID)))
+                == 1
+            )
 
         # Its id was never in scope, so its row survives untouched.
         assert removed == ["valve.zone1"]
@@ -996,7 +1437,10 @@ class TestOrphanedSweepGuards:
             patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
             patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
         ):
-            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 1
+            assert (
+                _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, offered_pairs=_offer_of(hass, ("valve", ZONE_1_UNIQUE_ID)))
+                == 1
+            )
 
         assert removed == ["valve.zone1"]
         assert "sensor.same_id_other_domain" not in removed
@@ -1011,7 +1455,10 @@ class TestOrphanedSweepGuards:
         entry = SimpleNamespace(entry_id=ENTRY_ID)
 
         with patch("custom_components.rainpoint.er.async_get", side_effect=RuntimeError("no registry")):
-            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 0
+            assert (
+                _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, offered_pairs=_offer_of(hass, ("valve", ZONE_1_UNIQUE_ID)))
+                == 0
+            )
 
         assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({ZONE_1_UNIQUE_ID})
 
@@ -1062,7 +1509,15 @@ class TestOrphanedSweepGuards:
             patch("custom_components.rainpoint.er.async_entries_for_config_entry", return_value=rows),
             caplog.at_level(logging.WARNING, logger="custom_components.rainpoint"),
         ):
-            assert _remove_orphaned_key_rows(hass, entry, SENSOR_KEY) == 1
+            assert (
+                _remove_orphaned_key_rows(
+                    hass,
+                    entry,
+                    SENSOR_KEY,
+                    offered_pairs=_offer_of(hass, ("valve", ZONE_1_UNIQUE_ID), ("valve", ZONE_2_UNIQUE_ID)),
+                )
+                == 1
+            )
 
         assert registry.removed == ["valve.zone2"]
         # Exactly the failure is held. Releasing it would be a unique_id
@@ -1113,7 +1568,9 @@ class TestOrphanedSweepGuards:
             patch("custom_components.rainpoint.er.async_get", return_value=_StubbornRegistry()),
             patch("custom_components.rainpoint.er.async_entries_for_config_entry", return_value=rows),
         ):
-            _remove_orphaned_key_rows(hass, entry, SENSOR_KEY)
+            _remove_orphaned_key_rows(
+                hass, entry, SENSOR_KEY, offered_pairs=_offer_of(hass, ("valve", ZONE_1_UNIQUE_ID), ("valve", ZONE_2_UNIQUE_ID))
+            )
 
         # Only the row that really went is offered again. The one still holding
         # its unique_id stays suppressed, which is what stops the returning
@@ -1350,7 +1807,9 @@ class TestOrphanedDeviceRowRemoval:
             patch("custom_components.rainpoint.dr.async_get", side_effect=device_get),
             patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=device_entries),
         ):
-            count = _remove_orphaned_key_rows(hass, entry, SENSOR_KEY)
+            count = _remove_orphaned_key_rows(
+                hass, entry, SENSOR_KEY, offered_pairs=_offer_of(hass, *(("valve", uid) for uid in EMITTED_UNIQUE_IDS))
+            )
 
         return count, removed_entities, device_events, adder
 
@@ -1703,33 +2162,40 @@ class TestOrphanedKeyReKeyEndState:
             raised = [call for call in create.call_args_list if call.args[2].startswith("orphaned_device_entities_")]
             assert len(raised) == 1
 
-        # Exactly one card, and it names the old key rather than the new one.
-        issue_id = raised[0].args[2]
-        flow_data = raised[0].kwargs["data"]
-        assert issue_id == orphaned_entities_issue_id(REKEY_OLD_KEY, ENTRY_ID)
-        assert flow_data["sensor_key"] == REKEY_OLD_KEY
+            # Exactly one card, and it names the old key rather than the new one.
+            issue_id = raised[0].args[2]
+            flow_data = raised[0].kwargs["data"]
+            assert issue_id == orphaned_entities_issue_id(REKEY_OLD_KEY, ENTRY_ID)
+            assert flow_data["sensor_key"] == REKEY_OLD_KEY
+            # Every pair the card offers belongs to the old key, so a confirm
+            # held to this offer cannot reach the new key's fresh entity set
+            # even though both sets sit on the same config entry.
+            assert flow_data["orphaned_pairs"]
+            assert all(REKEY_OLD_KEY in unique_id for _domain, unique_id in flow_data["orphaned_pairs"])
 
-        entity_rows, device_rows = self._registry_rows_from(captured, domains)
-        removed_entities, entity_get, entity_entries = _make_device_aware_entity_registry(entity_rows)
-        device_events, device_get, device_entries = _make_device_registry(device_rows)
+            entity_rows, device_rows = self._registry_rows_from(captured, domains)
+            removed_entities, entity_get, entity_entries = _make_device_aware_entity_registry(entity_rows)
+            device_events, device_get, device_entries = _make_device_registry(device_rows)
 
-        flow = await async_create_fix_flow(hass, issue_id, flow_data)
-        flow.hass = hass
+            flow = await async_create_fix_flow(hass, issue_id, flow_data)
+            flow.hass = hass
 
-        with (
-            patch("custom_components.rainpoint.er.async_get", side_effect=entity_get),
-            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=entity_entries),
-            patch("custom_components.rainpoint.dr.async_get", side_effect=device_get),
-            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=device_entries),
-        ):
-            shown = await flow.async_step_init()
-            assert shown["step_id"] == "confirm"
-            # Opening the card removes nothing at all.
-            assert removed_entities == []
-            assert device_events.removed == []
-            assert device_events.unlinked == []
+            # Inside the issue registry patch, because the confirm reads its own
+            # card back for the offer it is held to.
+            with (
+                patch("custom_components.rainpoint.er.async_get", side_effect=entity_get),
+                patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=entity_entries),
+                patch("custom_components.rainpoint.dr.async_get", side_effect=device_get),
+                patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=device_entries),
+            ):
+                shown = await flow.async_step_init()
+                assert shown["step_id"] == "confirm"
+                # Opening the card removes nothing at all.
+                assert removed_entities == []
+                assert device_events.removed == []
+                assert device_events.unlinked == []
 
-            result = await flow.async_step_confirm({})
+                result = await flow.async_step_confirm({})
 
         assert result["type"] == "create_entry"
 
@@ -1744,3 +2210,147 @@ class TestOrphanedKeyReKeyEndState:
         # the new key's row both survive.
         assert device_events.removed == [f"device_{REKEY_OLD_KEY}"]
         assert device_events.unlinked == []
+
+
+class TestTheCardsGoWhenTheEntryDoes:
+    """Removal is the one event that still withdraws these cards.
+
+    A reload leaves them standing and a restart restores them, so this is the
+    only path left that deletes one without a user confirming it. It has to
+    reach them through the issue registry rather than through the manager,
+    because Home Assistant unloads a config entry before it removes it and the
+    manager is gone by then.
+    """
+
+    @staticmethod
+    def _registry(*issue_ids):
+        """An issue registry double holding the given ids under this domain."""
+        held = {(DOMAIN, issue_id): SimpleNamespace(data={}) for issue_id in issue_ids}
+        held[("other_integration", "orphaned_device_entities_e1_1_2_3")] = SimpleNamespace(data={})
+        return held, SimpleNamespace(issues=held)
+
+    @pytest.mark.asyncio
+    async def test_removing_the_entry_withdraws_its_own_cards_and_no_others(self):
+        """Scoped by the entry id the issue id already carries.
+
+        Two RainPoint entries resolving the same invited home produce the same
+        sensor keys, so an unscoped sweep here would delete a card the other
+        entry raised and never consented to. An entry id carries no underscore
+        of its own, which is what makes the prefix test unable to reach across.
+        """
+        mine = orphaned_entities_issue_id(SENSOR_KEY, ENTRY_ID)
+        theirs = orphaned_entities_issue_id(SENSOR_KEY, "other_entry")
+        held, registry = self._registry(mine, theirs, "device_not_reporting_100_200_1")
+
+        with (
+            patch.object(repairs.ir, "async_get", return_value=registry),
+            patch.object(repairs.ir, "async_delete_issue", side_effect=lambda h, d, i: held.pop((d, i), None)),
+        ):
+            await async_remove_entry(SimpleNamespace(), SimpleNamespace(entry_id=ENTRY_ID))
+
+        assert (DOMAIN, mine) not in held
+        # The other entry's card, the not-reporting card and another
+        # integration's identically shaped id are all untouched.
+        assert (DOMAIN, theirs) in held
+        assert (DOMAIN, "device_not_reporting_100_200_1") in held
+        assert ("other_integration", "orphaned_device_entities_e1_1_2_3") in held
+
+    @pytest.mark.asyncio
+    async def test_a_sibling_entry_id_that_is_a_string_prefix_keeps_its_cards(self):
+        """The case the prefix test alone cannot answer.
+
+        Ids are f"{PREFIX}_{entry_id}_{sensor_key}", so entry "e1"'s prefix is a
+        string prefix of entry "e1_2"'s whole id. Home Assistant's own entry ids
+        are ULID or uuid4 hex and contain no underscore, which makes this
+        unreachable in production -- but the code states the scoping as a safety
+        property, so the property is what gets tested rather than the alphabet
+        that currently saves it. The card's own published entry_id decides.
+        """
+        mine = orphaned_entities_issue_id(SENSOR_KEY, "e1")
+        sibling = orphaned_entities_issue_id(SENSOR_KEY, "e1_2")
+        held = {
+            (DOMAIN, mine): SimpleNamespace(data={"entry_id": "e1", "sensor_key": SENSOR_KEY}),
+            (DOMAIN, sibling): SimpleNamespace(data={"entry_id": "e1_2", "sensor_key": SENSOR_KEY}),
+        }
+        registry = SimpleNamespace(issues=held)
+
+        with (
+            patch.object(repairs.ir, "async_get", return_value=registry),
+            patch.object(repairs.ir, "async_delete_issue", side_effect=lambda h, d, i: held.pop((d, i), None)),
+        ):
+            await async_remove_entry(SimpleNamespace(), SimpleNamespace(entry_id="e1"))
+
+        assert (DOMAIN, mine) not in held
+        # The sibling's id starts with entry e1's prefix and survives anyway.
+        assert sibling.startswith("orphaned_device_entities_e1_")
+        assert (DOMAIN, sibling) in held
+
+    @pytest.mark.asyncio
+    async def test_a_card_whose_entry_id_cannot_be_read_falls_back_to_the_prefix(self):
+        """The fallback, which is the pre-existing behaviour.
+
+        A card written before the entry id was published there, or one whose
+        data cannot be read at all, still has to be withdrawable by the entry
+        that raised it.
+        """
+        no_data = orphaned_entities_issue_id("100_200_1", ENTRY_ID)
+        raises = orphaned_entities_issue_id("100_200_2", ENTRY_ID)
+
+        class _ExplodingData:
+            @property
+            def data(self):
+                raise RuntimeError("unreadable")
+
+        held = {
+            (DOMAIN, no_data): SimpleNamespace(data=None),
+            (DOMAIN, raises): _ExplodingData(),
+        }
+        registry = SimpleNamespace(issues=held)
+
+        with (
+            patch.object(repairs.ir, "async_get", return_value=registry),
+            patch.object(repairs.ir, "async_delete_issue", side_effect=lambda h, d, i: held.pop((d, i), None)),
+        ):
+            await async_remove_entry(SimpleNamespace(), SimpleNamespace(entry_id=ENTRY_ID))
+
+        assert held == {}
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_registry_leaves_the_cards_and_does_not_raise(self, caplog):
+        """This runs on Home Assistant's removal path, where raising would
+        surface as a failed integration removal. A card left standing is the
+        lesser outcome."""
+        with (
+            patch.object(repairs.ir, "async_get", side_effect=RuntimeError("registry down")),
+            patch.object(repairs.ir, "async_delete_issue") as delete,
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint"),
+        ):
+            await async_remove_entry(SimpleNamespace(), SimpleNamespace(entry_id=ENTRY_ID))
+
+        delete.assert_not_called()
+        assert [r.getMessage() for r in caplog.records if "Could not read the issue registry" in r.getMessage()]
+
+    @pytest.mark.asyncio
+    async def test_one_card_that_refuses_to_go_does_not_strand_the_rest(self, caplog):
+        """Guarded per card, matching the per-row discipline of the removal
+        executor: one failure costs its own card and no others."""
+        first = orphaned_entities_issue_id("100_200_1", ENTRY_ID)
+        second = orphaned_entities_issue_id("100_200_2", ENTRY_ID)
+        held, registry = self._registry(first, second)
+
+        def _delete(hass, domain, issue_id):
+            """Fail on the first id only, so the second still has to go."""
+            if issue_id == first:
+                raise RuntimeError("cannot delete")
+            held.pop((domain, issue_id), None)
+
+        with (
+            patch.object(repairs.ir, "async_get", return_value=registry),
+            patch.object(repairs.ir, "async_delete_issue", side_effect=_delete),
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint"),
+        ):
+            await async_remove_entry(SimpleNamespace(), SimpleNamespace(entry_id=ENTRY_ID))
+
+        assert (DOMAIN, first) in held
+        assert (DOMAIN, second) not in held
+        assert [r.getMessage() for r in caplog.records if "Failed to withdraw the leftover entities" in r.getMessage()]

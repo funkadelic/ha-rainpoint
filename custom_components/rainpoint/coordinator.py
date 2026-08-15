@@ -934,6 +934,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._last_poll_sensor_keys: set[str] = set()
         self._orphaned_key_poll_counts: dict[str, int] = {}
         self._aged_out_sensor_keys: frozenset[str] = frozenset()
+        # The enumeration the orphan counter counts against, published for the
+        # one consumer that has to agree with it: the removal confirm's
+        # staleness guard. None until a poll has carried a device list, which is
+        # a different answer from "the enumeration is empty" and is why this is
+        # not seeded to frozenset(). See enumerated_sensor_keys.
+        self._last_enumerated_sensor_keys: frozenset[str] | None = None
         # The hub keys whose empty enumeration has already been warned about,
         # so that warning fires on the edge rather than on every poll. Sized by
         # the number of hubs in the account, and rebuilt whole on every poll
@@ -2023,6 +2029,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # filtered out by is_hub_record: it carries real children, and
         # _prune_silent_state does not filter it either.
         live_keys = {_sensor_key(hub["hid"], hub["mid"], addr) for hub in hubs for addr in _sub_devices_by_addr(hub)}
+        # Published from here rather than recomputed by the consumer, and this
+        # assignment is the whole of what makes the removal confirm's staleness
+        # guard agree with this counter about what "departed" means. Written
+        # before the freeze below, so it is the enumeration this poll actually
+        # carried rather than the subset this method chose to count.
+        self._last_enumerated_sensor_keys = frozenset(live_keys)
         missing = self._last_poll_sensor_keys - live_keys
         # A missing hub is an outage, not evidence about any addr, so its
         # children's counters neither advance nor reset while it is inside its
@@ -2148,6 +2160,28 @@ class RainPointCoordinator(DataUpdateCoordinator):
         at all is a total outage and leaves this value untouched.
         """
         return self._aged_out_sensor_keys
+
+    def enumerated_sensor_keys(self) -> frozenset[str] | None:
+        """Return the keys the last device list actually enumerated, or None.
+
+        The other half of the same boundary, and it exists so one consumer can
+        ask the question this class's counter is built on rather than a
+        near-miss of it. The removal confirm has to know whether RainPoint still
+        lists an addr before it deletes that addr's rows, which is exactly what
+        _track_orphaned_keys counts, and asking coordinator.data["sensors"]
+        instead is the conflation that method's own docstring rules out: a
+        device that is merely quiet is absent from ``sensors`` for up to
+        SILENT_DEBOUNCE_POLLS polls while still being enumerated, so a guard
+        reading ``sensors`` would read a briefly quiet device as departed and
+        clear the way to deleting a live device's rows and their history.
+
+        None means no poll has carried a device list yet, which is a different
+        answer from an empty enumeration and the only one a caller may not treat
+        as "this key is gone". Reflects the last poll that carried one: a total
+        outage leaves this value untouched, so a stale answer still names the
+        keys that were last seen, which errs toward keeping rows.
+        """
+        return self._last_enumerated_sensor_keys
 
     def _sync_silent_device_issues(
         self,

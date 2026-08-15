@@ -28,6 +28,9 @@
             "title": "Remove the leftover entities",
             "description": "RainPoint has stopped listing this device on its hub, and has not listed it across the last {missed_polls} checks, which run a couple of minutes apart.\n\n- **Device:** {device_name}\n- **Model:** {model}\n- **Address:** {address}\n- **Hub:** {hub_name}\n- **Entities left over:** {entity_count}\n\nThose entities can no longer update, and nothing will make them available again.\n\nThis usually means the device was unpaired, or that RainPoint moved it to a different parent record on its side. If it moved, a fresh set of entities for the same hardware already exists alongside these leftover ones, so you may be seeing each reading twice.\n\nSelect **Submit** to remove the leftover entities, along with the history recorded against them. That cannot be undone."
           }
+        },
+        "abort": {
+          "removal_unavailable": "This device's entities could not be removed right now, because the RainPoint integration is not loaded. The card has been left in place; reload the integration under Settings, then select Fix again."
         }
       }
     },
@@ -39,6 +42,9 @@
             "title": "Remove unused entities",
             "description": "RainPoint still lists this device on your account and it is reporting normally, but nothing has updated {entity_count} of its entities across the last {missed_polls} times this integration looked. How much time that covers depends on how often your devices send new readings, so it can be a good deal shorter than it sounds.\n\n- **Device:** {device_name}\n- **Model:** {model}\n- **Address:** {address}\n- **Hub:** {hub_name}\n- **Entities that would be removed:** {entity_count}\n{entity_list}\n\nThis usually means the device once reported something it no longer sends, or that a newer version of this integration replaced these entities with better ones.\n\nOne thing to check before you confirm: a reading that simply has not arrived since the last restart looks the same from here, and it will come back on its own once the device sends it again. If that is what this is, select Cancel and leave it alone. Watering zones are never offered here, so a zone you have not used yet is safe either way.\n\nSelect **Submit** to remove these entities, along with the history recorded against them. That cannot be undone."
           }
+        },
+        "abort": {
+          "removal_unavailable": "This device's entities could not be removed right now, because the RainPoint integration is not loaded. The card has been left in place; reload the integration under Settings, then select Fix again."
         }
       }
     }

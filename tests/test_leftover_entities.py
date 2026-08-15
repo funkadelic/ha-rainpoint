@@ -1388,7 +1388,7 @@ class TestWhatTheConfirmMayTake:
         hass = SimpleNamespace(data={DOMAIN: {ENTRY_ID: {LATE_ADDER_STORE_KEY: [adder]}}}, states=harness.state_machine())
         entry = SimpleNamespace(entry_id=ENTRY_ID)
         with harness.patched():
-            count = _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, leftover_pairs=pairs, leftover_shape=True)
+            count = _remove_orphaned_key_rows(hass, entry, SENSOR_KEY, offered_pairs=pairs, leftover_shape=True)
         return count, adder
 
     def test_exactly_the_named_pair_goes_and_the_device_row_stays(self):
