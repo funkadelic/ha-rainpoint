@@ -1339,8 +1339,8 @@ class TestSilentSubDeviceEndToEnd:
     @pytest.mark.asyncio
     async def test_fallback_transport_error_records_status_absent(self):
         """A transport error in the per-hub fallback records an absent marker, not an
-        arrived-empty status, so the hub-outage distinction survives one level
-        below _async_update_data (D-05/D-06)."""
+        arrived-empty status, so the hub-outage distinction survives
+        _fallback_per_hub_status as well as _async_update_data."""
         coord, client = _make_coord()
         hub = _make_hub(mid=301)
         client.get_device_status.side_effect = aiohttp.ClientError("boom")
