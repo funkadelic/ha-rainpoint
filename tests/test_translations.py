@@ -542,7 +542,12 @@ class TestGenericControlFailedIssuePlaceholderParity:
         rendered = entry["description"].format(**supplied)
         assert "{" not in rendered
         assert "}" not in rendered
-        assert entry["title"].format(**supplied)
+        # Held to the same brace test as the body rather than to truthiness.
+        # A non-empty title carrying an escaped brace is exactly what this
+        # test is named for catching, and truthiness passes it.
+        rendered_title = entry["title"].format(**supplied)
+        assert "{" not in rendered_title
+        assert "}" not in rendered_title
 
     def test_a_missing_model_still_renders_clean(self):
         """model is Optional at the call site, and None must not reach the card as a blank."""
