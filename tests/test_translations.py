@@ -14,8 +14,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import custom_components.rainpoint as rainpoint_pkg
-from custom_components.rainpoint import repairs
+from custom_components.rainpoint import generic_control, repairs
+from custom_components.rainpoint.api import RainPointApiError
 from custom_components.rainpoint.const import (
+    GENERIC_CONTROL_ISSUE_ID_PREFIX,
     LEFTOVER_ENTITIES_TRANSLATION_KEY,
     PUSH_HUB_IDENTITY_ISSUE_ID,
 )
@@ -80,6 +82,11 @@ def _orphaned_entities_entry() -> dict:
 def _leftover_entities_entry() -> dict:
     """The issues entry the still-present shape of that same card renders into."""
     return _load_en_translations()["issues"][LEFTOVER_ENTITIES_TRANSLATION_KEY]
+
+
+def _generic_control_failed_entry() -> dict:
+    """The issues entry whose copy _create_command_failed_issue renders into."""
+    return _load_en_translations()["issues"][GENERIC_CONTROL_ISSUE_ID_PREFIX]
 
 
 def _push_hub_identity_entry() -> dict:
@@ -499,3 +506,65 @@ class TestHubWordingNamesHardwareOnly:
         readme_path = Path(rainpoint_pkg.__file__).parent.parent.parent / "README.md"
         blob = readme_path.read_text(encoding="utf-8")
         assert len(re.findall("hub", blob, re.IGNORECASE)) == 68
+
+
+class TestGenericControlFailedIssuePlaceholderParity:
+    """The copy's placeholders and the ones _create_command_failed_issue supplies must match.
+
+    The last of the placeholder-carrying cards to get this guard. The other two
+    uncovered issue entries, push_channel_down and push_hub_identity_unresolved,
+    carry no placeholders at all, so there is nothing for a parity test to pin
+    on them.
+    """
+
+    @staticmethod
+    def _supplied_placeholders(model: str | None = "HCS003FRF", exc: Exception | None = None) -> dict[str, str]:
+        """Raise a real issue and capture what the code passed to the registry."""
+        with patch.object(generic_control.ir, "async_create_issue") as create:
+            generic_control._create_command_failed_issue(
+                MagicMock(),
+                model,
+                exc or RainPointApiError("controlWorkMode failed: code 3"),
+            )
+        create.assert_called_once()
+        return create.call_args.kwargs["translation_placeholders"]
+
+    def test_copy_placeholders_match_the_ones_the_code_supplies(self):
+        """A mismatch in either direction ships a card with a literal brace or a blank."""
+        entry = _generic_control_failed_entry()
+        in_copy = _placeholders_in(entry["title"]) | _placeholders_in(entry["description"])
+        assert in_copy == set(self._supplied_placeholders())
+
+    def test_copy_renders_with_the_supplied_values_and_leaves_no_brace(self):
+        """Proves the parity holds under an actual render, not just by name comparison."""
+        entry = _generic_control_failed_entry()
+        supplied = self._supplied_placeholders()
+        rendered = entry["description"].format(**supplied)
+        assert "{" not in rendered
+        assert "}" not in rendered
+        # Held to the same brace test as the body rather than to truthiness.
+        # A non-empty title carrying an escaped brace is exactly what this
+        # test is named for catching, and truthiness passes it.
+        rendered_title = entry["title"].format(**supplied)
+        assert "{" not in rendered_title
+        assert "}" not in rendered_title
+
+    def test_a_missing_model_still_renders_clean(self):
+        """model is Optional at the call site, and None must not reach the card as a blank."""
+        supplied = self._supplied_placeholders(model=None)
+        assert supplied["model"] == "unknown"
+        rendered = _generic_control_failed_entry()["description"].format(**supplied)
+        assert "{" not in rendered
+
+    def test_the_placeholders_are_sanitized_before_they_reach_the_card(self):
+        """Both values are cloud-supplied and the card is rendered as Markdown.
+
+        Pinned here as well as at the sanitizer, because parity alone would be
+        satisfied by a card that renders an injected link perfectly.
+        """
+        supplied = self._supplied_placeholders(
+            model="[click](http://evil.example)",
+            exc=RainPointApiError("[click](http://evil.example)"),
+        )
+        for value in supplied.values():
+            assert "](" not in value
