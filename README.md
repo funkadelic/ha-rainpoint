@@ -108,13 +108,15 @@ To get your device added:
 
 This integration is part of the default HACS store, so no custom repository is needed.
 
+The quickest way in is the button at the top of this page, which opens RainPoint Cloud in HACS on your own Home Assistant. From there, click **Download**, restart Home Assistant, then go to **Settings → Devices & Services → Add Integration** and search for **RainPoint Cloud**.
+
+To do it by hand instead:
+
 1. In Home Assistant, open **HACS** from the sidebar.
 2. Search for **RainPoint Cloud** and open it.
 3. Click **Download** to install it.
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & Services → Add Integration** and search for **RainPoint Cloud**.
-
-> Installing an older release? Versions published before HACS default inclusion may require adding `funkadelic/ha-rainpoint` as a custom repository (category **Integration**) first.
 
 ---
 
