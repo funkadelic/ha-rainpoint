@@ -10,9 +10,17 @@ import re
 from datetime import datetime
 
 from .utils import (
+    STA_CUR_FLOW_FIELD,
+    STA_DURATION_FIELD,
+    STA_LAST_DURATION_FIELD,
+    STA_LASTUSAGE_FIELD,
+    STA_TOTAL_TODAY_FIELD,
+    STA_VFLOW_FIELD,
+    STA_WATER_TOTAL_FIELD,
     _base_decoder_dict,
     _extract_report_time,
     _f10_to_c,
+    _find_field_int,
     _le16,
     _parse_entries,
     _parse_rainpoint_payload,
@@ -1578,35 +1586,70 @@ def decode_moisture_simple(raw: str) -> dict:
     return result
 
 
+# Litres per raw count on the HCS008FRF's volume datapoints. Confirmed against
+# a reporter's app screenshot taken alongside the frame the meter sent at the
+# same minute: STA_WATER_TOTAL 28693 read as 2869.3 L, STA_TOTAL_TODAY 5 as
+# 0.5 L and STA_LASTUSAGE 2 as 0.2 L. The meter carries its own flow-rate
+# calibration setting, so these counts are already calibrated device side and
+# need no per-install factor, unlike the HTV valve family's raw flow counts.
+_FLOW_LITRES_PER_COUNT = 0.1
+
+# Litres per minute per raw STA_VFLOW count. The app renders the same value to
+# one decimal, which fixes the resolution at a tenth, and the one capture taken
+# while water was running reported 49 against a run averaging several liters a
+# minute. A hundredth would put that run at 0.49 L/min, which the same frame's
+# own completed-run figures contradict.
+_FLOW_RATE_LPM_PER_COUNT = 0.1
+
+
+def _scaled_field(b: bytes, field: int, factor: float, digits: int) -> float | None:
+    """Return a structural field scaled by factor, or None when the frame lacks it."""
+    counts = _find_field_int(b, field)
+    return None if counts is None else round(counts * factor, digits)
+
+
 def decode_flow_meter(raw: str) -> dict:
-    """Decode HCS008FRF (flow meter)."""
+    """Decode HCS008FRF (flow meter).
+
+    Every datapoint the meter sends is read structurally, by the catalog field
+    index rather than a byte offset, and the twelve records in a captured frame
+    account for exactly the twelve dpCodes the catalog declares for model code
+    80 with nothing left over.
+
+    Volumes arrive as tenths of a liter and durations as whole seconds. The
+    "current" pair reads zero whenever no run is in progress, which is the
+    state the RainPoint app renders as "--", so those two entities sit at zero
+    between runs rather than going unknown.
+    """
     from ..const import debug_with_version
 
     _LOGGER.debug(debug_with_version("Decoding HCS008FRF: %s"), raw)
 
-    result = {
-        "type": "flowmeter",
-        "device_model": "HCS008FRF",
-        "flowcurrentused": None,
-        "flowcurrenduration": None,
-        "flowtoday": None,
-        "flowtotal": None,
-        "flowbatt": None,
-        "rssi": None,
-        "decoder": "basic",
-    }
+    # Every captured frame is 57 bytes. The floor rejects a payload too short to
+    # carry this meter's datapoint set at all; the helper's implicit ceiling of
+    # twice the floor leaves room for a firmware that adds a record or two,
+    # since a missing one already degrades to None rather than to a wrong value.
+    b = _validate_payload(raw, 32)
 
-    try:
-        b = _parse_rainpoint_payload(raw)
-        if b and len(b) > 1:
-            result["rssi"] = _extract_rssi(b)
-
-        # Basic flow parsing - can be enhanced with exact RainPoint logic later
-        _LOGGER.debug(debug_with_version("HCS008FRF basic parsing completed"))
-
-    except Exception:
-        _LOGGER.exception(debug_with_version("Error in HCS008FRF decoder"))
-
+    result = _base_decoder_dict("flowmeter", _extract_rssi(b), b)
+    battery_flag = _extract_battery_flag(b)
+    result.update(
+        {
+            "device_model": "HCS008FRF",
+            "flowrate": _scaled_field(b, STA_VFLOW_FIELD, _FLOW_RATE_LPM_PER_COUNT, 1),
+            "flowcurrentused": _scaled_field(b, STA_CUR_FLOW_FIELD, _FLOW_LITRES_PER_COUNT, 1),
+            "flowcurrenduration": _find_field_int(b, STA_DURATION_FIELD),
+            "flowlastused": _scaled_field(b, STA_LASTUSAGE_FIELD, _FLOW_LITRES_PER_COUNT, 1),
+            "flowlastusedduration": _find_field_int(b, STA_LAST_DURATION_FIELD),
+            "flowtotaltoday": _scaled_field(b, STA_TOTAL_TODAY_FIELD, _FLOW_LITRES_PER_COUNT, 1),
+            "flowtotal": _scaled_field(b, STA_WATER_TOTAL_FIELD, _FLOW_LITRES_PER_COUNT, 1),
+            "flowbatt": _battery_flag_to_percent(battery_flag),
+            "battery_flag": battery_flag,
+            "battery_percent": _battery_flag_to_percent(battery_flag),
+            "decoder": "flowmeter",
+        }
+    )
+    _attach_report_time(result, b)
     return result
 
 

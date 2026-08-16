@@ -15,6 +15,20 @@ _LOGGER = logging.getLogger(__name__)
 STA_BAT_FIELD = 31
 STA_REPTIME_FIELD = 54
 
+# HCS008FRF flow meter. The two "current" fields are named for what the
+# catalog calls them, which is the reverse of what the names suggest:
+# STA_CUR_FLOW is the volume accumulated so far by the run in progress, while
+# STA_VFLOW is the instantaneous rate. Both were resolved structurally, not by
+# matching bytes to guesses, and the identities come from the catalog's dpCode
+# list for model code 80.
+STA_VFLOW_FIELD = 14
+STA_LASTUSAGE_FIELD = 15
+STA_DURATION_FIELD = 19
+STA_WATER_TOTAL_FIELD = 20
+STA_TOTAL_TODAY_FIELD = 26
+STA_CUR_FLOW_FIELD = 46
+STA_LAST_DURATION_FIELD = 49
+
 # The hub record's own `param` field is a separate pipe-delimited wire shape
 # from the structural indices above -- it is not a datapoint dpCode, it is the
 # raw string `POST /app/device/main/update` reads and writes. Index 1 is the
@@ -490,6 +504,34 @@ def _splice_sub_power_mode(param: object, mode: str) -> str | None:
     return _SUB_PARAM_DELIMITER.join(spliced_tokens)
 
 
+def _parse_wide_entry(data: list[int], i: int) -> tuple[int, list[int], int] | None:
+    """Read the wide-form record whose header byte is ``data[i]``.
+
+    Returns ``(field, value_bytes, next_index)``, or None when the frame ends
+    inside the record: either an extended-escape header with no index byte
+    after it, or a value the stream is too short to carry whole. Returning
+    None for a value cut short is what keeps a caller from reading the low
+    bytes of a little-endian number as the number itself.
+    """
+    header = data[i]
+    extra_len = header & 3
+    span = extra_len + 2  # header byte + (extra_len + 1) value bytes
+    index5 = (header >> 2) & 31
+    if index5 <= 30:
+        field = index5 + 8
+    else:
+        # Extended escape: the field index is carried in the following byte,
+        # which takes the header byte's place in the span.
+        i += 1
+        if i >= len(data):
+            return None
+        field = (data[i] & 0xFF) + 39
+    chunk = data[i : i + span]
+    if len(chunk) != span:
+        return None
+    return field, chunk[1:], i + span
+
+
 def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
     """Walk the self-describing byte stream into structural entries.
 
@@ -503,7 +545,9 @@ def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
         the extended escape where the real index lives in the next byte.
 
     Returns ``{"dp_id", "field", "value_bytes"}`` dicts (value_bytes excludes
-    the header byte).
+    the header byte). A trailing record the frame ends inside is dropped rather
+    than returned short, so a caller reading it gets no value instead of a
+    wrong one.
     """
     entries: list[dict] = []
     i = 0
@@ -523,22 +567,13 @@ def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
             i += 1
             continue
 
-        extra_len = header & 3
-        span = extra_len + 2  # header byte + (extra_len + 1) value bytes
-        index5 = (header >> 2) & 31
-        if index5 <= 30:
-            field = index5 + 8
-            chunk = data[i : i + span]
-            i += span
-        else:
-            # Extended escape: the field index is carried in the following byte.
-            i += 1
-            if i >= n:
-                break
-            field = (data[i] & 0xFF) + 39
-            chunk = data[i : i + span]
-            i += span
-        entries.append({"dp_id": dp_id, "field": field, "value_bytes": chunk[1:]})
+        parsed = _parse_wide_entry(data, i)
+        if parsed is None:
+            # The frame ended inside this record. Nothing past it is decodable
+            # either, since the walk has no length to resume from.
+            break
+        field, value_bytes, i = parsed
+        entries.append({"dp_id": dp_id, "field": field, "value_bytes": value_bytes})
     return entries
 
 
@@ -554,6 +589,18 @@ def _find_field_value(b: bytes, field: int, *, dp_id_prefixed: bool = False) -> 
         if entry["field"] == field:
             return entry["value_bytes"]
     return None
+
+
+def _find_field_int(b: bytes, field: int, *, dp_id_prefixed: bool = False) -> int | None:
+    """Return the first ``field`` record in b as a little-endian integer, or None.
+
+    Absent rather than zero when the record is missing, so a frame that simply
+    does not carry a datapoint reads unknown instead of a fabricated reading.
+    """
+    value_bytes = _find_field_value(b, field, dp_id_prefixed=dp_id_prefixed)
+    if not value_bytes:
+        return None
+    return int.from_bytes(bytes(value_bytes), "little")
 
 
 def _decode_packed_report_time(raw: int) -> str | None:

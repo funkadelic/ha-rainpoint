@@ -175,10 +175,11 @@ SYNTHETIC_TEMPHUM_DATA = {
     "battery_percent": 88,
 }
 
-# Minimal synthetic FLOWMETER data dict. Keys match the seven RainPointFlow*
+# Minimal synthetic FLOWMETER data dict. Keys match the eight RainPointFlow*
 # classes in sensor.py. Flow battery is `flowbatt`, not `battery_percent`.
 SYNTHETIC_FLOWMETER_DATA = {
     "type": "flowmeter",
+    "flowrate": 6.4,
     "flowcurrentused": 12.3,
     "flowcurrenduration": 60,
     "flowlastused": 45.6,
@@ -188,6 +189,27 @@ SYNTHETIC_FLOWMETER_DATA = {
     "flowbatt": 77,
     "rssi_dbm": -68,
 }
+
+# Captured HCS008FRF flow-meter frames, contributed on the model's support
+# request. The 14 Aug frame is the one with an app screenshot taken in the same
+# minute, and it is what every scale factor in decode_flow_meter is calibrated
+# against: total 2869.3 L, today 0.5 L, last run 0.2 L over 17 s, rate 0.0
+# L/min, signal -79 dBm.
+FLOWMETER_IDLE_HEX = (
+    "10#E1B100FF0B10700000DC01990000B70CB01C1AFF0700000000AF000000009F02000000FF0A11000000CB05000000B315700000FF0F0CB01C1A"
+)
+
+# The only frame captured while water was running. Its four run-related
+# datapoints agree with each other: 0.1 L over 2 s at 4.9 L/min.
+FLOWMETER_FLOWING_HEX = (
+    "10#E1B200FF0BF36B0000DC01993100B7498E1A1AFF0701000000AF020000009F08000000FF0A0E000000CB23000000B3156C0000FF0F498E1A1A"
+)
+
+# An idle frame from the day before, carrying a long completed run (102.8 L
+# over 962 s) where the newer captures carry only short test runs.
+FLOWMETER_IDLE_LONG_RUN_HEX = (
+    "10#E1B900FF0BF36B0000DC01990000B714821A1AFF0700000000AF000000009F04040000FF0AC2030000CB00000000B3F36B0000FF0F14821A1A"
+)
 
 # Minimal synthetic CO2 data dict for the six RainPointCO2* sensor classes.
 # Keys are `co2`, `co2low`, `co2high`, `co2temp`, `co2humidity`, `co2batt`

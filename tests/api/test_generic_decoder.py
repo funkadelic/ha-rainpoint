@@ -25,7 +25,7 @@ from tests.payload_samples import (
 # hand-written decoder additions (most recently decode_hic801w) move this
 # hash forward on purpose; the guard exists to catch decode_generic and its
 # helpers reaching back into this file, not to freeze it.
-_DECODERS_PY_PRE_PHASE_SHA256 = "69d8078f5c2d186c5287f4a3ca708e21caa77c3185b23befd0c9c84cee5cf351"
+_DECODERS_PY_PRE_PHASE_SHA256 = "1f321b80c890c6ddff634b24926cfcdb15befda625c87fac085719f6bcdb09ad"
 
 
 class TestDecodeGenericTLV:
@@ -140,12 +140,26 @@ class TestDecodeGenericFraming:
         assert "error" not in result
         assert result["field_names"] == ["STA_BAT"]
 
-    def test_truncated_value_gives_none(self):
-        """A wide-form entry with no value bytes decodes to value None."""
-        fields = decode_generic("10#DC")["fields"]
-        assert fields[0]["name"] == "STA_BAT"
-        assert fields[0]["value"] is None
-        assert fields[0]["raw"] == ""
+    def test_entry_cut_short_of_its_declared_value_is_dropped(self):
+        """A wide-form entry the body ends inside is not surfaced at all.
+
+        Diagnostics included: a record whose value bytes are absent or partial
+        cannot be reported as a reading of any kind, and a partial one would
+        read as the low bytes of the real value.
+        """
+        assert decode_generic("10#DC")["fields"] == []
+        assert decode_generic("10#AABBCC")["fields"] == []
+
+    def test_empty_value_bytes_read_as_absent_not_zero(self):
+        """No payload reaches this guard now, and it still must not read zero.
+
+        Dropping records cut short of their value leaves every entry the
+        decoder annotates carrying at least one value byte, so this is
+        asserted on the helper directly rather than through a frame. Kept
+        because ``int.from_bytes(b"", "little")`` is 0, which would publish a
+        reading where there is none.
+        """
+        assert generic_decoder_module._int_from_bytes([]) is None
 
     def test_truncated_dp_id_only(self):
         """A dangling dp_id byte with no header terminates cleanly."""
@@ -602,14 +616,14 @@ class TestDecodeGenericAscii:
 
     def test_hex_payload_with_ascii_tail_is_unaffected(self):
         """Asserted positively: a hex-with-tail payload decodes exactly as before."""
-        result = decode_generic("10#AABBCC,1,2")
+        result = decode_generic("10#AABBCCDD,1,2")
 
         assert "ascii_framed" not in result
         assert is_ascii_declined(result) is False
         assert result == {
             "decoder": "generic-tlv",
             "dp_id_prefixed": False,
-            "fields": [{"name": "STA_ENERGY", "index": 18, "dp_id": 0, "raw": "bbcc", "value": 52411}],
+            "fields": [{"name": "STA_ENERGY", "index": 18, "dp_id": 0, "raw": "bbccdd", "value": 14535867}],
             "field_names": ["STA_ENERGY"],
         }
 

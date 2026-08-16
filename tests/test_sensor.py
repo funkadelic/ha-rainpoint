@@ -50,6 +50,7 @@ from custom_components.rainpoint.sensor import (
     RainPointFlowCurrentUsedSensor,
     RainPointFlowLastUsedDurationSensor,
     RainPointFlowLastUsedSensor,
+    RainPointFlowRateSensor,
     RainPointFlowTotalSensor,
     RainPointFlowTotalTodaySensor,
     RainPointHicCurrentStationSensor,
@@ -920,6 +921,7 @@ _NATIVE_VALUE_CASES = [
     (RainPointTempHumHumidityHighSensor, "humidityhigh", "temphum_humidity_high", 80),
     (RainPointTempHumHumidityLowSensor, "humiditylow", "temphum_humidity_low", 30),
     # Flow
+    (RainPointFlowRateSensor, "flowrate", "flow_rate", 6.4),
     (RainPointFlowCurrentUsedSensor, "flowcurrentused", "flow_current_used", 3.5),
     (RainPointFlowCurrentDurationSensor, "flowcurrenduration", "flow_current_duration", 60),
     (RainPointFlowLastUsedSensor, "flowlastused", "flow_last_used", 12.0),
@@ -1463,7 +1465,7 @@ class TestHCSSensorDispatch:
     @pytest.mark.parametrize(
         ("model", "count"),
         [
-            ("HCS010WRF", 7),  # temphum + flowmeter? Actually it's MODEL_FLOWMETER -> 7 entities + 1 raw
+            ("HCS010WRF", 11),  # MODEL_FLOWMETER -> 8 flow + 3 shared diagnostics + 1 raw
             ("HCS0530THO", 6),  # MODEL_CO2 -> 6 + 1 raw
             ("HCS014ARF", 6),  # MODEL_TEMPHUM -> 6 + 1 raw
         ],
@@ -3488,3 +3490,75 @@ class TestSensorAdderRegistration:
         registered = late_adders(store)
         assert registered[0] == "an earlier platform"
         assert isinstance(registered[1], _LateSensorEntityAdder)
+
+
+class TestFlowMeterEndToEnd:
+    """The captured HCS008FRF frame, carried all the way to entity state.
+
+    Worth its own class because the defect this model shipped with was not in
+    the decoder or in the entities but between them: the placeholder wrote
+    `flowtoday` while the entity read `flowtotaltoday`, and no test that
+    exercised only one side could see it. Every assertion here is the number
+    the reporter read off the RainPoint app in the same minute the frame was
+    sent.
+    """
+
+    @pytest.mark.asyncio
+    async def test_captured_frame_reaches_every_flow_entity(self):
+        """Decode the real payload, run the real platform setup, read the states back."""
+        from custom_components.rainpoint.api import decode_flow_meter
+        from custom_components.rainpoint.const import MODEL_FLOWMETER
+        from tests.payload_samples import FLOWMETER_IDLE_HEX
+
+        sensor_key = "233182_318806_1"
+        sensor_info = make_sensor_entry(
+            hid=233182,
+            mid=318806,
+            addr=1,
+            model=MODEL_FLOWMETER,
+            sub_name="Water Flow Meter",
+            data=decode_flow_meter(FLOWMETER_IDLE_HEX),
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        by_name = {entity._attr_name: entity.native_value for entity in captured}
+        assert by_name["Flow Total"] == 2869.3
+        assert by_name["Flow Total Today"] == 0.5
+        assert by_name["Flow Last Used"] == 0.2
+        assert by_name["Flow Last Used Duration"] == 17
+        assert by_name["Flow Rate"] == 0.0
+        assert by_name["Flow Battery"] == 100
+        assert by_name["Signal Strength"] == -79
+
+    @pytest.mark.asyncio
+    async def test_no_flow_entity_reads_unknown_on_a_complete_frame(self):
+        """A complete frame must leave nothing unknown, which is the state the placeholder left them all in."""
+        from custom_components.rainpoint.api import decode_flow_meter
+        from custom_components.rainpoint.const import MODEL_FLOWMETER
+        from tests.payload_samples import FLOWMETER_FLOWING_HEX
+
+        sensor_key = "233182_318806_1"
+        sensor_info = make_sensor_entry(
+            hid=233182,
+            mid=318806,
+            addr=1,
+            model=MODEL_FLOWMETER,
+            sub_name="Water Flow Meter",
+            data=decode_flow_meter(FLOWMETER_FLOWING_HEX),
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        unknown = [
+            entity._attr_name for entity in captured if str(entity._attr_name).startswith("Flow") and entity.native_value is None
+        ]
+        assert unknown == []

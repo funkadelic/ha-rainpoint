@@ -12,7 +12,13 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfTime, UnitOfVolume
+from homeassistant.const import (
+    PERCENTAGE,
+    EntityCategory,
+    UnitOfTime,
+    UnitOfVolume,
+    UnitOfVolumeFlowRate,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -70,6 +76,12 @@ from .hub_entities import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Icons shared by more than one entity class. Named here so a water reading and
+# a run-length reading keep the same glyph wherever they appear, rather than
+# drifting apart one literal at a time.
+_ICON_WATER = "mdi:water"
+_ICON_DURATION = "mdi:timer-outline"
 
 # HCS device variants that share an entity layout with one of the canonical
 # RainPoint sensor models. Resolving through this map lets the dispatch chain
@@ -141,7 +153,20 @@ def _make_temphum_entities(coordinator, key, info, base_slug):
 
 
 def _make_flowmeter_entities(coordinator, key, info, base_slug):
+    """Flow rate, run and lifetime volumes, and diagnostics for the HCS008FRF meter.
+
+    The seven Flow entities kept their shipped unique IDs through the move off
+    the placeholder decoder that never read the payload, so an install that has
+    been carrying them since before they had values keeps its history and any
+    automation referencing them. Only the flow-rate entity is new.
+
+    Battery is the existing Flow Battery entity rather than the shared
+    RainPointBatterySensor the other factories add, so the meter gains no
+    second battery entity alongside the one already in users' registries. The
+    remaining shared diagnostics have no such counterpart and are added.
+    """
     return [
+        RainPointFlowRateSensor(coordinator, key, info, base_slug),
         RainPointFlowCurrentUsedSensor(coordinator, key, info, base_slug),
         RainPointFlowCurrentDurationSensor(coordinator, key, info, base_slug),
         RainPointFlowLastUsedSensor(coordinator, key, info, base_slug),
@@ -149,6 +174,9 @@ def _make_flowmeter_entities(coordinator, key, info, base_slug):
         RainPointFlowTotalTodaySensor(coordinator, key, info, base_slug),
         RainPointFlowTotalSensor(coordinator, key, info, base_slug),
         RainPointFlowBatterySensor(coordinator, key, info, base_slug),
+        RainPointRSSISensor(coordinator, key, info, base_slug),
+        RainPointFirmwareVersionSensor(coordinator, key, info, base_slug),
+        RainPointLastUpdatedSensor(coordinator, key, info, base_slug),
     ]
 
 
@@ -862,9 +890,44 @@ class RainPointTempHumHumidityLowSensor(RainPointSensorBase):
 
 
 # HCS008FRF (Flowmeter)
-class RainPointFlowCurrentUsedSensor(RainPointSensorBase):
-    _attr_native_unit_of_measurement = "L"
+class RainPointFlowRateSensor(RainPointSensorBase):
+    """Water passing through the meter right now.
+
+    The only entity here without a shipped unique ID, because the placeholder
+    decoder never surfaced a rate at all. The meter reports it to a tenth of a
+    liter per minute, matching what the RainPoint app displays.
+    """
+
+    _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
+    _attr_native_unit_of_measurement = UnitOfVolumeFlowRate.LITERS_PER_MINUTE
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:water-pump"
+
+    def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_flow_rate"
+        self._attr_name = "Flow Rate"
+
+    @property
+    def native_value(self):
+        data = self._sensor_data
+        return data.get("flowrate") if data else None
+
+
+class RainPointFlowCurrentUsedSensor(RainPointSensorBase):
+    """Water used so far by the run in progress, zero between runs.
+
+    No device_class: SensorDeviceClass.WATER accepts only TOTAL and
+    TOTAL_INCREASING, and this reading returns to zero at the end of every run,
+    so it would corrupt any meter built on it. The same reasoning as
+    RainPointZoneWaterUsageSensor, reached for the same reason.
+    """
+
+    _attr_native_unit_of_measurement = UnitOfVolume.LITERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = _ICON_WATER
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -878,8 +941,12 @@ class RainPointFlowCurrentUsedSensor(RainPointSensorBase):
 
 
 class RainPointFlowCurrentDurationSensor(RainPointSensorBase):
-    _attr_native_unit_of_measurement = "s"
+    """How long the run in progress has been going, zero between runs."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = _ICON_DURATION
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -893,8 +960,16 @@ class RainPointFlowCurrentDurationSensor(RainPointSensorBase):
 
 
 class RainPointFlowLastUsedSensor(RainPointSensorBase):
-    _attr_native_unit_of_measurement = "L"
+    """Water used by the last completed run.
+
+    No device_class, for the same reason as the current-run volume: this is a
+    per-run figure, not a meter, and it steps down as often as up.
+    """
+
+    _attr_native_unit_of_measurement = UnitOfVolume.LITERS
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = _ICON_WATER
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -908,8 +983,12 @@ class RainPointFlowLastUsedSensor(RainPointSensorBase):
 
 
 class RainPointFlowLastUsedDurationSensor(RainPointSensorBase):
-    _attr_native_unit_of_measurement = "s"
+    """How long the last completed run lasted."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = _ICON_DURATION
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -923,8 +1002,16 @@ class RainPointFlowLastUsedDurationSensor(RainPointSensorBase):
 
 
 class RainPointFlowTotalTodaySensor(RainPointSensorBase):
-    _attr_native_unit_of_measurement = "L"
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    """Water the meter has passed since midnight.
+
+    TOTAL_INCREASING rather than TOTAL, so the drop back to zero at midnight is
+    read as the meter reset it is instead of as negative consumption.
+    """
+
+    _attr_device_class = SensorDeviceClass.WATER
+    _attr_native_unit_of_measurement = UnitOfVolume.LITERS
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_suggested_display_precision = 1
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -938,8 +1025,19 @@ class RainPointFlowTotalTodaySensor(RainPointSensorBase):
 
 
 class RainPointFlowTotalSensor(RainPointSensorBase):
-    _attr_native_unit_of_measurement = "L"
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    """Water the meter has passed over its lifetime.
+
+    This is the entity to point Home Assistant's water dashboard at. It is a
+    real metered volume the device calibrates itself, not a converted pulse
+    count, so unlike the valve family's per-zone usage it belongs in long-term
+    statistics. TOTAL_INCREASING also absorbs the app's own Reset Water Usage
+    action, which sets the meter back to zero.
+    """
+
+    _attr_device_class = SensorDeviceClass.WATER
+    _attr_native_unit_of_measurement = UnitOfVolume.LITERS
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_suggested_display_precision = 1
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -953,9 +1051,16 @@ class RainPointFlowTotalSensor(RainPointSensorBase):
 
 
 class RainPointFlowBatterySensor(RainPointSensorBase):
+    """The meter's battery, kept under its shipped name rather than replaced.
+
+    Reads the same STA_BAT flag the shared RainPointBatterySensor does, so it
+    is 100 or unknown and never an invented intermediate level.
+    """
+
     _attr_device_class = SensorDeviceClass.BATTERY
-    _attr_native_unit_of_measurement = "%"
+    _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -1532,7 +1637,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
     _attr_native_unit_of_measurement = UnitOfVolume.GALLONS
     _attr_state_class = None
     _attr_suggested_display_precision = 2
-    _attr_icon = "mdi:water"
+    _attr_icon = _ICON_WATER
 
     def __init__(
         self,
@@ -1606,7 +1711,7 @@ class RainPointZoneRunDurationSensor(RainPointZoneSensorBase):
     _attr_suggested_unit_of_measurement = UnitOfTime.MINUTES
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
-    _attr_icon = "mdi:timer-outline"
+    _attr_icon = _ICON_DURATION
 
     def __init__(
         self,
@@ -1765,7 +1870,7 @@ class RainPointHicRunDurationSensor(RainPointHic801wSensorBase):
     _attr_suggested_unit_of_measurement = UnitOfTime.MINUTES
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
-    _attr_icon = "mdi:timer-outline"
+    _attr_icon = _ICON_DURATION
 
     def __init__(
         self,

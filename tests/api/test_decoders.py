@@ -37,6 +37,9 @@ from custom_components.rainpoint.api.decoders import _hic801w_stations_from_mask
 from custom_components.rainpoint.api.utils import _parse_entries, _parse_rainpoint_payload
 from tests.payload_samples import (
     BASIC_HEX_PAYLOAD,
+    FLOWMETER_FLOWING_HEX,
+    FLOWMETER_IDLE_HEX,
+    FLOWMETER_IDLE_LONG_RUN_HEX,
     HWS019WRF_V2_PAYLOAD,
     MOISTURE_FULL_ASCII_PAYLOAD,
     MOISTURE_FULL_HEX_PAYLOAD,
@@ -753,17 +756,11 @@ class TestDecodeMoistureSimple:
 class TestBasicDecoders:
     """Tests for basic decoders that extract only type and RSSI."""
 
-    def test_decode_flow_meter(self):
-        """Decode flow meter."""
-        result = decode_flow_meter(BASIC_HEX_PAYLOAD)
-        assert result["type"] == "flowmeter"
-        assert result["rssi"] is not None
-
     def test_decode_flowmeter_alias(self):
         """Decode flowmeter alias."""
-        result = decode_flowmeter(BASIC_HEX_PAYLOAD)
+        result = decode_flowmeter(FLOWMETER_IDLE_HEX)
         assert result["type"] == "flowmeter"
-        assert result["rssi"] is not None
+        assert result["rssi_dbm"] == -79
 
     def test_decode_pool_plus(self):
         """Decode pool plus."""
@@ -1205,17 +1202,13 @@ class TestHws019PartialBranches:
 
 
 class TestBasicDecoderShortBufferBranches:
-    """Cover the 'len(b) > 1' False branch on the eight basic decoders.
+    """Cover the 'len(b) > 1' False branch on the remaining basic decoders.
 
     A '10#' payload with 0 or 1 hex bytes parses successfully but falls through
-    the RSSI extraction guard, leaving rssi=None on the returned dict.
+    the RSSI extraction guard, leaving rssi=None on the returned dict. The flow
+    meter no longer belongs here: it validates its payload up front and raises,
+    which TestFlowMeterDecoder covers.
     """
-
-    def test_decode_flow_meter_short_buffer_leaves_rssi_none(self):
-        """0-byte buffer skips the rssi branch."""
-        result = decode_flow_meter("10#")
-        assert result["type"] == "flowmeter"
-        assert result["rssi"] is None
 
     def test_decode_pool_plus_short_buffer_leaves_rssi_none(self):
         """0-byte buffer skips the rssi branch."""
@@ -1273,18 +1266,13 @@ class TestBasicDecoderShortBufferBranches:
 
 
 class TestBasicDecoderLogAndSwallowBranches:
-    """Cover the bare 'except Exception: log' blocks on the eight basic decoders.
+    """Cover the bare 'except Exception: log' blocks on the remaining basic decoders.
 
     Feeding a payload that survives the function entry but trips
     _parse_rainpoint_payload (no '#' separator) reaches the log-and-swallow
-    branch and returns the default dict with rssi=None.
+    branch and returns the default dict with rssi=None. The flow meter no
+    longer swallows, so it is covered in TestFlowMeterDecoder instead.
     """
-
-    def test_decode_flow_meter_swallows_parse_error(self):
-        """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed."""
-        result = decode_flow_meter("garbage_no_separator")
-        assert result["type"] == "flowmeter"
-        assert result["rssi"] is None
 
     def test_decode_pool_plus_swallows_parse_error(self):
         """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed."""
@@ -2018,6 +2006,10 @@ class TestDecodeHic801w:
         repr rather than of any particular byte, since the old form rendered
         values such as b'\\x03\\xff\\x03' that share no text with the payload's
         own hex.
+
+        A frame cut inside a record reads the field as missing rather than as
+        a short width, because the parser drops a record it cannot read whole
+        instead of handing back the low bytes of the value.
         """
         truncated = "10#" + SAMPLE_HIC801W_STATION3_PAYLOAD[3:][:truncate_to]
 
@@ -2026,7 +2018,27 @@ class TestDecodeHic801w:
 
         assert result["decoder"] == "hic801w_error"
         assert field_name in result["error"]
-        assert result["error"].endswith("3 bytes")
+        assert result["error"].endswith("missing")
+
+        everything = result["error"] + "\n".join(self._format_exc_text(r) for r in caplog.records)
+        assert "b'" not in everything
+        assert 'b"' not in everything
+        assert "\\x" not in everything
+
+    def test_width_check_reports_a_narrow_but_whole_record_as_its_width(self, caplog):
+        """A complete record narrower than the field needs reports that width.
+
+        Distinct from the truncated frames above: here the record declares two
+        value bytes and carries both, so it is read whole and rejected on the
+        width the decoder needs rather than dropped as unreadable. Header 0xAD
+        is STA_DURATION declared two bytes wide.
+        """
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.decoders"):
+            result = decode_hic801w("10#AD3C00")
+
+        assert result["decoder"] == "hic801w_error"
+        assert "STA_DURATION" in result["error"]
+        assert result["error"].endswith("2 bytes")
 
         everything = result["error"] + "\n".join(self._format_exc_text(r) for r in caplog.records)
         assert "b'" not in everything
@@ -2149,3 +2161,117 @@ class TestHic801wWidthToleranceProperty:
             assert actual_len != declared_len, label
             assert actual_len == 2, label
             assert decode_hic801w(raw)["decoder"] == "hic801w_hex", label
+
+
+class TestFlowMeterDecoder:
+    """HCS008FRF, decoded against a capture whose app screenshot was taken in the same minute.
+
+    The scale factors are the only judgement in this decoder, so they are
+    pinned against the reporter's readings rather than against the decoder's
+    own arithmetic.
+    """
+
+    def test_idle_frame_matches_the_app_screenshot_field_for_field(self):
+        """Every value the reporter read off the app at 11:02 on 14 Aug 2026."""
+        result = decode_flow_meter(FLOWMETER_IDLE_HEX)
+
+        assert result["flowtotal"] == 2869.3
+        assert result["flowtotaltoday"] == 0.5
+        assert result["flowlastused"] == 0.2
+        assert result["flowlastusedduration"] == 17
+        assert result["flowrate"] == 0.0
+        assert result["rssi_dbm"] == -79
+        assert result["report_time"] == "2026-08-14T11:00:12"
+
+    def test_idle_frame_reports_no_run_in_progress(self):
+        """Both current-run readings sit at zero, which is what the app renders as '--'."""
+        result = decode_flow_meter(FLOWMETER_IDLE_HEX)
+
+        assert result["flowcurrentused"] == 0.0
+        assert result["flowcurrenduration"] == 0
+
+    def test_flowing_frame_run_readings_agree_with_each_other(self):
+        """The only capture taken mid-run: 0.1 L over 2 s at 4.9 L/min.
+
+        Asserted as a set rather than one value at a time because their mutual
+        consistency is the evidence for the rate scale factor. A hundredth of a
+        liter per minute would put this run at 0.49 L/min, which its own
+        volume and duration contradict.
+        """
+        result = decode_flow_meter(FLOWMETER_FLOWING_HEX)
+
+        assert result["flowrate"] == 4.9
+        assert result["flowcurrentused"] == 0.1
+        assert result["flowcurrenduration"] == 2
+
+    def test_flowing_frame_still_reports_the_previous_completed_run(self):
+        """The last-run pair keeps its own values while a new run is under way."""
+        result = decode_flow_meter(FLOWMETER_FLOWING_HEX)
+
+        assert result["flowlastused"] == 0.8
+        assert result["flowlastusedduration"] == 14
+
+    def test_long_run_scales_the_same_way_as_the_short_ones(self):
+        """A 102.8 L run over 962 s, three orders of magnitude above the calibration capture."""
+        result = decode_flow_meter(FLOWMETER_IDLE_LONG_RUN_HEX)
+
+        assert result["flowlastused"] == 102.8
+        assert result["flowlastusedduration"] == 962
+        assert result["flowtotal"] == 2763.5
+
+    def test_lifetime_total_only_ever_rises_across_the_captures_in_order(self):
+        """Stated over the corpus, because a decoder that reads the wrong field can still look plausible on one frame."""
+        totals = [
+            decode_flow_meter(raw)["flowtotal"]
+            for raw in (FLOWMETER_IDLE_LONG_RUN_HEX, FLOWMETER_FLOWING_HEX, FLOWMETER_IDLE_HEX)
+        ]
+
+        assert totals == sorted(totals)
+        assert len(set(totals)) == len(totals)
+
+    def test_battery_reads_the_structural_flag(self):
+        """STA_BAT is 1 on every capture, which the shared mapping calls 100%."""
+        result = decode_flow_meter(FLOWMETER_IDLE_HEX)
+
+        assert result["battery_flag"] == 1
+        assert result["flowbatt"] == 100
+        assert result["battery_percent"] == 100
+
+    def test_alias_and_hand_written_decoder_agree(self):
+        """The alias is the name the coordinator registry uses, so it must decode identically."""
+        assert decode_flowmeter(FLOWMETER_IDLE_HEX) == decode_flow_meter(FLOWMETER_IDLE_HEX)
+
+    def test_model_is_locked_out_of_the_generic_path(self):
+        """The trust gate must agree that this model now has a real decoder behind it."""
+        assert is_hand_written_model("HCS008FRF") is True
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "garbage_no_separator",
+            "11#" + "AB" * 40,
+            "10#",
+            "10#E1B000DC01",
+        ],
+        ids=["no-separator", "wrong-prefix", "empty-body", "too-short"],
+    )
+    def test_unusable_payloads_raise_rather_than_returning_a_dict_of_none(self, raw):
+        """Raising lets the coordinator drop the one bad record; a None-filled dict would read as real readings of unknown."""
+        with pytest.raises(ValueError):
+            decode_flow_meter(raw)
+
+    def test_a_frame_missing_a_datapoint_leaves_that_reading_absent(self):
+        """Truncating the frame drops the trailing records; what survives still decodes.
+
+        The point is that a short frame degrades field by field rather than
+        poisoning the fields it does carry, so a firmware that stops sending
+        one datapoint costs exactly that one entity.
+        """
+        truncated = FLOWMETER_IDLE_HEX[: 3 + 2 * 40]
+
+        result = decode_flow_meter(truncated)
+
+        assert result["flowrate"] == 0.0
+        assert result["rssi_dbm"] == -79
+        assert result["flowtotal"] is None
+        assert "report_time" not in result

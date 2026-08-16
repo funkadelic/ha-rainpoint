@@ -23,7 +23,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
 | Pool sensors | HCS0528ARF, HCS015ARF, HCS015ARF+ | Pool temperature, ambient |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
-| Flow meters | HCS008FRF | Flow reading |
+| Flow meters | HCS008FRF | Live flow rate, water used and run length for the current and last run, water used today and in total, battery, signal strength |
 | Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
 | Irrigation controllers | HIC801W | Current watering station, a watering sensor per station, current run length and end time, program stations and stations completed |
 
@@ -36,6 +36,8 @@ While it is hub-paired, its zones open and close from Home Assistant like any ot
 If you ran an earlier release, the read-only zone state sensors it created stay where they are, so each zone now has both a state sensor and a valve control. Nothing is deleted for you, because automations and dashboard cards may already point at those sensors. If you would rather see only the valve, disable the zone state sensors from the device page.
 
 The **HIC801W** irrigation controller is read-only in this integration: it reports what the controller is doing, and it does not start or stop a station. The way to command a station has not been confirmed against real hardware, and this integration does not ship a control it cannot prove reaches the device. Adding station control needs a recording of the commands the RainPoint app sends when it starts and stops a station, because the status payloads contributed so far describe only what the controller reports, never what it is told. The larger controllers in the same family, HIC1200W, HIC1204W, HIC819W and HIC406B, are not supported, because no payloads have been captured from them.
+
+The **HCS008FRF** flow meter reports in liters, matching the RainPoint app. Its lifetime total is the entity to point Home Assistant's water dashboard at, since the meter calibrates that figure itself rather than leaving a pulse count to be converted. The current-run pair reads zero between runs, which is the state the app shows as "--".
 
 Every model listed above has a decoder written against a real payload, and each capability is listed only once it has been confirmed to do what it claims. Support is not claimed optimistically: a control that has not been shown to reach the hardware is not shipped, even where RainPoint's own product data says the device should accept one. If a controller or valve you own is missing here, or is listed without the control you want, contributed payloads are what move it forward. See [My device isn't listed](#my-device-isnt-listed).
 
