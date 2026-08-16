@@ -2,6 +2,25 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.18.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.17.0...v1.18.0) (2026-08-16)
+
+
+### Added
+
+* **repairs:** keep the leftover entities card until you answer it ([#180](https://github.com/funkadelic/ha-rainpoint/issues/180)) ([82c3838](https://github.com/funkadelic/ha-rainpoint/commit/82c3838403d24eeee32c2d2db959f17acd3c4909))
+* show real readings for the HCS008FRF flow meter ([#175](https://github.com/funkadelic/ha-rainpoint/issues/175)) ([1d1c377](https://github.com/funkadelic/ha-rainpoint/commit/1d1c377217a4b61c424420dd1f8fba1475779cda))
+* show the hub offline notice sooner, and say how long it has been offline ([#178](https://github.com/funkadelic/ha-rainpoint/issues/178)) ([b179c71](https://github.com/funkadelic/ha-rainpoint/commit/b179c71918cc9348bb8d1282db05682c9825324d))
+
+
+### Fixed
+
+* **logging:** keep device identifiers and email out of debug logs ([#176](https://github.com/funkadelic/ha-rainpoint/issues/176)) ([94cef93](https://github.com/funkadelic/ha-rainpoint/commit/94cef9324fc33bcd52d52bc448ab7dbe6ea92b1a))
+
+
+### Changed
+
+* guard the absent-hub marker and the generic control card copy ([#177](https://github.com/funkadelic/ha-rainpoint/issues/177)) ([852e56c](https://github.com/funkadelic/ha-rainpoint/commit/852e56ca4a25af54c6737a436cd11404a6523af2))
+
 ## [1.17.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.16.0...v1.17.0) (2026-08-14)
 
 
