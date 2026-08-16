@@ -55,18 +55,18 @@ This integration supports RainPoint Smart+ device families, including:
 
 | Family | Examples | Entities Created |
 | ------ | -------- | ---------------- |
-| Valve hubs | HTV245FRF, HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
-| Soil sensors | HCS021FRF, HCS026FRF (tested device), HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
+| Valve hubs | HTV245FRF*, HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
+| Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
 | Pool sensors | HCS0528ARF, HCS015ARF, HCS015ARF+ | Pool temperature, ambient |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
-| Flow meters | HCS008FRF | Live flow rate, water used and run length for the current and last run, water used today and in total, battery, signal strength |
-| Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
-| Irrigation controllers | HIC801W | Current watering station, a watering sensor per station, current run length and end time, program stations and stations completed |
+| Flow meters | HCS008FRF* | Live flow rate, water used and run length for the current and last run, water used today and in total, battery, signal strength |
+| Bluetooth valves | HTV210B* (hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
+| Irrigation controllers | HIC801W* | Current watering station, a watering sensor per station, current run length and end time, program stations and stations completed |
 
-The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B** Bluetooth valve are the maintainer's own hardware and are the models tested against real devices. Other models are supported opportunistically from captured payloads.
+\* A model marked with an asterisk has been validated against the hardware itself, either on the maintainer's own devices or by an owner who ran the release and confirmed the readings and controls matched what the device was doing. Every other model is supported from captured payloads alone, which is enough to decode a reading but not to confirm it against the hardware.
 
 The **HTV210B** only reports to the cloud while paired through a hub. Used over Bluetooth alone, RainPoint still lists it under the hub, but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. No valve entity is created for it in that state either, so a control that provably cannot reach the hardware is never offered.
 
