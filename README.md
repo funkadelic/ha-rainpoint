@@ -70,10 +70,6 @@ The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B**
 
 The **HTV210B** only reports to the cloud while paired through a hub. Used over Bluetooth alone, RainPoint still lists it under the hub, but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. No valve entity is created for it in that state either, so a control that provably cannot reach the hardware is never offered.
 
-While it is hub-paired, its zones open and close from Home Assistant like any other valve, with a run duration per zone. This valve needs a different command path from the wifi valves, which is why it was read-only in earlier releases.
-
-If you ran an earlier release, the read-only zone state sensors it created stay where they are, so each zone now has both a state sensor and a valve control. Nothing is deleted for you, because automations and dashboard cards may already point at those sensors. If you would rather see only the valve, disable the zone state sensors from the device page.
-
 The **HIC801W** irrigation controller is read-only in this integration: it reports what the controller is doing, and it does not start or stop a station. The way to command a station has not been confirmed against real hardware, and this integration does not ship a control it cannot prove reaches the device. Adding station control needs a recording of the commands the RainPoint app sends when it starts and stops a station, because the status payloads contributed so far describe only what the controller reports, never what it is told. The larger controllers in the same family, HIC1200W, HIC1204W, HIC819W and HIC406B, are not supported, because no payloads have been captured from them.
 
 The **HCS008FRF** flow meter reports in liters, matching the RainPoint app. Its lifetime total is the entity to point Home Assistant's water dashboard at, since the meter calibrates that figure itself rather than leaving a pulse count to be converted. The current-run pair reads zero between runs, which is the state the app shows as "--".
