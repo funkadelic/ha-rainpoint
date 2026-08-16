@@ -2,6 +2,65 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.18.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.17.0...v1.18.0) (2026-08-16)
+
+
+### What's new
+
+**The HCS008FRF water flow meter now reports real readings**
+
+- If you have one of these meters, every reading on it showed as Unknown. The model was listed as supported, but nothing behind it ever read what the meter sends. It now reports real values, and they match what the RainPoint app shows.
+- New: a live **Flow Rate**, in liters per minute.
+- Water used and how long the run lasted, for both the run in progress and the last completed one. The two "current" readings sit at zero between runs, matching the "--" the app shows while the meter is idle.
+- Water used today and over the meter's lifetime, in liters. The lifetime total can feed Home Assistant's water dashboard.
+- Battery, signal strength, firmware version and last updated, as the other devices already have.
+- The readings that already existed keep their names and history, so nothing needs re-adding to dashboards or automations.
+
+**The leftover entities card now stays until you answer it**
+
+- The **Settings → Repairs** card that offers to remove a device's leftover entities used to disappear whenever the integration reloaded or Home Assistant restarted, and it never came back. It now stays until you answer it, still scoped to exactly the entities it was raised for.
+- Pressing **Submit** while the integration is not running leaves the card in place and tells you to reload first, instead of making it vanish without removing anything.
+- Nothing is removed if RainPoint has started listing the device again, including in the first few minutes before it sends a reading.
+
+**A hub that goes offline is reported sooner, and the notice says for how long**
+
+- The notice used to wait for three checks in a row, so an outage shorter than about six minutes was over before it could appear. It now appears once RainPoint has reported the hub offline for three minutes.
+- The notice says how long the hub has been offline instead of how many times the integration checked.
+- If Home Assistant restarts while a hub is already offline, the notice comes back on the first update rather than starting its wait over.
+- The wait is measured against the time RainPoint reports for the outage, so changing the polling interval no longer changes how long the notice takes.
+
+**Debug logs no longer carry identifiers or your email address**
+
+- With debug logging turned on, the log used to contain your account email address, hardware addresses, cloud device identifiers and the names you gave your devices. None of that is written now. Debug logging is not on by default.
+- Complete cloud records are replaced by the field names they contained, with no values.
+- The device model is still shown, so reporting an unsupported device works exactly as before.
+
+**Also in this release**
+
+- Hubs that fail to answer a poll no longer share one internal marker between them, so a later change cannot make them appear to hold each other's sensors. Nothing about how the integration behaves changes.
+
+
+### Thanks
+
+Thanks to **@nderooij** for the flow meter payloads, the app screenshots that pinned down the units, and for checking the beta build reading by reading against the app, which is what made this release's flow meter support possible.
+
+
+### Added
+
+* **repairs:** keep the leftover entities card until you answer it ([#180](https://github.com/funkadelic/ha-rainpoint/issues/180)) ([82c3838](https://github.com/funkadelic/ha-rainpoint/commit/82c3838403d24eeee32c2d2db959f17acd3c4909))
+* show real readings for the HCS008FRF flow meter ([#175](https://github.com/funkadelic/ha-rainpoint/issues/175)) ([1d1c377](https://github.com/funkadelic/ha-rainpoint/commit/1d1c377217a4b61c424420dd1f8fba1475779cda))
+* show the hub offline notice sooner, and say how long it has been offline ([#178](https://github.com/funkadelic/ha-rainpoint/issues/178)) ([b179c71](https://github.com/funkadelic/ha-rainpoint/commit/b179c71918cc9348bb8d1282db05682c9825324d))
+
+
+### Fixed
+
+* **logging:** keep device identifiers and email out of debug logs ([#176](https://github.com/funkadelic/ha-rainpoint/issues/176)) ([94cef93](https://github.com/funkadelic/ha-rainpoint/commit/94cef9324fc33bcd52d52bc448ab7dbe6ea92b1a))
+
+
+### Changed
+
+* guard the absent-hub marker and the generic control card copy ([#177](https://github.com/funkadelic/ha-rainpoint/issues/177)) ([852e56c](https://github.com/funkadelic/ha-rainpoint/commit/852e56ca4a25af54c6737a436cd11404a6523af2))
+
 ## [1.17.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.16.0...v1.17.0) (2026-08-14)
 
 
