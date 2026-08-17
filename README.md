@@ -281,7 +281,7 @@ Short of deleting entities yourself under **Settings → Devices & services → 
 
 Home Assistant can write out a diagnostics file describing what this integration last received from RainPoint and what it made of it. It is the single most useful thing to attach to a bug report, and it saves a round trip asking you for details.
 
-Go to **Settings → Devices & Services**, stay on the **Integrations** tab and click the **RainPoint Cloud** card to open it. Your account is the row underneath: open the three-dot menu on that row and choose **Download diagnostics**. The file covers every device on the account, and its name begins with `config_entry-rainpoint-`.
+Go to **Settings → Devices & Services**, stay on the **Integrations** tab and click the **RainPoint Cloud** card to open it. Your account is the row underneath, which unless you have renamed it reads **RainPoint** followed by your email address in brackets. Open the three-dot menu on that row and choose **Download diagnostics**. The file covers every device on the account, and its name begins with `config_entry-rainpoint-`.
 
 Every device page carries the same option in its own menu, which is the one to use when only one device is misbehaving. That file is named after the device instead, so the name is also the quickest way to tell the two apart once they are in your downloads folder.
 
