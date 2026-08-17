@@ -17,6 +17,42 @@ addopts = [
     "--cov-report=html",
 ]
 
+# Mutation testing, run by hand rather than in CI. mutmut copies the source and
+# everything listed in also_copy into ./mutants/, mutates the copy, and runs the
+# suite from there, so anything the tests open by path has to be copied too:
+# README.md and scripts/ are read directly by tests, and pyproject.toml carries
+# the pytest configuration the suite needs to run at all.
+#
+# --no-cov is what keeps the results honest. This project's pytest run enables
+# coverage with a fail_under gate, and a mutant only ever exercises part of the
+# tree, so every run would exit non-zero on the gate and every mutant would be
+# reported killed whether the tests noticed it or not.
+#
+# debug.py is left alone for the same reason it is left out of coverage: nothing
+# imports it in a shipped build.
+#
+# The one deselected test pins api/decoders.py by whole-file digest. mutmut works
+# by rewriting every source file with its mutants inlined, so that digest can
+# never match under it, and the test would fail against the unmutated baseline
+# before any mutant is even tried. It still runs, and still guards the file, in
+# every ordinary pytest run.
+[tool.mutmut]
+source_paths = ["custom_components/"]
+also_copy = [
+    "tests/",
+    "scripts/",
+    "pyproject.toml",
+    "README.md",
+    ".github/ISSUE_TEMPLATE/",
+]
+do_not_mutate = ["*/debug.py"]
+pytest_add_cli_args = [
+    "--no-cov",
+    "--deselect",
+    "tests/api/test_generic_decoder.py::TestAsciiFramingNonRegression::test_decoders_py_is_byte_identical_to_the_phase_base",
+]
+pytest_add_cli_args_test_selection = ["tests/"]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 130

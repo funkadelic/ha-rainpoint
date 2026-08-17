@@ -50,6 +50,23 @@ CI runs the same `pytest` invocation plus `hassfest` and HACS validation on ever
 
 Every action in `.github/workflows/` is pinned to a full commit SHA with the version in a trailing comment, e.g. `uses: actions/checkout@3d3c42e... # v7.0.1`. A tag can be repointed at new code without review, so a new `uses:` line needs a SHA rather than `@v4`. Dependabot reads the trailing comment and bumps both parts together. Two actions have no usable release and track a branch commit instead, `hacs/action` and `home-assistant/actions/hassfest`; Dependabot cannot bump those, so refresh them by hand.
 
+## Mutation testing (optional)
+
+Coverage says a line ran; it doesn't say a test would notice if that line were wrong. [mutmut](https://mutmut.readthedocs.io/) answers the second question by changing the source in small ways and checking whether the suite fails. Nothing in CI runs it, and it is not a gate.
+
+```bash
+uv pip install mutmut
+mutmut run 'custom_components.rainpoint.api.trust.*'   # one module
+mutmut results                                          # what survived
+mutmut show <mutant-name>                               # the exact change that got away
+```
+
+Scope it to a module while you work on that module. A whole-tree `mutmut run` covers over fifteen thousand mutants and takes hours, though results are cached, so a later run picks up where the last one stopped. `mutants/` is the working copy mutmut builds; it is gitignored and safe to delete.
+
+A surviving mutant is a question, not a defect: it names a change to the source that no test objects to. Sometimes that means a missing assertion, sometimes it means the line genuinely doesn't matter.
+
+Configuration lives in `pyproject.toml` under `[tool.mutmut]`, with comments explaining why coverage is switched off for those runs and why one digest-pinning test is deselected.
+
 ## Adding a new device model
 
 Follow the pattern in `custom_components/rainpoint/api/decoders.py`:
