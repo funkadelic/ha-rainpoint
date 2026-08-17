@@ -150,13 +150,18 @@ jobs:
           git switch -C "$BRANCH"
           git add "$CATALOG"
           git commit -m "chore(catalog): refresh the product catalog snapshot"
-          # The checkout is single-branch, so there is no remote-tracking ref for
-          # this branch and a bare --force-with-lease would refuse the push with
-          # "stale info" from the second run on. Fetching it first gives the
-          # lease the baseline it compares against; the || true covers the first
-          # run, when the branch does not exist upstream yet.
-          git fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" || true
-          git push --force-with-lease origin "$BRANCH"
+          # The checkout is single-branch, so nothing here has a remote-tracking
+          # ref for this branch, and a bare --force-with-lease refuses with
+          # "stale info" from the second push onwards. Fetching the branch is
+          # necessary but not sufficient: the bare form still refuses, because it
+          # wants a value it observed rather than one it just created. Stating
+          # the expected value explicitly is the documented, non-experimental
+          # form of the lease, and it still refuses if anyone else moved the
+          # branch. An absent branch leaves the expectation empty, which git
+          # reads as "must not exist yet", so the first run is covered too.
+          git fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null || true
+          expected="$(git rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" || true)"
+          git push --force-with-lease="refs/heads/${BRANCH}:${expected}" origin "$BRANCH"
 
           {
             echo "The bundled snapshot of RainPoint's product list no longer matches a live pull, so it has been regenerated. Nothing changes for existing devices; the snapshot is what describes an unfamiliar device in a diagnostics report."
