@@ -72,7 +72,7 @@ from .const import (
     HUB_IDENTIFIER_PREFIX,
     VERSION,
 )
-from .control_probe_entities import probe_results
+from .control_probe_entities import async_probe_results
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -463,12 +463,12 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, config_entry: 
         "hubs": hubs,
         "sensors": sensors,
         "hub_connectivity": data.get("hub_connectivity") or {},
-        # Absent until the owner has actually run the opt-in encoding probe, so
+        # Empty until the owner has actually run the opt-in encoding probe, so
         # an ordinary dump is unchanged by its existence. This is the whole
         # delivery route for that experiment: the owner presses a button and
         # attaches this file, so the record has to ride in the download rather
         # than live only in a log they would have to find and scrape.
-        "control_probe": probe_results(hass, config_entry.entry_id),
+        "control_probe": await async_probe_results(hass, config_entry.entry_id),
     }
     return async_redact_data(payload, TO_REDACT)
 
@@ -529,6 +529,12 @@ async def async_get_device_diagnostics(hass: HomeAssistant, config_entry: Config
     payload["device"]["kind"] = "sub_device"
     sensors = data.get("sensors") or {}
     payload["sensors"] = {identifier: _sensor_dump(sensors[identifier])} if identifier in sensors else {}
+    # Carried on the sub-device dump as well as the entry one because the probe
+    # buttons live on this page, and a support thread that says "press the
+    # button, then download the diagnostics" is read against the page the button
+    # was on. Two rounds of that thread were lost to the entry-versus-device
+    # distinction, which is invisible to the person being asked.
+    payload["control_probe"] = await async_probe_results(hass, config_entry.entry_id)
     return async_redact_data(payload, TO_REDACT)
 
 

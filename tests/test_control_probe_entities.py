@@ -5,6 +5,7 @@ irrigation controller, so "no ordinary user can reach it" has to be a property
 the suite proves rather than a claim in a docstring.
 """
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,9 +20,12 @@ from custom_components.rainpoint.const import (
 from custom_components.rainpoint.control_probe_entities import (
     KIND_RAIN_DELAY,
     KIND_STATION,
+    PROBE_PERSIST_KEY,
     PROBE_RESULT_STORE_KEY,
     RainPointProbeRainDelayButton,
     RainPointProbeStationButton,
+    async_probe_results,
+    async_record_probe_result,
     probe_results,
     store_probe_result,
 )
@@ -35,6 +39,35 @@ SENSOR_KEY = "100_85577_1"
 def _no_settle(monkeypatch):
     """Collapse the inter-attempt settle so a button press does not sleep the suite."""
     monkeypatch.setattr("custom_components.rainpoint.control_probe.HIC_PROBE_SETTLE_SECONDS", 0)
+
+
+@pytest.fixture(autouse=True)
+def disk(monkeypatch):
+    """Stand in for Home Assistant's Store, and hand back what it holds.
+
+    Autouse, so no test in this module can reach a real .storage write by
+    forgetting to ask for it. `load_error` and `save_error` let a test make the
+    file unreadable or unwritable, which is the case that must never take a
+    press down with it.
+    """
+    state: dict = {"files": {}, "load_error": None, "save_error": None}
+
+    class _Store:
+        def __init__(self, hass, version, key):
+            self._key = key
+
+        async def async_load(self):
+            if state["load_error"]:
+                raise state["load_error"]
+            return state["files"].get(self._key)
+
+        async def async_save(self, data):
+            if state["save_error"]:
+                raise state["save_error"]
+            state["files"][self._key] = data
+
+    monkeypatch.setattr("custom_components.rainpoint.control_probe_entities.Store", _Store)
+    return state
 
 
 def _hub():
@@ -58,6 +91,15 @@ def _setup(model=MODEL_HIC801W, probe_enabled=True, hubs=None):
     client.get_device_status = AsyncMock(return_value={"subDeviceStatus": [{"id": "D1", "value": SAMPLE_HIC801W_IDLE_PAYLOAD}]})
     hass.data = {DOMAIN: {"entry1": {"coordinator": coordinator, "client": client}}}
     return hass, entry, coordinator
+
+
+def _pressable(cls):
+    """Return (button, hass) for a button wired to press against the doubles above."""
+    hass, _entry, coordinator = _setup(probe_enabled=True)
+    sensor_info = coordinator.data["sensors"][SENSOR_KEY]
+    button = cls(coordinator, SENSOR_KEY, sensor_info, SENSOR_KEY, "entry1")
+    button.hass = hass
+    return button, hass
 
 
 async def _captured(hass, entry):
@@ -124,11 +166,7 @@ class TestProbeButtonPress:
     """What a press actually does."""
 
     def _button(self, cls):
-        hass, _entry, coordinator = _setup(probe_enabled=True)
-        sensor_info = coordinator.data["sensors"][SENSOR_KEY]
-        button = cls(coordinator, SENSOR_KEY, sensor_info, SENSOR_KEY, "entry1")
-        button.hass = hass
-        return button, hass
+        return _pressable(cls)
 
     @pytest.mark.asyncio
     async def test_pressing_the_delay_button_records_a_run(self):
@@ -230,3 +268,125 @@ class TestProbeResultStore:
         store_probe_result(hass, "entry1", KIND_STATION, {"n": 1})
 
         assert hass.data[DOMAIN]["entry1"][PROBE_RESULT_STORE_KEY] == {KIND_STATION: {"n": 1}}
+
+
+class TestWhatThePressSays:
+    """The log line is the second delivery route, and the one that survives a restart."""
+
+    @pytest.mark.asyncio
+    async def test_the_finished_walk_names_its_answer_where_a_default_install_records_it(self, caplog):
+        """A default install records WARNING and above.
+
+        The first real run of this came back with a log holding nothing but the
+        line saying the buttons had loaded, because this pair was INFO.
+        """
+        button, _ = _pressable(RainPointProbeStationButton)
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.control_probe_entities"):
+            await button.async_press()
+
+        lines = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("confirmed=" in line for line in lines)
+
+
+class TestTheRecordSurvivingARestart:
+    """Why this is on disk at all.
+
+    Two consecutive support round trips were lost because the in-memory copy
+    was the only one: a restart or a config entry reload between the press and
+    the download clears it, and the owner has no way to know that happened.
+    Every test here is that sequence, not a storage API exercise.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _disk(self, disk):
+        """Expose the stand-in store to every test in this class."""
+        self.disk = disk
+
+    @pytest.mark.asyncio
+    async def test_a_press_writes_its_run_to_disk(self):
+        button, _ = _pressable(RainPointProbeStationButton)
+
+        await button.async_press()
+
+        saved = self.disk["files"][PROBE_PERSIST_KEY]
+        assert saved["entry1"][KIND_STATION]["kind"] == KIND_STATION
+
+    @pytest.mark.asyncio
+    async def test_a_run_outlives_the_session_that_made_it(self):
+        """The whole point: press, restart, download, and the answer is still there."""
+        button, _ = _pressable(RainPointProbeStationButton)
+        await button.async_press()
+
+        # A restart, expressed the only way it can be: everything in memory gone
+        # and nothing but the file left.
+        restarted = MagicMock()
+        restarted.data = {DOMAIN: {"entry1": {}}}
+
+        assert (await async_probe_results(restarted, "entry1"))[KIND_STATION]["kind"] == KIND_STATION
+
+    @pytest.mark.asyncio
+    async def test_this_sessions_run_wins_over_the_one_on_disk(self):
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"entry1": {}}}
+        self.disk["files"][PROBE_PERSIST_KEY] = {"entry1": {KIND_STATION: {"n": "old"}}}
+
+        store_probe_result(hass, "entry1", KIND_STATION, {"n": "new"})
+
+        assert (await async_probe_results(hass, "entry1"))[KIND_STATION] == {"n": "new"}
+
+    @pytest.mark.asyncio
+    async def test_a_stage_held_only_on_disk_joins_one_held_only_in_memory(self):
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"entry1": {}}}
+        self.disk["files"][PROBE_PERSIST_KEY] = {"entry1": {KIND_RAIN_DELAY: {"n": 1}}}
+
+        store_probe_result(hass, "entry1", KIND_STATION, {"n": 2})
+
+        assert await async_probe_results(hass, "entry1") == {KIND_RAIN_DELAY: {"n": 1}, KIND_STATION: {"n": 2}}
+
+    @pytest.mark.asyncio
+    async def test_saving_one_stage_leaves_another_entry_alone(self):
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"entry1": {}}}
+        self.disk["files"][PROBE_PERSIST_KEY] = {"other": {KIND_STATION: {"n": 1}}}
+
+        await async_record_probe_result(hass, "entry1", KIND_STATION, {"n": 2})
+
+        saved = self.disk["files"][PROBE_PERSIST_KEY]
+        assert saved == {"other": {KIND_STATION: {"n": 1}}, "entry1": {KIND_STATION: {"n": 2}}}
+        assert await async_probe_results(hass, "other") == {KIND_STATION: {"n": 1}}
+
+    @pytest.mark.asyncio
+    async def test_a_file_that_will_not_read_still_leaves_the_press_its_record(self):
+        self.disk["load_error"] = OSError("unreadable")
+        button, hass = _pressable(RainPointProbeStationButton)
+
+        await button.async_press()
+
+        assert probe_results(hass, "entry1")[KIND_STATION]["kind"] == KIND_STATION
+
+    @pytest.mark.asyncio
+    async def test_a_file_that_will_not_write_still_leaves_the_press_its_record(self):
+        self.disk["save_error"] = OSError("unwritable")
+        button, hass = _pressable(RainPointProbeStationButton)
+
+        await button.async_press()
+
+        assert probe_results(hass, "entry1")[KIND_STATION]["kind"] == KIND_STATION
+
+    @pytest.mark.asyncio
+    async def test_a_file_holding_something_other_than_a_mapping_reads_as_empty(self):
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"entry1": {}}}
+        self.disk["files"][PROBE_PERSIST_KEY] = "not-a-mapping"
+
+        assert await async_probe_results(hass, "entry1") == {}
+
+    @pytest.mark.asyncio
+    async def test_an_entry_that_has_never_run_it_reads_as_empty(self):
+        hass = MagicMock()
+        hass.data = {DOMAIN: {"entry1": {}}}
+        self.disk["files"][PROBE_PERSIST_KEY] = {"other": {KIND_STATION: {"n": 1}}}
+
+        assert await async_probe_results(hass, "entry1") == {}

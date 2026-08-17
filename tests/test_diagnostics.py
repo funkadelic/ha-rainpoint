@@ -32,6 +32,12 @@ from custom_components.rainpoint.diagnostics import (
 
 REDACTED = "**REDACTED**"
 
+# The probe's saved runs, which both dumps now read. Every test here builds its
+# hass as a MagicMock, so a real Store would answer with a mock rather than a
+# file; this holds one dict instead and keeps the dumps honest about what a
+# never-probed install carries.
+PROBE_DISK: dict = {}
+
 # Values chosen to be findable: every one is a literal that must not appear
 # anywhere in a finished dump, and each is distinctive enough that a substring
 # walk cannot match it by accident.
@@ -172,6 +178,29 @@ def _device(identifier, name="HTV245FRF", name_by_user=None, row_id="device-row-
     device.name_by_user = name_by_user
     device.id = row_id
     return device
+
+
+@pytest.fixture(autouse=True)
+def _probe_disk(monkeypatch):
+    """Stand in for the probe's on-disk record, file-wide.
+
+    Autouse and empty by default, so every existing dump assertion keeps
+    describing an install that has never run the opt-in probe.
+    """
+    PROBE_DISK.clear()
+
+    class _Store:
+        def __init__(self, hass, version, key):
+            self._key = key
+
+        async def async_load(self):
+            return PROBE_DISK.get(self._key)
+
+        async def async_save(self, data):
+            PROBE_DISK[self._key] = data
+
+    monkeypatch.setattr("custom_components.rainpoint.control_probe_entities.Store", _Store)
+    return PROBE_DISK
 
 
 @pytest.fixture(autouse=True)
@@ -427,6 +456,42 @@ class TestPushSection:
             "hub_mid": 236547,
         }
         assert "SECRET-SHOULD-NEVER-APPEAR" not in list(_walk_values(result))
+
+
+class TestTheProbeRecordRidesBothDumps:
+    """Which download carries the opt-in probe's answer, and when.
+
+    Both, deliberately. The buttons live on the device page, so a thread that
+    says "press the button, then download the diagnostics" is read against that
+    page; two support round trips were lost to the entry-versus-device
+    distinction, which is invisible to the person being asked.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_never_probed_install_carries_an_empty_record(self):
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["control_probe"] == {}
+
+    @pytest.mark.asyncio
+    async def test_the_entry_dump_carries_a_saved_run(self, _probe_disk):
+        _probe_disk[f"{DOMAIN}.hic_control_probe"] = {"entry-1": {"station": {"confirmed_label": "dp_station_le"}}}
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["control_probe"]["station"]["confirmed_label"] == "dp_station_le"
+
+    @pytest.mark.asyncio
+    async def test_the_device_page_the_buttons_sit_on_carries_it_too(self, _probe_disk):
+        _probe_disk[f"{DOMAIN}.hic_control_probe"] = {"entry-1": {"station": {"confirmed_label": "dp_station_le"}}}
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))
+
+        assert result["control_probe"]["station"]["confirmed_label"] == "dp_station_le"
 
 
 class TestDeviceRouting:

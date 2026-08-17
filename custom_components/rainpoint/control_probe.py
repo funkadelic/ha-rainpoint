@@ -335,15 +335,25 @@ async def _send(client: Any, candidate: ProbeCandidate, *, mid: int, addr: int, 
     )
 
 
-def _station_from_status(status: Any, addr: int) -> int | None:
-    """Return the running station this status response reports, or None.
+def _state_from_status(status: Any, addr: int) -> dict[str, Any]:
+    """Return what one status response says about this controller.
 
-    None means "could not read", never "no station running": the caller scores
-    an unreadable frame as its own outcome rather than as a miss, so a decode
-    failure cannot be mistaken for a candidate that did nothing.
+    ``station`` is None for "could not read", never "no station running": the
+    caller scores an unreadable frame as its own outcome rather than as a miss,
+    so a decode failure cannot be mistaken for a candidate that did nothing.
+
+    ``frame`` is the read-back payload kept whole rather than decoded. The
+    decoder deliberately reads none of STA_RAIN, STA_RH or STA_TS_DET, and
+    STA_TS_DET is the field observed latching a station number after a run on a
+    real unit, which makes it the one corroborating signal available when the
+    station read-back loses its race against a controller that gives up on a
+    station with no solenoid answering. Recording the frame keeps that evidence
+    without teaching the decoder a field whose meaning is still unpinned, and
+    the frames only ever reach the recorded run, never a log line.
     """
+    unread: dict[str, Any] = {"station": None, "frame": None}
     if not isinstance(status, dict):
-        return None
+        return unread
     for entry in status.get("subDeviceStatus") or []:
         if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
             continue
@@ -351,14 +361,14 @@ def _station_from_status(status: Any, addr: int) -> int | None:
             continue
         raw = entry.get("value")
         if not isinstance(raw, str):
-            return None
+            return unread
         decoded = decode_hic801w(raw)
         station = decoded.get("current_station")
-        return station if isinstance(station, int) else None
-    return None
+        return {"station": station if isinstance(station, int) else None, "frame": raw}
+    return unread
 
 
-async def _read_station(client: Any, mid: int, addr: int) -> int | None:
+async def _read_state(client: Any, mid: int, addr: int) -> dict[str, Any]:
     """Read the controller back through a direct status call.
 
     Deliberately not a coordinator refresh: the coordinator polls on its own
@@ -369,9 +379,13 @@ async def _read_station(client: Any, mid: int, addr: int) -> int | None:
     try:
         status = await client.get_device_status(mid)
     except (RainPointApiError, TimeoutError, OSError) as err:
-        _LOGGER.debug("HIC probe: status read-back failed: %s", type(err).__name__)
-        return None
-    return _station_from_status(status, addr)
+        # WARNING rather than DEBUG for the same reason the walk's own lines
+        # are: an owner running this is being asked for their log, and a
+        # read-back that never happened is the difference between "this
+        # encoding did nothing" and "nobody looked".
+        _LOGGER.warning("HIC probe: status read-back failed: %s", type(err).__name__)
+        return {"station": None, "frame": None}
+    return _state_from_status(status, addr)
 
 
 async def _attempt(
@@ -415,8 +429,10 @@ async def _attempt(
         return record
 
     await asyncio.sleep(HIC_PROBE_SETTLE_SECONDS)
-    station = await _read_station(client, mid, addr)
+    state = await _read_state(client, mid, addr)
+    station = state["station"]
     record["station_after"] = station
+    record["frame_after"] = state["frame"]
     if station is None:
         record["outcome"] = OUTCOME_UNREADABLE
     elif station == expect_station:
@@ -424,6 +440,32 @@ async def _attempt(
     else:
         record["outcome"] = OUTCOME_NO_EFFECT
     return record
+
+
+def _log_attempt(record: dict[str, Any], position: int, total: int) -> None:
+    """Announce one scored attempt at a level a plain log download captures.
+
+    WARNING rather than INFO or DEBUG, and that is the whole point of this
+    function. A default Home Assistant install records WARNING and above, so an
+    owner who presses the button and sends their log has already sent the
+    answer; at INFO the first real run came back with a log carrying nothing but
+    the line saying the buttons had loaded. The level is defensible on its own
+    terms too: nothing here runs unless a human turned an off-by-default option
+    on and pressed a button that writes commands to their hardware.
+
+    Three values only, all of them this module's own vocabulary: the candidate
+    label, the verdict, and the station the controller reported afterwards. No
+    frame, no cloud message, no addressing field, so the line stays inside the
+    rule the cloud-record paths already follow.
+    """
+    _LOGGER.warning(
+        "HIC probe: attempt %d/%d %s -> %s (station_after=%s)",
+        position,
+        total,
+        record.get("label"),
+        record.get("outcome"),
+        record.get("station_after"),
+    )
 
 
 def _stop_candidate(confirmed: ProbeCandidate, station: int) -> ProbeCandidate:
@@ -473,7 +515,8 @@ async def async_run_probe(
         expect_station = None
 
     run = ProbeRun(kind=kind, station=expect_station, started_at=now)
-    for candidate in candidates[:HIC_PROBE_MAX_ATTEMPTS]:
+    walk = candidates[:HIC_PROBE_MAX_ATTEMPTS]
+    for position, candidate in enumerate(walk, start=1):
         record = await _attempt(
             client,
             candidate,
@@ -484,6 +527,7 @@ async def async_run_probe(
             expect_station=expect_station,
         )
         run.attempts.append(record)
+        _log_attempt(record, position, len(walk))
         if record["outcome"] != OUTCOME_CONFIRMED:
             continue
 
@@ -503,6 +547,7 @@ async def async_run_probe(
         # needs to see called out.
         stop_record["stop_succeeded"] = stop_record.get("station_after") in (0, None)
         run.attempts.append(stop_record)
+        _log_attempt(stop_record, len(run.attempts), len(walk) + 1)
         run.stop_outcome = stop_record["outcome"]
         break
 

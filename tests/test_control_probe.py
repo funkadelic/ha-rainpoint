@@ -11,6 +11,7 @@ commands to hardware the maintainer does not own:
 Both are asserted directly rather than inferred from a call count.
 """
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -32,7 +33,7 @@ from custom_components.rainpoint.control_probe import (
     ProbeCandidate,
     ProbeRun,
     _pair,
-    _station_from_status,
+    _state_from_status,
     _stop_candidate,
     _u16,
     async_run_probe,
@@ -363,6 +364,71 @@ class TestProbeRunRecord:
         assert stop.duration == 0
 
 
+class TestWhatOneAttemptRecords:
+    """The two things added after two support round trips came back empty."""
+
+    @pytest.mark.asyncio
+    async def test_every_read_back_keeps_the_frame_it_read(self):
+        """The frame carries STA_TS_DET, which the decoder deliberately never reads.
+
+        That field is what latched the station number on the one real unit that
+        has run this, and it survives a controller giving up on a station with
+        no solenoid answering, which the current_station read-back does not.
+        """
+        client = _client(statuses=lambda mid: _status(SAMPLE_HIC801W_STATION3_PAYLOAD))
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert run.attempts[0]["frame_after"] == SAMPLE_HIC801W_STATION3_PAYLOAD
+
+    @pytest.mark.asyncio
+    async def test_a_read_back_that_failed_records_no_frame_rather_than_a_stale_one(self):
+        client = _client(statuses=lambda mid: None)
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert run.attempts[0]["outcome"] == OUTCOME_UNREADABLE
+        assert run.attempts[0]["frame_after"] is None
+
+    @pytest.mark.asyncio
+    async def test_the_delay_stage_records_no_frame_it_never_read(self):
+        """It has no read-back at all, so a frame key there would be a fiction."""
+        client = _client()
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="rain_delay", now="t0")
+
+        assert all("frame_after" not in attempt for attempt in run.attempts)
+
+    @pytest.mark.asyncio
+    async def test_each_attempt_is_announced_where_a_plain_log_download_finds_it(self, caplog):
+        """At INFO the first real run came back with a log carrying nothing.
+
+        A default install records WARNING and above, so the level is the whole
+        difference between an owner's log answering this and not.
+        """
+        client = _client(statuses=lambda mid: _status(SAMPLE_HIC801W_STATION3_PAYLOAD))
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.control_probe"):
+            await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        lines = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any(station_candidates()[0].label in line and OUTCOME_CONFIRMED in line for line in lines)
+
+    @pytest.mark.asyncio
+    async def test_an_announced_attempt_carries_no_frame_and_no_addressing_field(self, caplog):
+        """The log line stays inside the rule the cloud-record paths already follow."""
+        client = _client(statuses=lambda mid: _status(SAMPLE_HIC801W_STATION3_PAYLOAD))
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.control_probe"):
+            await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        text = "\n".join(r.getMessage() for r in caplog.records)
+        assert SAMPLE_HIC801W_STATION3_PAYLOAD not in text
+        assert SENSOR_INFO["device_name"] not in text
+        assert SENSOR_INFO["product_key"] not in text
+        assert str(SENSOR_INFO["mid"]) not in text
+
+
 class TestStatusReadBackGuards:
     """The read-back walks a cloud-supplied list, so its shape is never assumed.
 
@@ -388,13 +454,13 @@ class TestStatusReadBackGuards:
         ],
     )
     def test_a_malformed_status_response_reads_as_unknown(self, status, why):
-        assert _station_from_status(status, 1) is None, why
+        assert _state_from_status(status, 1)["station"] is None, why
 
     def test_a_well_formed_response_reads_the_station(self):
         """The positive case, so the guards above cannot pass by rejecting everything."""
         status = {"subDeviceStatus": [{"id": "D1", "value": SAMPLE_HIC801W_STATION3_PAYLOAD}]}
 
-        assert _station_from_status(status, 1) == HIC_PROBE_STATION
+        assert _state_from_status(status, 1)["station"] == HIC_PROBE_STATION
 
     def test_the_reading_for_the_addressed_sub_device_is_the_one_read(self):
         """A hub carrying several children must not have another one's frame read."""
@@ -405,5 +471,5 @@ class TestStatusReadBackGuards:
             ]
         }
 
-        assert _station_from_status(status, 1) == HIC_PROBE_STATION
-        assert _station_from_status(status, 2) == 0
+        assert _state_from_status(status, 1)["station"] == HIC_PROBE_STATION
+        assert _state_from_status(status, 2)["station"] == 0
