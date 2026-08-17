@@ -44,6 +44,14 @@ mutation = ["mutmut>=3.7,<4"]
 # never match under it, and the test would fail against the unmutated baseline
 # before any mutant is even tried. It still runs, and still guards the file, in
 # every ordinary pytest run.
+#
+# on_dependency_change defaults to "warn", which keeps a cache built under the
+# previous config when one of the also_copy files changes. That cache is what
+# feeds the test-to-function map, and a stale one can end up emptied, at which
+# point every mutant is skipped as uncovered and the run finishes green at
+# 0.00 mutations/second having tested nothing. "rerun" throws the cache away
+# instead. It costs a full re-run whenever a copied file changes, README.md
+# included, which is the cheaper of the two failure modes.
 [tool.mutmut]
 source_paths = ["custom_components/"]
 also_copy = [
@@ -54,6 +62,7 @@ also_copy = [
     ".github/ISSUE_TEMPLATE/",
 ]
 do_not_mutate = ["*/debug.py"]
+on_dependency_change = "rerun"
 pytest_add_cli_args = [
     "--no-cov",
     "--deselect",

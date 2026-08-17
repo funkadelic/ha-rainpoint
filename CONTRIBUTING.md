@@ -67,7 +67,7 @@ Pass `--max-children`, and pick a number below your core count. It defaults to o
 
 A surviving mutant is a question, not a defect: it names a change to the source that no test objects to. Sometimes that means a missing assertion, sometimes it means the line genuinely doesn't matter.
 
-Configuration lives in `pyproject.toml` under `[tool.mutmut]`, with comments explaining why coverage is switched off for those runs and why one digest-pinning test is deselected.
+Configuration lives in `pyproject.toml` under `[tool.mutmut]`, with comments explaining why coverage is switched off for those runs, why one digest-pinning test is deselected, and why a change to any copied file throws the cache away rather than reusing it.
 
 ## Adding a new device model
 
