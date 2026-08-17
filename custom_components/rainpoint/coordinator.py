@@ -1491,6 +1491,9 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
         # Try multipleDeviceStatus first (more efficient)
         multiple_status: list | None = None
+        # Set when the call never returned at all, which is what separates the two
+        # sentences the fallback below can say about itself.
+        transport_failed = False
         try:
             multiple_status = await self._client.get_multiple_device_status(device_list)
             _LOGGER.debug(
@@ -1505,6 +1508,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # Only treat transport-level errors as transient. Programming bugs
             # (KeyError, AttributeError, etc.) propagate to the outer handler so
             # they surface as UpdateFailed and are not silently masked by the fallback.
+            transport_failed = True
             _LOGGER.warning("multipleDeviceStatus transport error, falling back to individual calls: %s", _error_text(e))
 
         # Convert response to status_by_mid format when populated.
@@ -1527,8 +1531,12 @@ class RainPointCoordinator(DataUpdateCoordinator):
 
         # Plain conditional fallback path: empty / None / transient-error multi-status all
         # converge here, replacing the prior raised-exception sentinel that doubled as
-        # control flow.
-        _LOGGER.warning("multipleDeviceStatus returned empty data, falling back to individual calls")
+        # control flow. The convergence is deliberate and stays; only the line is
+        # conditional, because a call that raised did not return empty data, it did
+        # not return at all, and saying both about one failure was two warnings and
+        # one of them untrue.
+        if not transport_failed:
+            _LOGGER.warning("multipleDeviceStatus returned empty data, falling back to individual calls")
         # Class-level dispatch matches the orchestrator pattern in _async_update_data so the
         # SimpleNamespace-based test fixture in tests/test_coordinator.py keeps working
         # without modification.

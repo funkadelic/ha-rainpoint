@@ -1284,6 +1284,38 @@ class TestCoordinatorEdgeBranches:
         assert [r for r in caplog.records if r.exc_info]
 
     @pytest.mark.asyncio
+    async def test_one_failed_bulk_call_says_so_once(self, caplog):
+        """A call that raised did not return empty data, it did not return at all.
+
+        Both lines used to fire for a single failure, and the second one
+        described something that never happened.
+        """
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_multiple_device_status.side_effect = aiohttp.ClientError("bulk call fails")
+        client.get_device_status.return_value = {"subDeviceStatus": []}
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.coordinator"):
+            await _run(coord)
+
+        fallback_lines = [r.getMessage() for r in caplog.records if "falling back to individual calls" in r.getMessage()]
+        assert len(fallback_lines) == 1
+        assert "transport error" in fallback_lines[0]
+
+    @pytest.mark.asyncio
+    async def test_a_bulk_call_that_really_returned_nothing_still_says_so(self, caplog):
+        """The other half of the pair, so the guard cannot pass by silencing both."""
+        coord, client = _make_coord()
+        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_multiple_device_status.return_value = []
+        client.get_device_status.return_value = {"subDeviceStatus": []}
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.coordinator"):
+            await _run(coord)
+
+        assert [r for r in caplog.records if "returned empty data" in r.getMessage()]
+
+    @pytest.mark.asyncio
     async def test_update_individual_fallback_hub_error_continues(self):
         """When multipleDeviceStatus fails AND a per-hub get_device_status also fails
         with a transport error, that hub is recorded with an empty subDeviceStatus list
