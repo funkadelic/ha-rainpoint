@@ -9,34 +9,68 @@
 
 A Home Assistant custom integration for RainPoint Smart+ irrigation devices via the RainPoint cloud API.
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=funkadelic&repository=ha-rainpoint&category=integration)
+
 ---
 
-## Supported Devices
+## Contents
+
+**Your devices**
+
+- [Supported devices](#supported-devices)
+- [My device isn't listed](#my-device-isnt-listed)
+
+**Setting it up**
+
+- [Installation via HACS](#installation-via-hacs)
+- [Configuration](#configuration)
+- [Use a dedicated Home Assistant account (recommended)](#use-a-dedicated-home-assistant-account-recommended)
+
+**What you get in Home Assistant**
+
+- [Entities](#entities)
+- [Transmission power control](#transmission-power-control)
+
+**Optional features**
+
+- [Real-time push updates](#real-time-push-updates)
+- [Unverified generic entities (opt-in)](#unverified-generic-entities-opt-in)
+
+**When something looks wrong**
+
+- [When a hub goes offline](#when-a-hub-goes-offline)
+- [When a device's entities are left over](#when-a-devices-entities-are-left-over)
+- [Downloading diagnostics](#downloading-diagnostics)
+
+**About this project**
+
+- [Attribution](#attribution)
+- [Contributing / Issues](#contributing--issues)
+
+---
+
+## Supported devices
 
 This integration supports RainPoint Smart+ device families, including:
 
 | Family | Examples | Entities Created |
 | ------ | -------- | ---------------- |
-| Valve hubs | HTV245FRF, HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
-| Soil sensors | HCS021FRF, HCS026FRF (tested device), HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
+| Valve hubs | HTV245FRF*, HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
+| Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
 | Pool sensors | HCS0528ARF, HCS015ARF, HCS015ARF+ | Pool temperature, ambient |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
-| Flow meters | HCS008FRF | Live flow rate, water used and run length for the current and last run, water used today and in total, battery, signal strength |
-| Bluetooth valves | HTV210B (tested device, hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
-| Irrigation controllers | HIC801W | Current watering station, a watering sensor per station, current run length and end time, program stations and stations completed |
+| Flow meters | HCS008FRF* | Live flow rate, water used and run length for the current and last run, water used today and in total, battery, signal strength |
+| Bluetooth valves | HTV210B* (hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
+| Irrigation controllers | HIC801W* | Current watering station, a watering sensor per station, current run length and end time, program stations and stations completed |
 
-The **HTV245FRF** wifi valve, the **HCS026FRF** soil sensor, and the **HTV210B** Bluetooth valve are the maintainer's own hardware and are the models tested against real devices. Other models are supported opportunistically from captured payloads.
+\* A model marked with an asterisk has been validated against the hardware itself, either on the maintainer's own devices or by an owner who ran the release and confirmed the readings and controls matched what the device was doing. Every other model is supported from captured payloads alone, which is enough to decode a reading but not to confirm it against the hardware.
 
 The **HTV210B** only reports to the cloud while paired through a hub. Used over Bluetooth alone, RainPoint still lists it under the hub, but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. No valve entity is created for it in that state either, so a control that provably cannot reach the hardware is never offered.
 
-While it is hub-paired, its zones open and close from Home Assistant like any other valve, with a run duration per zone. This valve needs a different command path from the wifi valves, which is why it was read-only in earlier releases.
-
-If you ran an earlier release, the read-only zone state sensors it created stay where they are, so each zone now has both a state sensor and a valve control. Nothing is deleted for you, because automations and dashboard cards may already point at those sensors. If you would rather see only the valve, disable the zone state sensors from the device page.
-
-The **HIC801W** irrigation controller is read-only in this integration: it reports what the controller is doing, and it does not start or stop a station. The way to command a station has not been confirmed against real hardware, and this integration does not ship a control it cannot prove reaches the device. Adding station control needs a recording of the commands the RainPoint app sends when it starts and stops a station, because the status payloads contributed so far describe only what the controller reports, never what it is told. The larger controllers in the same family, HIC1200W, HIC1204W, HIC819W and HIC406B, are not supported, because no payloads have been captured from them.
+The **HIC801W** irrigation controller is read-only in this integration: it reports what the controller is doing, and it does not start or stop a station at this time.
 
 The **HCS008FRF** flow meter reports in liters, matching the RainPoint app. Its lifetime total is the entity to point Home Assistant's water dashboard at, since the meter calibrates that figure itself rather than leaving a pulse count to be converted. The current-run pair reads zero between runs, which is the state the app shows as "--".
 
@@ -70,13 +104,15 @@ To get your device added:
 
 This integration is part of the default HACS store, so no custom repository is needed.
 
+The quickest way in is the button at the top of this page, which opens RainPoint Cloud in HACS on your own Home Assistant. From there, click **Download**, restart Home Assistant, then go to **Settings → Devices & Services → Add Integration** and search for **RainPoint Cloud**.
+
+To do it by hand instead:
+
 1. In Home Assistant, open **HACS** from the sidebar.
 2. Search for **RainPoint Cloud** and open it.
 3. Click **Download** to install it.
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & Services → Add Integration** and search for **RainPoint Cloud**.
-
-> Installing an older release? Versions published before HACS default inclusion may require adding `funkadelic/ha-rainpoint` as a custom repository (category **Integration**) first.
 
 ---
 
@@ -148,46 +184,6 @@ The entity is a configuration control, and it is enabled by default. Nothing ins
 
 ---
 
-## When a hub goes offline
-
-Each hub's **Cloud Connection** entity reflects whether RainPoint's cloud currently reports that hub as reachable, refreshed on every poll (every two minutes by default). With [push](#real-time-push-updates) enabled, RainPoint also announces a hub going offline or coming back as it happens, and the entity follows within a second or so instead of waiting for the next poll. The poll keeps running either way, so nothing depends on push being on.
-
-Once a hub has been reported offline for a few minutes, Home Assistant also raises a **Settings → Repairs** notice naming the hub, so a brief blip doesn't flap a card on and off. Valve controls for devices on that hub become unavailable as soon as the hub is reported offline, which is within a single check, or near-immediately with push enabled, since a command cannot reach hardware the cloud itself cannot reach.
-
-Every other reading on that hub keeps showing its last known value, and that deserves its own explanation. RainPoint keeps serving the last reading it received for every device on an offline hub, for as long as the outage lasts, rather than reporting that a device has gone quiet. That means a reading can look perfectly current in Home Assistant while the hub behind it has actually been offline for hours: the moisture, temperature, or rainfall value shown is the last one RainPoint delivered, not necessarily a fresh one. The integration leaves those readings visible rather than hiding them, because the data catches up within seconds of the hub reconnecting, and marking devices unavailable for a condition that clears itself would leave gaps in your history and break any automation or template built around a device going offline.
-
-To tell whether what you're looking at is current, check two things: the hub's own **Cloud Connection** entity, and the `hub_connected` attribute Home Assistant now attaches to every entity on that hub's devices. The attribute is always present: `hub_connected` is `true` when the cloud reports the hub connected, `false` when it reports the hub offline, and `none` when the cloud hasn't said either way yet. Test that unknown state with `is none` rather than `is defined`, since the key exists either way. A dashboard card or an automation condition can check this attribute directly to flag a reading that might be stale.
-
-Everything above clears on its own after the hub reconnects: the Repairs notice closes, the Cloud Connection entity turns back on, valve controls return, and no reload is needed. With push enabled that happens within seconds of the hub coming back; otherwise it waits for the next scheduled check, so allow up to two minutes.
-
----
-
-## When a device's entities are left over
-
-Two different things can leave you with entity rows that will never update again, and each raises its own **Settings → Repairs** card. Both cards name the device and its hub by the names you gave them in Home Assistant, so when two are up at once you can tell them apart without cross-referencing an address against a device page. Anything you have never renamed is named by RainPoint's own string for it instead.
-
-### The device is gone from your account
-
-RainPoint sometimes moves a device to a different parent record on its side, which changes the identity this integration builds its entity IDs from. A fresh set of entities then appears for the same physical device while the old set stays behind, permanently unavailable, so every reading looks like it exists twice.
-
-Home Assistant raises "A device's entities are left over from an older listing" once the old listing has been absent from thirty consecutive checks, roughly an hour at the default two-minute polling interval. The window is deliberately long, and it pauses entirely while the device's hub is itself missing from your account listing, so a cloud-side blip cannot strand a healthy device's entities.
-
-This card keeps until you answer it. Reloading the integration or restarting Home Assistant leaves it where it is, still scoped to exactly the entities it was raised for, so deferring it costs you nothing and you can come back to it whenever you like. It goes on its own only if RainPoint starts listing the old device again, in which case there is nothing left to remove.
-
-### The device is still here, but some of its entities are not
-
-A device can stay on your account and report normally while some of its entity rows go unused: a reading it used to send and no longer does, or an entity a newer version of this integration replaced with a better one. Those rows sit permanently unavailable on an otherwise healthy device page.
-
-Home Assistant raises "A device has unused entities" only once the rows have looked that way on every one of the last thirty checks. Those checks are counted as your devices report rather than on a clock, and with push enabled a check happens whenever a device sends a reading, so the real wait depends on how chatty your devices are. Restarting Home Assistant or reloading the integration starts the count again from zero, and a check that could not run leaves it where it was.
-
-This card names the entities it would remove, up to ten of them and a count of any beyond that, so you can check the list against the device page before deciding. It can still offer a row that is only temporarily quiet, because a reading that has not arrived since the last restart looks the same from inside the integration as one that is gone for good. Two things are never offered here: watering zones, so a zone you have not run yet is safe either way, and anything on a device that has stopped reporting altogether, which gets its own card saying so instead. **Cancel** leaves everything alone. Unlike the card above, this one is rebuilt rather than kept: reloading the integration or restarting Home Assistant sends it away, and it returns once the rows have looked unused for thirty checks again.
-
-### Neither card removes anything on its own
-
-Short of deleting entities yourself under **Settings → Devices & services → Entities**, those cards' **Submit** buttons are the only thing that removes an entity you did not opt into, and they delete the history recorded against those entities along with them, which cannot be undone. (The one other integration-side deletion is switching off an option you turned on yourself, under [unverified generic entities](#unverified-generic-entities-opt-in), which clears the entities that option created.) If you would rather keep the history, leave the card alone: the leftover entities stay where they are, unavailable but intact. On the first card, the leftover device page is released at the same time as the entities, once it carries nothing else; on the second the device is still in use, so its page stays.
-
----
-
 ## Real-time push updates
 
 In addition to the 120-second polling that always runs, the integration surfaces device state changes in near real time over an MQTT push connection. Push is additive and on by default: polling keeps running as the fallback no matter what, so nothing breaks whether push is on, off, or the connection drops. Turning it off is a supported choice, not a workaround.
@@ -238,6 +234,46 @@ Some device firmwares report their status in a comma-and-semicolon text format r
 The form tells you how many devices on your account each option would currently affect, so you can see whether turning it on would produce anything at all before you commit to it. Unchecking an option on the same screen turns it back off, and the entities it created are removed rather than left behind unavailable, along with their recorded history.
 
 If a generic reading turns out to be right (or wrong) for your device, that is worth [reporting](#my-device-isnt-listed): it is what turns a catalog guess into a tested decoder.
+
+---
+
+## When a hub goes offline
+
+Each hub's **Cloud Connection** entity reflects whether RainPoint's cloud currently reports that hub as reachable, refreshed on every poll (every two minutes by default). With [push](#real-time-push-updates) enabled, RainPoint also announces a hub going offline or coming back as it happens, and the entity follows within a second or so instead of waiting for the next poll. The poll keeps running either way, so nothing depends on push being on.
+
+Once a hub has been reported offline for a few minutes, Home Assistant also raises a **Settings → Repairs** notice naming the hub, so a brief blip doesn't flap a card on and off. Valve controls for devices on that hub become unavailable as soon as the hub is reported offline, which is within a single check, or near-immediately with push enabled, since a command cannot reach hardware the cloud itself cannot reach.
+
+Every other reading on that hub keeps showing its last known value, and that deserves its own explanation. RainPoint keeps serving the last reading it received for every device on an offline hub, for as long as the outage lasts, rather than reporting that a device has gone quiet. That means a reading can look perfectly current in Home Assistant while the hub behind it has actually been offline for hours: the moisture, temperature, or rainfall value shown is the last one RainPoint delivered, not necessarily a fresh one. The integration leaves those readings visible rather than hiding them, because the data catches up once the hub reconnects (within seconds with push enabled, on the next scheduled check without it), and marking devices unavailable for a condition that clears itself would leave gaps in your history and break any automation or template built around a device going offline.
+
+To tell whether what you're looking at is current, check two things: the hub's own **Cloud Connection** entity, and the `hub_connected` attribute Home Assistant now attaches to every entity on that hub's devices. The attribute is always present: `hub_connected` is `true` when the cloud reports the hub connected, `false` when it reports the hub offline, and `none` when the cloud hasn't said either way yet. Test that unknown state with `is none` rather than `is defined`, since the key exists either way. A dashboard card or an automation condition can check this attribute directly to flag a reading that might be stale.
+
+Everything above clears on its own after the hub reconnects: the Repairs notice closes, the Cloud Connection entity turns back on, valve controls return, and no reload is needed. With push enabled that happens within seconds of the hub coming back; otherwise it waits for the next scheduled check, so allow up to two minutes.
+
+---
+
+## When a device's entities are left over
+
+Two different things can leave you with entity rows that will never update again, and each raises its own **Settings → Repairs** card. Both cards name the device and its hub by the names you gave them in Home Assistant, so when two are up at once you can tell them apart without cross-referencing an address against a device page. Anything you have never renamed is named by RainPoint's own string for it instead.
+
+### The device is gone from your account
+
+RainPoint sometimes moves a device to a different parent record on its side, which changes the identity this integration builds its entity IDs from. A fresh set of entities then appears for the same physical device while the old set stays behind, permanently unavailable, so every reading looks like it exists twice.
+
+Home Assistant raises "A device's entities are left over from an older listing" once the old listing has been absent from thirty consecutive checks, roughly an hour at the default two-minute polling interval. The window is deliberately long, and it pauses entirely while the device's hub is itself missing from your account listing, so a cloud-side blip cannot strand a healthy device's entities.
+
+This card keeps until you answer it. Reloading the integration or restarting Home Assistant leaves it where it is, still scoped to exactly the entities it was raised for, so deferring it costs you nothing and you can come back to it whenever you like. It goes on its own only if RainPoint starts listing the old device again, in which case there is nothing left to remove.
+
+### The device is still here, but some of its entities are not
+
+A device can stay on your account and report normally while some of its entity rows go unused: a reading it used to send and no longer does, or an entity a newer version of this integration replaced with a better one. Those rows sit permanently unavailable on an otherwise healthy device page.
+
+Home Assistant raises "A device has unused entities" only once the rows have looked that way on every one of the last thirty checks. Those checks are counted as your devices report rather than on a clock, and with push enabled a check happens whenever a device sends a reading, so the real wait depends on how chatty your devices are. Restarting Home Assistant or reloading the integration starts the count again from zero, and a check that could not run leaves it where it was.
+
+This card names the entities it would remove, up to ten of them and a count of any beyond that, so you can check the list against the device page before deciding. It can still offer a row that is only temporarily quiet, because a reading that has not arrived since the last restart looks the same from inside the integration as one that is gone for good. Two things are never offered here: watering zones, so a zone you have not run yet is safe either way, and anything on a device that has stopped reporting altogether, which gets its own card saying so instead. **Cancel** leaves everything alone. Unlike the card above, this one is rebuilt rather than kept: reloading the integration or restarting Home Assistant sends it away, and it returns once the rows have looked unused for thirty checks again.
+
+### Neither card removes anything on its own
+
+Short of deleting entities yourself under **Settings → Devices & services → Entities**, those cards' **Submit** buttons are the only thing that removes an entity you did not opt into, and they delete the history recorded against those entities along with them, which cannot be undone. (The one other integration-side deletion is switching off an option you turned on yourself, under [unverified generic entities](#unverified-generic-entities-opt-in), which clears the entities that option created.) If you would rather keep the history, leave the card alone: the leftover entities stay where they are, unavailable but intact. On the first card, the leftover device page is released at the same time as the entities, once it carries nothing else; on the second the device is still in use, so its page stays.
 
 ---
 
