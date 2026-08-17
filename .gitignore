@@ -12,6 +12,7 @@ htmlcov/
 junit.xml
 .pytest_cache/
 .ruff_cache/
+mutants/
 
 # Local-only workflow aids (never commit)
 CLAUDE.md

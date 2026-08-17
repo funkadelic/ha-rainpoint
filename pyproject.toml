@@ -17,6 +17,79 @@ addopts = [
     "--cov-report=html",
 ]
 
+# Declared here rather than in requirements-test.txt so CI, which installs that
+# file on every pull request, never pays to download a tool no job runs. The
+# major is capped because mutmut 3 changed its configuration format from mutmut
+# 2, so a 4.x could invalidate the [tool.mutmut] block below without failing
+# loudly.
+[dependency-groups]
+mutation = ["mutmut>=3.7,<4"]
+
+# Mutation testing, run by hand rather than in CI. mutmut copies the source and
+# everything listed in also_copy into ./mutants/, mutates the copy, and runs the
+# suite from there, so anything the tests open by path has to be copied too:
+# README.md and scripts/ are read directly by tests, and pyproject.toml carries
+# the pytest configuration the suite needs to run at all.
+#
+# --no-cov is what keeps the results honest. This project's pytest run enables
+# coverage with a fail_under gate, and a mutant only ever exercises part of the
+# tree, so every run would exit non-zero on the gate and every mutant would be
+# reported killed whether the tests noticed it or not.
+#
+# debug.py is left alone for the same reason it is left out of coverage: nothing
+# imports it in a shipped build.
+#
+# The one deselected test pins api/decoders.py by whole-file digest. mutmut works
+# by rewriting every source file with its mutants inlined, so that digest can
+# never match under it, and the test would fail against the unmutated baseline
+# before any mutant is even tried. It still runs, and still guards the file, in
+# every ordinary pytest run.
+#
+# on_dependency_change defaults to "warn", which keeps a cache built under the
+# previous config when one of the copied inputs changes. That cache is what
+# feeds the test-to-function map, and a stale one can end up emptied, at which
+# point every mutant is skipped as uncovered and the run finishes green at
+# 0.00 mutations/second having tested nothing. "rerun" throws the cache away
+# instead. It costs a full re-run whenever one of those inputs changes, which is
+# the cheaper of the two failure modes.
+#
+# also_copy only copies; it registers nothing for change detection, and neither
+# of mutmut's two detectors sees these files on its own. The git detector skips
+# every .py file, because the per-function source hashes are meant to cover
+# those, but those hashes only span source_paths, so scripts/ is invisible to
+# both. Markdown is then dropped as documentation noise, which hides README.md.
+# cache_invalidation_files is the escape hatch: a registered path is hashed every
+# run and is never dropped as noise. Keep the globs one level deep. mutmut
+# matches them with fnmatch as well as glob, and fnmatch's "*" already spans
+# separators, so "scripts/**/*" silently matches nothing there.
+#
+# tests/ is deliberately left unregistered. mutmut re-collects stats for tests it
+# has not seen before, so a new test is picked up without discarding anything,
+# and registering the directory would throw the whole cache away on every
+# assertion added while chasing a surviving mutant.
+[tool.mutmut]
+source_paths = ["custom_components/"]
+also_copy = [
+    "tests/",
+    "scripts/",
+    "pyproject.toml",
+    "README.md",
+    ".github/ISSUE_TEMPLATE/",
+]
+cache_invalidation_files = [
+    "scripts/*",
+    "README.md",
+    ".github/ISSUE_TEMPLATE/*",
+]
+do_not_mutate = ["*/debug.py"]
+on_dependency_change = "rerun"
+pytest_add_cli_args = [
+    "--no-cov",
+    "--deselect",
+    "tests/api/test_generic_decoder.py::TestAsciiFramingNonRegression::test_decoders_py_is_byte_identical_to_the_phase_base",
+]
+pytest_add_cli_args_test_selection = ["tests/"]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 130
