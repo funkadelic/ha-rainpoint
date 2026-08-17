@@ -1,0 +1,143 @@
+name: Release PR guard
+
+# Fails a release-please pull request that would move the project backwards.
+#
+# release-please decides the next version by finding the latest release for this
+# package and walking the commits after it. When it resolves that release to a
+# commit which is not on main, the walk never terminates, it replays the whole
+# history, and it rewrites the version and the changelog from scratch. It
+# reports success while doing so, and the damage only becomes visible once the
+# release PR is merged and the wrong tag exists.
+#
+# That happened on 2026-08-17. A v1.18.0rc3 pre-release cut from a feature
+# branch after v1.18.0 had already shipped became "the latest 1.18.0 release",
+# its commit was not on main, and the open release PR was rewritten from
+# "release 1.18.1" to "release 1.5.0" with a changelog replayed from the first
+# commit in the project.
+#
+# The version check below is measured against that exact failure: run over the
+# corrupted branch, it fails. The changelog check covers a different shape, a
+# release PR that rewrites sections rather than adding one, and would NOT have
+# caught 2026-08-17, which prepended its replayed history. It is here because it
+# is free, not because it is the guard.
+#
+# None of this prevents the hijack. It makes it a red check rather than a clean
+# merge button.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    # Only release-please's own branches. Every other PR is unaffected, and a
+    # human editing the manifest by hand is not this job's business.
+    if: startsWith(github.head_ref, 'release-please--branches--')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Both sides of every comparison are read from git, so the base commit
+          # has to be in the clone.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The release version must not go backwards
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$BASE_SHA:.release-please-manifest.json" > "$RUNNER_TEMP/base-manifest.json"
+          python3 - "$RUNNER_TEMP/base-manifest.json" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+
+          def version_of(path):
+              """Return the root package's version from a release-please manifest."""
+              with open(path) as handle:
+                  manifest = json.load(handle)
+              version = manifest.get(".")
+              if not isinstance(version, str):
+                  sys.exit(f"::error::{path} carries no root package version")
+              return version
+
+
+          def sortable(version):
+              """Return the numeric triple, which is all this comparison needs."""
+              match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
+              if not match:
+                  sys.exit(f"::error::Could not read a version number from '{version}'")
+              return tuple(int(part) for part in match.groups())
+
+
+          base = version_of(sys.argv[1])
+          head = version_of(".release-please-manifest.json")
+          print(f"base {base} -> head {head}")
+
+          if sortable(head) < sortable(base):
+              sys.exit(
+                  f"::error::This release PR would move the version backwards, from {base} to {head}. "
+                  "release-please has most likely resolved the latest release to a commit that is not on "
+                  "main, which happens when a pre-release tag for an already-shipped version is still "
+                  "published. Check the release-please run log for the sha it started from, and do not "
+                  "merge this PR until the version is right."
+              )
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"Release version {base} to {head}, no regression.\n")
+          PY
+
+      - name: The changelog's newest entry must be the version being released
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          with open(".release-please-manifest.json") as handle:
+              version = json.load(handle).get(".")
+
+          with open("CHANGELOG.md") as handle:
+              headings = re.findall(r"^## \[?([0-9][^\]\s]*)", handle.read(), re.MULTILINE)
+
+          if not headings:
+              sys.exit("::error::CHANGELOG.md carries no version headings at all")
+
+          if headings[0] != version:
+              sys.exit(
+                  f"::error::The changelog's newest entry is {headings[0]} but the manifest says {version}. "
+                  "The two are written by the same run, so they disagreeing means the release PR was built "
+                  "from something other than this branch's history."
+              )
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"Changelog's newest entry is {headings[0]}, matching the manifest.\n")
+          PY
+
+      - name: The changelog must only gain entries
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # release-please prepends a section for the new version and never
+          # rewrites a released one, so a release PR that deletes changelog lines
+          # is rebuilding history rather than adding to it.
+          removed="$(git diff --numstat "$BASE_SHA" HEAD -- CHANGELOG.md | awk '{print $2}')"
+          removed="${removed:-0}"
+          echo "changelog lines removed: $removed"
+          if [ "$removed" != "0" ]; then
+            echo "::error::This release PR removes $removed line(s) from CHANGELOG.md. release-please only ever prepends, so this is a rebuilt changelog rather than a new entry. Do not merge it."
+            exit 1
+          fi
+          echo "CHANGELOG.md gains entries only." >> "$GITHUB_STEP_SUMMARY"
