@@ -65,8 +65,16 @@ def _make_client(connected=False, last_message_at=None):
     return client
 
 
-def _make_watchdog(client, clock):
-    return RainPointPushWatchdog(MagicMock(), MagicMock(), client, time_source=clock)
+def _make_watchdog(client, clock, coordinator=None):
+    """Return a watchdog on a controllable clock, with or without a coordinator."""
+    return RainPointPushWatchdog(MagicMock(), MagicMock(), client, time_source=clock, coordinator=coordinator)
+
+
+def _make_polling_coordinator(last_update_success=True):
+    """Return a coordinator stand-in carrying nothing but its poll health."""
+    coordinator = MagicMock()
+    coordinator.last_update_success = last_update_success
+    return coordinator
 
 
 @pytest.fixture
@@ -211,10 +219,17 @@ class TestWatchdogTransient:
 class TestWatchdogDetectionOnly:
     """The watchdog surfaces only; it never reconnects or changes poll cadence."""
 
-    def test_never_reconnects_or_touches_coordinator(self, issue_mocks):
+    def test_never_reconnects_and_never_drives_the_coordinator(self, issue_mocks):
+        """It reads one attribute off the coordinator and touches nothing else.
+
+        A namespace rather than a mock, deliberately: a mock answers any call
+        and would let a refresh or a cadence change pass unnoticed, where this
+        raises on the first method the watchdog is not allowed to call.
+        """
         clock = _Clock()
         client = _make_client(connected=False, last_message_at=None)
-        watchdog = _make_watchdog(client, clock)
+        coordinator = SimpleNamespace(last_update_success=True)
+        watchdog = _make_watchdog(client, clock, coordinator=coordinator)
 
         watchdog._async_check()
         clock.advance(PUSH_WATCHDOG_DEAD_AFTER_SECONDS)
@@ -224,9 +239,95 @@ class TestWatchdogDetectionOnly:
         client.async_start.assert_not_called()
         client.on_http_relogin.assert_not_called()
         client._renew.assert_not_called()
-        # The watchdog holds no coordinator reference at all.
-        assert not hasattr(watchdog, "_coordinator")
-        assert not hasattr(watchdog, "coordinator")
+        # And nothing on the coordinator was called or written, including the
+        # update interval this watchdog must never change.
+        assert vars(coordinator) == {"last_update_success": True}
+
+
+class TestWatchdogVersusAnUnreachableCloud:
+    """Which of the two failures the card is actually about.
+
+    The card tells an owner that push is down while polling still works. When
+    the poll is failing too, the cloud or the network is unreachable and that
+    sentence points at the wrong half of the problem.
+    """
+
+    def _dead_channel_at_the_threshold(self, coordinator):
+        """Return a watchdog whose channel has been dead for exactly the window."""
+        clock = _Clock()
+        client = _make_client(connected=False, last_message_at=None)
+        watchdog = _make_watchdog(client, clock, coordinator=coordinator)
+        watchdog._async_check()
+        clock.advance(PUSH_WATCHDOG_DEAD_AFTER_SECONDS)
+        return watchdog, clock
+
+    def test_the_card_is_held_while_the_poll_is_failing_too(self, issue_mocks):
+        """An unreachable cloud is not a dead push channel, so the card waits."""
+        create, _delete = issue_mocks
+        watchdog, _clock = self._dead_channel_at_the_threshold(_make_polling_coordinator(last_update_success=False))
+
+        watchdog._async_check()
+
+        create.assert_not_called()
+
+    def test_a_held_card_is_raised_on_the_first_check_after_the_poll_recovers(self, issue_mocks):
+        """Held, not reset. The outage clock keeps running while the poll is down.
+
+        Otherwise a channel that was already dead would have to serve a second
+        full dead-after window before anyone was told, every time the network
+        wobbled.
+        """
+        create, _delete = issue_mocks
+        coordinator = _make_polling_coordinator(last_update_success=False)
+        watchdog, clock = self._dead_channel_at_the_threshold(coordinator)
+        watchdog._async_check()
+
+        coordinator.last_update_success = True
+        clock.advance(PUSH_WATCHDOG_SCAN_INTERVAL_SECONDS)
+        watchdog._async_check()
+
+        create.assert_called_once()
+
+    def test_a_card_already_raised_is_left_alone_when_the_poll_starts_failing(self, issue_mocks):
+        """Withdrawing it would make the card flicker with the link."""
+        create, delete = issue_mocks
+        coordinator = _make_polling_coordinator(last_update_success=True)
+        watchdog, clock = self._dead_channel_at_the_threshold(coordinator)
+        watchdog._async_check()
+        create.assert_called_once()
+
+        coordinator.last_update_success = False
+        clock.advance(PUSH_WATCHDOG_SCAN_INTERVAL_SECONDS)
+        watchdog._async_check()
+
+        delete.assert_not_called()
+
+    def test_a_watchdog_built_without_a_coordinator_raises_as_it_always_did(self, issue_mocks):
+        """The coordinator is optional, and its absence changes nothing."""
+        create, _delete = issue_mocks
+        watchdog, _clock = self._dead_channel_at_the_threshold(None)
+
+        watchdog._async_check()
+
+        create.assert_called_once()
+
+    def test_a_coordinator_whose_health_cannot_be_read_is_treated_as_healthy(self, issue_mocks):
+        """Every uncertainty resolves towards the behaviour that predates this."""
+
+        class _Unreadable:
+            """A coordinator whose poll health cannot be read at all."""
+
+            @property
+            def last_update_success(self):
+                """Raise, standing in for a coordinator mid-teardown."""
+                raise RuntimeError("unreadable")
+
+        create, _delete = issue_mocks
+        watchdog, _clock = self._dead_channel_at_the_threshold(_Unreadable())
+
+        watchdog._async_check()
+
+        create.assert_called_once()
 
 
 class TestWatchdogTimer:

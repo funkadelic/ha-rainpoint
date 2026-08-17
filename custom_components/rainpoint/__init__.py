@@ -88,17 +88,26 @@ _HUB_MIGRATABLE_SUFFIXES = frozenset(
     }
 )
 
-# The per-zone segment every zone-scoped unique_id this integration writes
-# carries: "_zone{n}" either at the end of the id or followed by a further
-# segment ("_duration", "_water_used", "_run_duration", "_state"). It is used
-# in exactly one place, _build_leftover_row_pairs, and only ever to EXCLUDE a
-# candidate. That direction is the whole of its safety: a zone produces its
-# entities only once that zone reports, so a zone nobody has watered since the
-# last restart is indistinguishable from one that is gone for good, and this is
-# the one surface whose confirmation deletes recorder history permanently. It
-# may never be used to bring a row into scope, and removal itself stays an
-# exact (domain, unique_id) pair match with no string reasoning in it.
-_ZONE_UNIQUE_ID_RE = re.compile(r"_zone\d+(?:_|$)")
+# The per-outlet segment every outlet-scoped unique_id this integration writes
+# carries: "_zone{n}" or "_station{n}", either at the end of the id or followed
+# by a further segment ("_duration", "_water_used", "_run_duration", "_state",
+# "_watering"). It is used in exactly one place, _build_leftover_row_pairs, and
+# only ever to EXCLUDE a candidate. That direction is the whole of its safety: a
+# zone produces its entities only once that zone reports, so a zone nobody has
+# watered since the last restart is indistinguishable from one that is gone for
+# good, and this is the one surface whose confirmation deletes recorder history
+# permanently. It may never be used to bring a row into scope, and removal
+# itself stays an exact (domain, unique_id) pair match with no string reasoning
+# in it.
+#
+# Stations are here because the HIC family spells the same idea with a different
+# word: its eight "_station{n}_watering" rows are built for a fixed fan-out from
+# the catalog's portNumber and are skipped whole while the record reads silent,
+# so a restart landing in that window leaves them registered with no entity
+# behind them, which is precisely the shape this exclusion exists for. Nothing
+# reachable today produces that combination, so this closes the hole before a
+# payload-derived fan-out opens it rather than after.
+_OUTLET_UNIQUE_ID_RE = re.compile(r"_(?:zone|station)\d+(?:_|$)")
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
@@ -866,8 +875,8 @@ def _leftover_pair_for_row(hass: HomeAssistant, row, key_ledger_pairs, declared_
     never offered, because _remove_stale_generic_entities owns that namespace
     and governs it by its own toggles. A row whose pair the session's adders
     already recorded is never offered, because that row belongs to the
-    departed-key shape. A zone row is never offered, for the reason
-    _ZONE_UNIQUE_ID_RE carries. And a row a live entity object still holds is
+    departed-key shape. A zone or station row is never offered, for the reason
+    _OUTLET_UNIQUE_ID_RE carries. And a row a live entity object still holds is
     never offered, which is the marker that makes a row a candidate at all and
     is answered last because it is the one read that goes to the state machine.
 
@@ -892,11 +901,12 @@ def _leftover_pair_for_row(hass: HomeAssistant, row, key_ledger_pairs, declared_
     if pair in key_ledger_pairs:
         return None
     # The one narrowing this path applies to a unique_id, and it can only ever
-    # remove a candidate. A zone control or a per-zone reading exists only once
-    # that zone has reported, so a zone nobody has watered since the last
-    # restart reads exactly like a zone that is gone for good, and this card's
-    # Submit deletes recorder history permanently. See _ZONE_UNIQUE_ID_RE.
-    if _ZONE_UNIQUE_ID_RE.search(unique_id):
+    # remove a candidate. A zone or station control, and a per-outlet reading,
+    # exists only once that outlet has reported, so one nobody has watered since
+    # the last restart reads exactly like one that is gone for good, and this
+    # card's Submit deletes recorder history permanently. See
+    # _OUTLET_UNIQUE_ID_RE.
+    if _OUTLET_UNIQUE_ID_RE.search(unique_id):
         return None
     if not _row_is_unbacked(hass, entity_id):
         return None
@@ -2565,7 +2575,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # changes the poll cadence. Torn down alongside the client on unload.
             from .repairs import RainPointPushWatchdog
 
-            watchdog = RainPointPushWatchdog(hass, entry, mqtt_client)
+            # The coordinator is handed over so the watchdog can tell a dead push
+            # channel apart from an unreachable cloud, and is read for nothing
+            # else.
+            watchdog = RainPointPushWatchdog(hass, entry, mqtt_client, coordinator=coordinator)
             hass.data[DOMAIN][entry.entry_id]["watchdog"] = watchdog
             entry.async_on_unload(watchdog.async_stop)
             watchdog.start()
