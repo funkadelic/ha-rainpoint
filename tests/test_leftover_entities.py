@@ -498,6 +498,35 @@ class TestWhatTheScanMayNotReach:
 
         assert _derive(harness) == {}
 
+    def test_a_per_station_row_is_never_a_candidate_either(self):
+        """The HIC family spells the same idea with a different word.
+
+        Its eight per-station rows are built for a fixed fan-out and skipped
+        whole while the record reads silent, so a restart landing in that window
+        leaves them registered with nothing behind them. That is the same shape
+        the zone exclusion above exists for, and the same permanent deletion is
+        downstream of it.
+        """
+        harness = _Harness()
+        for suffix in ("station1_watering", "station8_watering", "station3"):
+            unique_id = f"rainpoint_{SENSOR_KEY}_{suffix}"
+            harness.add_leftover_row(entity_id=f"binary_sensor.{unique_id}", unique_id=unique_id)
+
+        assert _derive(harness) == {}
+
+    def test_a_row_merely_naming_a_station_without_a_number_is_still_a_candidate(self):
+        """The exclusion is the outlet-numbered shape, not the word.
+
+        A guard that swallowed any id containing "station" would take rows this
+        card is meant to offer, and the exclusion can only ever be checked in
+        that direction.
+        """
+        harness = _Harness()
+        unique_id = f"rainpoint_{SENSOR_KEY}_station_count"
+        harness.add_leftover_row(entity_id=f"sensor.{unique_id}", unique_id=unique_id)
+
+        assert _derive(harness) == {SENSOR_KEY: frozenset({("sensor", unique_id)})}
+
     def test_a_row_carrying_no_string_unique_id_is_never_a_candidate(self):
         """A row shape the scan cannot name a pair for cannot be removed by one."""
         harness = _Harness()
@@ -1180,8 +1209,8 @@ class TestAPlatformThatNeverStartedIsNotEvidence:
     removal does not come back with them.
     """
 
-    OTHER_UNIQUE_ID = f"rainpoint_{SENSOR_KEY}_station1_watering"
-    OTHER_ENTITY_ID = f"binary_sensor.rainpoint_{SENSOR_KEY}_station1_watering"
+    OTHER_UNIQUE_ID = f"rainpoint_{SENSOR_KEY}_not_reporting"
+    OTHER_ENTITY_ID = f"binary_sensor.rainpoint_{SENSOR_KEY}_not_reporting"
 
     def _harness_with_a_row_from_another_platform(self) -> _Harness:
         """One dead row belonging to a platform other than the seeded one."""
@@ -1987,8 +2016,8 @@ class TestTheNarrowedPropertiesHoldInSource:
     def test_no_function_here_tests_a_unique_id_for_a_prefix_or_a_suffix(self, func):
         """Removal stays an exact pair list. The only two string tests allowed
         anywhere on this path are the generic-namespace containment check, which
-        keeps this scan out of a namespace another sweep owns, and the zone
-        exclusion, which can only ever remove a candidate."""
+        keeps this scan out of a namespace another sweep owns, and the
+        zone-and-station exclusion, which can only ever remove a candidate."""
         tree = self._tree(func)
         attribute_calls = {
             ast.unparse(node.func)
@@ -1998,7 +2027,7 @@ class TestTheNarrowedPropertiesHoldInSource:
 
         assert not [name for name in attribute_calls if name.endswith((".startswith", ".endswith"))]
         matches = {name for name in attribute_calls if name.endswith((".search", ".match", ".fullmatch"))}
-        assert matches <= {"_ZONE_UNIQUE_ID_RE.search"}
+        assert matches <= {"_OUTLET_UNIQUE_ID_RE.search"}
 
         containments = {
             ast.unparse(node)

@@ -102,12 +102,19 @@ class RainPointPushWatchdog:
         mqtt_client,
         *,
         time_source=time.monotonic,
+        coordinator=None,
     ) -> None:
-        """Wire the watchdog to a hub's MQTT client; time_source is injectable for tests."""
+        """Wire the watchdog to a hub's MQTT client; time_source is injectable for tests.
+
+        ``coordinator`` is optional and is read for one thing only: whether the
+        poll is currently succeeding. A watchdog built without one behaves
+        exactly as it always has.
+        """
         self._hass = hass
         self._entry = entry
         self._mqtt_client = mqtt_client
         self._time_source = time_source
+        self._coordinator = coordinator
         # Monotonic time the channel was first observed non-functional in the
         # current outage, or None while it is functional. This is the sustained-
         # failure clock; it is distinct from the client's last-message clock.
@@ -173,7 +180,32 @@ class RainPointPushWatchdog:
             return
 
         if current - self._dead_since >= PUSH_WATCHDOG_DEAD_AFTER_SECONDS:
+            if self._polls_are_failing():
+                # The card tells an owner that the push channel is down while
+                # polling still works. When the poll is failing too, the cloud
+                # or the network is unreachable and that sentence is misleading:
+                # the owner's problem is bigger than push, and the card points
+                # at the wrong half of it. Held rather than cleared, and the
+                # outage clock keeps running, so a channel that is genuinely
+                # dead is raised on the first check after the poll recovers
+                # rather than serving a fresh window.
+                _LOGGER.debug("RainPoint push channel is down, but the poll is failing too; holding the repair issue")
+                return
             self._raise_issue()
+
+    def _polls_are_failing(self) -> bool:
+        """Return whether the coordinator's last poll failed.
+
+        Answers False for every uncertainty: no coordinator wired, no such
+        attribute, or a read that raised. The only thing downstream of a True is
+        withholding a card, so an unreadable coordinator has to leave the
+        watchdog behaving exactly as it did before this existed.
+        """
+        try:
+            return getattr(self._coordinator, "last_update_success", True) is False
+        except Exception as exc:
+            _LOGGER.debug("Coordinator poll health unreadable; treating the poll as healthy: %s", type(exc).__name__)
+            return False
 
     def _on_alive(self) -> None:
         """Reset the outage clock and clear any active issue on recovery."""
