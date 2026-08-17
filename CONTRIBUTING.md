@@ -55,7 +55,7 @@ Every action in `.github/workflows/` is pinned to a full commit SHA with the ver
 Coverage says a line ran; it doesn't say a test would notice if that line were wrong. [mutmut](https://mutmut.readthedocs.io/) answers the second question by changing the source in small ways and checking whether the suite fails. Nothing in CI runs it, and it is not a gate.
 
 ```bash
-uv pip install mutmut
+uv pip install --group mutation                         # or: pip install --group mutation
 mutmut run 'custom_components.rainpoint.api.trust.*'   # one module
 mutmut results                                          # what survived
 mutmut show <mutant-name>                               # the exact change that got away

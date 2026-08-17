@@ -17,6 +17,14 @@ addopts = [
     "--cov-report=html",
 ]
 
+# Declared here rather than in requirements-test.txt so CI, which installs that
+# file on every pull request, never pays to download a tool no job runs. The
+# major is capped because mutmut 3 changed its configuration format from mutmut
+# 2, so a 4.x could invalidate the [tool.mutmut] block below without failing
+# loudly.
+[dependency-groups]
+mutation = ["mutmut>=3.7,<4"]
+
 # Mutation testing, run by hand rather than in CI. mutmut copies the source and
 # everything listed in also_copy into ./mutants/, mutates the copy, and runs the
 # suite from there, so anything the tests open by path has to be copied too:
