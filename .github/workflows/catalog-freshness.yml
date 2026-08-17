@@ -1,5 +1,11 @@
 name: Catalog Freshness
 
+# Writes are done with a GitHub App token rather than GITHUB_TOKEN. A branch
+# pushed with GITHUB_TOKEN does not raise workflow events, so the PR this job
+# opens would sit with no checks on it forever. An App-authored push raises
+# them normally, so the catalog PR gets the same test, lint and validate run as
+# a hand-pushed one. The App and its two secrets are the ones release-please
+# already uses.
 permissions:
   contents: read
 
@@ -7,20 +13,47 @@ on:
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
-    inputs:
-      regenerate:
-        description: "Regenerate the catalog and upload it as an artifact instead of only reporting drift. Nothing is committed either way."
-        type: boolean
-        default: false
+
+# A manual dispatch that overlaps the weekly cron would otherwise race two
+# runs into the same branch and the same PR-creation probe.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  BRANCH: automated/product-catalog-sync
 
 jobs:
   freshness-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          # Scoped to exactly what the push and the PR need. Requesting a
+          # permission the installation lacks fails the token request, so a run
+          # that starts erroring here wants the specific scope added back rather
+          # than this block removed.
+          permission-contents: write
+          permission-pull-requests: write
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
+          # Pinned to main rather than left to default, because a dispatch run
+          # takes the ref picked under "Use workflow from". Off main, the branch
+          # the PR step creates would be based on that ref, so the catalog PR
+          # would carry its unrelated commits while claiming to be a snapshot
+          # refresh. The scheduled run is already on main; this makes the
+          # dispatch behave the same.
+          ref: main
+          # Persisted on purpose, unlike the other workflows here: the drift
+          # step pushes with it.
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Set up Python 3.13
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -54,31 +87,107 @@ jobs:
       # "HTV2***3FRF", which is ambiguous and defeats the point of the report. An
       # unset variable is an empty string, and the script already falls back to 1.
       - name: Run catalog freshness check
-        if: steps.creds.outputs.skip == 'false' && !inputs.regenerate
-        env:
-          RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
-          RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
-          RAINPOINT_AREA_CODE: ${{ vars.RAINPOINT_AREA_CODE }}
-        run: python scripts/refresh_product_catalog.py --check
-
-      # Regenerate-and-upload exists because the RainPoint endpoint is not reliably
-      # reachable from every maintainer network, and the credentials are already
-      # here as secrets. The job still only has contents: read, so the result is
-      # an artifact to download and commit deliberately, never a push.
-      - name: Regenerate catalog
-        if: steps.creds.outputs.skip == 'false' && inputs.regenerate
+        id: check
+        if: steps.creds.outputs.skip == 'false'
         env:
           RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
           RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
           RAINPOINT_AREA_CODE: ${{ vars.RAINPOINT_AREA_CODE }}
         run: |
-          python scripts/refresh_product_catalog.py
-          git --no-pager diff --stat -- custom_components/rainpoint/api/data/product_catalog.json
+          # The default step shell is "bash -e", so drift (a deliberate exit 1)
+          # would abort the step before the status could be read. -e goes off
+          # around the call and back on straight after.
+          set +e
+          # --check writes its drift summary to stdout and its progress lines to
+          # stderr, so redirecting stdout alone captures the summary cleanly. It
+          # is worth capturing rather than leaving in the log: it splits changed
+          # models into datapoint changes and metadata-only changes, which is the
+          # difference between "commit this" and "read this carefully", and that
+          # split is what the PR body is for.
+          python scripts/refresh_product_catalog.py --check > drift.txt
+          status=$?
+          set -e
+          cat drift.txt
+          if [ "$status" -eq 0 ]; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # --check also exits 1 when the live pull comes back empty, which is a
+          # fetch failure rather than drift. It reports that on stderr, leaving
+          # stdout empty, so an empty summary here is the failure case and has to
+          # stay a red run.
+          if ! grep -q '[^[:space:]]' drift.txt; then
+            echo "::error::Catalog check failed without producing a drift summary."
+            exit 1
+          fi
+          echo "drift=true" >> "$GITHUB_OUTPUT"
 
-      - name: Upload regenerated catalog
-        if: steps.creds.outputs.skip == 'false' && inputs.regenerate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: product-catalog
-          path: custom_components/rainpoint/api/data/product_catalog.json
-          if-no-files-found: error
+      # The write is a second live pull rather than a reuse of the one above
+      # because write mode is where the guards live: it refuses to overwrite the
+      # committed catalog with an empty pull, or with one holding under half the
+      # models. Fetching twice costs a login and about half a megabyte, once a
+      # week.
+      - name: Regenerate catalog
+        if: steps.check.outputs.drift == 'true'
+        env:
+          RAINPOINT_EMAIL: ${{ secrets.RAINPOINT_EMAIL }}
+          RAINPOINT_PASSWORD: ${{ secrets.RAINPOINT_PASSWORD }}
+          RAINPOINT_AREA_CODE: ${{ vars.RAINPOINT_AREA_CODE }}
+        run: python scripts/refresh_product_catalog.py
+
+      - name: Open or update the catalog PR
+        if: steps.check.outputs.drift == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          CATALOG: custom_components/rainpoint/api/data/product_catalog.json
+        run: |
+          set -euo pipefail
+          # The drift report and the written file are two separate pulls, so a
+          # report with nothing behind it is possible and must not become an
+          # empty commit.
+          if git diff --quiet -- "$CATALOG"; then
+            echo "Drift was reported but the regenerated catalog is unchanged; nothing to open."
+            exit 0
+          fi
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          # -C resets the branch onto main every run (the checkout is pinned to
+          # it), so it carries exactly one commit and never accumulates stale
+          # ones.
+          git switch -C "$BRANCH"
+          git add "$CATALOG"
+          git commit -m "chore(catalog): refresh the product catalog snapshot"
+          # The checkout is single-branch, so nothing here has a remote-tracking
+          # ref for this branch, and a bare --force-with-lease refuses with
+          # "stale info" from the second push onwards. Fetching the branch is
+          # necessary but not sufficient: the bare form still refuses, because it
+          # wants a value it observed rather than one it just created. Stating
+          # the expected value explicitly is the documented, non-experimental
+          # form of the lease, and it still refuses if anyone else moved the
+          # branch. An absent branch leaves the expectation empty, which git
+          # reads as "must not exist yet", so the first run is covered too.
+          git fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null || true
+          expected="$(git rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" || true)"
+          git push --force-with-lease="refs/heads/${BRANCH}:${expected}" origin "$BRANCH"
+
+          {
+            echo "The bundled snapshot of RainPoint's product list no longer matches a live pull, so it has been regenerated. Nothing changes for existing devices; the snapshot is what describes an unfamiliar device in a diagnostics report."
+            echo
+            echo '```'
+            cat drift.txt
+            echo '```'
+          } > pr-body.md
+
+          number="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')"
+          if [ -z "$number" ]; then
+            gh pr create --draft --base main --head "$BRANCH" \
+              --title "chore(catalog): refresh the product catalog snapshot" \
+              --body-file pr-body.md
+          else
+            # gh pr edit --body fails on this repo with a Projects-classic
+            # GraphQL error and changes nothing, so the body is patched through
+            # the REST API instead.
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${number}" -F body=@pr-body.md > /dev/null
+            echo "PR #${number} for $BRANCH already open; force-push and body update applied."
+          fi
