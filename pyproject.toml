@@ -46,12 +46,27 @@ mutation = ["mutmut>=3.7,<4"]
 # every ordinary pytest run.
 #
 # on_dependency_change defaults to "warn", which keeps a cache built under the
-# previous config when one of the also_copy files changes. That cache is what
+# previous config when one of the copied inputs changes. That cache is what
 # feeds the test-to-function map, and a stale one can end up emptied, at which
 # point every mutant is skipped as uncovered and the run finishes green at
 # 0.00 mutations/second having tested nothing. "rerun" throws the cache away
-# instead. It costs a full re-run whenever a copied file changes, README.md
-# included, which is the cheaper of the two failure modes.
+# instead. It costs a full re-run whenever one of those inputs changes, which is
+# the cheaper of the two failure modes.
+#
+# also_copy only copies; it registers nothing for change detection, and neither
+# of mutmut's two detectors sees these files on its own. The git detector skips
+# every .py file, because the per-function source hashes are meant to cover
+# those, but those hashes only span source_paths, so scripts/ is invisible to
+# both. Markdown is then dropped as documentation noise, which hides README.md.
+# cache_invalidation_files is the escape hatch: a registered path is hashed every
+# run and is never dropped as noise. Keep the globs one level deep. mutmut
+# matches them with fnmatch as well as glob, and fnmatch's "*" already spans
+# separators, so "scripts/**/*" silently matches nothing there.
+#
+# tests/ is deliberately left unregistered. mutmut re-collects stats for tests it
+# has not seen before, so a new test is picked up without discarding anything,
+# and registering the directory would throw the whole cache away on every
+# assertion added while chasing a surviving mutant.
 [tool.mutmut]
 source_paths = ["custom_components/"]
 also_copy = [
@@ -60,6 +75,11 @@ also_copy = [
     "pyproject.toml",
     "README.md",
     ".github/ISSUE_TEMPLATE/",
+]
+cache_invalidation_files = [
+    "scripts/*",
+    "README.md",
+    ".github/ISSUE_TEMPLATE/*",
 ]
 do_not_mutate = ["*/debug.py"]
 on_dependency_change = "rerun"

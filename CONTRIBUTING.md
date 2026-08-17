@@ -56,7 +56,7 @@ Every action in `.github/workflows/` is pinned to a full commit SHA with the ver
 uv pip install --group mutation                                        # or: pip install --group mutation
 mutmut run --max-children 4 'custom_components.rainpoint.api.trust.*'  # one module
 mutmut results                                                         # what survived
-mutmut show <mutant-name>                                              # the exact change that got away
+mutmut show MUTANT_NAME                                                # one of those names, and its exact change
 ```
 
 Scope it to a module while you work on that module. A whole-tree `mutmut run` covers over fifteen thousand mutants and takes hours, though results are cached, so a later run picks up where the last one stopped. `mutants/` is the working copy mutmut builds; it is gitignored and safe to delete.
@@ -65,7 +65,7 @@ Pass `--max-children`, and pick a number below your core count. It defaults to o
 
 A surviving mutant is a question, not a defect: it names a change to the source that no test objects to. Sometimes that means a missing assertion, sometimes it means the line genuinely doesn't matter.
 
-Configuration lives in `pyproject.toml` under `[tool.mutmut]`, with comments explaining why coverage is switched off for those runs, why one digest-pinning test is deselected, and why a change to any copied file throws the cache away rather than reusing it.
+Configuration lives in `pyproject.toml` under `[tool.mutmut]`, with comments explaining why coverage is switched off for those runs, why one digest-pinning test is deselected, and why editing one of the files the tests open by path throws the cache away rather than reusing it.
 
 ## Adding a new device model
 
