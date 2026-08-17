@@ -55,13 +55,15 @@ Every action in `.github/workflows/` is pinned to a full commit SHA with the ver
 Coverage says a line ran; it doesn't say a test would notice if that line were wrong. [mutmut](https://mutmut.readthedocs.io/) answers the second question by changing the source in small ways and checking whether the suite fails. Nothing in CI runs it, and it is not a gate.
 
 ```bash
-uv pip install --group mutation                         # or: pip install --group mutation
-mutmut run 'custom_components.rainpoint.api.trust.*'   # one module
-mutmut results                                          # what survived
-mutmut show <mutant-name>                               # the exact change that got away
+uv pip install --group mutation                                        # or: pip install --group mutation
+mutmut run --max-children 4 'custom_components.rainpoint.api.trust.*'  # one module
+mutmut results                                                         # what survived
+mutmut show <mutant-name>                                              # the exact change that got away
 ```
 
 Scope it to a module while you work on that module. A whole-tree `mutmut run` covers over fifteen thousand mutants and takes hours, though results are cached, so a later run picks up where the last one stopped. `mutants/` is the working copy mutmut builds; it is gitignored and safe to delete.
+
+Pass `--max-children`, and pick a number below your core count. It defaults to one worker per core, and every worker is a forked copy of a process that has already imported Home Assistant and the whole test suite, so a default run saturates the machine and costs a few hundred MB per worker. That is enough to leave a laptop, or a WSL session, unresponsive until the run finishes. Half your cores is a reasonable ceiling, and prefixing the command with `nice -n 19` keeps the rest of your shell usable.
 
 A surviving mutant is a question, not a defect: it names a change to the source that no test objects to. Sometimes that means a missing assertion, sometimes it means the line genuinely doesn't matter.
 
