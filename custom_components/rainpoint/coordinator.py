@@ -85,6 +85,17 @@ _LOGGER = logging.getLogger(__name__)
 STALE_VALVE_POLL_GUARD = timedelta(minutes=5)
 
 
+def _error_text(err: BaseException) -> str:
+    """Return something readable for a transport error, whatever it carries.
+
+    An aiohttp timeout raised with no message renders as an empty string, which
+    is how a real log line ended up reading "falling back to individual calls: "
+    with nothing after the colon. The class name is the least this can say and
+    is always available.
+    """
+    return str(err) or type(err).__name__
+
+
 class _AbsentStatus(dict):
     """Marker meaning "no status response arrived for this hub".
 
@@ -1313,7 +1324,23 @@ class RainPointCoordinator(DataUpdateCoordinator):
             }
         except RainPointApiError as err:
             raise UpdateFailed(f"RainPoint API error: {err}") from err
+        except (aiohttp.ClientError, TimeoutError) as err:
+            # The cloud being unreachable is an expected condition, not a defect,
+            # so it gets the same one-line treatment RainPointApiError already
+            # gets. It reaches this handler from the calls the two fetch helpers
+            # do not wrap, `getDeviceByHid` above all, and it used to fall
+            # through to the handler below and log a full traceback on every
+            # failed poll. A reporter on a flaky link sent 242 of those in three
+            # days, 98% of the lines in their log, which buried the one line
+            # they had been asked for.
+            #
+            # DataUpdateCoordinator already logs its own "Error fetching ..."
+            # line for an UpdateFailed and suppresses the repeats, so there is
+            # deliberately no _LOGGER call of our own here.
+            raise UpdateFailed(f"RainPoint transport error: {_error_text(err)}") from err
         except Exception as err:
+            # Left broad and left loud: what reaches here now is a shape nobody
+            # anticipated, which is exactly when a traceback earns its place.
             _LOGGER.exception("Unexpected RainPoint error while refreshing")
             raise UpdateFailed(f"Unexpected RainPoint error: {err}") from err
 
@@ -1478,7 +1505,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # Only treat transport-level errors as transient. Programming bugs
             # (KeyError, AttributeError, etc.) propagate to the outer handler so
             # they surface as UpdateFailed and are not silently masked by the fallback.
-            _LOGGER.warning("multipleDeviceStatus transport error, falling back to individual calls: %s", e)
+            _LOGGER.warning("multipleDeviceStatus transport error, falling back to individual calls: %s", _error_text(e))
 
         # Convert response to status_by_mid format when populated.
         # Note: get_multiple_device_status already converts "status" to "subDeviceStatus".
@@ -1523,7 +1550,11 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 # Surface API errors to the outer except RainPointApiError -> UpdateFailed wrapper.
                 raise
             except (aiohttp.ClientError, TimeoutError) as individual_e:
-                _LOGGER.error("Transport error getting status for mid=%s: %s", mid, individual_e)
+                # WARNING rather than ERROR: this is a condition the loop is
+                # written to absorb, it recovers on the next poll, and the hub
+                # is already marked absent below. ERROR reads as a fault needing
+                # attention, which one unreachable poll on a flaky link is not.
+                _LOGGER.warning("Transport error getting status for mid=%s: %s", mid, _error_text(individual_e))
                 # This hub's status was not obtained this poll -- an outage, not
                 # evidence that it reported nobody -- so it must contribute no
                 # silent entries for any of its children.

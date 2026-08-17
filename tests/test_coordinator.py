@@ -1229,6 +1229,61 @@ class TestCoordinatorEdgeBranches:
             await _run(coord)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "why"),
+        [
+            (aiohttp.ClientError("cannot connect"), "the cloud was unreachable"),
+            (TimeoutError(), "the call timed out"),
+        ],
+    )
+    async def test_an_unreachable_cloud_fails_the_poll_without_a_traceback(self, error, why, caplog):
+        """The cloud being unreachable is expected, so it is not logged as a defect.
+
+        This used to fall through to the broad handler and log a full traceback
+        on every failed poll. A reporter on a flaky link sent 242 of them in
+        three days, 98% of the lines in the log they had been asked for.
+        """
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.side_effect = error
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.coordinator"),
+            pytest.raises(UpdateFailed, match="RainPoint transport error"),
+        ):
+            await _run(coord)
+
+        assert not [r for r in caplog.records if r.exc_info], why
+
+    @pytest.mark.asyncio
+    async def test_a_transport_error_carrying_no_message_still_names_itself(self):
+        """An aiohttp timeout raised with no message renders as an empty string."""
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.side_effect = TimeoutError()
+
+        with pytest.raises(UpdateFailed, match="TimeoutError"):
+            await _run(coord)
+
+    @pytest.mark.asyncio
+    async def test_a_programming_bug_is_still_logged_with_its_traceback(self, caplog):
+        """The narrowing above must not quieten the handler it was carved out of."""
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        coord, client = _make_coord()
+        client.get_devices_by_hid.side_effect = RuntimeError("boom")
+
+        with (
+            caplog.at_level(logging.ERROR, logger="custom_components.rainpoint.coordinator"),
+            pytest.raises(UpdateFailed),
+        ):
+            await _run(coord)
+
+        assert [r for r in caplog.records if r.exc_info]
+
+    @pytest.mark.asyncio
     async def test_update_individual_fallback_hub_error_continues(self):
         """When multipleDeviceStatus fails AND a per-hub get_device_status also fails
         with a transport error, that hub is recorded with an empty subDeviceStatus list
