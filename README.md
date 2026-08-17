@@ -269,7 +269,7 @@ A device can stay on your account and report normally while some of its entity r
 
 Home Assistant raises "A device has unused entities" only once the rows have looked that way on every one of the last thirty checks. Those checks are counted as your devices report rather than on a clock, and with push enabled a check happens whenever a device sends a reading, so the real wait depends on how chatty your devices are. Restarting Home Assistant or reloading the integration starts the count again from zero, and a check that could not run leaves it where it was.
 
-This card names the entities it would remove, up to ten of them and a count of any beyond that, so you can check the list against the device page before deciding. It can still offer a row that is only temporarily quiet, because a reading that has not arrived since the last restart looks the same from inside the integration as one that is gone for good. Two things are never offered here: watering zones, so a zone you have not run yet is safe either way, and anything on a device that has stopped reporting altogether, which gets its own card saying so instead. **Cancel** leaves everything alone. Unlike the card above, this one is rebuilt rather than kept: reloading the integration or restarting Home Assistant sends it away, and it returns once the rows have looked unused for thirty checks again.
+This card names the entities it would remove, up to ten of them and a count of any beyond that, so you can check the list against the device page before deciding. It can still offer a row that is only temporarily quiet, because a reading that has not arrived since the last restart looks the same from inside the integration as one that is gone for good. Two things are never offered here: the outlets a device waters through, whether your model calls them zones or stations, so one you have not run yet is safe either way, and anything on a device that has stopped reporting altogether, which gets its own card saying so instead. **Cancel** leaves everything alone. Unlike the card above, this one is rebuilt rather than kept: reloading the integration or restarting Home Assistant sends it away, and it returns once the rows have looked unused for thirty checks again.
 
 ### Neither card removes anything on its own
 
@@ -281,7 +281,9 @@ Short of deleting entities yourself under **Settings → Devices & services → 
 
 Home Assistant can write out a diagnostics file describing what this integration last received from RainPoint and what it made of it. It is the single most useful thing to attach to a bug report, and it saves a round trip asking you for details.
 
-Go to **Settings → Devices & Services → RainPoint**, open the three-dot menu on the RainPoint entry and choose **Download diagnostics**. Every device page carries the same option in its own menu, which is the one to use when only one device is misbehaving.
+Go to **Settings → Devices & Services**, stay on the **Integrations** tab and click the **RainPoint Cloud** card to open it. Your account is the row underneath: open the three-dot menu on that row and choose **Download diagnostics**. The file covers every device on the account, and its name begins with `config_entry-rainpoint-`.
+
+Every device page carries the same option in its own menu, which is the one to use when only one device is misbehaving. That file is named after the device instead, so the name is also the quickest way to tell the two apart once they are in your downloads folder.
 
 The file opens with a list of your devices, each carrying the name you gave it in Home Assistant, so you can tell which section describes which device.
 
