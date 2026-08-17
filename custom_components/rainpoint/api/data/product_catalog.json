@@ -4248,6 +4248,13 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSRP"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
         }
       ],
       "hasDistribution": false,
@@ -5578,7 +5585,7 @@
           "identity": "STA_RSRP"
         }
       ],
-      "hasDistribution": true,
+      "hasDistribution": false,
       "isMainDevice": true,
       "portNumber": 1
     }
