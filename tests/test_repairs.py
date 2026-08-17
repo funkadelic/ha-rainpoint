@@ -66,6 +66,7 @@ def _make_client(connected=False, last_message_at=None):
 
 
 def _make_watchdog(client, clock, coordinator=None):
+    """Return a watchdog on a controllable clock, with or without a coordinator."""
     return RainPointPushWatchdog(MagicMock(), MagicMock(), client, time_source=clock, coordinator=coordinator)
 
 
@@ -252,6 +253,7 @@ class TestWatchdogVersusAnUnreachableCloud:
     """
 
     def _dead_channel_at_the_threshold(self, coordinator):
+        """Return a watchdog whose channel has been dead for exactly the window."""
         clock = _Clock()
         client = _make_client(connected=False, last_message_at=None)
         watchdog = _make_watchdog(client, clock, coordinator=coordinator)
@@ -260,6 +262,7 @@ class TestWatchdogVersusAnUnreachableCloud:
         return watchdog, clock
 
     def test_the_card_is_held_while_the_poll_is_failing_too(self, issue_mocks):
+        """An unreachable cloud is not a dead push channel, so the card waits."""
         create, _delete = issue_mocks
         watchdog, _clock = self._dead_channel_at_the_threshold(_make_polling_coordinator(last_update_success=False))
 
@@ -300,6 +303,7 @@ class TestWatchdogVersusAnUnreachableCloud:
         delete.assert_not_called()
 
     def test_a_watchdog_built_without_a_coordinator_raises_as_it_always_did(self, issue_mocks):
+        """The coordinator is optional, and its absence changes nothing."""
         create, _delete = issue_mocks
         watchdog, _clock = self._dead_channel_at_the_threshold(None)
 
@@ -311,8 +315,11 @@ class TestWatchdogVersusAnUnreachableCloud:
         """Every uncertainty resolves towards the behaviour that predates this."""
 
         class _Unreadable:
+            """A coordinator whose poll health cannot be read at all."""
+
             @property
             def last_update_success(self):
+                """Raise, standing in for a coordinator mid-teardown."""
                 raise RuntimeError("unreadable")
 
         create, _delete = issue_mocks
