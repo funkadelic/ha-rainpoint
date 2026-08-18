@@ -1,0 +1,13 @@
+# The oldest supported combination, tested alongside the current one so a
+# change that only works on the newest HA cannot land unnoticed. hacs.json
+# declares Home Assistant 2025.2.0 as the minimum, and this is the harness that
+# still runs there.
+#
+# DO NOT BUMP THIS PIN to match requirements-test.txt. It is deliberately old:
+# 0.13.316 is the last release that supports Python 3.13, and 0.13.317 moved to
+# 3.14. Raising it would silently drop the older half of the support range that
+# this file exists to cover. Dependabot cannot tell the two files apart, so
+# close its bump PRs for this one.
+pytest-homeassistant-custom-component==0.13.316
+pytest-asyncio>=1.3.0
+pytest-cov>=7.0.0
