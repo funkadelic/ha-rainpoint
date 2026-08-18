@@ -48,8 +48,11 @@ from tests.helpers import make_sensor_entry
 
 # Home Assistant 2026.3 added two required keyword-only arguments to this private
 # helper, area_id and parts, alongside an optional use_legacy_naming. This repo
-# supports HA back to 2025.2, whose signature predates all three, so they are
+# supports HA back to 2026.2, whose signature predates all three, so they are
 # supplied only when the installed version accepts them.
+#
+# 2026.2 is also the release that introduced the helper at all, which is what
+# sets the supported floor: there is nothing to assert against on an older one.
 #
 # The values mirror what HA's own async_get_full_entity_name wrapper passes, so
 # what is asserted here stays the composition users actually get. area_id is None

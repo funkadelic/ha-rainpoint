@@ -1,13 +1,18 @@
-# The oldest supported combination, tested alongside the current one so a
-# change that only works on the newest HA cannot land unnoticed. hacs.json
-# declares Home Assistant 2025.2.0 as the minimum, and this is the harness that
-# still runs there.
+# The oldest supported combination, tested alongside the current one so a change
+# that only works on the newest Home Assistant cannot land unnoticed. hacs.json
+# declares 2026.2.0 as the minimum and this is the harness that covers it.
+#
+# That floor is set by what this pin can actually verify, not by taste. Home
+# Assistant added entity_registry._async_get_full_entity_name in 2026.2.0, and
+# tests/test_entity_naming_composition.py has no equivalent to assert against on
+# a release that predates it: on HA 2025.2.2 the module does not even collect,
+# and the rest of the suite reports 18 failures and 14 errors. Claiming an older
+# floor would be a claim nothing checks.
 #
 # DO NOT BUMP THIS PIN to match requirements-test.txt. It is deliberately old:
-# 0.13.316 is the last release that supports Python 3.13, and 0.13.317 moved to
-# 3.14. Raising it would silently drop the older half of the support range that
-# this file exists to cover. Dependabot cannot tell the two files apart, so
-# close its bump PRs for this one.
+# 0.13.316 is the last release supporting Python 3.13, and 0.13.317 moved to
+# 3.14. Raising it drops the older half of the range this file exists to cover.
+# Dependabot cannot tell the two files apart, so close its bump PRs for this one.
 pytest-homeassistant-custom-component==0.13.316
 pytest-asyncio>=1.3.0
 pytest-cov>=7.0.0

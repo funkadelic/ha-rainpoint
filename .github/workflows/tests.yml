@@ -146,7 +146,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-  # The floor declared in hacs.json: Home Assistant 2025.2.0, which runs Python
+  # The floor declared in hacs.json: Home Assistant 2026.2.0, which runs Python
   # 3.13. Runs the suite only. Coverage, the badge and Sonar all belong to the
   # job above, so they report once rather than racing each other.
   test-min:
@@ -170,5 +170,9 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system -r requirements-test-min.txt
 
+      # --no-cov because addopts turns coverage on with a fail_under gate. The
+      # job above already measures and uploads it, and a product path that only
+      # newer Home Assistant can reach would fail this gate here for a reason
+      # that has nothing to do with the oldest supported release.
       - name: Run tests with pytest
-        run: pytest --tb=short
+        run: pytest --no-cov --tb=short

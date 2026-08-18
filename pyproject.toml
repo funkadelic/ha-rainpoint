@@ -92,10 +92,10 @@ pytest_add_cli_args_test_selection = ["tests/"]
 
 [tool.ruff]
 # The oldest Python this integration must run on, not the newest it is tested
-# against. hacs.json declares Home Assistant 2025.2.0 as the minimum and that
+# against. hacs.json declares Home Assistant 2026.2.0 as the minimum and that
 # release runs Python 3.13, so 3.13 syntax is the ceiling the code has to hold
-# to even though CI's primary leg is 3.14. Raise this only when the declared
-# minimum HA moves to a release requiring a newer Python.
+# to even though CI's primary leg is 3.14. Home Assistant moved to 3.14 in
+# 2026.3, so raise this only when the declared minimum reaches that release.
 target-version = "py313"
 line-length = 130
 
