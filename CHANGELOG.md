@@ -2,6 +2,28 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.18.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.18.0...v1.18.1) (2026-08-18)
+
+
+### Fixed
+
+* keep a cloud outage from filling the log and raising a repair ([a234656](https://github.com/funkadelic/ha-rainpoint/commit/a2346561d44751f76419f5a9dd5e32a5c8536270))
+
+
+### Other Changes
+
+* add a README table of contents and group the sections ([9b4493a](https://github.com/funkadelic/ha-rainpoint/commit/9b4493aac1d4523a32aaba514b4c02b2b294eb79))
+* add a test count badge to the README ([#182](https://github.com/funkadelic/ha-rainpoint/issues/182)) ([3d3f3cc](https://github.com/funkadelic/ha-rainpoint/commit/3d3f3cc408c6401ffa6b1a5d9b1c836464200d7d))
+* bound the release commit walk at the v1.18.0 release ([#188](https://github.com/funkadelic/ha-rainpoint/issues/188)) ([a0fb855](https://github.com/funkadelic/ha-rainpoint/commit/a0fb85517b3bcdda0394e7161d3068e0e45f87ff))
+* bump astral-sh/setup-uv from 9.0.0 to 10.0.1 ([#192](https://github.com/funkadelic/ha-rainpoint/issues/192)) ([341ee20](https://github.com/funkadelic/ha-rainpoint/commit/341ee20946e655403915179e0dce2994a3d66bf9))
+* bump schneegans/dynamic-badges-action from 1.7.0 to 1.9.0 ([#193](https://github.com/funkadelic/ha-rainpoint/issues/193)) ([34d7e29](https://github.com/funkadelic/ha-rainpoint/commit/34d7e29e8480bd90c275e68f6f1708ba1ac471e2))
+* **catalog:** refresh the product catalog snapshot ([#190](https://github.com/funkadelic/ha-rainpoint/issues/190)) ([f26dbbe](https://github.com/funkadelic/ha-rainpoint/commit/f26dbbebb42d0c4d611a0dd1d12ee994e4ca72fd))
+* fail a release PR that moves the version backwards ([4b126dd](https://github.com/funkadelic/ha-rainpoint/commit/4b126ddb3d587b3c572cb347412528ba09b0e56a))
+* move the release walk bound to where it is read ([#189](https://github.com/funkadelic/ha-rainpoint/issues/189)) ([92dc1fa](https://github.com/funkadelic/ha-rainpoint/commit/92dc1fa53057ba915c9899ed41299ee077f5cf87))
+* open a PR when the product catalog drifts ([#191](https://github.com/funkadelic/ha-rainpoint/issues/191)) ([44af567](https://github.com/funkadelic/ha-rainpoint/commit/44af5673b82aba2f421bca4b08f9a74b34420a5e))
+* set up mutation testing with mutmut ([#185](https://github.com/funkadelic/ha-rainpoint/issues/185)) ([c1b0435](https://github.com/funkadelic/ha-rainpoint/commit/c1b04359f7aaedcfa88b90cce8abd240e7a533fe))
+* test against current Home Assistant and the supported floor ([#194](https://github.com/funkadelic/ha-rainpoint/issues/194)) ([be17e76](https://github.com/funkadelic/ha-rainpoint/commit/be17e76a5e825e6b3f97539aad3ecf26ac54eae9))
+
 ## [1.18.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.17.0...v1.18.0) (2026-08-16)
 
 
