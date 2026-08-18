@@ -20,6 +20,7 @@ it is fixed.
 
 from __future__ import annotations
 
+import inspect
 from unittest.mock import MagicMock
 
 import pytest
@@ -44,6 +45,28 @@ from custom_components.rainpoint.select import RainPointSubDevicePowerSelect
 from custom_components.rainpoint.sensor import RainPointMoisturePercentSensor, RainPointZoneStateSensor
 from custom_components.rainpoint.valve import RainPointValveEntity
 from tests.helpers import make_sensor_entry
+
+# Home Assistant 2026.3 added two required keyword-only arguments to this private
+# helper, area_id and parts, alongside an optional use_legacy_naming. This repo
+# supports HA back to 2026.2, whose signature predates all three, so they are
+# supplied only when the installed version accepts them.
+#
+# 2026.2 is also the release that introduced the helper at all, which is what
+# sets the supported floor: there is nothing to assert against on an older one.
+#
+# The values mirror what HA's own async_get_full_entity_name wrapper passes, so
+# what is asserted here stays the composition users actually get. area_id is None
+# and parts omits AREA and FLOOR, which keeps the result device name plus entity
+# name as before. use_legacy_naming matters only where a name is passed: without
+# it a user override would be composed against the device name instead of
+# standing alone.
+_FULL_NAME_EXTRA_KWARGS: dict[str, object] = {}
+if "parts" in inspect.signature(er._async_get_full_entity_name).parameters:
+    _FULL_NAME_EXTRA_KWARGS = {
+        "area_id": None,
+        "parts": (er.EntityNamePart.DEVICE, er.EntityNamePart.ENTITY),
+        "use_legacy_naming": True,
+    }
 
 # The one real CTL_SOCK candidate in the committed catalog with no
 # hand-written decoder, reused from tests/test_generic_control.py's own
@@ -124,6 +147,7 @@ def _compose(hass, entity, device):
         has_entity_name=entity.has_entity_name,
         name=None,
         original_name=entity._attr_name,
+        **_FULL_NAME_EXTRA_KWARGS,
     )
 
 
@@ -504,6 +528,7 @@ class TestUserOverrideWins:
             has_entity_name=valve.has_entity_name,
             name="My Custom Zone Name",
             original_name=valve._attr_name,
+            **_FULL_NAME_EXTRA_KWARGS,
         )
 
         assert composed == "My Custom Zone Name"

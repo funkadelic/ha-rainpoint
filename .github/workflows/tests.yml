@@ -9,6 +9,15 @@ on:
     branches: [main]
 
 jobs:
+  # Two jobs rather than one matrix, because "test" is a required status check
+  # on main: a matrix would rename it to "test (3.14)" and the required check
+  # would never report again, blocking every pull request. This job stays the
+  # newest supported combination and keeps the reporting steps; test-min below
+  # covers the oldest.
+  #
+  # An integration runs on whatever Python Home Assistant ships, so the version
+  # here is dictated by HA, not chosen. HA has required 3.14 since 2026.3, which
+  # is what about 80% of installs run.
   test:
     runs-on: ubuntu-latest
 
@@ -18,10 +27,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Python 3.13
+      - name: Set up Python 3.14
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       # uv resolves and unpacks this dependency tree in a fraction of pip's time
       # (measured locally: 8s against pip's 58s, both with a cold cache), which is
@@ -136,3 +145,34 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # The floor declared in hacs.json: Home Assistant 2026.2.0, which runs Python
+  # 3.13. Runs the suite only. Coverage, the badge and Sonar all belong to the
+  # job above, so they report once rather than racing each other.
+  test-min:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv pip install --system -r requirements-test-min.txt
+
+      # --no-cov because addopts turns coverage on with a fail_under gate. The
+      # job above already measures and uploads it, and a product path that only
+      # newer Home Assistant can reach would fail this gate here for a reason
+      # that has nothing to do with the oldest supported release.
+      - name: Run tests with pytest
+        run: pytest --no-cov --tb=short

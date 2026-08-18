@@ -1398,6 +1398,14 @@ class TestTheCompetingRowWindow:
         ]
         assert warnings, "the abandoned row must be named at warning level"
 
+        # This test drives async_setup_entry, which starts the push channel, but
+        # never unloads the entry, so the disconnect registered on unload never
+        # runs. Home Assistant's test cleanup fails a test that leaves the
+        # supervisor task running.
+        mqtt_client = hass.data[DOMAIN][entry.entry_id].get("mqtt_client")
+        if mqtt_client is not None:
+            await mqtt_client.async_disconnect()
+
         assert rp._complete_hub_identity_rekey(hass, entry, coordinator) == frozenset({str(HID)})
 
     @pytest.mark.asyncio

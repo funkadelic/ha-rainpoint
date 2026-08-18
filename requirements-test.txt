@@ -1,3 +1,11 @@
-pytest-homeassistant-custom-component>=0.13.316
+# Pinned exactly, not floored. pytest-homeassistant-custom-component pins one
+# exact Home Assistant version per release, so this line is what decides which
+# HA the suite is tested against. A ">=" floor let pip resolve backwards
+# whenever the newest release needed a Python the runner did not have, which is
+# how the suite silently spent five months testing against HA 2026.2.3 while
+# users ran 2026.8.x. An exact pin fails loudly instead. Dependabot bumps it.
+#
+# 0.13.356 pins homeassistant==2026.8.2 and needs Python 3.14.
+pytest-homeassistant-custom-component==0.13.356
 pytest-asyncio>=1.3.0
 pytest-cov>=7.0.0

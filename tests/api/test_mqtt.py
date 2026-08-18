@@ -291,6 +291,11 @@ class TestMessageReceiptLogging:
         scheduled_func(*scheduled_args)
         assert client.message_count == 1
 
+        # async_start above spawned the supervisor task. Home Assistant's test
+        # cleanup fails a test that leaves one running, so tear it down the way
+        # the sibling cases do.
+        await client.async_disconnect()
+
 
 class TestSecretRedaction:
     """No log line emits deviceSecret, the derived password, or a full clientId."""
