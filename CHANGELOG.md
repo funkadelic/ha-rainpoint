@@ -5,6 +5,27 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 ## [1.18.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.18.0...v1.18.1) (2026-08-18)
 
 
+### What's new
+
+**An unreachable cloud no longer fills your log**
+
+- When RainPoint's cloud or your own internet link goes down, every failed check used to write a full crash report into the Home Assistant log, and now writes a single line saying the cloud could not be reached.
+
+**The push updates notice no longer appears when the cloud is unreachable**
+
+- The **Settings → Repairs** notice saying real-time push updates are not arriving is meant for when push is down while the regular two-minute polling still works, and it tells you so. It is now held back while polling is failing too, since in that case the problem is the connection to RainPoint as a whole.
+- The outage is still being timed while it is held back, so a push connection that really has stopped is reported on the first check after polling recovers rather than starting its wait over.
+
+**Irrigation controller stations are protected from the unused entities card**
+
+- The **Settings → Repairs** card that offers to remove a device's unused entity rows has always skipped watering zones, because a zone you have not run since the last restart looks exactly like one that is gone for good, and confirming the card deletes its history permanently. Irrigation controller stations are the same idea under a different word, and they are now skipped for the same reason.
+
+**Also in this release**
+
+- **README:** the steps for downloading a diagnostics file now match what you actually see on screen, and they say how to tell the account-wide file apart from a single device's file once both are in your downloads folder. The previous steps sent you to a menu that is not where that option lives.
+- **README:** a table of contents, and the sections grouped so the setup, device and troubleshooting material each sit together.
+
+
 ### Fixed
 
 * keep a cloud outage from filling the log and raising a repair ([a234656](https://github.com/funkadelic/ha-rainpoint/commit/a2346561d44751f76419f5a9dd5e32a5c8536270))
