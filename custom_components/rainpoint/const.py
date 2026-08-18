@@ -4,7 +4,7 @@ from pathlib import Path
 DOMAIN = "rainpoint"
 
 # Integration version
-VERSION = "1.18.0"  # x-release-please-version
+VERSION = "1.18.1"  # x-release-please-version
 
 # Issue tracker URL
 ISSUE_URL = "https://github.com/funkadelic/ha-rainpoint/issues"
