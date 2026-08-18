@@ -75,11 +75,22 @@ CONF_HIC_CONTROL_PROBE_ENABLED = "hic_control_probe_enabled"
 # whichever order the two sit in. Station 1 makes all of those read 0x01.
 HIC_PROBE_STATION = 3
 
-# The shortest run worth asking for. Sized so a station that does switch on
-# stops by itself within the minute even if the probe's own stop command is
-# rejected, which is the failure mode that would otherwise leave a stranger's
-# hardware running on a guess.
-HIC_PROBE_RUN_SECONDS = 60
+# The number sent in the command's duration field. Deliberately NOT named for a
+# unit any more, because which unit this device reads is the open question: the
+# first real run asked for 60 and the controller reported a 3600-second run,
+# exactly 60 times what was asked. Everything else this integration drives
+# reads the field as seconds.
+#
+# 30 is chosen to answer that rather than to be small. It is unambiguous under
+# either reading, since a controller reporting 30 read seconds and one
+# reporting 1800 read minutes, and no confusion between the two survives a
+# single frame. It also stays long enough that a station switched on is still
+# running when the settle elapses, which a value of 2 would not be under the
+# seconds reading, and a walk that cannot see the station it just started is a
+# walk that scores its own success as a miss. The cost of the minutes reading
+# is bounded by the stop that follows a confirmation immediately, and by this
+# hardware dropping a station whose solenoid does not answer within seconds.
+HIC_PROBE_RUN_VALUE = 30
 
 # One day. Long enough to be unmistakable in the vendor app, which is the only
 # read-back a rain delay has: variant 279 declares no STA_ counterpart for it.

@@ -4,21 +4,23 @@ Two properties matter more than line coverage here, because this module writes
 commands to hardware the maintainer does not own:
 
 - Nothing is ever scored as working on the cloud's say-so. A candidate is
-  confirmed only when a status frame read back afterwards reports the station,
-  and every other path has its own outcome word.
+  confirmed only when one of the controller's own state frames reports the
+  station, whether that is the frame the endpoint answered with or the one read
+  back after the settle, and every other path has its own outcome word.
 - The walk stops the moment something works, and sends the stop.
 
 Both are asserted directly rather than inferred from a call count.
 """
 
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.rainpoint.api import RainPointApiError
+from custom_components.rainpoint.api import RainPointApiError, decode_hic801w
 from custom_components.rainpoint.const import (
-    HIC_PROBE_RUN_SECONDS,
+    HIC_PROBE_RUN_VALUE,
+    HIC_PROBE_SETTLE_SECONDS,
     HIC_PROBE_STATION,
 )
 from custom_components.rainpoint.control_probe import (
@@ -42,6 +44,7 @@ from custom_components.rainpoint.control_probe import (
 )
 from tests.payload_samples import (
     SAMPLE_HIC801W_IDLE_PAYLOAD,
+    SAMPLE_HIC801W_PROBE_RESPONSE_STATION3,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
 )
 
@@ -54,8 +57,12 @@ SENSOR_INFO = {
 }
 
 
-def _status(payload: str, addr: int = 1) -> dict:
-    """Return a getDeviceStatus body carrying one sub-device reading."""
+def _status(payload: str, addr: int | str = 1) -> dict:
+    """Return a getDeviceStatus body carrying one sub-device reading.
+
+    ``addr`` accepts a string so a test can pin the exact id spelling a real
+    unit sends. The first HIC801W to run the probe reports ``D01``, not ``D1``.
+    """
     return {"subDeviceStatus": [{"id": f"D{addr}", "value": payload, "time": 1}]}
 
 
@@ -122,7 +129,7 @@ class TestCandidateSpace:
         """The cap is what makes a rejected stop harmless, so nothing may exceed it."""
         durations = [c.duration for c in station_candidates() if c.duration is not None]
 
-        assert durations and max(durations) <= HIC_PROBE_RUN_SECONDS
+        assert durations and max(durations) <= HIC_PROBE_RUN_VALUE
 
     def test_plain_endpoint_candidates_lead_the_walk(self):
         """The endpoint every supported valve already uses is tried before the datapoint one."""
@@ -473,3 +480,195 @@ class TestStatusReadBackGuards:
 
         assert _state_from_status(status, 1)["station"] == HIC_PROBE_STATION
         assert _state_from_status(status, 2)["station"] == 0
+
+
+class TestTheSubDeviceIdIsResolvedNumerically:
+    """The defect that made a working walk record no winner at all.
+
+    The first real unit to run this probe reports its sub-device as ``D01``.
+    The read-back matched ids by rebuilding ``f"D{addr}"``, so it compared
+    against ``D1``, matched nothing, and scored all ten attempts unreadable
+    while the commands were in fact starting the station. Every test here fails
+    against that string comparison and passes against the numeric one.
+    """
+
+    def test_a_zero_padded_id_resolves_to_the_same_addr(self):
+        state = _state_from_status(_status(SAMPLE_HIC801W_STATION3_PAYLOAD, addr="01"), 1)
+
+        assert state["station"] == 3
+        assert state["frame"] == SAMPLE_HIC801W_STATION3_PAYLOAD
+
+    def test_an_unpadded_id_still_resolves(self):
+        """The fix must not trade one spelling for the other."""
+        state = _state_from_status(_status(SAMPLE_HIC801W_STATION3_PAYLOAD, addr="1"), 1)
+
+        assert state["station"] == 3
+
+    def test_a_different_addr_is_still_not_this_device(self):
+        """Numeric resolution must not turn into matching everything."""
+        state = _state_from_status(_status(SAMPLE_HIC801W_STATION3_PAYLOAD, addr="02"), 1)
+
+        assert state["station"] is None
+        assert state["frame"] is None
+
+    def test_a_non_numeric_id_is_skipped_rather_than_raising(self):
+        state = _state_from_status({"subDeviceStatus": [{"id": "connected", "value": "1"}]}, 1)
+
+        assert state["station"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_walk_against_a_zero_padded_unit_confirms(self):
+        """The end-to-end shape of the defect, not just the helper it lived in.
+
+        Asserting on _state_from_status alone would have kept passing for the
+        wrong reason if the walk stopped calling it, so this drives the real
+        entry point against the id spelling the real unit sends.
+        """
+        client = _client(statuses=lambda mid: _status(SAMPLE_HIC801W_STATION3_PAYLOAD, addr="01"))
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert run.confirmed_label == "work_mode_port"
+        assert run.attempts[0]["confirmed_by"] == "read_back"
+
+
+class TestTheCommandResponseIsAWitnessToo:
+    """Why the read-back alone is not enough on this hardware.
+
+    Both control endpoints answer with the controller's own state frame, and on
+    the first real run that frame already showed the commanded station running.
+    The read-back that follows the settle can miss it: this controller drops a
+    station whose solenoid does not answer within seconds, which is precisely
+    the state a probe is run in. Confirming on either frame is what keeps a
+    working encoding from scoring as a miss.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_response_frame_confirms_when_the_read_back_has_gone_quiet(self):
+        client = _client(
+            send=lambda **kw: SAMPLE_HIC801W_PROBE_RESPONSE_STATION3,
+            statuses=lambda mid: _status(SAMPLE_HIC801W_IDLE_PAYLOAD),
+        )
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert run.confirmed_label == "work_mode_port"
+        assert run.attempts[0]["confirmed_by"] == "response"
+        assert run.attempts[0]["station_in_response"] == 3
+
+    @pytest.mark.asyncio
+    async def test_the_read_back_is_preferred_when_both_witnesses_speak(self):
+        """Not a behavioural nicety: it records which evidence the verdict rests on."""
+        client = _client(
+            send=lambda **kw: SAMPLE_HIC801W_PROBE_RESPONSE_STATION3,
+            statuses=lambda mid: _status(SAMPLE_HIC801W_STATION3_PAYLOAD),
+        )
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert run.attempts[0]["confirmed_by"] == "read_back"
+
+    @pytest.mark.asyncio
+    async def test_a_bare_acknowledgement_confirms_nothing(self):
+        """The response is a witness only when it is actually a state frame.
+
+        The endpoints can answer with a plain word, and treating that as
+        evidence would make every candidate confirm and the walk meaningless.
+        """
+        client = _client(send=lambda **kw: "ok", statuses=lambda mid: _status(SAMPLE_HIC801W_IDLE_PAYLOAD))
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert run.confirmed_label is None
+        assert {a["station_in_response"] for a in run.attempts} == {None}
+
+    @pytest.mark.asyncio
+    async def test_a_bare_acknowledgement_never_reaches_the_decoder(self):
+        """decode_hic801w logs an exception on an unparseable blob.
+
+        Handing it every response would put a traceback in the owner's log for
+        each attempt, in a run whose whole purpose is to produce a readable log.
+        """
+        client = _client(send=lambda **kw: "ok", statuses=lambda mid: _status(SAMPLE_HIC801W_IDLE_PAYLOAD))
+
+        with patch("custom_components.rainpoint.control_probe.decode_hic801w", wraps=decode_hic801w) as decoder:
+            await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert all(call.args[0].startswith("10#") for call in decoder.call_args_list)
+
+
+class TestTheRunLengthTheControllerReports:
+    """The seconds-or-minutes question, carried in the record rather than inferred.
+
+    The first real run asked for 60 and the controller reported 3600. Until
+    that is settled no duration can reach a user-facing control, so the number
+    asked for and the number reported both have to survive into the report.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_reported_run_length_is_recorded_next_to_the_one_asked_for(self):
+        client = _client(
+            send=lambda **kw: SAMPLE_HIC801W_PROBE_RESPONSE_STATION3,
+            statuses=lambda mid: _status(SAMPLE_HIC801W_IDLE_PAYLOAD),
+        )
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert run.attempts[0]["run_seconds_in_response"] == 3600
+        assert run.attempts[0]["request"]["duration"] == HIC_PROBE_RUN_VALUE
+
+    @pytest.mark.asyncio
+    async def test_the_read_back_records_its_run_length_too(self):
+        client = _client(statuses=lambda mid: _status(SAMPLE_HIC801W_STATION3_PAYLOAD))
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert run.attempts[0]["run_seconds_after"] == 60
+
+    def test_the_value_sent_is_unambiguous_under_either_unit(self):
+        """30 seconds and 30 minutes cannot be confused in a reported frame.
+
+        A value that read the same under both, or one small enough to have
+        finished before the settle elapses, would leave the question open after
+        another round trip with the owner.
+        """
+        assert HIC_PROBE_RUN_VALUE * 60 != HIC_PROBE_RUN_VALUE
+        assert HIC_PROBE_RUN_VALUE > HIC_PROBE_SETTLE_SECONDS
+
+
+class TestTheStopIsNotCreditedWithoutEvidence:
+    """An unreadable frame was counted as a successful stop.
+
+    That is the one scoring rule that could report a stop command as working
+    with no frame supporting it, and it sat directly behind a read-back that
+    was matching nothing at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_stop_nobody_could_read_is_not_a_success(self):
+        statuses = iter(
+            [
+                _status(SAMPLE_HIC801W_STATION3_PAYLOAD, addr="01"),  # the start confirms
+                {"subDeviceStatus": []},  # the stop read-back says nothing
+            ]
+        )
+        client = _client(statuses=lambda mid: next(statuses))
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert run.confirmed_label == "work_mode_port"
+        assert run.attempts[-1]["stop_succeeded"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_station_reported_off_is_a_success(self):
+        statuses = iter(
+            [
+                _status(SAMPLE_HIC801W_STATION3_PAYLOAD, addr="01"),
+                _status(SAMPLE_HIC801W_IDLE_PAYLOAD, addr="01"),
+            ]
+        )
+        client = _client(statuses=lambda mid: next(statuses))
+
+        run = await async_run_probe(client, SENSOR_INFO, kind="station", now="t0")
+
+        assert run.attempts[-1]["stop_succeeded"] is True

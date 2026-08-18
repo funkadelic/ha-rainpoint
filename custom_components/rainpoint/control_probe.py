@@ -32,12 +32,14 @@ structural rather than advisory:
 - It is off unless the owner turns on an options toggle that ships off, so no
   ordinary user can reach it.
 - The station walk targets station 3 (``HIC_PROBE_STATION``), asks for the
-  shortest useful run, and sends the matching stop the moment a candidate
-  works. A station that switches on stops within the minute even if that stop
-  is rejected.
+  shortest run that still answers the unit question, and sends the matching
+  stop the moment a candidate works.
 - Nothing here is optimistic. A candidate counts as working only when the
-  controller itself reports that station running in a status frame read back
-  afterwards, never because the cloud returned success.
+  controller itself reports that station running in one of its own state
+  frames, never because the cloud returned success. Two frames can say so: the
+  one these endpoints answer with, and the one read back after the settle.
+  ``confirmed_by`` records which, because they are not equally available on
+  this hardware and a reader should not have to guess.
 - The walk stops at the first candidate that works, so the remaining writes
   never happen.
 """
@@ -53,10 +55,11 @@ from .api import RainPointApiError, decode_hic801w
 from .const import (
     HIC_PROBE_MAX_ATTEMPTS,
     HIC_PROBE_RAIN_DELAY_DAYS,
-    HIC_PROBE_RUN_SECONDS,
+    HIC_PROBE_RUN_VALUE,
     HIC_PROBE_SETTLE_SECONDS,
     HIC_PROBE_STATION,
 )
+from .coordinator import _resolve_addr_from_sid
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,6 +70,10 @@ _LOGGER = logging.getLogger(__name__)
 DP_CODE_CTL_WATER = 7
 DP_CODE_CTL_SET_DELAY = 11
 
+# The marker every HIC801W status frame carries. Used to tell a state string
+# apart from a bare acknowledgement before the decoder is asked to read it.
+_FRAME_PREFIX = "10#"
+
 ENDPOINT_WORK_MODE = "controlWorkMode"
 ENDPOINT_WORK_MODE_DP = "controlWorkModeDP"
 
@@ -75,7 +82,7 @@ ENDPOINT_WORK_MODE_DP = "controlWorkModeDP"
 OUTCOME_CONFIRMED = "confirmed"  # cloud accepted AND the controller reported it
 OUTCOME_NO_EFFECT = "no_effect"  # cloud accepted, controller did not move
 OUTCOME_REJECTED = "rejected"  # cloud refused the call
-OUTCOME_UNREADABLE = "unreadable"  # call went out, read-back could not be decoded
+OUTCOME_UNREADABLE = "unreadable"  # call went out, neither frame could be decoded
 
 
 @dataclass(frozen=True)
@@ -108,7 +115,7 @@ def _pair(low: int, high: int) -> str:
     return bytes((low & 0xFF, high & 0xFF)).hex().upper()
 
 
-def station_candidates(station: int = HIC_PROBE_STATION, duration: int = HIC_PROBE_RUN_SECONDS) -> list[ProbeCandidate]:
+def station_candidates(station: int = HIC_PROBE_STATION, duration: int = HIC_PROBE_RUN_VALUE) -> list[ProbeCandidate]:
     """Return the ordered candidate encodings for starting one station.
 
     Ordered cheapest-hypothesis first. The two ``controlWorkMode`` shapes lead
@@ -335,12 +342,44 @@ async def _send(client: Any, candidate: ProbeCandidate, *, mid: int, addr: int, 
     )
 
 
-def _state_from_status(status: Any, addr: int) -> dict[str, Any]:
-    """Return what one status response says about this controller.
+def _decode_frame(raw: Any) -> dict[str, Any]:
+    """Return the station and run length one status frame reports.
 
     ``station`` is None for "could not read", never "no station running": the
     caller scores an unreadable frame as its own outcome rather than as a miss,
     so a decode failure cannot be mistaken for a candidate that did nothing.
+
+    ``run_seconds`` is STA_DURATION as the controller reports it, and it is
+    carried for one specific question the walk cannot otherwise answer: whether
+    the ``duration`` argument this probe sends is read as seconds or as minutes.
+    The first real run asked for 60 and the controller reported 3600, so the
+    unit has to be settled before any duration reaches a user-facing control.
+    Recording the number the controller reports next to the number that was
+    asked for settles it without anyone decoding hex by hand.
+    """
+    if not isinstance(raw, str) or not raw.startswith(_FRAME_PREFIX):
+        # The prefix check is what keeps the decoder off strings that were
+        # never frames. Both control endpoints can answer with a plain word
+        # rather than a state, and decode_hic801w answers an unparseable blob
+        # with an error envelope logged at exception level. Handing it every
+        # response would put a traceback in the owner's log for each attempt in
+        # the walk, in a run whose whole purpose is to produce a log worth
+        # reading.
+        return {"station": None, "run_seconds": None}
+    decoded = decode_hic801w(raw)
+    station = decoded.get("current_station")
+    run_seconds = decoded.get("run_duration_seconds")
+    return {
+        "station": station if isinstance(station, int) else None,
+        "run_seconds": run_seconds if isinstance(run_seconds, int) else None,
+    }
+
+
+def _state_from_status(status: Any, addr: int) -> dict[str, Any]:
+    """Return what one status response says about this controller.
+
+    ``station`` and ``run_seconds`` carry _decode_frame's readings for the entry
+    matching ``addr``, and both are None when there is nothing to read.
 
     ``frame`` is the read-back payload kept whole rather than decoded. The
     decoder deliberately reads none of STA_RAIN, STA_RH or STA_TS_DET, and
@@ -350,21 +389,27 @@ def _state_from_status(status: Any, addr: int) -> dict[str, Any]:
     station with no solenoid answering. Recording the frame keeps that evidence
     without teaching the decoder a field whose meaning is still unpinned, and
     the frames only ever reach the recorded run, never a log line.
+
+    The entry is matched with _resolve_addr_from_sid rather than against a
+    rebuilt ``f"D{addr}"`` string, and that is not a stylistic preference. The
+    first real unit to run this probe reports its sub-device as ``D01``, so the
+    string form matched nothing, every read-back scored unreadable, and a walk
+    whose commands were in fact working recorded no winner. The coordinator has
+    always resolved these ids numerically and says so where it does; sharing
+    that one definition is what stops the two from disagreeing again.
     """
-    unread: dict[str, Any] = {"station": None, "frame": None}
+    unread: dict[str, Any] = {"station": None, "run_seconds": None, "frame": None}
     if not isinstance(status, dict):
         return unread
     for entry in status.get("subDeviceStatus") or []:
         if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
             continue
-        if entry["id"] != f"D{addr}":
+        if _resolve_addr_from_sid(entry["id"]) != addr:
             continue
         raw = entry.get("value")
         if not isinstance(raw, str):
             return unread
-        decoded = decode_hic801w(raw)
-        station = decoded.get("current_station")
-        return {"station": station if isinstance(station, int) else None, "frame": raw}
+        return {**_decode_frame(raw), "frame": raw}
     return unread
 
 
@@ -384,7 +429,7 @@ async def _read_state(client: Any, mid: int, addr: int) -> dict[str, Any]:
         # read-back that never happened is the difference between "this
         # encoding did nothing" and "nobody looked".
         _LOGGER.warning("HIC probe: status read-back failed: %s", type(err).__name__)
-        return {"station": None, "frame": None}
+        return {"station": None, "run_seconds": None, "frame": None}
     return _state_from_status(status, addr)
 
 
@@ -405,7 +450,7 @@ async def _attempt(
         "request": _request_record(candidate, addr),
     }
     try:
-        state = await _send(client, candidate, mid=mid, addr=addr, device_name=device_name, product_key=product_key)
+        response_state = await _send(client, candidate, mid=mid, addr=addr, device_name=device_name, product_key=product_key)
     except RainPointApiError as err:
         record["outcome"] = OUTCOME_REJECTED
         record["error"] = str(err)
@@ -418,7 +463,10 @@ async def _attempt(
         record["error"] = f"transport: {type(err).__name__}"
         return record
 
-    record["cloud_state"] = state
+    record["cloud_state"] = response_state
+    reported = _decode_frame(response_state)
+    record["station_in_response"] = reported["station"]
+    record["run_seconds_in_response"] = reported["run_seconds"]
     if expect_station is None:
         # The rain delay has no STA_ counterpart in variant 279, so there is
         # nothing to read back and the owner's own look at the vendor app is
@@ -429,14 +477,32 @@ async def _attempt(
         return record
 
     await asyncio.sleep(HIC_PROBE_SETTLE_SECONDS)
-    state = await _read_state(client, mid, addr)
-    station = state["station"]
+    read_back = await _read_state(client, mid, addr)
+    station = read_back["station"]
     record["station_after"] = station
-    record["frame_after"] = state["frame"]
-    if station is None:
-        record["outcome"] = OUTCOME_UNREADABLE
-    elif station == expect_station:
+    record["run_seconds_after"] = read_back["run_seconds"]
+    record["frame_after"] = read_back["frame"]
+    if station == expect_station:
         record["outcome"] = OUTCOME_CONFIRMED
+        record["confirmed_by"] = "read_back"
+    elif reported["station"] == expect_station:
+        # The read-back is not the only witness, and on this device it is not
+        # even the reliable one. These endpoints answer with the controller's
+        # own state frame, and on the first real run that frame already showed
+        # the commanded station running before the settle had elapsed. The
+        # read-back that follows loses a race the owner described plainly: a
+        # station with no solenoid answering is dropped again within seconds,
+        # so waiting to ask is how a working encoding scores as a miss.
+        #
+        # This stays honest about what "confirmed" has always meant here,
+        # because the state frame is the controller's reading of itself rather
+        # than the cloud's acknowledgement of the call. A response that merely
+        # succeeded still confirms nothing; ``confirmed_by`` records which
+        # witness spoke so the distinction survives into the report.
+        record["outcome"] = OUTCOME_CONFIRMED
+        record["confirmed_by"] = "response"
+    elif station is None:
+        record["outcome"] = OUTCOME_UNREADABLE
     else:
         record["outcome"] = OUTCOME_NO_EFFECT
     return record
@@ -453,18 +519,27 @@ def _log_attempt(record: dict[str, Any], position: int, total: int) -> None:
     terms too: nothing here runs unless a human turned an off-by-default option
     on and pressed a button that writes commands to their hardware.
 
-    Three values only, all of them this module's own vocabulary: the candidate
-    label, the verdict, and the station the controller reported afterwards. No
-    frame, no cloud message, no addressing field, so the line stays inside the
-    rule the cloud-record paths already follow.
+    This module's own vocabulary and integers only: the candidate label, the
+    verdict, which witness confirmed it, the station each witness reported, and
+    the run length the controller reported against the one that was asked for.
+    No frame, no cloud message, no addressing field, so the line stays inside
+    the rule the cloud-record paths already follow.
+
+    The run lengths are on the line rather than in the record alone because
+    this is the surface that survives everything. A owner who sends nothing but
+    a plain log download has still sent the seconds-or-minutes answer.
     """
     _LOGGER.warning(
-        "HIC probe: attempt %d/%d %s -> %s (station_after=%s)",
+        "HIC probe: attempt %d/%d %s -> %s (by=%s, station_after=%s, station_in_response=%s, asked_run=%s, reported_run=%s)",
         position,
         total,
         record.get("label"),
         record.get("outcome"),
+        record.get("confirmed_by"),
         record.get("station_after"),
+        record.get("station_in_response"),
+        (record.get("request") or {}).get("duration"),
+        record.get("run_seconds_in_response") if record.get("run_seconds_after") is None else record.get("run_seconds_after"),
     )
 
 
@@ -545,7 +620,14 @@ async def async_run_probe(
         # The stop is scored inverted: the station going quiet is the success
         # here, so a read-back that still reports it running is what a reader
         # needs to see called out.
-        stop_record["stop_succeeded"] = stop_record.get("station_after") in (0, None)
+        #
+        # An unreadable frame is emphatically not success. It was counted as
+        # one while the read-back was matching sub-device ids by a rebuilt
+        # string and therefore never matching at all, which is exactly the
+        # combination that would have reported a stop command as working
+        # without a single frame supporting it. Either witness reading 0
+        # counts; neither being readable leaves this False.
+        stop_record["stop_succeeded"] = 0 in (stop_record.get("station_after"), stop_record.get("station_in_response"))
         run.attempts.append(stop_record)
         _log_attempt(stop_record, len(run.attempts), len(walk) + 1)
         run.stop_outcome = stop_record["outcome"]
