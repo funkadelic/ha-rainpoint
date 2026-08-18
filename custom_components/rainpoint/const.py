@@ -69,11 +69,28 @@ HUB_UNIQUE_ID_PREFIX = f"{DOMAIN}_hub_"
 # and records every attempt for the owner to attach to a support thread.
 CONF_HIC_CONTROL_PROBE_ENABLED = "hic_control_probe_enabled"
 
-# Station 3, not station 1. Three separates every candidate encoding that a 1
-# would collapse together: as a station number it is 0x03 where the bitmask for
-# the same station is 0x04, and a byte pair carrying it plus an on-flag differs
-# whichever order the two sit in. Station 1 makes all of those read 0x01.
-HIC_PROBE_STATION = 3
+# Station 1, and this was station 3 for a reason that has since expired.
+#
+# Three was chosen to tell the candidate encodings apart, because 3 reads 0x03
+# as a station number against 0x04 as a bitmask and a byte pair carrying it
+# plus an on-flag differs whichever order the two sit in, where station 1
+# collapses all of those onto 0x01. That mattered while the encoding was
+# unknown. It is known now: a real unit confirmed controlWorkMode with the
+# station in port, so there is nothing left for a distinguishing station to
+# distinguish.
+#
+# What matters instead is that the stop can be proved, and station 3 cannot
+# prove it. The reporter's station 3 has no solenoid on it, and this hardware
+# drops a station whose solenoid does not answer within seconds, which is the
+# same few seconds the probe waits before sending its stop. A station reading
+# off afterwards would be equally consistent with the stop working and with the
+# controller giving up, and the two cannot be separated after the fact.
+#
+# Station 1 is wired. The run holds, so the station being off after the stop
+# means the stop did it. Nothing waters as long as the water is off at the tap,
+# because what the controller checks is whether the solenoid answers
+# electrically, not whether water moved.
+HIC_PROBE_STATION = 1
 
 # The number sent in the command's duration field. Deliberately NOT named for a
 # unit any more, because which unit this device reads is the open question: the
@@ -81,19 +98,30 @@ HIC_PROBE_STATION = 3
 # exactly 60 times what was asked. Everything else this integration drives
 # reads the field as seconds.
 #
-# 30 is chosen to answer that rather than to be small. It is unambiguous under
-# either reading, since a controller reporting 30 read seconds and one
-# reporting 1800 read minutes, and no confusion between the two survives a
-# single frame. It also stays long enough that a station switched on is still
-# running when the settle elapses, which a value of 2 would not be under the
-# seconds reading, and a walk that cannot see the station it just started is a
-# walk that scores its own success as a miss. The cost of the minutes reading
-# is bounded by the stop that follows a confirmation immediately, and by this
-# hardware dropping a station whose solenoid does not answer within seconds.
-HIC_PROBE_RUN_VALUE = 30
+# 2 separates all three readings that are actually in play: a controller
+# reporting 2 read seconds, one reporting 120 read minutes, and one reporting
+# 3600 again ignored the field entirely and used a runtime of its own. Any
+# other number means something none of those three cover, which is worth
+# knowing too.
+#
+# It is small because the probe now runs against a wired station, where the
+# minutes reading means a real two-minute run rather than a station that drops
+# itself. Two minutes is the whole exposure, and the stop that follows a
+# confirmation cuts it shorter still.
+#
+# A value this small was unusable while a candidate could only be confirmed by
+# a status read taken after the settle, since a two-second run would be over
+# before anyone looked. It is usable now because the command's own response
+# frame is read immediately, with no settle in front of it.
+HIC_PROBE_RUN_VALUE = 2
 
-# One day. Long enough to be unmistakable in the vendor app, which is the only
-# read-back a rain delay has: variant 279 declares no STA_ counterpart for it.
+# One day. Long enough to be unmistakable in the vendor app, which is still the
+# only verdict this stage can be scored against: variant 279 declares no STA_
+# counterpart for a rain delay, so nothing in a status frame is known to carry
+# one. The walk now records the frame after each candidate anyway, against the
+# possibility that a delay moves a field whose meaning nobody has pinned down.
+# STA_RAIN is the obvious suspect and reads the same value in all 23 captures
+# held here, none of which were taken with a delay set.
 HIC_PROBE_RAIN_DELAY_DAYS = 1
 
 # Pause between issuing a command and reading the station back. The cloud

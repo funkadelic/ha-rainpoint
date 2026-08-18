@@ -126,6 +126,16 @@ def station_candidates(station: int = HIC_PROBE_STATION, duration: int = HIC_PRO
     number rather than a mask (``STA_WATER_ZONES`` b0 reads 03 for station 3,
     not 04), which makes the same convention on the command side the more
     likely of the two rather than merely the more convenient.
+
+    The list is no longer expected to disambiguate anything. A real unit
+    confirmed ``work_mode_port``, the first entry, so the walk exists now to
+    reproduce that result and to fall through to the alternatives if the
+    hardware in front of it turns out to differ. That is why the probe no
+    longer runs against a station chosen to keep the encodings distinct: with
+    ``HIC_PROBE_STATION`` at 1 several of these candidates encode to identical
+    bytes, which would have been fatal to a walk that still had to tell them
+    apart and costs nothing to one that does not. See the constant for why
+    proving the stop now matters more than distinguishing the start.
     """
     mask = 1 << (station - 1)
     return [
@@ -283,6 +293,7 @@ class ProbeRun:
     finished_at: str | None = None
     confirmed_label: str | None = None
     stop_outcome: str | None = None
+    baseline_frame: str | None = None
     attempts: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -294,6 +305,7 @@ class ProbeRun:
             "finished_at": self.finished_at,
             "confirmed_label": self.confirmed_label,
             "stop_outcome": self.stop_outcome,
+            "baseline_frame": self.baseline_frame,
             "attempt_count": len(self.attempts),
             "attempts": self.attempts,
         }
@@ -468,12 +480,22 @@ async def _attempt(
     record["station_in_response"] = reported["station"]
     record["run_seconds_in_response"] = reported["run_seconds"]
     if expect_station is None:
-        # The rain delay has no STA_ counterpart in variant 279, so there is
-        # nothing to read back and the owner's own look at the vendor app is
-        # the verdict. Saying so here keeps the record honest rather than
-        # implying a confirmation this stage cannot produce.
+        # Variant 279 declares no STA_ counterpart for a rain delay, so nothing
+        # here can be scored and the outcome stays NO_EFFECT: this stage still
+        # cannot say a candidate worked.
+        #
+        # It can preserve the evidence, though, and that is new. Every frame is
+        # recorded even though nothing reads them yet, because the field that
+        # moves when a delay is set can be identified separately, by the owner
+        # setting a delay in the vendor app and sending the frame that results.
+        # Once that field is known, these frames say which candidate moved it
+        # and the first one that did is the answer. Recording them costs one
+        # status call each and turns a second round trip into a comparison.
+        await asyncio.sleep(HIC_PROBE_SETTLE_SECONDS)
+        delay_state = await _read_state(client, mid, addr)
         record["outcome"] = OUTCOME_NO_EFFECT
-        record["read_back"] = "not_applicable"
+        record["read_back"] = "recorded_not_scored"
+        record["frame_after"] = delay_state["frame"]
         return record
 
     await asyncio.sleep(HIC_PROBE_SETTLE_SECONDS)
@@ -543,6 +565,26 @@ def _log_attempt(record: dict[str, Any], position: int, total: int) -> None:
     )
 
 
+def _stop_would_prove_anything(start_record: dict[str, Any]) -> bool:
+    """Return whether a station reading off after the stop can be credited to it.
+
+    It can only be credited when the run the controller reported was still
+    supposed to be going when the stop was sent. The probe waits
+    HIC_PROBE_SETTLE_SECONDS before reading back and again before sending the
+    stop, so a run shorter than that had already expired on its own and the
+    station being off afterwards says nothing about the command.
+
+    A run length that could not be read at all returns False rather than True.
+    The question is whether there is positive evidence the run was still alive,
+    and an unreadable frame is not that.
+    """
+    for key in ("run_seconds_after", "run_seconds_in_response"):
+        reported = start_record.get(key)
+        if isinstance(reported, int):
+            return reported > HIC_PROBE_SETTLE_SECONDS
+    return False
+
+
 def _stop_candidate(confirmed: ProbeCandidate, station: int) -> ProbeCandidate:
     """Return the inverse of the candidate that worked.
 
@@ -576,6 +618,12 @@ async def async_run_probe(
     first candidate the controller confirms and immediately sends the matching
     stop; the rain-delay walk runs every candidate, because it has no read-back
     to stop on and each one is harmless.
+
+    The rain-delay walk reads one frame before it sends anything. That baseline
+    is what the frames recorded after each candidate are compared against, and
+    it has to come from the same session on the same unit: the committed
+    captures are all from units with no delay set and cannot show which field a
+    delay moves on this one.
     """
     mid = sensor_info["mid"]
     addr = sensor_info["addr"]
@@ -590,6 +638,8 @@ async def async_run_probe(
         expect_station = None
 
     run = ProbeRun(kind=kind, station=expect_station, started_at=now)
+    if expect_station is None:
+        run.baseline_frame = (await _read_state(client, mid, addr))["frame"]
     walk = candidates[:HIC_PROBE_MAX_ATTEMPTS]
     for position, candidate in enumerate(walk, start=1):
         record = await _attempt(
@@ -627,7 +677,19 @@ async def async_run_probe(
         # combination that would have reported a stop command as working
         # without a single frame supporting it. Either witness reading 0
         # counts; neither being readable leaves this False.
-        stop_record["stop_succeeded"] = 0 in (stop_record.get("station_after"), stop_record.get("station_in_response"))
+        #
+        # Conclusiveness is scored separately and first, because a station can
+        # read off for a reason that has nothing to do with the stop. A run
+        # already over by the time the stop went out is the obvious one, and it
+        # is not hypothetical: it is what station 3 did on the reporter's unit
+        # every time, and why the probe moved to a wired station. Recording
+        # "off, but it proves nothing" is the difference between an answer and
+        # a coincidence that reads like one.
+        stop_record["stop_conclusive"] = _stop_would_prove_anything(record)
+        stop_record["stop_succeeded"] = stop_record["stop_conclusive"] and 0 in (
+            stop_record.get("station_after"),
+            stop_record.get("station_in_response"),
+        )
         run.attempts.append(stop_record)
         _log_attempt(stop_record, len(run.attempts), len(walk) + 1)
         run.stop_outcome = stop_record["outcome"]

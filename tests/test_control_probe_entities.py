@@ -37,8 +37,17 @@ SENSOR_KEY = "100_85577_1"
 
 @pytest.fixture(autouse=True)
 def _no_settle(monkeypatch):
-    """Collapse the inter-attempt settle so a button press does not sleep the suite."""
-    monkeypatch.setattr("custom_components.rainpoint.control_probe.HIC_PROBE_SETTLE_SECONDS", 0)
+    """Make the settle instant without changing how long it is.
+
+    Stubbing the sleep rather than zeroing the constant, for the reason the
+    same fixture in test_control_probe.py spells out: the constant doubles as
+    the threshold a stop is judged against, so zeroing it disables that rule.
+    """
+
+    async def _instant(_seconds):
+        return None
+
+    monkeypatch.setattr("custom_components.rainpoint.control_probe.asyncio.sleep", _instant)
 
 
 @pytest.fixture(autouse=True)
