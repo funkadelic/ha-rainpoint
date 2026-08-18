@@ -150,7 +150,6 @@ jobs:
   # 3.13. Runs the suite only. Coverage, the badge and Sonar all belong to the
   # job above, so they report once rather than racing each other.
   test-min:
-    name: test-min (oldest supported HA)
     runs-on: ubuntu-latest
 
     steps:
