@@ -2,6 +2,26 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.19.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.18.1...v1.19.0) (2026-08-19)
+
+
+### What's new
+
+**The HIC801W irrigation controller can now start and stop its stations**
+
+- Each of the eight stations gets a valve you can open and close from Home Assistant, and a run duration to set beside it, the same as the valve hubs already have.
+- Run lengths on this model are whole minutes, from 1 to 60, which is what the controller accepts. Changing a station's duration while that station is watering is refused with an explanation, as it is on the other models.
+- While a station is running, its valve carries that run's length and the time the controller expects it to finish. The other seven stay bare, because the controller reports one run at a time rather than one per station.
+
+### Thanks
+
+Thanks to **@fredclappen** for running the beta builds against their HIC801W which generated the diagnostics which made HIC801W station control possible.
+
+
+### Added
+
+* start and stop stations on the HIC801W irrigation controller ([#184](https://github.com/funkadelic/ha-rainpoint/issues/184)) ([3e27405](https://github.com/funkadelic/ha-rainpoint/commit/3e2740589d80f7efc53c6c55c6f73bd401eeba8b))
+
 ## [1.18.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.18.0...v1.18.1) (2026-08-18)
 
 
