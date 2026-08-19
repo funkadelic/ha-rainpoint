@@ -2327,7 +2327,36 @@ def _resolve_residual_hub_mid(row, hid: str, real_hubs: list, entity_rows, devic
     return _resolve_hub_mid(row, hid, entity_rows, device_rows) or (min(candidates, key=int) if candidates else None)
 
 
-def _log_residual_mid_decline(hid: str, warned_hids: set[str] | None) -> None:
+def _residual_mid_decline_reason(hid: str, real_hubs: list) -> str:
+    """Say why no candidate mid qualified for this hid, in one fixed phrase.
+
+    The decline below is the only durable signal a hub that never resolves
+    ever produces, and until now it named the hid and stopped, so the two
+    conditions behind it were indistinguishable in a log. They call for
+    opposite responses: waiting is right for one and useless for the other.
+
+    Absent from this poll is transient by construction. A getDeviceByHid
+    response can omit a hub the previous poll listed, which is the whole reason
+    this sweep re-runs on updates rather than once at setup, so the deferral
+    the message promises is real and the next poll may well supply the mid.
+
+    A record that is present but carries a mid this sweep cannot read is
+    permanent until the cloud changes it. `device.py` writes that mid into the
+    hub identifier and every unique id with no guard, while this sweep filters
+    candidates through `str(mid).isdigit()`, so the hub is used and declined at
+    once and no later poll will resolve it on its own.
+
+    Two outcomes rather than three: a hid with any readable mid resolves, so
+    the caller never reaches here for it. Both phrases are fixed strings, so no
+    cloud value rides into the log on this path.
+    """
+    for_hid = [hub for hub in real_hubs if str(hub.get("hid")) == hid]
+    if not for_hid:
+        return "no record for it in this poll"
+    return "its record carries a mid that is not a decimal integer"
+
+
+def _log_residual_mid_decline(hid: str, warned_hids: set[str] | None, reason: str) -> None:
     """Log a hub whose mid no source could supply, loudly once and quietly after.
 
     warned_hids is the caller's closure-local record of which hids have already
@@ -2339,15 +2368,21 @@ def _log_residual_mid_decline(hid: str, warned_hids: set[str] | None) -> None:
     A caller passing None owns no closure to dedupe against (a direct test call,
     say), so it gets the WARNING every time rather than silent DEBUG. Announcing
     twice is a much cheaper failure than announcing never.
+
+    reason comes from _residual_mid_decline_reason and rides both levels, not
+    only the loud one: a hub can be absent on one pass and unreadable on the
+    next, and the repeat line is the only place that change is visible once the
+    hid has already been announced.
     """
     if warned_hids is not None and hid in warned_hids:
-        _LOGGER.debug("No mid available for hub %s this pass; leaving it for a later poll", hid)
+        _LOGGER.debug("No mid available for hub %s this pass (%s); leaving it for a later poll", hid, reason)
         return
     if warned_hids is not None:
         warned_hids.add(hid)
     _LOGGER.warning(
-        "No mid available yet for hub %s; its identity re-key is deferred until a later poll supplies one",
+        "No mid available yet for hub %s (%s); its identity re-key is deferred until a later poll supplies one",
         hid,
+        reason,
     )
 
 
@@ -2445,7 +2480,7 @@ def _complete_hub_identity_rekey(
 
         mid = _resolve_residual_hub_mid(row, hid, real_hubs, entity_rows, device_rows)
         if mid is None:
-            _log_residual_mid_decline(hid, warned_hids)
+            _log_residual_mid_decline(hid, warned_hids, _residual_mid_decline_reason(hid, real_hubs))
             continue
         if _move_hub_device_row(device_registry, row, hid, mid):
             _migrate_hub_entity_unique_ids(entity_registry, entity_rows, hid, mid)
