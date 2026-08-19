@@ -26,7 +26,7 @@ from .const import (
 )
 from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .device import build_sub_device_info
-from .entity import LateEntityAdder, register_late_adder, sub_device_attributes
+from .entity import LateEntityAdder, hic801w_station_is_running, register_late_adder, sub_device_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -579,21 +579,14 @@ class RainPointHicStationDurationNumber(_RainPointDurationNumberBase):
     def _run_state_open(self) -> bool | None:
         """Read whether this station is the one currently running.
 
-        The same tri-state the station valve publishes, derived the same way
-        and from the same reading, so a setpoint and its valve can never
-        disagree about whether a station is watering. None (no data, an
-        unparsed frame, or a station number outside the declared range) is the
-        fail-open answer the base class documents: a setpoint edit starts no
-        water, so an unconfirmed state must accept the write rather than lock
-        the entity.
+        The same tri-state the station valve publishes, through the same
+        helper, so a setpoint and its valve can never disagree about whether a
+        station is watering. None (no data, an unparsed frame, or a station
+        number outside the declared range) is the fail-open answer the base
+        class documents: a setpoint edit starts no water, so an unconfirmed
+        state must accept the write rather than lock the entity.
         """
-        data = self._hic_data
-        if not data:
-            return None
-        current_station = data.get("current_station")
-        if not isinstance(current_station, int) or not (0 <= current_station <= HIC801W_STATION_COUNT):
-            return None
-        return current_station == self._station_num
+        return hic801w_station_is_running(self._hic_data, self._station_num)
 
     @property
     def _zone_label(self) -> str:

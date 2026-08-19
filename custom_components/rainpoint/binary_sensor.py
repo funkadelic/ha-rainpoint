@@ -9,7 +9,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, HIC801W_STATION_COUNT, MODEL_HIC801W
 from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
-from .entity import LateEntityAdder, RainPointSubDeviceEntity, register_late_adder
+from .entity import LateEntityAdder, RainPointSubDeviceEntity, hic801w_station_is_running, register_late_adder
 from .hub_entities import (
     RainPointHubConnectivityBinarySensor,
     RainPointPushConnectedBinarySensor,
@@ -63,29 +63,16 @@ class RainPointHicStationWateringBinarySensor(RainPointSubDeviceEntity, BinarySe
     def is_on(self) -> bool | None:
         """Return whether this station is the one currently running.
 
-        None whenever the reading is missing or the frame failed its shape
-        check: an automation must not be able to read a
-        definite False as evidence that a station is off when the frame did
-        not parse at all. `available` deliberately stays True on that path,
-        because the device is reachable and still polling and it is the
-        payload that did not parse, so `unavailable` would misreport the
-        cause.
+        The shared reading, so this sensor and the station valve beside it can
+        never disagree about whether a station is watering. Its three-way
+        answer and the reasoning behind it live on the helper.
 
-        A `current_station` outside 0 through 8 is treated the same way, for
-        the same reason and on the same evidence as
-        RainPointHicCurrentStationSensor's closed option list: the
-        decoder's shape check rejects only on a non-zero b3 and does not
-        itself exclude an out-of-range b0, so without this guard a single
-        corrupt byte would make all eight stations report a confident False
-        rather than no state.
+        `available` deliberately stays True when that answer is None because a
+        frame failed its shape check: the device is reachable and still
+        polling and it is the payload that did not parse, so `unavailable`
+        would misreport the cause.
         """
-        data = self._sensor_data
-        if not data:
-            return None
-        current_station = data.get("current_station")
-        if not isinstance(current_station, int) or not (0 <= current_station <= HIC801W_STATION_COUNT):
-            return None
-        return current_station == self._station_num
+        return hic801w_station_is_running(self._sensor_data, self._station_num)
 
 
 def _build_hic801w_station_entities(coordinator: RainPointCoordinator, key: str, info: dict) -> list:

@@ -43,7 +43,7 @@ from .coordinator import (
     hub_connectivity_record,
 )
 from .device import build_sub_device_info
-from .entity import LateEntityAdder, register_late_adder, sub_device_attributes
+from .entity import LateEntityAdder, hic801w_station_is_running, register_late_adder, sub_device_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -616,24 +616,12 @@ class RainPointHicStationValveEntity(CoordinatorEntity[RainPointCoordinator], Va
     def _is_running_station(self) -> bool | None:
         """Return whether this station is the one currently running.
 
-        The same reading, and the same three-way answer, as
-        RainPointHicStationWateringBinarySensor.is_on. None means the frame is
-        missing or did not parse, and it must not collapse to False: a valve
-        reporting a confident closed on a frame that never parsed would be an
-        invented state, and an automation cannot tell the two apart afterwards.
-
-        A ``current_station`` outside the declared station range is treated the
-        same way. The decoder's shape check rejects only on a non-zero b3 and
-        does not itself exclude an out-of-range b0, so without this guard one
-        corrupt byte would make all eight stations report a confident closed.
+        Literally the same reading as the watching binary sensor's, through
+        the same helper, so a valve can never report closed while the sensor
+        beside it reports watering. The three-way answer and the reasoning
+        behind it live there.
         """
-        data = self._hic_data
-        if not data:
-            return None
-        current_station = data.get("current_station")
-        if not isinstance(current_station, int) or not (0 <= current_station <= HIC801W_STATION_COUNT):
-            return None
-        return current_station == self._station_num
+        return hic801w_station_is_running(self._hic_data, self._station_num)
 
     # ------------------------------------------------------------------
     # Entity properties

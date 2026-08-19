@@ -24,6 +24,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .const import HIC801W_STATION_COUNT
 from .coordinator import (
     SILENT_DATA_TYPE,
     RainPointCoordinator,
@@ -268,6 +269,33 @@ class LateEntityAdder:
             new.extend(self.collect(key, info))
         if new:
             self._async_add_entities(new)
+
+
+def hic801w_station_is_running(decoded: dict | None, station_num: int) -> bool | None:
+    """Return whether `station_num` is the station an HIC801W is running now.
+
+    Three platforms project this controller's single running-station number
+    onto a per-station entity: the watching binary sensor, the station valve,
+    and that valve's duration setpoint. They have to agree, and what they have
+    to agree on is not only the station count const.py already names but the
+    guard around the reading, whose reasoning does not survive being copied.
+
+    None means the record is missing, carried no reading, or did not parse,
+    and it must never collapse to False. A confident "not running" on a frame
+    that never parsed is an invented state, and nothing reading the entity
+    afterwards can tell the two apart.
+
+    A `current_station` outside the declared range answers None for the same
+    reason. The decoder's shape check rejects only on a non-zero b3 and does
+    not itself exclude an out-of-range b0, so without this guard a single
+    corrupt byte would make every station report a confident not-running.
+    """
+    if not decoded:
+        return None
+    current_station = decoded.get("current_station")
+    if not isinstance(current_station, int) or not (0 <= current_station <= HIC801W_STATION_COUNT):
+        return None
+    return current_station == station_num
 
 
 def sub_device_attributes(coordinator: RainPointCoordinator, sensor_key: str) -> dict[str, Any]:
