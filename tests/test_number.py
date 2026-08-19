@@ -1588,6 +1588,7 @@ produced nothing" reading.
 
 
 def _make_hic_entry(model=MODEL_HIC801W, payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_HIC_UNSET):
+    """Return a coordinator sensor entry for an HIC801W, decoded from `payload`."""
     entry = make_sensor_entry(
         hid=100,
         mid=200,
@@ -1600,6 +1601,7 @@ def _make_hic_entry(model=MODEL_HIC801W, payload=SAMPLE_HIC801W_IDLE_PAYLOAD, da
 
 
 def _make_station_duration(payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_HIC_UNSET, station_num=1):
+    """Build one station duration setpoint over a decoded frame."""
     entry = _make_hic_entry(payload=payload, data=data)
     coordinator = MagicMock()
     coordinator.data = make_coordinator_data(sensors={"100_200_3": entry})
@@ -1613,11 +1615,13 @@ class TestHicStationDurationBuilder:
 
     @staticmethod
     def _build(entry):
+        """Run the station duration factory against one sensor entry."""
         coordinator = MagicMock()
         coordinator.data = make_coordinator_data(sensors={"100_200_3": entry})
         return _build_hic801w_station_durations(coordinator, "100_200_3", entry)
 
     def test_eight_setpoints_with_the_locked_unique_ids_and_names(self):
+        """Eight setpoints, with the unique IDs and names the registry persists."""
         built = self._build(_make_hic_entry())
         assert len(built) == HIC801W_STATION_COUNT
         assert [n._attr_unique_id for n in built] == [f"rainpoint_100_200_3_station{n}_duration" for n in range(1, 9)]
@@ -1634,13 +1638,16 @@ class TestHicStationDurationBuilder:
         assert [n._attr_unique_id for n in numbers] == [f"{v._attr_unique_id}_duration" for v in valves]
 
     def test_another_model_builds_nothing(self):
+        """The factory is dispatched on the model, so another model grows none."""
         assert self._build(_make_hic_entry(model=MODEL_VALVE_245)) == []
 
     def test_a_silent_controller_builds_nothing(self):
+        """A controller the integration cannot reach is offered no setpoint."""
         entry = _make_hic_entry(data={"type": SILENT_DATA_TYPE, "silent_state": "stopped_reporting"})
         assert self._build(entry) == []
 
     def test_the_setpoints_carry_the_family_bounds_and_default(self):
+        """The setpoints inherit the duration family's own bounds and default."""
         number = self._build(_make_hic_entry())[0]
         assert number.native_value == DURATION_DEFAULT_MINUTES
         assert number._attr_native_min_value == DURATION_MIN_MINUTES
@@ -1651,30 +1658,37 @@ class TestHicStationDurationRunState:
     """The setpoint and its valve read one signal about whether water is on."""
 
     def test_the_running_station_reads_open(self):
+        """The running station's own setpoint reads open."""
         number = _make_station_duration(SAMPLE_HIC801W_STATION3_PAYLOAD, station_num=3)
         assert number._run_state_open is True
 
     def test_a_station_that_is_not_the_running_one_reads_closed(self):
+        """A station that is not the running one reads closed."""
         number = _make_station_duration(SAMPLE_HIC801W_STATION3_PAYLOAD, station_num=1)
         assert number._run_state_open is False
 
     def test_an_idle_controller_reads_closed(self):
+        """An idle controller reads closed on every station."""
         number = _make_station_duration(SAMPLE_HIC801W_IDLE_PAYLOAD, station_num=1)
         assert number._run_state_open is False
 
     def test_a_missing_reading_reads_unknown(self):
+        """No reading at all reads unknown rather than closed."""
         assert _make_station_duration(data=None)._run_state_open is None
 
     def test_a_key_that_has_left_the_poll_reads_unknown(self):
+        """A key that has left the poll reads unknown."""
         number = _make_station_duration()
         number.coordinator.data["sensors"] = {}
         assert number._run_state_open is None
 
     def test_a_frame_that_did_not_parse_reads_unknown(self):
+        """A frame that failed its shape check reads unknown."""
         mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
         assert _make_station_duration(mutated)._run_state_open is None
 
     def test_a_station_outside_the_declared_range_reads_unknown(self):
+        """A running station outside the declared range reads unknown."""
         decoded = decode_hic801w(SAMPLE_HIC801W_STATION3_PAYLOAD)
         decoded["current_station"] = 9
         assert _make_station_duration(data=decoded)._run_state_open is None
@@ -1691,6 +1705,7 @@ class TestHicStationDurationWrites:
 
     @pytest.mark.asyncio
     async def test_a_setpoint_edit_is_accepted_while_the_station_is_idle(self):
+        """An idle station accepts a new setpoint."""
         number = _make_station_duration(SAMPLE_HIC801W_IDLE_PAYLOAD, station_num=1)
         number.async_write_ha_state = MagicMock()
 
@@ -1700,6 +1715,7 @@ class TestHicStationDurationWrites:
 
     @pytest.mark.asyncio
     async def test_a_setpoint_edit_is_refused_while_that_station_waters(self):
+        """A running station refuses the edit and keeps the stored value."""
         number = _make_station_duration(SAMPLE_HIC801W_STATION3_PAYLOAD, station_num=3)
         number.async_write_ha_state = MagicMock()
 
@@ -1749,18 +1765,21 @@ class TestHicStationDurationAttributes:
     """The running run's numbers, contributed only while it runs."""
 
     def test_the_running_station_carries_the_run_numbers(self):
+        """The running station's setpoint carries the run's own numbers."""
         number = _make_station_duration(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1, station_num=1)
         attrs = number.extra_state_attributes
         assert attrs["duration_seconds"] == 120
         assert attrs["run_ends_at"] == "2026-08-19T13:20:50"
 
     def test_an_idle_station_accumulates_no_stale_run_numbers(self):
+        """An idle station carries no stale numbers from the last run."""
         number = _make_station_duration(SAMPLE_HIC801W_IDLE_PAYLOAD, station_num=1)
         attrs = number.extra_state_attributes
         assert "duration_seconds" not in attrs
         assert "run_ends_at" not in attrs
 
     def test_missing_readings_omit_their_keys_rather_than_rendering_null(self):
+        """A missing reading omits its key rather than rendering a null."""
         decoded = decode_hic801w(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1)
         decoded["run_duration_seconds"] = None
         decoded["run_ends_at"] = None
@@ -1770,9 +1789,11 @@ class TestHicStationDurationAttributes:
         assert "run_ends_at" not in attrs
 
     def test_the_sub_device_attributes_are_layered_on_top(self):
+        """The shared sub-device keys ride on this entity too."""
         number = _make_station_duration()
         assert number.extra_state_attributes["firmware_version"] == "1.0.0"
 
     def test_device_info_parents_the_setpoint_under_its_hub(self):
+        """The setpoint sits on the same device page as the valve it configures."""
         number = _make_station_duration()
         assert number.device_info["via_device"] == (DOMAIN, "hub_100_200")

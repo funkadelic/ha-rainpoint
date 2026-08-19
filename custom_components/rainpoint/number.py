@@ -558,6 +558,7 @@ class RainPointHicStationDurationNumber(_RainPointDurationNumberBase):
         sensor_info: dict,
         station_num: int,
     ) -> None:
+        """Bind this setpoint to one station number on an HIC801W sensor key."""
         super().__init__(coordinator)
         self._sensor_key = sensor_key
         self._sensor_info = sensor_info

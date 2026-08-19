@@ -3078,6 +3078,7 @@ class TestRemoveWithdrawnProbeEntities:
     )
 
     def _all_rows(self):
+        """Return every seeded registry row, across both config entries."""
         return [
             self.PROBE_STATION,
             self.PROBE_RAIN_DELAY,
@@ -3090,11 +3091,15 @@ class TestRemoveWithdrawnProbeEntities:
         ]
 
     def _make_fake_registry(self, raise_on_lookup=False, raise_on_remove=()):
+        """Build patchable stand-ins for the entity registry accessors the sweep calls."""
         removed: list[str] = []
         raise_on_remove = set(raise_on_remove)
 
         class _FakeRegistry:
+            """Record removals, raising for any entity id seeded as a failure."""
+
             def async_remove(self, entity_id):
+                """Record the removal, or raise when this id is one of the seeded failures."""
                 if entity_id in raise_on_remove:
                     raise RuntimeError(f"boom removing {entity_id}")
                 removed.append(entity_id)
@@ -3102,16 +3107,19 @@ class TestRemoveWithdrawnProbeEntities:
         fake_registry = _FakeRegistry()
 
         def _async_get(hass):
+            """Return the fake registry, or raise when the lookup is meant to fail."""
             if raise_on_lookup:
                 raise RuntimeError("registry unavailable")
             return fake_registry
 
         def _async_entries_for_config_entry(registry, entry_id):
+            """Return this entry's rows, re-filtering out any the sweep already removed."""
             return [row for row in self._all_rows() if row.config_entry_id == entry_id and row.entity_id not in removed]
 
         return removed, _async_get, _async_entries_for_config_entry
 
     def _sweep(self, removed, async_get, async_entries):
+        """Run the withdrawn-probe sweep against the seeded registry."""
         entry = MagicMock()
         entry.entry_id = self.ENTRY_ID
         with (
@@ -3122,6 +3130,7 @@ class TestRemoveWithdrawnProbeEntities:
         return removed
 
     def test_both_probe_buttons_are_removed(self):
+        """Both withdrawn buttons are taken."""
         removed = self._sweep(*self._make_fake_registry())
         assert set(removed) == {self.PROBE_STATION.entity_id, self.PROBE_RAIN_DELAY.entity_id}
 
@@ -3135,6 +3144,7 @@ class TestRemoveWithdrawnProbeEntities:
         assert self.STATION_WATERING.entity_id not in removed
 
     def test_another_integrations_row_is_never_touched(self):
+        """A row from another integration is left alone even though its id ends the same way."""
         removed = self._sweep(*self._make_fake_registry())
         assert self.FOREIGN.entity_id not in removed
 
@@ -3145,18 +3155,22 @@ class TestRemoveWithdrawnProbeEntities:
         assert self.OTHER_ENTRY_PROBE.entity_id not in removed
 
     def test_a_row_with_no_unique_id_is_skipped_rather_than_raising(self):
+        """A row carrying no unique_id is skipped rather than raising out of the sweep."""
         removed = self._sweep(*self._make_fake_registry())
         assert self.MALFORMED.entity_id not in removed
 
     def test_an_unreadable_registry_removes_nothing_and_does_not_raise(self):
+        """A registry that cannot be read removes nothing and does not abort setup."""
         removed, async_get, async_entries = self._make_fake_registry(raise_on_lookup=True)
         assert self._sweep(removed, async_get, async_entries) == []
 
     def test_a_removal_that_raises_leaves_the_remaining_rows_swept(self):
+        """One removal raising does not stop the remaining rows being swept."""
         removed, async_get, async_entries = self._make_fake_registry(raise_on_remove=[self.PROBE_STATION.entity_id])
         assert self._sweep(removed, async_get, async_entries) == [self.PROBE_RAIN_DELAY.entity_id]
 
     def test_a_second_sweep_finds_nothing_left(self):
+        """The sweep is idempotent: a second run finds nothing left to take."""
         removed, async_get, async_entries = self._make_fake_registry()
         self._sweep(removed, async_get, async_entries)
         before = list(removed)
@@ -3169,6 +3183,7 @@ class TestRemoveWithdrawnProbeStore:
 
     @pytest.mark.asyncio
     async def test_the_store_file_is_deleted(self):
+        """The saved runs file is deleted along with the feature."""
         store = MagicMock()
         store.async_remove = AsyncMock()
         with patch("custom_components.rainpoint.Store", return_value=store) as mock_store:

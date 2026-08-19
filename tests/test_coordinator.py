@@ -6669,17 +6669,21 @@ class TestHicStalenessGuard:
 
     @staticmethod
     def _running():
+        """Return a decoded record with station 3 running."""
         return {"type": "irrigation_controller", "current_station": 3, "run_duration_seconds": 120}
 
     @staticmethod
     def _idle():
+        """Return a decoded record with nothing running."""
         return {"type": "irrigation_controller", "current_station": 0, "run_duration_seconds": 0}
 
     @staticmethod
     def _poll_at(dt):
+        """Return a status entry carrying `dt` as its device timestamp."""
         return {"time": int(dt.timestamp() * 1000)}
 
     def _preserve(self, coord, decoded, poll_time):
+        """Run the guard for this controller against one polled record."""
         return _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
             coord,
             "100_200_3",
@@ -6727,6 +6731,7 @@ class TestHicStalenessGuard:
         assert result is fresh
 
     def test_the_most_recent_command_against_the_key_is_the_one_that_counts(self):
+        """The latest command against the key decides, not the first."""
         coord, _ = _make_coord()
         polled = self._idle()
         coord.data = {"sensors": {"100_200_3": {"data": self._running()}}}
@@ -6740,6 +6745,7 @@ class TestHicStalenessGuard:
         assert result is polled
 
     def test_another_key_s_command_never_holds_this_one(self):
+        """The guard is keyed per sensor key, so another controller's command cannot hold this one's record."""
         coord, _ = _make_coord()
         polled = self._idle()
         coord.data = {"sensors": {"100_200_3": {"data": self._running()}}}
@@ -6750,6 +6756,7 @@ class TestHicStalenessGuard:
         assert result is polled
 
     def test_no_command_has_ever_been_sent(self):
+        """With no command ever sent, the polled record is the only reading there is."""
         coord, _ = _make_coord()
         polled = self._idle()
         coord.data = {"sensors": {"100_200_3": {"data": self._running()}}}
@@ -6760,6 +6767,7 @@ class TestHicStalenessGuard:
         assert result is polled
 
     def test_a_decode_that_produced_nothing_is_passed_straight_through(self):
+        """A decode that produced nothing is returned untouched rather than replaced."""
         coord, _ = _make_coord()
         coord.data = {"sensors": {"100_200_3": {"data": self._running()}}}
         coord._last_valve_command_at = {("100_200_3", 3): datetime(2024, 1, 2, tzinfo=UTC)}

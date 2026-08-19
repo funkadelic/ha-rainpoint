@@ -578,6 +578,7 @@ class RainPointHicStationValveEntity(CoordinatorEntity[RainPointCoordinator], Va
         sensor_info: dict,
         station_num: int,
     ) -> None:
+        """Bind this entity to one station number on an HIC801W sensor key."""
         super().__init__(coordinator)
         self._sensor_key = sensor_key
         self._sensor_info = sensor_info
@@ -661,6 +662,7 @@ class RainPointHicStationValveEntity(CoordinatorEntity[RainPointCoordinator], Va
 
     @property
     def is_closed(self) -> bool | None:
+        """Return whether this station is idle, or None when the reading is unknown."""
         running = self._is_running_station
         if running is None:
             return None
@@ -693,6 +695,7 @@ class RainPointHicStationValveEntity(CoordinatorEntity[RainPointCoordinator], Va
 
     @property
     def device_info(self) -> DeviceInfo:
+        """Return the sub-device page this station's entities sit under."""
         return build_sub_device_info(self._sensor_info)
 
     # ------------------------------------------------------------------
@@ -782,6 +785,7 @@ class RainPointHicStationValveEntity(CoordinatorEntity[RainPointCoordinator], Va
 
     # ------------------------------------------------------------------
     async def async_open_valve(self, **kwargs: Any) -> None:
+        """Start this station, for the run length the call or the setpoint resolves to."""
         minutes = self._wire_duration_minutes(kwargs)
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
@@ -810,6 +814,7 @@ class RainPointHicStationValveEntity(CoordinatorEntity[RainPointCoordinator], Va
         self._apply_response_state(response_state)
 
     async def async_close_valve(self, **kwargs: Any) -> None:
+        """Stop this station."""
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
         device_name = self._sensor_info.get("device_name") or ""
