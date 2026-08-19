@@ -424,6 +424,80 @@ class TestOrphanedKeyEndToEnd:
         assert "valve.foreign" not in removed
 
     @pytest.mark.asyncio
+    async def test_a_restored_card_clears_itself_when_its_device_returns_mid_session(self):
+        """A restored card does not wait for the next restart to go.
+
+        The sibling above proves a restored card can still remove its rows in a
+        session that never listed the device. This is the other outcome open to
+        it: the device comes back before the user acts, so the card is offering
+        a removal its own live guard would refuse, and it has to go on its own.
+
+        The reason to pin it is that the mechanism is easy to reason away. The
+        clear needs the returned key in a fresh ledger, and platform setup
+        builds its entity list once from the first refresh, which in this
+        session listed no child. What closes the gap is the late adder
+        listener: it collects for every key in the update's sensors, so the key
+        re-enters a ledger on the poll that brings the device back, and the
+        sweep then builds a record for it carrying orphaned False.
+
+        It costs one poll, and the order is why. The orphan sweep is registered
+        ahead of the platform forward, so on the update that first lists the
+        child again the sweep runs before the adder records it and still sees
+        no ledger entry. The clear lands on the update after. That is asserted
+        here rather than smoothed over, because a later change that made the
+        sweep run after the adders would clear it a poll sooner and should not
+        read as a regression.
+        """
+        # Session one: raise the card, and keep what a restart would leave.
+        first, hass_one, entry_one, client = _build_timeline()
+        _captured, async_add_entities = _capturing_add_entities()
+
+        with _patched_issue_registry() as (create, _delete):
+            await first.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass_one, entry_one, first)
+            await valve_async_setup_entry(hass_one, entry_one, async_add_entities)
+
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+            for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                await first.async_refresh()
+            assert create.call_count == 1
+            issue_id = create.call_args.args[2]
+            persisted_data = create.call_args.kwargs["data"]
+
+        # Session two: a fresh everything over a hub that lists no child, with
+        # the card already in the registry.
+        second, hass_two, entry_two, client_two = _build_timeline()
+        client_two.get_devices_by_hid.return_value = _hub_record(with_child=False)
+        _captured_two, async_add_entities_two = _capturing_add_entities()
+
+        with _patched_issue_registry({issue_id: persisted_data}) as (create_two, delete_two):
+            await second.async_config_entry_first_refresh()
+            _sync_orphaned_entity_issues_on_updates(hass_two, entry_two, second)
+            await valve_async_setup_entry(hass_two, entry_two, async_add_entities_two)
+
+            # The premise: nothing in this session raised or holds the key.
+            assert create_two.call_count == 0
+            assert _offer_of(hass_two) == frozenset()
+            delete_two.reset_mock()
+
+            # The device returns. The sweep on this same update still sees no
+            # ledger entry, because it runs ahead of the adder that is about to
+            # record one.
+            client_two.get_devices_by_hid.return_value = _hub_record(with_child=True)
+            await second.async_refresh()
+            assert SENSOR_KEY in second.data["sensors"]
+            assert [call.args[2] for call in delete_two.call_args_list if call.args[2] == issue_id] == []
+
+            # The next update finds the key in the ledger the adder filled, so
+            # the record carries orphaned False and the card goes.
+            await second.async_refresh()
+            assert [call.args[2] for call in delete_two.call_args_list if call.args[2] == issue_id] == [issue_id]
+
+            # And it goes without being re-raised, so the user is not handed a
+            # card for a device that is back and reporting.
+            assert create_two.call_count == 0
+
+    @pytest.mark.asyncio
     async def test_a_device_that_returns_under_an_open_dialog_survives_the_confirm(self, caplog):
         """The guard that came with the persistent card, driven in order.
 
