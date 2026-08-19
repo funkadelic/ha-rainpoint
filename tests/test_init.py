@@ -13,11 +13,13 @@ from homeassistant.helpers import issue_registry as ir
 from custom_components.rainpoint import (
     DOMAIN,
     PLATFORMS,
+    _async_remove_withdrawn_probe_store,
     _generic_control_row_removal_reason,
     _generic_row_removal_reason,
     _reconcile_sub_device_parents,
     _reconcile_sub_device_parents_on_updates,
     _remove_stale_generic_entities,
+    _remove_withdrawn_probe_entities,
     async_reload_integration,
     async_setup,
     async_setup_entry,
@@ -3016,3 +3018,170 @@ class TestPriorPhaseSweepsUnchanged:
 
         offenders = [symbol for symbol in self.REMOVAL_PATH_SYMBOLS if symbol in source]
         assert offenders == []
+
+
+class TestRemoveWithdrawnProbeEntities:
+    """The one-way cleanup of the withdrawn HIC control-encoding probe.
+
+    Its rows can never be recreated, since the platform that made them is
+    deleted, so this is a removal with no user decision left to ask for and
+    deliberately does not go through the Repairs flow that governs the rest.
+    """
+
+    ENTRY_ID = "this_entry"
+    OTHER_ENTRY_ID = "other_entry"
+
+    PROBE_STATION = SimpleNamespace(
+        entity_id="button.rainpoint_42_100_1_probe_station",
+        unique_id="rainpoint_42_100_1_probe_station",
+        config_entry_id=ENTRY_ID,
+    )
+    PROBE_RAIN_DELAY = SimpleNamespace(
+        entity_id="button.rainpoint_42_100_1_probe_rain_delay",
+        unique_id="rainpoint_42_100_1_probe_rain_delay",
+        config_entry_id=ENTRY_ID,
+    )
+    # The station control that replaced the probe. Its unique_id contains
+    # "station", so a looser match would take the very entity this change
+    # exists to ship.
+    STATION_VALVE = SimpleNamespace(
+        entity_id="valve.rainpoint_42_100_1_station1",
+        unique_id="rainpoint_42_100_1_station1",
+        config_entry_id=ENTRY_ID,
+    )
+    STATION_DURATION = SimpleNamespace(
+        entity_id="number.rainpoint_42_100_1_station1_duration",
+        unique_id="rainpoint_42_100_1_station1_duration",
+        config_entry_id=ENTRY_ID,
+    )
+    STATION_WATERING = SimpleNamespace(
+        entity_id="binary_sensor.rainpoint_42_100_1_station1_watering",
+        unique_id="rainpoint_42_100_1_station1_watering",
+        config_entry_id=ENTRY_ID,
+    )
+    # A row belonging to another integration entirely, carrying a unique_id
+    # that would match on the suffix alone.
+    FOREIGN = SimpleNamespace(
+        entity_id="button.other_42_100_1_probe_station",
+        unique_id="other_42_100_1_probe_station",
+        config_entry_id=ENTRY_ID,
+    )
+    OTHER_ENTRY_PROBE = SimpleNamespace(
+        entity_id="button.rainpoint_99_100_1_probe_station",
+        unique_id="rainpoint_99_100_1_probe_station",
+        config_entry_id=OTHER_ENTRY_ID,
+    )
+    MALFORMED = SimpleNamespace(
+        entity_id="button.rainpoint_broken",
+        unique_id=None,
+        config_entry_id=ENTRY_ID,
+    )
+
+    def _all_rows(self):
+        return [
+            self.PROBE_STATION,
+            self.PROBE_RAIN_DELAY,
+            self.STATION_VALVE,
+            self.STATION_DURATION,
+            self.STATION_WATERING,
+            self.FOREIGN,
+            self.OTHER_ENTRY_PROBE,
+            self.MALFORMED,
+        ]
+
+    def _make_fake_registry(self, raise_on_lookup=False, raise_on_remove=()):
+        removed: list[str] = []
+        raise_on_remove = set(raise_on_remove)
+
+        class _FakeRegistry:
+            def async_remove(self, entity_id):
+                if entity_id in raise_on_remove:
+                    raise RuntimeError(f"boom removing {entity_id}")
+                removed.append(entity_id)
+
+        fake_registry = _FakeRegistry()
+
+        def _async_get(hass):
+            if raise_on_lookup:
+                raise RuntimeError("registry unavailable")
+            return fake_registry
+
+        def _async_entries_for_config_entry(registry, entry_id):
+            return [row for row in self._all_rows() if row.config_entry_id == entry_id and row.entity_id not in removed]
+
+        return removed, _async_get, _async_entries_for_config_entry
+
+    def _sweep(self, removed, async_get, async_entries):
+        entry = MagicMock()
+        entry.entry_id = self.ENTRY_ID
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _remove_withdrawn_probe_entities(MagicMock(), entry)
+        return removed
+
+    def test_both_probe_buttons_are_removed(self):
+        removed = self._sweep(*self._make_fake_registry())
+        assert set(removed) == {self.PROBE_STATION.entity_id, self.PROBE_RAIN_DELAY.entity_id}
+
+    def test_the_station_control_that_replaced_the_probe_survives(self):
+        """The valve, its duration companion and the watching binary sensor all
+        carry "station" in their unique_ids; only the probe's own two suffixes
+        may match."""
+        removed = self._sweep(*self._make_fake_registry())
+        assert self.STATION_VALVE.entity_id not in removed
+        assert self.STATION_DURATION.entity_id not in removed
+        assert self.STATION_WATERING.entity_id not in removed
+
+    def test_another_integrations_row_is_never_touched(self):
+        removed = self._sweep(*self._make_fake_registry())
+        assert self.FOREIGN.entity_id not in removed
+
+    def test_another_config_entrys_row_is_never_touched(self):
+        """The registry lookup is entry-scoped, so a second account's rows are
+        not even offered to this sweep."""
+        removed = self._sweep(*self._make_fake_registry())
+        assert self.OTHER_ENTRY_PROBE.entity_id not in removed
+
+    def test_a_row_with_no_unique_id_is_skipped_rather_than_raising(self):
+        removed = self._sweep(*self._make_fake_registry())
+        assert self.MALFORMED.entity_id not in removed
+
+    def test_an_unreadable_registry_removes_nothing_and_does_not_raise(self):
+        removed, async_get, async_entries = self._make_fake_registry(raise_on_lookup=True)
+        assert self._sweep(removed, async_get, async_entries) == []
+
+    def test_a_removal_that_raises_leaves_the_remaining_rows_swept(self):
+        removed, async_get, async_entries = self._make_fake_registry(raise_on_remove=[self.PROBE_STATION.entity_id])
+        assert self._sweep(removed, async_get, async_entries) == [self.PROBE_RAIN_DELAY.entity_id]
+
+    def test_a_second_sweep_finds_nothing_left(self):
+        removed, async_get, async_entries = self._make_fake_registry()
+        self._sweep(removed, async_get, async_entries)
+        before = list(removed)
+        self._sweep(removed, async_get, async_entries)
+        assert removed == before
+
+
+class TestRemoveWithdrawnProbeStore:
+    """The probe's saved runs go with the feature rather than staying on disk."""
+
+    @pytest.mark.asyncio
+    async def test_the_store_file_is_deleted(self):
+        store = MagicMock()
+        store.async_remove = AsyncMock()
+        with patch("custom_components.rainpoint.Store", return_value=store) as mock_store:
+            await _async_remove_withdrawn_probe_store(MagicMock())
+
+        store.async_remove.assert_awaited_once()
+        assert mock_store.call_args.args[2] == f"{DOMAIN}.hic_control_probe"
+
+    @pytest.mark.asyncio
+    async def test_a_store_that_will_not_delete_does_not_take_setup_down(self):
+        """Housekeeping for a feature that is gone is not worth failing a
+        config-entry setup over."""
+        store = MagicMock()
+        store.async_remove = AsyncMock(side_effect=RuntimeError("no such file"))
+        with patch("custom_components.rainpoint.Store", return_value=store):
+            await _async_remove_withdrawn_probe_store(MagicMock())

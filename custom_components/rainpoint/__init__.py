@@ -11,6 +11,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 
 from .api import RainPointClient, is_hand_written_model
 from .api.mqtt import RainPointMqttClient
@@ -408,6 +409,71 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
             _LOGGER.debug("Removed stale generic entity %s: %s", row.entity_id, reason)
         except Exception as exc:
             _LOGGER.debug("Failed to remove stale generic entity %s: %s", row.entity_id, exc)
+
+
+# The unique_id suffixes the withdrawn HIC control-encoding probe gave its two
+# buttons. The probe was an opt-in diagnostic that only ever shipped in
+# prerelease builds, and station control replaced it, but a tester who turned
+# it on still has its rows persisted in the entity registry, where they would
+# sit unavailable forever with nothing left to create them.
+_WITHDRAWN_PROBE_SUFFIXES = ("_probe_rain_delay", "_probe_station")
+
+# The store the probe parked its recorded runs in, so removing the feature
+# removes its file rather than leaving one behind under .storage.
+_WITHDRAWN_PROBE_STORE_KEY = f"{DOMAIN}.hic_control_probe"
+_WITHDRAWN_PROBE_STORE_VERSION = 1
+
+
+def _remove_withdrawn_probe_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove the registry rows left behind by the withdrawn HIC probe buttons.
+
+    This is a one-way cleanup of a feature that no longer exists, not a
+    debounced judgement about a device that may come back, which is why it
+    does not go through the Repairs flow that governs every other removal in
+    this integration. Nothing can recreate these rows: the platform that made
+    them is deleted, so there is no state in which keeping one is right and no
+    user decision left to ask for.
+
+    Scoped exactly as narrowly as the generic sweep beside it: the rows come
+    from the config-entry-scoped registry lookup, and each is matched on this
+    integration's own unique_id prefix plus one of two literal suffixes, so it
+    can reach neither another config entry nor another integration.
+
+    Synchronous and non-raising for the same reasons the generic sweep is:
+    the registry helper is a callback with nothing to await, and every step is
+    guarded independently so a registry problem degrades to leaving a row in
+    place rather than aborting config-entry setup.
+    """
+    registry, rows = _fetch_registry_rows(
+        er.async_get, er.async_entries_for_config_entry, hass, entry, "the withdrawn probe sweep"
+    )
+    if registry is None:
+        return
+
+    for row in rows:
+        unique_id = getattr(row, "unique_id", None)
+        if not isinstance(unique_id, str) or not unique_id.startswith(UNIQUE_ID_PREFIX):
+            continue
+        if not unique_id.endswith(_WITHDRAWN_PROBE_SUFFIXES):
+            continue
+        try:
+            registry.async_remove(row.entity_id)
+            _LOGGER.debug("Removed withdrawn HIC probe entity %s", row.entity_id)
+        except Exception as exc:
+            _LOGGER.debug("Failed to remove withdrawn HIC probe entity %s: %s", row.entity_id, exc)
+
+
+async def _async_remove_withdrawn_probe_store(hass: HomeAssistant) -> None:
+    """Delete the withdrawn probe's saved runs, if a tester ever produced any.
+
+    Never raises: this is housekeeping for a feature that is gone, and a store
+    that will not delete is not worth failing a setup over. The file is
+    account-wide rather than entry-scoped, matching how the probe wrote it.
+    """
+    try:
+        await Store(hass, _WITHDRAWN_PROBE_STORE_VERSION, _WITHDRAWN_PROBE_STORE_KEY).async_remove()
+    except Exception as exc:
+        _LOGGER.debug("Could not remove the withdrawn HIC probe store: %s", type(exc).__name__)
 
 
 def _domain_sensor_key(row) -> str | None:
@@ -2537,6 +2603,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # is also where each adder publishes itself for the sweep to read.
     _complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
     _remove_stale_generic_entities(hass, entry, coordinator)
+    _remove_withdrawn_probe_entities(hass, entry)
+    await _async_remove_withdrawn_probe_store(hass)
     _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
     _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
 

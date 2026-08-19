@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, MODEL_HIC801W
+from .const import DOMAIN, HIC801W_STATION_COUNT, MODEL_HIC801W
 from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .entity import LateEntityAdder, RainPointSubDeviceEntity, register_late_adder
 from .hub_entities import (
@@ -27,9 +27,9 @@ class RainPointHicStationWateringBinarySensor(RainPointSubDeviceEntity, BinarySe
     open/closed sensor mirroring ``RainPointZoneStateSensor``: that precedent
     exists to hold valve vocabulary in reserve for a model whose control half
     was unproven, and it models an irrigation station as a valve it is not.
-    Whether a station is watering is literally a boolean. When station control
-    ships in a later milestone, valve entities are added alongside these rather than
-    replacing them, the same way the HTV210B keeps its read-only per-zone
+    Whether a station is watering is literally a boolean. Station control has
+    since shipped, and its valve entities were added alongside these rather
+    than replacing them, the same way the HTV210B keeps its read-only per-zone
     state sensor even after gaining a valve entity: deleting these would
     strand persisted registry rows rather than remove them.
 
@@ -83,7 +83,7 @@ class RainPointHicStationWateringBinarySensor(RainPointSubDeviceEntity, BinarySe
         if not data:
             return None
         current_station = data.get("current_station")
-        if not isinstance(current_station, int) or not (0 <= current_station <= 8):
+        if not isinstance(current_station, int) or not (0 <= current_station <= HIC801W_STATION_COUNT):
             return None
         return current_station == self._station_num
 
@@ -113,7 +113,8 @@ def _build_hic801w_station_entities(coordinator: RainPointCoordinator, key: str,
 
     base_slug = f"{info.get('hid', '')}_{info.get('mid', '')}_{info.get('addr', '')}"
     return [
-        RainPointHicStationWateringBinarySensor(coordinator, key, info, base_slug, station_num) for station_num in range(1, 9)
+        RainPointHicStationWateringBinarySensor(coordinator, key, info, base_slug, station_num)
+        for station_num in range(1, HIC801W_STATION_COUNT + 1)
     ]
 
 

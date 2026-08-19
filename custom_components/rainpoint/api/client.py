@@ -611,8 +611,12 @@ class RainPointClient:
             product_key: Hub productKey.
             port: Zone/port number (1-based).
             mode: 1 = open, 0 = close.
-            duration: Run time in seconds for an RF valve call. An int is sent as-is,
-                including 0: pass 0 on a close, since the device ignores this field on
+            duration: Run time for the call, in whatever unit the addressed device
+                family reads it: seconds for the RF valves, minutes for the HIC801W
+                irrigation controller, which answered a request for 2 with a run it
+                reported as 120 seconds. This method sends the int as-is and converts
+                nothing, so choosing the unit belongs to the caller that knows the
+                family. Pass 0 on a close, since the device ignores this field on
                 close commands but it must still be present in the request. Pass None
                 (the default) to omit the "duration" key from the payload entirely,
                 which is what a hub-addressed call (addr=0) needs: the app sends no
@@ -717,11 +721,10 @@ class RainPointClient:
                 with ``_encode_dp_duration_param``; this method sends no
                 ``duration`` key at all.
             dp_code: The datapoint this command addresses. Defaults to the
-                Bluetooth valve code every shipped caller wants, so the valve
-                path reads the same as before this became settable. The
-                HIC encoding probe is the only caller that overrides it, and it
-                passes a code the committed catalog declares for the device it
-                is addressing rather than an arbitrary integer.
+                Bluetooth valve code every current caller wants, so the valve path
+                reads the same as it did before this became settable. An override
+                must be a code the committed catalog declares for the device being
+                addressed, never an arbitrary integer.
 
         Returns:
             The value of ``data["data"]`` if it is a string, or

@@ -60,81 +60,6 @@ GENERIC_UNIQUE_ID_MARKER = "_generic_"
 HUB_IDENTIFIER_PREFIX = "hub_"
 HUB_UNIQUE_ID_PREFIX = f"{DOMAIN}_hub_"
 
-# === HIC station-control encoding probe ===
-# Opt-in, off by default, and never reached by an ordinary user. The HIC family
-# declares one CTL_WATER datapoint at dpPort 0 for all eight stations, so the
-# station number has to be encoded inside its 2-byte payload and no status
-# frame can say how: dpCode 7 is write-only and never appears in a reading.
-# The probe walks the candidate encodings, reads the station back after each,
-# and records every attempt for the owner to attach to a support thread.
-CONF_HIC_CONTROL_PROBE_ENABLED = "hic_control_probe_enabled"
-
-# Station 1, and this was station 3 for a reason that has since expired.
-#
-# Three was chosen to tell the candidate encodings apart, because 3 reads 0x03
-# as a station number against 0x04 as a bitmask and a byte pair carrying it
-# plus an on-flag differs whichever order the two sit in, where station 1
-# collapses all of those onto 0x01. That mattered while the encoding was
-# unknown. It is known now: a real unit confirmed controlWorkMode with the
-# station in port, so there is nothing left for a distinguishing station to
-# distinguish.
-#
-# What matters instead is that the stop can be proved, and station 3 cannot
-# prove it. The reporter's station 3 has no solenoid on it, and this hardware
-# drops a station whose solenoid does not answer within seconds, which is the
-# same few seconds the probe waits before sending its stop. A station reading
-# off afterwards would be equally consistent with the stop working and with the
-# controller giving up, and the two cannot be separated after the fact.
-#
-# Station 1 is wired. The run holds, so the station being off after the stop
-# means the stop did it. Nothing waters as long as the water is off at the tap,
-# because what the controller checks is whether the solenoid answers
-# electrically, not whether water moved.
-HIC_PROBE_STATION = 1
-
-# The number sent in the command's duration field. Deliberately NOT named for a
-# unit any more, because which unit this device reads is the open question: the
-# first real run asked for 60 and the controller reported a 3600-second run,
-# exactly 60 times what was asked. Everything else this integration drives
-# reads the field as seconds.
-#
-# 2 separates all three readings that are actually in play: a controller
-# reporting 2 read seconds, one reporting 120 read minutes, and one reporting
-# 3600 again ignored the field entirely and used a runtime of its own. Any
-# other number means something none of those three cover, which is worth
-# knowing too.
-#
-# It is small because the probe now runs against a wired station, where the
-# minutes reading means a real two-minute run rather than a station that drops
-# itself. Two minutes is the whole exposure, and the stop that follows a
-# confirmation cuts it shorter still.
-#
-# A value this small was unusable while a candidate could only be confirmed by
-# a status read taken after the settle, since a two-second run would be over
-# before anyone looked. It is usable now because the command's own response
-# frame is read immediately, with no settle in front of it.
-HIC_PROBE_RUN_VALUE = 2
-
-# One day. Long enough to be unmistakable in the vendor app, which is still the
-# only verdict this stage can be scored against: variant 279 declares no STA_
-# counterpart for a rain delay, so nothing in a status frame is known to carry
-# one. The walk now records the frame after each candidate anyway, against the
-# possibility that a delay moves a field whose meaning nobody has pinned down.
-# STA_RAIN is the obvious suspect and reads the same value in all 23 captures
-# held here, none of which were taken with a delay set.
-HIC_PROBE_RAIN_DELAY_DAYS = 1
-
-# Pause between issuing a command and reading the station back. The cloud
-# forwards to the controller and the controller answers on its own schedule, so
-# an immediate read reports the previous state and would score a working
-# encoding as a miss.
-HIC_PROBE_SETTLE_SECONDS = 4
-
-# Backstop on the candidate walk. The lists below are literals, so this can
-# only fire if one is edited carelessly; it exists so a mistake there cannot
-# turn into an unbounded run of writes against someone else's controller.
-HIC_PROBE_MAX_ATTEMPTS = 24
-
 # === Generic (catalog-driven) control entity factory ===
 CONF_GENERIC_CONTROL_ENABLED = "generic_control_enabled"
 # The control marker is nested inside GENERIC_UNIQUE_ID_MARKER rather than
@@ -368,6 +293,18 @@ MODEL_HTV210B = "HTV210B"  # Bluetooth valve; reports over RF as a normal hub su
 MODEL_HIC801W = "HIC801W"  # 8-station irrigation controller; catalog variant 279 is the accessory
 # record carrying the stations, while 278 is the pairable main record with no ports.
 
+# How many stations an HIC801W fans out to. Fixed from the model rather than
+# derived from a frame, unlike the HTV valve factories which read their zones
+# out of the decoded payload: variant 279 sends one aggregate record carrying a
+# single running-station number and enumerates no stations of its own, so there
+# is nothing in a frame to derive this from. Variant 279 declares portNumber 8.
+#
+# Named once here because three independent surfaces fan out over it -- the
+# per-station watching binary sensors, the station valves, and their companion
+# duration numbers -- and three literal 8s would be three places to miss when a
+# sibling controller with a different station count arrives.
+HIC801W_STATION_COUNT = 8
+
 # Legacy valve aliases
 MODEL_VALVE_113 = MODEL_HTV113FRF
 MODEL_VALVE_145 = MODEL_HTV145FRF
@@ -392,11 +329,17 @@ VALVE_MODELS = {
     MODEL_VALVE_345,
     MODEL_VALVE_405,
     MODEL_HTV210B,
-    # MODEL_HIC801W is deliberately absent: HIC801W support is read-only,
-    # so it must not enrol in valve.py/number.py entity creation or the
-    # command-versus-poll staleness guard. Do not "complete the pair" with
-    # the HAND_WRITTEN_MODELS entry below. Adding it here is part of
-    # shipping station control, never a tidy-up on its own.
+    # MODEL_HIC801W is still deliberately absent, and station control shipping
+    # is what settled that rather than what changed it. This set means
+    # "zone-shaped valve model": every path it gates reads decoded["zones"],
+    # and the HIC801W carries no zones dict at all -- one aggregate record with
+    # a single running-station number instead. Enrolling it here would hand
+    # valve.py and number.py a model whose builders find no zones and emit
+    # nothing, and would put it through a staleness guard keyed on a mapping it
+    # does not have. Its control entities are built by its own station-shaped
+    # factories, dispatched on MODEL_HIC801W the way binary_sensor.py already
+    # dispatches its per-station entities, and its staleness guard is a branch
+    # of its own that preserves the whole aggregate record.
 }
 
 # Every model with a hand-written, fixture-validated decoder (mirrors the

@@ -389,19 +389,31 @@ SAMPLE_HIC801W_SECOND_UNIT_FRAMES = {
 # either side of the merge fails loudly instead of silently dropping a frame.
 SAMPLE_HIC801W_ALL_FRAMES = {**SAMPLE_HIC801W_REPORTER_FRAMES, **SAMPLE_HIC801W_SECOND_UNIT_FRAMES}
 
-# The first frame ever returned by a control call rather than by a poll,
-# captured on 2026-08-18 when the reporter's probe run started station 3. It is
+# The frames returned by a control call rather than by a poll. They are
 # deliberately NOT in the corpus above and not in SAMPLE_HIC801W_ALL_FRAMES:
 # that table is the poll-path ground truth and its 22-frame count is asserted
-# directly, while this one is a command response and belongs to the probe's
-# tests alone.
+# directly, while these are command responses and belong to the control tests.
 #
-# Two things are readable in it and nothing else in the repository shows
-# either. b1 reads 04 where every plan-driven capture above reads FF or a
-# multi-station mask, which is what a single commanded station looks like
-# against a programmed run. And STA_DURATION reads 3600 against a command that
-# asked for 60, the observation that puts the duration field's unit in doubt.
-SAMPLE_HIC801W_PROBE_RESPONSE_STATION3 = "10#108800AF100E0000B7E649251AD821F703040000F90300"
+# The first was captured on 2026-08-18, when a run against the reporter's unit
+# started station 3. b1 reads 04 where every plan-driven capture above reads FF
+# or a multi-station mask, which is what a single commanded station looks like
+# against a programmed run.
+SAMPLE_HIC801W_COMMAND_RESPONSE_STATION3 = "10#108800AF100E0000B7E649251AD821F703040000F90300"
+
+# The pair that settled station control, captured on 2026-08-19 against the
+# reporter's wired station 1 and thirteen seconds apart. The start asked for a
+# duration of 2 and the controller answered with STA_DURATION 120, which is
+# what fixes the field's unit as minutes rather than the seconds every other
+# family in this integration sends. Its STA_EVTIME decodes to 13:20:50 local
+# against a press at 11:18:49 UTC on a UTC+2 unit, exactly two minutes later,
+# which is the same fact read a second independent way.
+SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1 = "10#108800AF78000000B732D5261AD821F701010000F90300"
+
+# The stop that followed it. Every station reads off and the run collapses to
+# zero, and the run it interrupted was still supposed to have most of its two
+# minutes left, which is what makes this the stop working rather than a run
+# that had already ended on its own.
+SAMPLE_HIC801W_COMMAND_RESPONSE_STOP = "10#108800AF00000000B700204200D800F700000000F90300"
 
 # Named single-frame constants for tests that need one frame rather than the
 # whole table.
