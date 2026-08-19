@@ -167,6 +167,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    """Create the valve entities for every sub-device this config entry reports."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
@@ -232,6 +233,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
         sensor_info: dict,
         zone_num: int,
     ) -> None:
+        """Bind this entity to one zone on a valve hub sensor key."""
         super().__init__(coordinator)
         self._sensor_key = sensor_key
         self._sensor_info = sensor_info
@@ -250,6 +252,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
 
     @property
     def _zone_data(self) -> dict | None:
+        """Return this entity's own zone dict, or None when the key has no reading."""
         sensors = self.coordinator.data.get("sensors", {})
         info = sensors.get(self._sensor_key)
         if not info:
@@ -293,6 +296,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
 
     @property
     def is_closed(self) -> bool | None:
+        """Return whether this zone is shut, or None when the reading is unknown."""
         zone = self._zone_data
         if zone is None or zone.get("open") is None:
             return None
@@ -300,6 +304,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        """Carry this zone's own run numbers, plus the shared sub-device keys."""
         attrs: dict[str, Any] = {}
         zone = self._zone_data
         if zone:
@@ -321,6 +326,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
 
     @property
     def device_info(self) -> DeviceInfo:
+        """Return the sub-device page this zone's entities sit under."""
         return build_sub_device_info(self._sensor_info)
 
     # ------------------------------------------------------------------
@@ -377,6 +383,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
 
     # ------------------------------------------------------------------
     async def async_open_valve(self, **kwargs: Any) -> None:
+        """Open this zone, for the run length the call or the setpoint resolves to."""
         duration = int(kwargs["duration"]) if "duration" in kwargs else self._get_configured_duration_seconds()
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
@@ -405,6 +412,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
         self._apply_response_state(response_state)
 
     async def async_close_valve(self, **kwargs: Any) -> None:
+        """Close this zone."""
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
         device_name = self._sensor_info.get("device_name") or ""
@@ -451,6 +459,7 @@ class RainPointDpValveEntity(RainPointValveEntity):
     """
 
     async def async_open_valve(self, **kwargs: Any) -> None:
+        """Open this zone through the datapoint endpoint."""
         duration = int(kwargs["duration"]) if "duration" in kwargs else self._get_configured_duration_seconds()
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
@@ -480,6 +489,7 @@ class RainPointDpValveEntity(RainPointValveEntity):
         self._apply_response_state(response_state)
 
     async def async_close_valve(self, **kwargs: Any) -> None:
+        """Close this zone through the datapoint endpoint."""
         mid = self._sensor_info["mid"]
         addr = self._sensor_info["addr"]
         device_name = self._sensor_info.get("device_name") or ""

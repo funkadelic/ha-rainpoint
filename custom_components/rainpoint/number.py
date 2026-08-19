@@ -41,6 +41,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    """Create the duration setpoints for every sub-device this config entry reports."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
@@ -114,6 +115,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
     _attr_mode = NumberMode.BOX
 
     async def async_added_to_hass(self) -> None:
+        """Restore the value this setpoint last held, when it is still within bounds."""
         await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
         if last_state is not None:
@@ -131,6 +133,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
 
     @property
     def native_value(self) -> float:
+        """Return the stored setpoint, in minutes."""
         return self._current_value
 
     @property
@@ -312,6 +315,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
 
     @property
     def device_info(self) -> DeviceInfo:
+        """Return the sub-device page this setpoint sits under."""
         return build_sub_device_info(self._sensor_info)
 
 
@@ -332,6 +336,7 @@ class RainPointZoneDurationNumber(_RainPointDurationNumberBase):
         sensor_info: dict,
         zone_num: int,
     ) -> None:
+        """Bind this setpoint to one zone on a valve hub sensor key."""
         super().__init__(coordinator)
         self._sensor_key = sensor_key
         self._sensor_info = sensor_info
@@ -456,6 +461,7 @@ class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
         datapoint: Any,
         port_number: int | None,
     ) -> None:
+        """Bind this setpoint to one generic control datapoint."""
         super().__init__(coordinator)
         self._sensor_key = sensor_key
         self._sensor_info = sensor_info
