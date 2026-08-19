@@ -1267,11 +1267,25 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # Everything from here to the return below is synchronous: no
             # further await exists in this method, so this read is not just
             # "as late as possible" but the last point at which a
-            # concurrently-arriving push could be missed. If a future change
-            # adds an await between this line and the return (or makes one of
-            # the helpers called below async), that reasoning stops holding
-            # and this comment needs revisiting alongside it. Degrades to {}
-            # the same way hub_connectivity_record already does, so a first
+            # concurrently-arriving push could be missed, and the window
+            # between this line and the return is zero-width rather than
+            # merely small.
+            #
+            # Three of the four legs that hold that up are pinned rather than
+            # left to this comment, because each can be taken away while every
+            # behavioural test stays green. TestPollTailHasNoSuspensionPoint
+            # covers two: no await below this line, and every helper the tail
+            # reaches, at any depth, staying a synchronous method rather than
+            # a coroutine or a job handed to the loop to run later.
+            # TestPushDispatchNeverRunsOnPahoThread covers the third, that no
+            # push reaches the coordinator except after a hop onto the loop.
+            # The fourth is Home Assistant's, not ours: DataUpdateCoordinator
+            # resumes from `self.data = await self._async_update_data()`
+            # without yielding, so the assignment lands in the same task step
+            # as the return. Nothing here can pin that, and a release that
+            # changed it would reopen this window silently.
+            #
+            # Degrades to {} the same way hub_connectivity_record does, so a first
             # poll after startup (self.data is falsy) or a snapshot that
             # never gained a hub_connectivity key both resolve to no prior
             # record.
@@ -1428,11 +1442,13 @@ class RainPointCoordinator(DataUpdateCoordinator):
             # entry when there is no prior record, so a hub that vanished
             # before it ever reported stays absent rather than gaining
             # an invented one. This narrows the window in which a
-            # concurrent push is lost (a push that landed before the
-            # prior_connectivity hoist above now survives the gap instead
-            # of being dropped) but does not close it: a push landing
-            # between that hoist and this method's return is still lost,
-            # unchanged.
+            # concurrent push is lost: a push that landed before the
+            # prior_connectivity hoist above survives the gap instead of
+            # being dropped. What is left after that is not a narrower
+            # window but no window: the hoist sits after every await in
+            # _async_update_data and nothing below it suspends or defers,
+            # so no push callback can run between the two. The hoist's own
+            # comment carries the full argument and names what pins it.
             for _missing_hid, missing_mid in missing_hub_keys:
                 held_record = prior_connectivity.get(missing_mid)
                 if held_record is not None:
