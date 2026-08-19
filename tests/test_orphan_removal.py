@@ -440,13 +440,28 @@ class TestOrphanedKeyEndToEnd:
         re-enters a ledger on the poll that brings the device back, and the
         sweep then builds a record for it carrying orphaned False.
 
-        It costs one poll, and the order is why. The orphan sweep is registered
-        ahead of the platform forward, so on the update that first lists the
-        child again the sweep runs before the adder records it and still sees
-        no ledger entry. The clear lands on the update after. That is asserted
-        here rather than smoothed over, because a later change that made the
-        sweep run after the adders would clear it a poll sooner and should not
-        read as a regression.
+        **Asserted against the issue registry, never against the delete mock,
+        and that is the whole difference between this test and a vacuous one.**
+        _clear_issue deletes unconditionally rather than only when the id is
+        active, so a delete call is raised for a returning key whether or not a
+        card was ever restored. Reading what the registry actually holds is
+        what makes the restored card load-bearing here, and it is also what
+        makes the second assertion below fatal to the one regression this
+        surface is closest to: seeding the manager's active set from the issue
+        registry at setup, which hands every restored card to the stale-set
+        sweep that mentions none of them and deletes the lot. Nothing else in
+        the suite pins that.
+
+        It costs one poll, because the orphan sweep is registered ahead of the
+        platform forward and so runs before the adder records the returned key.
+        The order itself is arranged by this test rather than driven through
+        async_setup_entry, so the assertion is a description of the sequence
+        and not a guard on it; test_init.py pins the registration order.
+
+        Scope worth stating rather than implying: the ledger gains a key only
+        for an entity the adder actually emits with a unique id, so this covers
+        a device that comes back reporting. One that is listed again but still
+        silent emits nothing on the valve platform this test sets up.
         """
         # Session one: raise the card, and keep what a restart would leave.
         first, hass_one, entry_one, client = _build_timeline()
@@ -470,31 +485,37 @@ class TestOrphanedKeyEndToEnd:
         client_two.get_devices_by_hid.return_value = _hub_record(with_child=False)
         _captured_two, async_add_entities_two = _capturing_add_entities()
 
-        with _patched_issue_registry({issue_id: persisted_data}) as (create_two, delete_two):
+        with _patched_issue_registry({issue_id: persisted_data}) as (create_two, _delete_two):
+            registry = repairs.ir.async_get(hass_two)
             await second.async_config_entry_first_refresh()
             _sync_orphaned_entity_issues_on_updates(hass_two, entry_two, second)
             await valve_async_setup_entry(hass_two, entry_two, async_add_entities_two)
 
-            # The premise: nothing in this session raised or holds the key.
+            # The premise: nothing in this session raised or holds the key, and
+            # the restored card survived setup. The second half is what a
+            # registry-seeded active set would break, by handing this id to the
+            # stale-set sweep on the setup pass.
             assert create_two.call_count == 0
             assert _offer_of(hass_two) == frozenset()
-            delete_two.reset_mock()
+            assert registry.async_get_issue(DOMAIN, issue_id) is not None
 
             # The device returns. The sweep on this same update still sees no
             # ledger entry, because it runs ahead of the adder that is about to
-            # record one.
+            # record one, so the card is still up afterwards.
             client_two.get_devices_by_hid.return_value = _hub_record(with_child=True)
             await second.async_refresh()
             assert SENSOR_KEY in second.data["sensors"]
-            assert [call.args[2] for call in delete_two.call_args_list if call.args[2] == issue_id] == []
+            assert registry.async_get_issue(DOMAIN, issue_id) is not None
 
             # The next update finds the key in the ledger the adder filled, so
             # the record carries orphaned False and the card goes.
             await second.async_refresh()
-            assert [call.args[2] for call in delete_two.call_args_list if call.args[2] == issue_id] == [issue_id]
+            assert registry.async_get_issue(DOMAIN, issue_id) is None
 
-            # And it goes without being re-raised, so the user is not handed a
-            # card for a device that is back and reporting.
+            # It stays gone, and it goes without being re-raised, so the user
+            # is not handed a card for a device that is back and reporting.
+            await second.async_refresh()
+            assert registry.async_get_issue(DOMAIN, issue_id) is None
             assert create_two.call_count == 0
 
     @pytest.mark.asyncio
