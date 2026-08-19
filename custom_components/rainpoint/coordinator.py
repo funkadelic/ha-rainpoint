@@ -1972,6 +1972,33 @@ class RainPointCoordinator(DataUpdateCoordinator):
         authoritative for it again and the memory this method owns cannot
         grow without bound.
 
+        Every top-level record is remembered, not only the ones satisfying
+        is_hub_record. A Bluetooth wrapper record is a parent that carries
+        children, and its disappearance is the same outage for them that a real
+        hub's is: nothing about it says whether any particular child has left.
+        Excluding it meant _prune_silent_state dropped its children's debounce
+        counters and _sync_silent_device_issues cleared their not-reporting
+        cards the moment it went, which are then raised again once it returns
+        and the window has served a second time. That is the
+        clear-then-reraise cycle this method exists to prevent, reached
+        through the one door it used to leave open.
+
+        The key is available and it is stable. A wrapper record carries no
+        identity fields, but it does carry a mid, and that mid is what every
+        unique id behind it is already built from and persisted under. On the
+        account this surface was written for it has read the same value in
+        every capture taken since the record first appeared. The sub-device
+        behind it has moved between parents, which is a different fact and is
+        not evidence that the parent's own key churns.
+
+        The cost of being wrong is bounded by this method's own release rule
+        rather than open-ended. A remembered key is released once its absences
+        exceed HUB_ABSENT_DEBOUNCE_POLLS, so a wrapper record that really has
+        gone for good delays its children's removal counting by that many
+        polls and no more, and holds a stale not-reporting card for the same
+        span. Freezing for as long as the record is absent was rejected here
+        for the same reason it was rejected for a real hub.
+
         A restart mid-gap clears every card this method is protecting: the
         Repairs issue itself survives in Home Assistant's registry, but
         _last_poll_hub_keys and _hub_absent_poll_counts do not, so the first
@@ -2004,7 +2031,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         missing hub is not in it. That is pre-existing behaviour this method
         deliberately does not change.
         """
-        current_keys = {(hub["hid"], hub["mid"]) for hub in hubs if is_hub_record(hub)}
+        current_keys = {(hub["hid"], hub["mid"]) for hub in hubs}
         missing_keys = self._last_poll_hub_keys - current_keys
 
         # A hub reappearing at all resets its counter, regardless of what its
@@ -2137,13 +2164,23 @@ class RainPointCoordinator(DataUpdateCoordinator):
         genuinely loses a hub would keep every child's leftover entities
         forever.
 
-        The Bluetooth wrapper record is never in missing_hub_keys, because
-        is_hub_record is False for it and _track_missing_hubs therefore never
-        remembers it, so its children are counted rather than frozen when it
-        disappears. That is correct rather than an oversight: a wrapper record
-        vanishing as a hub's mid changes is the observed case this whole
-        surface exists for, and freezing on it would make the surface unable
-        to fire on its own reproduction.
+        The Bluetooth wrapper record reaches missing_hub_keys like any other
+        top-level record, so its children are frozen rather than counted while
+        it is absent. It used to be excluded, on the reading that a wrapper
+        vanishing as a hub's mid changes was the case this surface exists for.
+        That reading does not survive the capture it rests on: the mid that
+        moved belonged to the sub-device changing parents, not to the wrapper,
+        whose own mid has held the same value throughout. The case the freeze
+        protects against is the ordinary one, a parent missing from one poll
+        saying nothing about any child, and the freeze is released by
+        _track_missing_hubs after HUB_ABSENT_DEBOUNCE_POLLS either way.
+
+        What this does not touch, and the distinction is worth keeping
+        straight, is a wrapper record that stays listed and loses a child.
+        That child's key leaves the enumeration with its parent present, so
+        nothing is missing, nothing is frozen, and the count runs as it
+        should. Re-pairing a Bluetooth device onto a hub is exactly that
+        shape.
 
         Every log line here carries only the sensor key and integer counts,
         never a cloud-supplied name or model, following _track_missing_hubs'

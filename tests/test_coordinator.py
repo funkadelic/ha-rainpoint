@@ -178,6 +178,27 @@ async def _run(coord):
     return await _async_update_data_fn(coord)
 
 
+def _wrapper_record(hid=100, mid=346965, addrs=(1,)):
+    """A Bluetooth wrapper record: every identity field empty, mid real.
+
+    The empty strings rather than missing keys are what is_hub_record tests
+    truthiness for, and the mid is the field that makes this record
+    rememberable at all. Module level rather than a fixture on one class,
+    because three classes need the same shape and reaching across to another
+    class's staticmethod couples them where nothing says they are related.
+    """
+    return {
+        "hid": hid,
+        "mid": mid,
+        "did": "",
+        "mac": "",
+        "productKey": "",
+        "model": "",
+        "name": "",
+        "subDevices": [{"addr": addr, "model": "HTV210B", "name": "BT Valve", "softVer": "1.0"} for addr in addrs],
+    }
+
+
 def _make_hub(hid=100, mid=200, model=MODEL_MOISTURE_SIMPLE):
     """Make hub helper."""
     return {
@@ -3096,9 +3117,18 @@ class TestSensorKeysForHubKeys:
 class TestTrackMissingHubs:
     """Direct-call tests for _track_missing_hubs."""
 
-    def test_a_wrapper_record_is_never_remembered_as_a_hub_key(self):
-        """A Bluetooth wrapper record must never enter _last_poll_hub_keys,
-        so its disappearance is never treated as a hub shrink."""
+    def test_a_wrapper_record_is_remembered_so_its_disappearance_is_a_shrink(self):
+        """Every top-level record enters _last_poll_hub_keys, not only the ones
+        satisfying is_hub_record.
+
+        A wrapper record is a parent that carries children, so its absence says
+        nothing about whether any of them has left, which is the whole premise
+        of the provisional window. It carries no identity fields but it does
+        carry a mid, and that mid is what the unique ids behind it are already
+        built from, so the key exists and is the one already relied on
+        elsewhere. Excluding it left its children's counters pruned and their
+        not-reporting cards cleared the moment it went.
+        """
         coord, _ = _make_coord()
         wrapper_hub = {
             "hid": 100,
@@ -3113,8 +3143,10 @@ class TestTrackMissingHubs:
 
         provisional = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [wrapper_hub])
 
+        # Present, so nothing is provisional yet; remembered, so its absence
+        # next poll is a shrink.
         assert provisional == set()
-        assert coord._last_poll_hub_keys == set()
+        assert coord._last_poll_hub_keys == {(100, 346965)}
 
     def test_provisional_boundary_is_the_third_absence_and_release_is_the_fourth(self):
         """Pins the "<=" boundary at exactly HUB_ABSENT_DEBOUNCE_POLLS,
@@ -3136,6 +3168,118 @@ class TestTrackMissingHubs:
 
 
 _TRACK_ORPHANS = _coord_module.RainPointCoordinator._track_orphaned_keys
+
+
+class TestWrapperRecordAbsenceIsProtected:
+    """A Bluetooth wrapper record dropping out of a poll no longer clears the
+    not-reporting cards of the devices behind it.
+
+    The shrink guard used to remember only records satisfying is_hub_record, so
+    a wrapper record's children were neither live nor protected when it went:
+    their debounce counters were pruned and their cards cleared, then raised
+    again once it returned and the window had served a second time. That is the
+    clear-then-reraise cycle the guard exists to prevent, reached through the
+    one door it left open.
+
+    Driven with a genuinely silent child rather than a reporting stand-in,
+    because substituting one removes the whole failure mode, and with a second
+    record that stays put, so this is a partial shrink rather than an empty
+    device list, which the outage guard would catch first and which would prove
+    nothing about either record.
+    """
+
+    KEY = "100_346965_1"
+    WRAPPER_MID = 346965
+
+    _anchor = staticmethod(TestOrphanedKeyCounterFreeze._hub)
+    _arrived_empty = staticmethod(TestOrphanedKeyCounterFreeze._arrived_empty)
+    _wrapper = staticmethod(_wrapper_record)
+
+    def _build(self):
+        """Return (coord, client) with a real issue manager, over the wrapper
+        record plus one anchor record that never leaves."""
+        coord, client = _make_coord()
+        coord._silent_issues = RainPointSilentDeviceIssues(MagicMock())
+        self._point(client, [self._anchor(mid=200, addrs=()), self._wrapper()])
+        return coord, client
+
+    def _point(self, client, hubs):
+        """Point the next poll at the given device list, every hub silent."""
+        client.get_devices_by_hid.return_value = hubs
+        client.get_multiple_device_status.return_value = [self._arrived_empty(hub["mid"]) for hub in hubs]
+
+    async def _drive_to_a_raised_card(self, coord, create):
+        """Poll until the wrapper's silent child is carrying its card."""
+        for _ in range(_coord_module.SILENT_DEBOUNCE_POLLS):
+            await _run(coord)
+        assert coord._silent_poll_counts[self.KEY] == _coord_module.SILENT_DEBOUNCE_POLLS
+        assert [call.args[2] for call in create.call_args_list] == [silent_device_issue_id(100, self.WRAPPER_MID, 1)]
+
+    @pytest.mark.asyncio
+    async def test_a_silent_child_keeps_its_card_while_the_wrapper_record_is_absent(self):
+        """The cycle, driven to the point it used to break, then past it."""
+        coord, client = self._build()
+        issue_id = silent_device_issue_id(100, self.WRAPPER_MID, 1)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            await self._drive_to_a_raised_card(coord, create)
+            assert (100, self.WRAPPER_MID) in coord._last_poll_hub_keys
+
+            # The wrapper record leaves. Both mocks are reset before the poll
+            # that matters, so this asserts what that poll did rather than what
+            # the run-up did: a clear and an immediate re-raise inside one poll
+            # would otherwise read the same as nothing happening.
+            self._point(client, [self._anchor(mid=200, addrs=())])
+            create.reset_mock()
+            delete.reset_mock()
+            await _run(coord)
+
+            assert coord._silent_poll_counts[self.KEY] == _coord_module.SILENT_DEBOUNCE_POLLS
+            assert issue_id not in [call.args[2] for call in delete.call_args_list]
+            assert create.call_count == 0
+            # And its removal count has not started either, on a poll that
+            # observed nothing about this child at all.
+            assert self.KEY not in coord._orphaned_key_poll_counts
+
+            # The wrapper comes back inside the window. Nothing was cleared, so
+            # there is nothing to raise a second time.
+            self._point(client, [self._anchor(mid=200, addrs=()), self._wrapper()])
+            await _run(coord)
+
+            assert issue_id not in [call.args[2] for call in delete.call_args_list]
+            assert create.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_a_wrapper_record_that_stays_gone_releases_its_child(self):
+        """The freeze is a delay, not a reprieve: an account that really lost
+        the record does not keep the card and the leftover rows forever."""
+        coord, client = self._build()
+        issue_id = silent_device_issue_id(100, self.WRAPPER_MID, 1)
+
+        with (
+            patch.object(_repairs_module.ir, "async_create_issue") as create,
+            patch.object(_repairs_module.ir, "async_delete_issue") as delete,
+        ):
+            await self._drive_to_a_raised_card(coord, create)
+
+            self._point(client, [self._anchor(mid=200, addrs=())])
+            create.reset_mock()
+            delete.reset_mock()
+            for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS):
+                await _run(coord)
+                assert issue_id not in [call.args[2] for call in delete.call_args_list]
+
+            # The release poll: the key leaves the memory, so the record is no
+            # longer missing, the child is pruned and its card goes.
+            await _run(coord)
+
+            assert self.KEY not in coord._silent_poll_counts
+            assert issue_id in [call.args[2] for call in delete.call_args_list]
+            assert coord._orphaned_key_poll_counts[self.KEY] == 1
+            assert create.call_count == 0
 
 
 class TestTrackOrphanedKeys:
@@ -3217,40 +3361,81 @@ class TestTrackOrphanedKeys:
         assert aged_out == frozenset()
         assert coord._last_poll_sensor_keys == set()
 
-    def test_the_wrapper_records_children_are_counted_not_frozen(self):
-        """The reproduction case. A Bluetooth wrapper record fails
-        is_hub_record, so _track_missing_hubs never remembers it and it can
-        never appear in the missing-hub set. Its children are therefore counted
-        immediately when it disappears, which is correct: a wrapper record
-        vanishing as a hub's mid changes is the event this surface exists for,
-        and freezing on it would make the surface unable to fire on its own
-        reproduction.
+    def test_the_wrapper_records_children_are_frozen_while_it_is_absent(self):
+        """A Bluetooth wrapper record is a parent, and its absence is the same
+        outage for its children that a real hub's absence is.
+
+        It used to be excluded from the enumeration memory, on the reading that
+        a wrapper vanishing as a hub's mid changes was the event this surface
+        exists for. The mid that was seen to move belonged to the sub-device
+        changing parents; the wrapper's own has held one value throughout, so
+        that reading described something never observed while the
+        clear-then-reraise cycle it allowed was reachable on every poll.
+
+        The freeze is bounded by the same release rule a real hub gets, which
+        the sibling below drives to its end.
         """
         coord, _ = _make_coord()
-        wrapper = {
-            "hid": 100,
-            "mid": 346965,
-            "did": "",
-            "mac": "",
-            "productKey": "",
-            "model": "",
-            "name": "",
-            "subDevices": [{"addr": 1, "model": "HTV210B", "name": "BT Valve", "softVer": "1.0"}],
-        }
+        wrapper = _wrapper_record()
         real_hub = self._hub(mid=200)
         wrapper_key = "100_346965_1"
 
-        # Poll 1: both records present. The wrapper's child is remembered even
-        # though the wrapper itself is not remembered as a hub key.
+        # Poll 1: both records present, both remembered.
         missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [wrapper, real_hub])
         _TRACK_ORPHANS(coord, [wrapper, real_hub], missing_hub_keys=missing_hub_keys)
-        assert coord._last_poll_hub_keys == {(100, 200)}
+        assert coord._last_poll_hub_keys == {(100, 200), (100, 346965)}
         assert wrapper_key in coord._last_poll_sensor_keys
 
-        # Poll 2: the wrapper record is gone. No hub is missing, so nothing is
-        # frozen and its child starts counting on this very poll.
+        # Poll 2: the wrapper record is gone. It is inside its provisional
+        # window, so its child is frozen rather than counted.
         missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [real_hub])
         _TRACK_ORPHANS(coord, [real_hub], missing_hub_keys=missing_hub_keys)
+
+        assert missing_hub_keys == {(100, 346965)}
+        assert wrapper_key not in coord._orphaned_key_poll_counts
+
+    def test_a_wrapper_record_that_stays_gone_releases_its_children_to_be_counted(self):
+        """The freeze is a delay, not a reprieve. A wrapper record absent for
+        more than HUB_ABSENT_DEBOUNCE_POLLS is released like any other, and its
+        children start counting from that poll, so an account that really did
+        lose one does not keep its leftover rows forever."""
+        coord, _ = _make_coord()
+        wrapper = _wrapper_record()
+        real_hub = self._hub(mid=200)
+        wrapper_key = "100_346965_1"
+
+        missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [wrapper, real_hub])
+        _TRACK_ORPHANS(coord, [wrapper, real_hub], missing_hub_keys=missing_hub_keys)
+
+        for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS):
+            missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [real_hub])
+            _TRACK_ORPHANS(coord, [real_hub], missing_hub_keys=missing_hub_keys)
+            assert missing_hub_keys == {(100, 346965)}
+            assert wrapper_key not in coord._orphaned_key_poll_counts
+
+        # The release poll: the key is dropped from the memory, so nothing is
+        # missing any more and the child is counted from here.
+        missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [real_hub])
+        _TRACK_ORPHANS(coord, [real_hub], missing_hub_keys=missing_hub_keys)
+
+        assert missing_hub_keys == frozenset()
+        assert coord._orphaned_key_poll_counts[wrapper_key] == 1
+
+    def test_a_wrapper_record_that_keeps_a_child_it_no_longer_lists_still_counts_it(self):
+        """The shape the freeze must not swallow, and the one that really
+        happens: re-pairing a Bluetooth device onto a hub leaves the wrapper
+        record listed and empties its subDevices. Nothing is missing, so
+        nothing is frozen, and the stale rows start their count at once."""
+        coord, _ = _make_coord()
+        real_hub = self._hub(mid=200)
+        wrapper_key = "100_346965_1"
+
+        missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [_wrapper_record(), real_hub])
+        _TRACK_ORPHANS(coord, [_wrapper_record(), real_hub], missing_hub_keys=missing_hub_keys)
+
+        emptied = _wrapper_record(addrs=())
+        missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [emptied, real_hub])
+        _TRACK_ORPHANS(coord, [emptied, real_hub], missing_hub_keys=missing_hub_keys)
 
         assert missing_hub_keys == frozenset()
         assert coord._orphaned_key_poll_counts[wrapper_key] == 1
