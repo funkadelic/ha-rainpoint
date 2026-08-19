@@ -52,7 +52,7 @@ from .const import (
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
     MODEL_HCS0528ARF,
-    MODEL_HIC801W,  # HIC801W support (read-only)
+    MODEL_HIC801W,
     MODEL_HTV210B,  # HTV210B support
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
@@ -226,7 +226,7 @@ DECODER_REGISTRY = {
     MODEL_VALVE_345: decode_htv213frf_valve,  # HTV345FRF uses custom decoder
     MODEL_VALVE_405: decode_htv213frf_valve,  # HTV405FRF uses custom decoder
     MODEL_HTV210B: decode_htv210b,  # HTV210B structural record walk (hub-paired frames)
-    MODEL_HIC801W: decode_hic801w,  # HIC801W 8-station irrigation controller, read from the 279 accessory record
+    MODEL_HIC801W: decode_hic801w,  # 8-station irrigation controller, read from the 279 accessory record
     # HCS sensor models (v1.3.0)
     MODEL_HCS005FRF: decode_hcs005frf,
     MODEL_HCS024FRF_V1: decode_hcs024frf_v1,
@@ -1705,6 +1705,17 @@ class RainPointCoordinator(DataUpdateCoordinator):
         status_entry: dict,
     ) -> dict | None:
         """Keep fresh command response zone state when a cloud poll is stale."""
+        # Dispatched before the zone-shaped body below, not folded into it.
+        # The HIC801W carries no zones mapping, so every line that follows
+        # would fall straight through for it, and what has to be preserved is
+        # a different thing: one aggregate record rather than a mapping of
+        # independently-commanded zones.
+        if model == MODEL_HIC801W:
+            # Class-level dispatch, not self._..., matching every other
+            # extracted helper in this module: parts of the test suite drive
+            # these bodies with `self` faked as a SimpleNamespace, which
+            # carries no methods of its own.
+            return RainPointCoordinator._preserve_recent_hic_command_state(self, sensor_key, decoded, status_entry)
         if model not in VALVE_MODELS or not decoded or not isinstance(decoded.get("zones"), dict):
             return decoded
 
@@ -1743,6 +1754,57 @@ class RainPointCoordinator(DataUpdateCoordinator):
         preserved = dict(decoded)
         preserved["zones"] = zones
         return preserved
+
+    def _preserve_recent_hic_command_state(
+        self,
+        sensor_key: str,
+        decoded: dict | None,
+        status_entry: dict,
+    ) -> dict | None:
+        """Keep an HIC801W's command-fresh record when a cloud poll is stale.
+
+        The station-shaped counterpart to the zone walk above, and it
+        preserves the record whole rather than per station. The controller
+        reports one aggregate frame naming the single station it is running,
+        so there is no per-station state to merge selectively: replacing part
+        of it would leave a record describing two different moments.
+
+        Any station's recent command holds the whole record for that reason,
+        and the most recent one wins. A stop on station 1 and a start on
+        station 2 both rewrite the same aggregate, so the question this has to
+        answer is only whether the poll predates the last thing this
+        integration told the controller to do.
+
+        Falls through to the polled record whenever the current one carries no
+        station reading. That covers the first poll, a silent entry, and a
+        frame that failed its shape check, and in each case the polled reading
+        is the better of the two rather than something to protect.
+        """
+        if not decoded:
+            return decoded
+
+        current_data = (self.data or {}).get("sensors", {}).get(sensor_key, {}).get("data") or {}
+        if current_data.get("current_station") is None:
+            return decoded
+
+        last_command_time = max(
+            (command_at for (key, _station), command_at in self._last_valve_command_at.items() if key == sensor_key),
+            default=None,
+        )
+        if last_command_time is None:
+            return decoded
+
+        poll_time = _status_entry_time(status_entry)
+        if not _valve_zone_poll_is_stale(poll_time, last_command_time, datetime.now(UTC)):
+            return decoded
+
+        _LOGGER.debug(
+            "Ignoring stale RainPoint irrigation controller poll for key=%s: poll_time=%s, last_command_time=%s",
+            sensor_key,
+            poll_time.isoformat() if poll_time else None,
+            last_command_time.isoformat(),
+        )
+        return current_data
 
     def _warn_on_malformed_records(self, hub: dict, status: dict) -> None:
         """Warn once per hub per degradation edge when a cloud record is unusable.

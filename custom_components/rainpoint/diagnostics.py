@@ -224,11 +224,17 @@ _SENSOR_ENTRY_FIELDS = frozenset(
 # fields, and the payload itself is the middle one.
 _STATUS_ENTRY_FIELDS = frozenset({"id", "time", "value"})
 
-# The options the options flow writes, all three of them booleans. Allow-listed
+# The options the options flow writes, all of them booleans. Allow-listed
 # for the same reason the cloud records are, one step removed: the options dict
 # is whatever has ever been persisted against this entry, which includes
 # anything a past version wrote and stopped using.
-_OPTION_FIELDS = frozenset({CONF_GENERIC_CONTROL_ENABLED, CONF_GENERIC_ENTITIES_ENABLED, CONF_PUSH_ENABLED})
+_OPTION_FIELDS = frozenset(
+    {
+        CONF_GENERIC_CONTROL_ENABLED,
+        CONF_GENERIC_ENTITIES_ENABLED,
+        CONF_PUSH_ENABLED,
+    }
+)
 
 # Kept out of _HUB_RECORD_FIELDS on purpose, because `_hub_dump` walks each
 # child through its own allow-list rather than letting the list ride along

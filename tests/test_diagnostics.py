@@ -379,7 +379,7 @@ class TestSupportPayload:
 
     @pytest.mark.asyncio
     async def test_the_hub_param_blob_survives(self):
-        """The field the throwaway probe script was written to read."""
+        """The field the throwaway catalog script was written to read."""
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
@@ -886,7 +886,7 @@ class TestDeviceIdentityMap:
 
 
 class TestDeviceIdentityMapEdges:
-    """The edges the probe surfaced, plus the map's disclosure boundary.
+    """The edges hardware testing surfaced, plus the map's disclosure boundary.
 
     Distinctive literals throughout, the same idiom `TestUserChosenNamesSurvive`
     already uses, so a survival or absence assertion made by walking every

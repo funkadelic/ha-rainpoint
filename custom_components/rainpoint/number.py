@@ -19,12 +19,14 @@ from .const import (
     GENERIC_CONTROL_DURATION_SUFFIX,
     GENERIC_CONTROL_MARKER_ICON,
     GENERIC_CONTROL_UNIQUE_ID_MARKER,
+    HIC801W_STATION_COUNT,
+    MODEL_HIC801W,
     UNIQUE_ID_PREFIX,
     VALVE_MODELS,
 )
 from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .device import build_sub_device_info
-from .entity import LateEntityAdder, register_late_adder, sub_device_attributes
+from .entity import LateEntityAdder, hic801w_station_is_running, register_late_adder, sub_device_attributes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    """Create the duration setpoints for every sub-device this config entry reports."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
@@ -69,6 +72,8 @@ async def async_setup_entry(
                 for zone_num in sorted(zones.keys()):
                     built.append(RainPointZoneDurationNumber(coordinator, key, info, zone_num))
                     _LOGGER.debug("Creating duration number entity: key=%s zone=%s", key, zone_num)
+
+        built.extend(_build_hic801w_station_durations(coordinator, key, info))
 
         if generic_enabled:
             base_slug = f"{info.get('hid', '')}_{info.get('mid', '')}_{info.get('addr', '')}"
@@ -110,6 +115,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
     _attr_mode = NumberMode.BOX
 
     async def async_added_to_hass(self) -> None:
+        """Restore the value this setpoint last held, when it is still within bounds."""
         await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
         if last_state is not None:
@@ -127,6 +133,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
 
     @property
     def native_value(self) -> float:
+        """Return the stored setpoint, in minutes."""
         return self._current_value
 
     @property
@@ -153,6 +160,19 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         or port number overrides it with one.
         """
         return "The zone"
+
+    @property
+    def _zone_noun(self) -> str:
+        """The bare noun the second sentence of the refusal message uses.
+
+        Paired with _zone_label rather than derived from it, because the two
+        appear in different grammatical positions and a family may want a
+        capitalised subject and a lowercase noun. Overriding one without the
+        other is what produced a message reading "Station 3 is watering. The
+        run duration can only be changed while the zone is closed", naming
+        something the device in front of the user does not have.
+        """
+        return "zone"
 
     @property
     def _open_run_attributes(self) -> dict[str, Any]:
@@ -268,7 +288,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         """
         if self._run_state_open is True:
             raise HomeAssistantError(
-                f"{self._zone_label} is watering. The run duration can only be changed while the zone is closed. "
+                f"{self._zone_label} is watering. The run duration can only be changed while the {self._zone_noun} is closed. "
                 "The change was not saved, so set it again once the run ends."
             )
         self._current_value = value
@@ -295,6 +315,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
 
     @property
     def device_info(self) -> DeviceInfo:
+        """Return the sub-device page this setpoint sits under."""
         return build_sub_device_info(self._sensor_info)
 
 
@@ -315,6 +336,7 @@ class RainPointZoneDurationNumber(_RainPointDurationNumberBase):
         sensor_info: dict,
         zone_num: int,
     ) -> None:
+        """Bind this setpoint to one zone on a valve hub sensor key."""
         super().__init__(coordinator)
         self._sensor_key = sensor_key
         self._sensor_info = sensor_info
@@ -439,6 +461,7 @@ class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
         datapoint: Any,
         port_number: int | None,
     ) -> None:
+        """Bind this setpoint to one generic control datapoint."""
         super().__init__(coordinator)
         self._sensor_key = sensor_key
         self._sensor_info = sensor_info
@@ -490,3 +513,133 @@ class RainPointGenericZoneDurationNumber(_RainPointDurationNumberBase):
         if self._port_number is not None and self._port_number > 1:
             return f"Zone {self._datapoint.dp_port}"
         return "The zone"
+
+
+def _build_hic801w_station_durations(coordinator: RainPointCoordinator, sensor_key: str, sensor_info: dict) -> list:
+    """Return the eight station duration setpoints for one HIC801W key, or [].
+
+    The companion set to valve.py's own station factory, and gated
+    identically: dispatched on the model rather than on VALVE_MODELS, because
+    that set means "zone-shaped valve model" and this controller carries no
+    zones mapping to build from; and empty for a silent entry, because a
+    setpoint with no valve beside it configures nothing.
+
+    The two factories must agree on which stations exist. They agree by both
+    counting to HIC801W_STATION_COUNT, which is why that lives in const.py
+    rather than as a literal in either file.
+    """
+    if sensor_info.get("model") != MODEL_HIC801W:
+        return []
+    if (sensor_info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
+        return []
+
+    built: list = []
+    for station_num in range(1, HIC801W_STATION_COUNT + 1):
+        built.append(RainPointHicStationDurationNumber(coordinator, sensor_key, sensor_info, station_num))
+        _LOGGER.debug("Creating HIC801W station duration entity: key=%s station=%s", sensor_key, station_num)
+    return built
+
+
+class RainPointHicStationDurationNumber(_RainPointDurationNumberBase):
+    """Configurable run duration (in minutes) for one HIC801W station.
+
+    The value is restored across a restart by RestoreEntity. When a station
+    valve is opened with no explicit duration in the service call,
+    valve.py reads this entity by unique_id through the entity registry,
+    exactly the way the zone-shaped valves resolve their own companions.
+
+    This is the one duration entity in the integration whose value reaches the
+    wire unscaled: the controller's own command field is in minutes, so no
+    conversion happens between this setpoint and the command. Every other
+    family converts to seconds on the way out. That difference is confined to
+    valve.py's command boundary and changes nothing here.
+    """
+
+    _attr_icon = "mdi:timer-outline"
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        station_num: int,
+    ) -> None:
+        """Bind this setpoint to one station number on an HIC801W sensor key."""
+        super().__init__(coordinator)
+        self._sensor_key = sensor_key
+        self._sensor_info = sensor_info
+        self._station_num = station_num
+        self._current_value: float = DURATION_DEFAULT_MINUTES
+
+        hid = sensor_info["hid"]
+        mid = sensor_info["mid"]
+        addr = sensor_info["addr"]
+
+        # The station valve's own unique_id plus the duration suffix, the same
+        # relationship the zone companions have to their valves. valve.py
+        # rebuilds this string to resolve the entity, so the two shapes have
+        # to stay in step.
+        self._attr_unique_id = f"rainpoint_{hid}_{mid}_{addr}_station{station_num}_duration"
+        self._attr_name = f"Station {station_num} Duration"
+
+    @property
+    def _hic_data(self) -> dict | None:
+        """Return this controller's decoded aggregate record, or None.
+
+        Guards a None coordinator.data the way the sibling duration entities
+        do, since DataUpdateCoordinator.data is None before the first update.
+        """
+        sensors = (self.coordinator.data or {}).get("sensors", {})
+        info = sensors.get(self._sensor_key)
+        if not info:
+            return None
+        return info.get("data") or None
+
+    @property
+    def _run_state_open(self) -> bool | None:
+        """Read whether this station is the one currently running.
+
+        The same tri-state the station valve publishes, through the same
+        helper, so a setpoint and its valve can never disagree about whether a
+        station is watering. None (no data, an unparsed frame, or a station
+        number outside the declared range) is the fail-open answer the base
+        class documents: a setpoint edit starts no water, so an unconfirmed
+        state must accept the write rather than lock the entity.
+        """
+        return hic801w_station_is_running(self._hic_data, self._station_num)
+
+    @property
+    def _zone_label(self) -> str:
+        """Name this entity's own station in the refusal message."""
+        return f"Station {self._station_num}"
+
+    @property
+    def _zone_noun(self) -> str:
+        """Say station in the refusal sentence too.
+
+        Nothing on this controller is called a zone, in this integration or on
+        the hardware, so the message has to keep one word throughout.
+        """
+        return "station"
+
+    @property
+    def _open_run_attributes(self) -> dict[str, Any]:
+        """Carry the running run's own duration and end time, only while open.
+
+        The base has already established this station is the running one
+        before reading this, so the controller-wide numbers below belong to
+        this station's run and to no other. Each is guarded with ``is not
+        None`` so a missing reading omits its key rather than rendering a
+        null. ``run_ends_at`` is a naive local wall-clock string and is absent
+        from an idle frame, which is why it rides here as an attribute rather
+        than in the refusal message.
+        """
+        attrs: dict[str, Any] = {}
+        data = self._hic_data or {}
+        run_duration = data.get("run_duration_seconds")
+        if run_duration is not None:
+            attrs["duration_seconds"] = run_duration
+        run_ends_at = data.get("run_ends_at")
+        if run_ends_at is not None:
+            attrs["run_ends_at"] = run_ends_at
+        return attrs

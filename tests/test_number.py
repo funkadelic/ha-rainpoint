@@ -8,9 +8,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.rainpoint.api import decode_hic801w
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
+    HIC801W_STATION_COUNT,
+    MODEL_HIC801W,
     MODEL_HTV210B,
     MODEL_VALVE_245,
     MODEL_VALVE_345,
@@ -24,10 +27,13 @@ from custom_components.rainpoint.number import (
     DURATION_MIN_MINUTES,
     DURATION_STEP_MINUTES,
     RainPointGenericZoneDurationNumber,
+    RainPointHicStationDurationNumber,
     RainPointZoneDurationNumber,
+    _build_hic801w_station_durations,
     _RainPointDurationNumberBase,
     build_generic_duration_entities,
 )
+from custom_components.rainpoint.valve import _build_hic801w_station_valves
 from tests.helpers import (
     htv210b_hub_devices,
     htv210b_silent_status,
@@ -37,6 +43,11 @@ from tests.helpers import (
     make_sensor_entry,
     make_valve_zone_status,
     make_valve_zone_status_open,
+)
+from tests.payload_samples import (
+    SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1,
+    SAMPLE_HIC801W_IDLE_PAYLOAD,
+    SAMPLE_HIC801W_STATION3_PAYLOAD,
 )
 
 # Real, non-hand-written catalog variants reused from tests/test_generic_control.py's
@@ -1566,3 +1577,223 @@ class TestRecordedDecision:
         record = self._record()
         assert "displayed value visibly does not move" not in record
         assert "displayed value never moves" not in record
+
+
+_HIC_UNSET = object()
+"""Sentinel telling the helpers below to decode their payload argument.
+
+Distinct from None, which has to stay available as a real "the decoder
+produced nothing" reading.
+"""
+
+
+def _make_hic_entry(model=MODEL_HIC801W, payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_HIC_UNSET):
+    """Return a coordinator sensor entry for an HIC801W, decoded from `payload`."""
+    entry = make_sensor_entry(
+        hid=100,
+        mid=200,
+        addr=3,
+        model=model,
+        sub_name="Irrigation Controller",
+        data=decode_hic801w(payload) if data is _HIC_UNSET else data,
+    )
+    return entry
+
+
+def _make_station_duration(payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_HIC_UNSET, station_num=1):
+    """Build one station duration setpoint over a decoded frame."""
+    entry = _make_hic_entry(payload=payload, data=data)
+    coordinator = MagicMock()
+    coordinator.data = make_coordinator_data(sensors={"100_200_3": entry})
+    number = RainPointHicStationDurationNumber(coordinator, "100_200_3", entry, station_num)
+    number.hass = MagicMock()
+    return number
+
+
+class TestHicStationDurationBuilder:
+    """Which sensor keys grow station duration setpoints, and how many."""
+
+    @staticmethod
+    def _build(entry):
+        """Run the station duration factory against one sensor entry."""
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={"100_200_3": entry})
+        return _build_hic801w_station_durations(coordinator, "100_200_3", entry)
+
+    def test_eight_setpoints_with_the_locked_unique_ids_and_names(self):
+        """Eight setpoints, with the unique IDs and names the registry persists."""
+        built = self._build(_make_hic_entry())
+        assert len(built) == HIC801W_STATION_COUNT
+        assert [n._attr_unique_id for n in built] == [f"rainpoint_100_200_3_station{n}_duration" for n in range(1, 9)]
+        assert [n._attr_name for n in built] == [f"Station {n} Duration" for n in range(1, 9)]
+
+    def test_the_unique_ids_are_the_station_valves_own_ids_plus_the_suffix(self):
+        """valve.py rebuilds this string to resolve the companion, so the two
+        shapes have to stay in step."""
+        coordinator = MagicMock()
+        entry = _make_hic_entry()
+        coordinator.data = make_coordinator_data(sensors={"100_200_3": entry})
+        valves = _build_hic801w_station_valves(coordinator, "100_200_3", entry)
+        numbers = self._build(entry)
+        assert [n._attr_unique_id for n in numbers] == [f"{v._attr_unique_id}_duration" for v in valves]
+
+    def test_another_model_builds_nothing(self):
+        """The factory is dispatched on the model, so another model grows none."""
+        assert self._build(_make_hic_entry(model=MODEL_VALVE_245)) == []
+
+    def test_a_silent_controller_builds_nothing(self):
+        """A controller the integration cannot reach is offered no setpoint."""
+        entry = _make_hic_entry(data={"type": SILENT_DATA_TYPE, "silent_state": "stopped_reporting"})
+        assert self._build(entry) == []
+
+    def test_the_setpoints_carry_the_family_bounds_and_default(self):
+        """The setpoints inherit the duration family's own bounds and default."""
+        number = self._build(_make_hic_entry())[0]
+        assert number.native_value == DURATION_DEFAULT_MINUTES
+        assert number._attr_native_min_value == DURATION_MIN_MINUTES
+        assert number._attr_native_max_value == DURATION_MAX_MINUTES
+
+
+class TestHicStationDurationRunState:
+    """The setpoint and its valve read one signal about whether water is on."""
+
+    def test_the_running_station_reads_open(self):
+        """The running station's own setpoint reads open."""
+        number = _make_station_duration(SAMPLE_HIC801W_STATION3_PAYLOAD, station_num=3)
+        assert number._run_state_open is True
+
+    def test_a_station_that_is_not_the_running_one_reads_closed(self):
+        """A station that is not the running one reads closed."""
+        number = _make_station_duration(SAMPLE_HIC801W_STATION3_PAYLOAD, station_num=1)
+        assert number._run_state_open is False
+
+    def test_an_idle_controller_reads_closed(self):
+        """An idle controller reads closed on every station."""
+        number = _make_station_duration(SAMPLE_HIC801W_IDLE_PAYLOAD, station_num=1)
+        assert number._run_state_open is False
+
+    def test_a_missing_reading_reads_unknown(self):
+        """No reading at all reads unknown rather than closed."""
+        assert _make_station_duration(data=None)._run_state_open is None
+
+    def test_a_key_that_has_left_the_poll_reads_unknown(self):
+        """A key that has left the poll reads unknown."""
+        number = _make_station_duration()
+        number.coordinator.data["sensors"] = {}
+        assert number._run_state_open is None
+
+    def test_a_frame_that_did_not_parse_reads_unknown(self):
+        """A frame that failed its shape check reads unknown."""
+        mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
+        assert _make_station_duration(mutated)._run_state_open is None
+
+    def test_a_station_outside_the_declared_range_reads_unknown(self):
+        """A running station outside the declared range reads unknown."""
+        decoded = decode_hic801w(SAMPLE_HIC801W_STATION3_PAYLOAD)
+        decoded["current_station"] = 9
+        assert _make_station_duration(data=decoded)._run_state_open is None
+
+    def test_no_coordinator_data_at_all_reads_unknown(self):
+        """DataUpdateCoordinator.data is None before the first update."""
+        number = _make_station_duration()
+        number.coordinator.data = None
+        assert number._run_state_open is None
+
+
+class TestHicStationDurationWrites:
+    """The mid-run refusal, in this family's own vocabulary."""
+
+    @pytest.mark.asyncio
+    async def test_a_setpoint_edit_is_accepted_while_the_station_is_idle(self):
+        """An idle station accepts a new setpoint."""
+        number = _make_station_duration(SAMPLE_HIC801W_IDLE_PAYLOAD, station_num=1)
+        number.async_write_ha_state = MagicMock()
+
+        await number.async_set_native_value(15)
+
+        assert number.native_value == 15
+
+    @pytest.mark.asyncio
+    async def test_a_setpoint_edit_is_refused_while_that_station_waters(self):
+        """A running station refuses the edit and keeps the stored value."""
+        number = _make_station_duration(SAMPLE_HIC801W_STATION3_PAYLOAD, station_num=3)
+        number.async_write_ha_state = MagicMock()
+
+        with pytest.raises(HomeAssistantError, match="Station 3 is watering"):
+            await number.async_set_native_value(15)
+
+        assert number.native_value == DURATION_DEFAULT_MINUTES
+        number.async_write_ha_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_refusal_says_station_throughout(self):
+        """Nothing on this controller is called a zone, so the message must not
+        send the reader looking for one."""
+        number = _make_station_duration(SAMPLE_HIC801W_STATION3_PAYLOAD, station_num=3)
+        number.async_write_ha_state = MagicMock()
+
+        with pytest.raises(HomeAssistantError) as raised:
+            await number.async_set_native_value(15)
+
+        assert "while the station is closed" in str(raised.value)
+        assert "zone" not in str(raised.value)
+
+    @pytest.mark.asyncio
+    async def test_a_sibling_station_is_still_editable_while_another_waters(self):
+        """Only one station runs at a time, so the other seven setpoints stay
+        editable rather than the whole controller locking."""
+        number = _make_station_duration(SAMPLE_HIC801W_STATION3_PAYLOAD, station_num=5)
+        number.async_write_ha_state = MagicMock()
+
+        await number.async_set_native_value(15)
+
+        assert number.native_value == 15
+
+    @pytest.mark.asyncio
+    async def test_an_unconfirmed_run_state_accepts_the_write(self):
+        """The fail-open reading the base class documents: a setpoint edit
+        starts no water, so an unknown state must not lock the entity."""
+        number = _make_station_duration(data=None)
+        number.async_write_ha_state = MagicMock()
+
+        await number.async_set_native_value(15)
+
+        assert number.native_value == 15
+
+
+class TestHicStationDurationAttributes:
+    """The running run's numbers, contributed only while it runs."""
+
+    def test_the_running_station_carries_the_run_numbers(self):
+        """The running station's setpoint carries the run's own numbers."""
+        number = _make_station_duration(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1, station_num=1)
+        attrs = number.extra_state_attributes
+        assert attrs["duration_seconds"] == 120
+        assert attrs["run_ends_at"] == "2026-08-19T13:20:50"
+
+    def test_an_idle_station_accumulates_no_stale_run_numbers(self):
+        """An idle station carries no stale numbers from the last run."""
+        number = _make_station_duration(SAMPLE_HIC801W_IDLE_PAYLOAD, station_num=1)
+        attrs = number.extra_state_attributes
+        assert "duration_seconds" not in attrs
+        assert "run_ends_at" not in attrs
+
+    def test_missing_readings_omit_their_keys_rather_than_rendering_null(self):
+        """A missing reading omits its key rather than rendering a null."""
+        decoded = decode_hic801w(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1)
+        decoded["run_duration_seconds"] = None
+        decoded["run_ends_at"] = None
+        number = _make_station_duration(data=decoded, station_num=1)
+        attrs = number.extra_state_attributes
+        assert "duration_seconds" not in attrs
+        assert "run_ends_at" not in attrs
+
+    def test_the_sub_device_attributes_are_layered_on_top(self):
+        """The shared sub-device keys ride on this entity too."""
+        number = _make_station_duration()
+        assert number.extra_state_attributes["firmware_version"] == "1.0.0"
+
+    def test_device_info_parents_the_setpoint_under_its_hub(self):
+        """The setpoint sits on the same device page as the valve it configures."""
+        number = _make_station_duration()
+        assert number.device_info["via_device"] == (DOMAIN, "hub_100_200")

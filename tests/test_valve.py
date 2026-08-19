@@ -5,25 +5,53 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.components.valve import ValveDeviceClass, ValveEntityFeature
 
-from custom_components.rainpoint.api import _encode_dp_duration_param
-from custom_components.rainpoint.const import DOMAIN, MODEL_HTV210B, MODEL_VALVE_145, MODEL_VALVE_245, MODEL_VALVE_345
+from custom_components.rainpoint.api import _encode_dp_duration_param, decode_hic801w
+from custom_components.rainpoint.const import (
+    DOMAIN,
+    HIC801W_STATION_COUNT,
+    MODEL_HIC801W,
+    MODEL_HTV210B,
+    MODEL_VALVE_145,
+    MODEL_VALVE_245,
+    MODEL_VALVE_345,
+)
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS
 from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
+    DEFAULT_HIC_DURATION_MINUTES,
     RainPointDpValveEntity,
+    RainPointHicStationValveEntity,
     RainPointValveEntity,
+    _build_hic801w_station_valves,
 )
 from tests.helpers import (
     htv210b_hub_devices,
     htv210b_silent_status,
     htv210b_status,
+    make_coordinator_data,
     make_mock_session_client,
     make_sensor_coordinator,
+    make_sensor_entry,
     make_valve_zone_status,
     mock_json_response,
 )
-from tests.payload_samples import SAMPLE_HTV145_OPEN_PAYLOAD, SAMPLE_HTV245_ASCII_PAYLOAD
+from tests.payload_samples import (
+    SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1,
+    SAMPLE_HIC801W_COMMAND_RESPONSE_STOP,
+    SAMPLE_HIC801W_IDLE_PAYLOAD,
+    SAMPLE_HIC801W_STATION3_PAYLOAD,
+    SAMPLE_HTV145_OPEN_PAYLOAD,
+    SAMPLE_HTV245_ASCII_PAYLOAD,
+)
+
+_UNSET = object()
+"""Sentinel telling the HIC helpers below to decode their payload argument.
+
+Distinct from None, which those helpers have to be able to pass through as a
+real "the decoder produced nothing" reading.
+"""
 
 ONE_ZONE_TLV_PAYLOAD = "11#17E1D70018DC0119D8001D20"
 """The shared two-zone TLV frame with zone 2's state and duration entries removed.
@@ -1576,3 +1604,453 @@ class TestDpClassDispatch:
 
         assert isinstance(valve, RainPointValveEntity)
         assert not isinstance(valve, RainPointDpValveEntity)
+
+
+class TestHicStationValveBuilder:
+    """Which sensor keys grow station valves, and how many."""
+
+    @staticmethod
+    def _entry(model=MODEL_HIC801W, payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_UNSET):
+        """Return a coordinator sensor entry for an HIC801W, decoded from `payload`."""
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=model,
+            sub_name="Irrigation Controller",
+            data=decode_hic801w(payload) if data is _UNSET else data,
+        )
+        entry["device_name"] = "dev1"
+        entry["product_key"] = "pk1"
+        return entry
+
+    def _build(self, entry):
+        """Run the station valve factory against one sensor entry."""
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={"100_200_3": entry})
+        return _build_hic801w_station_valves(coordinator, "100_200_3", entry)
+
+    def test_eight_valves_with_the_locked_unique_ids_and_names(self):
+        """Eight valves, with the unique IDs and names the registry persists."""
+        valves = self._build(self._entry())
+        assert len(valves) == HIC801W_STATION_COUNT
+        assert [v._attr_unique_id for v in valves] == [f"rainpoint_100_200_3_station{n}" for n in range(1, 9)]
+        assert [v._attr_name for v in valves] == [f"Station {n}" for n in range(1, 9)]
+
+    def test_all_eight_are_water_valves_that_open_and_close(self):
+        """Every station is a water valve that opens and closes."""
+        valves = self._build(self._entry())
+        assert all(v._attr_device_class is ValveDeviceClass.WATER for v in valves)
+        assert all(v._attr_supported_features == (ValveEntityFeature.OPEN | ValveEntityFeature.CLOSE) for v in valves)
+
+    def test_another_model_builds_nothing(self):
+        """The builder is dispatched on the model, so a valve hub sharing this
+        platform never grows station entities."""
+        assert self._build(self._entry(model=MODEL_VALVE_245)) == []
+
+    def test_a_silent_controller_builds_nothing(self):
+        """A controller the integration cannot currently reach is never offered
+        a control, matching the zone-shaped path's own silent guard."""
+        entry = self._entry(data={"type": SILENT_DATA_TYPE, "silent_state": "stopped_reporting"})
+        assert self._build(entry) == []
+
+    def test_a_controller_with_an_empty_decode_still_builds(self):
+        """An empty decode is not the silent type. Creation is one-shot, so the
+        valves are built and report unavailable until a frame arrives, rather
+        than being withheld and never offered again."""
+        built = self._build(self._entry(data={}))
+        assert len(built) == HIC801W_STATION_COUNT
+        assert all(v.available is False for v in built)
+
+
+def _make_station_valve(payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_UNSET, station_num=1):
+    """Build one station valve over a decoded frame, with a mock coordinator."""
+    sensor_key = "100_200_3"
+    sensor_info = make_sensor_entry(
+        hid=100,
+        mid=200,
+        addr=3,
+        model=MODEL_HIC801W,
+        sub_name="Irrigation Controller",
+        data=decode_hic801w(payload) if data is _UNSET else data,
+    )
+    sensor_info["device_name"] = "dev1"
+    sensor_info["product_key"] = "pk1"
+    coordinator = MagicMock()
+    coordinator.data = make_coordinator_data(sensors={sensor_key: sensor_info})
+    valve = RainPointHicStationValveEntity(coordinator, sensor_key, sensor_info, station_num)
+    valve.hass = MagicMock()
+    return valve
+
+
+class TestHicStationValveState:
+    """What each of the eight reports, from the real committed frames."""
+
+    def test_the_running_station_reads_open_and_the_rest_read_closed(self):
+        """The reporter's station-3 capture: exactly one valve is open."""
+        valves = [_make_station_valve(SAMPLE_HIC801W_STATION3_PAYLOAD, station_num=n) for n in range(1, 9)]
+        assert [v.is_closed for v in valves] == [True, True, False, True, True, True, True, True]
+
+    def test_an_idle_frame_reads_closed_on_all_eight(self):
+        """An idle frame reads closed on all eight."""
+        valves = [_make_station_valve(SAMPLE_HIC801W_IDLE_PAYLOAD, station_num=n) for n in range(1, 9)]
+        assert all(v.is_closed is True for v in valves)
+
+    def test_a_rejected_frame_reads_no_state_but_stays_available(self):
+        """A b3-mutated frame decodes to the error envelope. Every station
+        reads unknown rather than a confident closed, and availability stays
+        True because the controller is reachable and it is the payload that
+        did not parse."""
+        mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("F703FF0300F9", "F703FF0301F9")
+        assert mutated != SAMPLE_HIC801W_STATION3_PAYLOAD
+        valve = _make_station_valve(mutated)
+        assert valve.is_closed is None
+        assert valve.available is True
+
+    def test_a_missing_reading_reads_no_state(self):
+        """No reading at all reads unknown rather than closed."""
+        valve = _make_station_valve(data=None)
+        assert valve.is_closed is None
+
+    def test_a_key_that_has_left_the_poll_reads_no_state(self):
+        """A key that has left the poll reads unknown."""
+        valve = _make_station_valve()
+        valve.coordinator.data["sensors"] = {}
+        assert valve.is_closed is None
+
+    def test_no_coordinator_data_at_all_reads_no_state(self):
+        """DataUpdateCoordinator.data is None before the first update."""
+        valve = _make_station_valve()
+        valve.coordinator.data = None
+        assert valve.is_closed is None
+
+    def test_a_station_number_outside_the_declared_range_reads_no_state(self):
+        """The decoder's shape check rejects only on a non-zero b3, so an
+        out-of-range running station reaches the entity inside an otherwise
+        valid envelope. Reporting closed there would be an invented state."""
+        decoded = decode_hic801w(SAMPLE_HIC801W_STATION3_PAYLOAD)
+        decoded["current_station"] = 9
+        valve = _make_station_valve(data=decoded)
+        assert valve.is_closed is None
+
+    def test_a_non_integer_station_reads_no_state(self):
+        """A non-integer running station reads unknown."""
+        decoded = decode_hic801w(SAMPLE_HIC801W_STATION3_PAYLOAD)
+        decoded["current_station"] = "3"
+        valve = _make_station_valve(data=decoded)
+        assert valve.is_closed is None
+
+
+class TestHicStationValveAvailability:
+    """Availability is the cloud's verdict on the hub, and nothing else."""
+
+    def test_available_with_no_hub_connectivity_record_at_all(self):
+        """Unknown connectivity must leave availability alone: only an explicit
+        disconnected takes a control away."""
+        valve = _make_station_valve()
+        assert "hub_connectivity" not in valve.coordinator.data
+        assert valve.available is True
+
+    def test_available_when_the_cloud_reports_the_hub_connected(self):
+        """A hub the cloud reports as connected leaves the valve available."""
+        valve = _make_station_valve()
+        valve.coordinator.data["hub_connectivity"] = {200: {"state": "connected"}}
+        assert valve.available is True
+
+    def test_unavailable_when_the_cloud_reports_the_hub_disconnected(self):
+        """A hub the cloud reports as disconnected takes the valve away."""
+        valve = _make_station_valve()
+        valve.coordinator.data["hub_connectivity"] = {200: {"state": "disconnected"}}
+        assert valve.available is False
+
+    def test_available_when_the_cloud_connectivity_is_unknown(self):
+        """Unknown cloud connectivity leaves availability alone."""
+        valve = _make_station_valve()
+        valve.coordinator.data["hub_connectivity"] = {200: {"state": "unknown"}}
+        assert valve.available is True
+
+    def test_unavailable_when_the_key_has_left_the_poll(self):
+        """A key that has left the poll is unavailable."""
+        valve = _make_station_valve()
+        valve.coordinator.data["sensors"] = {}
+        assert valve.available is False
+
+    def test_unavailable_when_the_entry_carries_no_reading(self):
+        """An entry carrying no reading is unavailable."""
+        valve = _make_station_valve(data=None)
+        assert valve.available is False
+
+    def test_unavailable_once_the_controller_goes_silent(self):
+        """A controller that has gone silent is unavailable."""
+        valve = _make_station_valve(data={"type": SILENT_DATA_TYPE, "silent_state": "stopped_reporting"})
+        assert valve.available is False
+
+    def test_device_info_parents_the_valve_under_its_hub(self):
+        """The valve sits on its sub-device page under the hub."""
+        valve = _make_station_valve()
+        info = valve.device_info
+        assert info["serial_number"] == "200_3"
+        assert info["via_device"] == (DOMAIN, "hub_100_200")
+
+
+class TestHicStationValveAttributes:
+    """The controller reports one run, so only the running station carries it."""
+
+    def test_the_running_station_carries_the_run_numbers(self):
+        """The running station carries the run's duration and end time."""
+        valve = _make_station_valve(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1, station_num=1)
+        attrs = valve.extra_state_attributes
+        assert attrs["duration_seconds"] == 120
+        assert attrs["run_ends_at"] == "2026-08-19T13:20:50"
+
+    def test_the_other_stations_carry_none_of_them(self):
+        """Seven stations are not having the run the eighth is having."""
+        valve = _make_station_valve(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1, station_num=2)
+        attrs = valve.extra_state_attributes
+        assert "duration_seconds" not in attrs
+        assert "run_ends_at" not in attrs
+
+    def test_an_idle_controller_carries_no_run_numbers(self):
+        """An idle controller carries no run numbers."""
+        valve = _make_station_valve(SAMPLE_HIC801W_IDLE_PAYLOAD, station_num=1)
+        assert "duration_seconds" not in valve.extra_state_attributes
+
+    def test_a_missing_end_time_omits_its_key_rather_than_rendering_null(self):
+        """A missing reading omits its key rather than rendering a null."""
+        decoded = decode_hic801w(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1)
+        decoded["run_ends_at"] = None
+        decoded["run_duration_seconds"] = None
+        valve = _make_station_valve(data=decoded, station_num=1)
+        attrs = valve.extra_state_attributes
+        assert "run_ends_at" not in attrs
+        assert "duration_seconds" not in attrs
+
+    def test_the_sub_device_attributes_are_layered_on_top(self):
+        """The shared sub-device keys ride on this entity the same way they
+        ride on every other control in the integration."""
+        valve = _make_station_valve(SAMPLE_HIC801W_IDLE_PAYLOAD)
+        assert valve.extra_state_attributes["firmware_version"] == "1.0.0"
+
+
+def _bind_entity_registry(monkeypatch, entity_id):
+    """Point the duration lookup's deferred entity-registry import at a mock.
+
+    The same sys.modules rebinding the zone-shaped duration tests above use,
+    and for the same reason: valve.py imports entity_registry inside the
+    lookup, and the parent stub may already have cached an auto-MagicMock
+    attribute for it, so the parent attribute has to be rebound too.
+    """
+    import sys
+
+    registry = MagicMock()
+    registry.async_get_entity_id.return_value = entity_id
+    module = MagicMock()
+    module.async_get.return_value = registry
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", module)
+    monkeypatch.setattr(sys.modules["homeassistant.helpers"], "entity_registry", module, raising=False)
+    return registry
+
+
+class TestHicStationValveDuration:
+    """Resolving how long a start should run for."""
+
+    def test_the_companion_setpoint_reaches_the_wire_unscaled(self, monkeypatch):
+        """The number entity is in minutes and so is the command field, so this
+        is the one family where no conversion happens."""
+        valve = _make_station_valve()
+        _bind_entity_registry(monkeypatch, "number.station_1_duration")
+        valve.hass.states.get.return_value = MagicMock(state="7")
+        assert valve._get_configured_duration_minutes() == 7
+
+    def test_the_setpoint_is_resolved_by_the_valve_s_own_unique_id(self, monkeypatch):
+        """The lookup asks for this station's own companion, not another's."""
+        valve = _make_station_valve(station_num=4)
+        registry = _bind_entity_registry(monkeypatch, "number.station_4_duration")
+        valve.hass.states.get.return_value = MagicMock(state="3")
+
+        valve._get_configured_duration_minutes()
+
+        registry.async_get_entity_id.assert_called_once_with("number", "rainpoint", "rainpoint_100_200_3_station4_duration")
+
+    def test_no_companion_entity_falls_back_to_the_default(self, monkeypatch):
+        """No companion entity yet falls back to the default."""
+        valve = _make_station_valve()
+        _bind_entity_registry(monkeypatch, None)
+        assert valve._get_configured_duration_minutes() == DEFAULT_HIC_DURATION_MINUTES
+
+    def test_a_companion_with_no_state_falls_back_to_the_default(self, monkeypatch):
+        """A companion with no state falls back to the default."""
+        valve = _make_station_valve()
+        _bind_entity_registry(monkeypatch, "number.station_1_duration")
+        valve.hass.states.get.return_value = None
+        assert valve._get_configured_duration_minutes() == DEFAULT_HIC_DURATION_MINUTES
+
+    def test_an_unparsable_state_falls_back_to_the_default(self, monkeypatch):
+        """A state that will not parse falls back to the default."""
+        valve = _make_station_valve()
+        _bind_entity_registry(monkeypatch, "number.station_1_duration")
+        valve.hass.states.get.return_value = MagicMock(state="unknown")
+        assert valve._get_configured_duration_minutes() == DEFAULT_HIC_DURATION_MINUTES
+
+    def test_a_setpoint_below_one_minute_is_floored_at_one(self, monkeypatch):
+        """The controller cannot express a shorter run, and a request must not
+        silently become a request for none."""
+        valve = _make_station_valve()
+        _bind_entity_registry(monkeypatch, "number.station_1_duration")
+        valve.hass.states.get.return_value = MagicMock(state="0")
+        assert valve._get_configured_duration_minutes() == 1
+
+    def test_a_service_call_duration_stays_in_seconds_and_converts_here(self):
+        """`duration` means seconds on every valve this integration exposes, so
+        one service does not change units with the model behind it."""
+        valve = _make_station_valve()
+        assert valve._wire_duration_minutes({"duration": 600}) == 10
+
+    def test_a_service_call_duration_rounds_to_the_nearest_minute(self):
+        """A duration that is not a whole number of minutes rounds to the nearest."""
+        valve = _make_station_valve()
+        assert valve._wire_duration_minutes({"duration": 90}) == 2
+
+    def test_a_service_call_duration_shorter_than_a_minute_is_floored_at_one(self):
+        """A duration under a minute is floored at one rather than becoming none."""
+        valve = _make_station_valve()
+        assert valve._wire_duration_minutes({"duration": 20}) == 1
+
+    def test_no_service_call_duration_reads_the_companion_setpoint(self):
+        """With no duration in the call, the companion setpoint decides."""
+        valve = _make_station_valve()
+        valve._get_configured_duration_minutes = MagicMock(return_value=5)
+        assert valve._wire_duration_minutes({}) == 5
+
+
+class TestHicStationValveControl:
+    """The commands the settled encoding sends."""
+
+    @pytest.mark.asyncio
+    async def test_open_starts_the_station_with_the_duration_in_minutes(self):
+        """A start sends mode 1 with the run length in minutes."""
+        valve = _make_station_valve()
+        valve._get_configured_duration_minutes = MagicMock(return_value=2)
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode = mock_control
+
+        await valve.async_open_valve()
+
+        mock_control.assert_called_once_with(
+            mid=200,
+            addr=3,
+            device_name="dev1",
+            product_key="pk1",
+            port=1,
+            mode=1,
+            duration=2,
+        )
+
+    @pytest.mark.asyncio
+    async def test_open_addresses_the_station_in_port(self):
+        """The station number rides in `port`, which is what the encoding run
+        confirmed against a real controller."""
+        valve = _make_station_valve(station_num=6)
+        valve._get_configured_duration_minutes = MagicMock(return_value=2)
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode = mock_control
+
+        await valve.async_open_valve()
+
+        assert mock_control.call_args.kwargs["port"] == 6
+
+    @pytest.mark.asyncio
+    async def test_close_stops_the_station(self):
+        """A stop sends mode 0 with a zero duration."""
+        valve = _make_station_valve()
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode = mock_control
+
+        await valve.async_close_valve()
+
+        mock_control.assert_called_once_with(
+            mid=200,
+            addr=3,
+            device_name="dev1",
+            product_key="pk1",
+            port=1,
+            mode=0,
+            duration=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_start_records_the_command_against_its_own_station(self):
+        """The command is recorded against the station that caused it."""
+        valve = _make_station_valve(station_num=4)
+        valve.coordinator._client.control_work_mode = AsyncMock(return_value=None)
+        valve._get_configured_duration_minutes = MagicMock(return_value=2)
+
+        await valve.async_open_valve()
+
+        valve.coordinator.record_valve_command.assert_called_once_with("100_200_3", 4)
+
+    @pytest.mark.asyncio
+    async def test_a_start_applies_the_response_frame_without_waiting_for_a_poll(self):
+        """The real start capture, end to end: the command's own response frame
+        is decoded straight into coordinator data."""
+        valve = _make_station_valve(station_num=1)
+        valve.coordinator.async_set_updated_data = MagicMock()
+        valve._get_configured_duration_minutes = MagicMock(return_value=2)
+        valve.coordinator._client.control_work_mode = AsyncMock(return_value=SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1)
+
+        await valve.async_open_valve()
+
+        updated = valve.coordinator.async_set_updated_data.call_args.args[0]
+        assert updated["sensors"]["100_200_3"]["data"]["current_station"] == 1
+        assert updated["sensors"]["100_200_3"]["data"]["run_duration_seconds"] == 120
+
+    @pytest.mark.asyncio
+    async def test_a_stop_applies_the_response_frame_too(self):
+        """The stop capture taken thirteen seconds after the start above."""
+        valve = _make_station_valve(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1, station_num=1)
+        valve.coordinator.async_set_updated_data = MagicMock()
+        valve.coordinator._client.control_work_mode = AsyncMock(return_value=SAMPLE_HIC801W_COMMAND_RESPONSE_STOP)
+
+        await valve.async_close_valve()
+
+        updated = valve.coordinator.async_set_updated_data.call_args.args[0]
+        assert updated["sensors"]["100_200_3"]["data"]["current_station"] == 0
+        assert updated["sensors"]["100_200_3"]["data"]["run_duration_seconds"] == 0
+
+
+class TestHicStationValveResponseHandling:
+    """What a command response has to be before it is written to state."""
+
+    def test_no_response_writes_nothing(self):
+        """No response leaves coordinator data untouched."""
+        valve = _make_station_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+        valve._apply_response_state(None)
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_a_frame_that_did_not_parse_writes_nothing(self):
+        """The decoder answers a fully populated error envelope rather than
+        None, so writing it would blank all eight stations on a command that
+        may well have worked."""
+        valve = _make_station_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+        valve._apply_response_state("11#not-an-hic-frame")
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_a_key_that_has_left_the_poll_writes_nothing(self):
+        """A key that has left the poll is never written back to."""
+        valve = _make_station_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+        valve.coordinator.data["sensors"] = {}
+        valve._apply_response_state(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1)
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_the_write_is_copy_on_write(self):
+        """The record handed to the coordinator is a new mapping, never the one
+        the entity was reading."""
+        valve = _make_station_valve()
+        original_sensors = valve.coordinator.data["sensors"]
+        valve.coordinator.async_set_updated_data = MagicMock()
+        valve._apply_response_state(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1)
+        updated = valve.coordinator.async_set_updated_data.call_args.args[0]
+        assert updated["sensors"] is not original_sensors

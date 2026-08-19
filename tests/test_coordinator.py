@@ -6657,3 +6657,163 @@ class TestReportLinkMatchesTheIssueForm:
                 required.add(found.group(1))
 
         assert required == {"model", "category"}
+
+
+class TestHicStalenessGuard:
+    """The station-shaped branch of the command-versus-poll guard.
+
+    The HIC801W carries one aggregate record rather than a zones mapping, so
+    what has to survive a stale poll is the whole record: replacing part of it
+    would leave a reading describing two different moments.
+    """
+
+    @staticmethod
+    def _running():
+        """Return a decoded record with station 3 running."""
+        return {"type": "irrigation_controller", "current_station": 3, "run_duration_seconds": 120}
+
+    @staticmethod
+    def _idle():
+        """Return a decoded record with nothing running."""
+        return {"type": "irrigation_controller", "current_station": 0, "run_duration_seconds": 0}
+
+    @staticmethod
+    def _poll_at(dt):
+        """Return a status entry carrying `dt` as its device timestamp."""
+        return {"time": int(dt.timestamp() * 1000)}
+
+    def _preserve(self, coord, decoded, poll_time):
+        """Run the guard for this controller against one polled record."""
+        return _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
+            coord,
+            "100_200_3",
+            MODEL_HIC801W,
+            decoded,
+            self._poll_at(poll_time),
+        )
+
+    def test_a_poll_older_than_the_command_keeps_the_command_fresh_record(self):
+        """The exact race the guard exists for: the command's own response
+        already put the running station in state, and the next poll still
+        carries the cloud's pre-command frame."""
+        coord, _ = _make_coord()
+        fresh = self._running()
+        coord.data = {"sensors": {"100_200_3": {"data": fresh}}}
+        coord._last_valve_command_at = {("100_200_3", 3): datetime(2024, 1, 2, tzinfo=UTC)}
+
+        result = self._preserve(coord, self._idle(), datetime(2024, 1, 1, tzinfo=UTC))
+
+        assert result is fresh
+
+    def test_a_poll_newer_than_the_command_wins(self):
+        """Once the controller has reported since the command, the poll is the
+        better reading and the guard gets out of the way."""
+        coord, _ = _make_coord()
+        coord.data = {"sensors": {"100_200_3": {"data": self._running()}}}
+        coord._last_valve_command_at = {("100_200_3", 3): datetime(2024, 1, 1, tzinfo=UTC)}
+        polled = self._idle()
+
+        result = self._preserve(coord, polled, datetime(2024, 1, 2, tzinfo=UTC))
+
+        assert result is polled
+
+    def test_any_station_s_recent_command_holds_the_whole_record(self):
+        """A stop on one station and a start on another rewrite the same
+        aggregate, so the guard asks only whether the poll predates the last
+        thing this integration commanded."""
+        coord, _ = _make_coord()
+        fresh = self._running()
+        coord.data = {"sensors": {"100_200_3": {"data": fresh}}}
+        coord._last_valve_command_at = {("100_200_3", 7): datetime(2024, 1, 2, tzinfo=UTC)}
+
+        result = self._preserve(coord, self._idle(), datetime(2024, 1, 1, tzinfo=UTC))
+
+        assert result is fresh
+
+    def test_the_most_recent_command_against_the_key_is_the_one_that_counts(self):
+        """The latest command against the key decides, not the first."""
+        coord, _ = _make_coord()
+        polled = self._idle()
+        coord.data = {"sensors": {"100_200_3": {"data": self._running()}}}
+        coord._last_valve_command_at = {
+            ("100_200_3", 1): datetime(2024, 1, 1, tzinfo=UTC),
+            ("100_200_3", 2): datetime(2024, 1, 3, tzinfo=UTC),
+        }
+
+        result = self._preserve(coord, polled, datetime(2024, 1, 4, tzinfo=UTC))
+
+        assert result is polled
+
+    def test_another_key_s_command_never_holds_this_one(self):
+        """The guard is keyed per sensor key, so another controller's command cannot hold this one's record."""
+        coord, _ = _make_coord()
+        polled = self._idle()
+        coord.data = {"sensors": {"100_200_3": {"data": self._running()}}}
+        coord._last_valve_command_at = {("999_888_1", 1): datetime(2024, 1, 2, tzinfo=UTC)}
+
+        result = self._preserve(coord, polled, datetime(2024, 1, 1, tzinfo=UTC))
+
+        assert result is polled
+
+    def test_no_command_has_ever_been_sent(self):
+        """With no command ever sent, the polled record is the only reading there is."""
+        coord, _ = _make_coord()
+        polled = self._idle()
+        coord.data = {"sensors": {"100_200_3": {"data": self._running()}}}
+        coord._last_valve_command_at = {}
+
+        result = self._preserve(coord, polled, datetime(2024, 1, 1, tzinfo=UTC))
+
+        assert result is polled
+
+    def test_a_decode_that_produced_nothing_is_passed_straight_through(self):
+        """A decode that produced nothing is returned untouched rather than replaced."""
+        coord, _ = _make_coord()
+        coord.data = {"sensors": {"100_200_3": {"data": self._running()}}}
+        coord._last_valve_command_at = {("100_200_3", 3): datetime(2024, 1, 2, tzinfo=UTC)}
+
+        result = self._preserve(coord, None, datetime(2024, 1, 1, tzinfo=UTC))
+
+        assert result is None
+
+    def test_the_first_poll_has_nothing_to_preserve(self):
+        """No current record, so the polled reading is the only one there is."""
+        coord, _ = _make_coord()
+        coord.data = None
+        polled = self._idle()
+        coord._last_valve_command_at = {("100_200_3", 3): datetime(2024, 1, 2, tzinfo=UTC)}
+
+        result = self._preserve(coord, polled, datetime(2024, 1, 1, tzinfo=UTC))
+
+        assert result is polled
+
+    def test_a_current_record_with_no_station_reading_is_not_protected(self):
+        """A frame that failed its shape check carries current_station None.
+        The polled reading is the better of the two rather than something to
+        protect."""
+        coord, _ = _make_coord()
+        polled = self._idle()
+        coord.data = {"sensors": {"100_200_3": {"data": {"current_station": None}}}}
+        coord._last_valve_command_at = {("100_200_3", 3): datetime(2024, 1, 2, tzinfo=UTC)}
+
+        result = self._preserve(coord, polled, datetime(2024, 1, 1, tzinfo=UTC))
+
+        assert result is polled
+
+    def test_an_unreadable_poll_time_falls_back_to_the_wall_clock_window(self):
+        """With no device timestamp to compare, a command inside the guard
+        window still holds the record."""
+        coord, _ = _make_coord()
+        fresh = self._running()
+        coord.data = {"sensors": {"100_200_3": {"data": fresh}}}
+        coord._last_valve_command_at = {("100_200_3", 3): datetime.now(UTC) - timedelta(seconds=1)}
+
+        result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
+            coord,
+            "100_200_3",
+            MODEL_HIC801W,
+            self._idle(),
+            {"time": "not-a-number"},
+        )
+
+        assert result is fresh

@@ -293,6 +293,18 @@ MODEL_HTV210B = "HTV210B"  # Bluetooth valve; reports over RF as a normal hub su
 MODEL_HIC801W = "HIC801W"  # 8-station irrigation controller; catalog variant 279 is the accessory
 # record carrying the stations, while 278 is the pairable main record with no ports.
 
+# How many stations an HIC801W fans out to. Fixed from the model rather than
+# derived from a frame, unlike the HTV valve factories which read their zones
+# out of the decoded payload: variant 279 sends one aggregate record carrying a
+# single running-station number and enumerates no stations of its own, so there
+# is nothing in a frame to derive this from. Variant 279 declares portNumber 8.
+#
+# Named once here because three independent surfaces fan out over it -- the
+# per-station watching binary sensors, the station valves, and their companion
+# duration numbers -- and three literal 8s would be three places to miss when a
+# sibling controller with a different station count arrives.
+HIC801W_STATION_COUNT = 8
+
 # Legacy valve aliases
 MODEL_VALVE_113 = MODEL_HTV113FRF
 MODEL_VALVE_145 = MODEL_HTV145FRF
@@ -317,11 +329,17 @@ VALVE_MODELS = {
     MODEL_VALVE_345,
     MODEL_VALVE_405,
     MODEL_HTV210B,
-    # MODEL_HIC801W is deliberately absent: HIC801W support is read-only,
-    # so it must not enrol in valve.py/number.py entity creation or the
-    # command-versus-poll staleness guard. Do not "complete the pair" with
-    # the HAND_WRITTEN_MODELS entry below. Adding it here is part of
-    # shipping station control, never a tidy-up on its own.
+    # MODEL_HIC801W is still deliberately absent, and station control shipping
+    # is what settled that rather than what changed it. This set means
+    # "zone-shaped valve model": every path it gates reads decoded["zones"],
+    # and the HIC801W carries no zones dict at all -- one aggregate record with
+    # a single running-station number instead. Enrolling it here would hand
+    # valve.py and number.py a model whose builders find no zones and emit
+    # nothing, and would put it through a staleness guard keyed on a mapping it
+    # does not have. Its control entities are built by its own station-shaped
+    # factories, dispatched on MODEL_HIC801W the way binary_sensor.py already
+    # dispatches its per-station entities, and its staleness guard is a branch
+    # of its own that preserves the whole aggregate record.
 }
 
 # Every model with a hand-written, fixture-validated decoder (mirrors the
