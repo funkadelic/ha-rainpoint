@@ -1710,6 +1710,19 @@ class TestHicStationDurationWrites:
         number.async_write_ha_state.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_the_refusal_says_station_throughout(self):
+        """Nothing on this controller is called a zone, so the message must not
+        send the reader looking for one."""
+        number = _make_station_duration(SAMPLE_HIC801W_STATION3_PAYLOAD, station_num=3)
+        number.async_write_ha_state = MagicMock()
+
+        with pytest.raises(HomeAssistantError) as raised:
+            await number.async_set_native_value(15)
+
+        assert "while the station is closed" in str(raised.value)
+        assert "zone" not in str(raised.value)
+
+    @pytest.mark.asyncio
     async def test_a_sibling_station_is_still_editable_while_another_waters(self):
         """Only one station runs at a time, so the other seven setpoints stay
         editable rather than the whole controller locking."""

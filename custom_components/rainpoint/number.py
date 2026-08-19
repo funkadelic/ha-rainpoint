@@ -159,6 +159,19 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         return "The zone"
 
     @property
+    def _zone_noun(self) -> str:
+        """The bare noun the second sentence of the refusal message uses.
+
+        Paired with _zone_label rather than derived from it, because the two
+        appear in different grammatical positions and a family may want a
+        capitalised subject and a lowercase noun. Overriding one without the
+        other is what produced a message reading "Station 3 is watering. The
+        run duration can only be changed while the zone is closed", naming
+        something the device in front of the user does not have.
+        """
+        return "zone"
+
+    @property
     def _open_run_attributes(self) -> dict[str, Any]:
         """Return the running run's own numbers, contributed only while open.
 
@@ -272,7 +285,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
         """
         if self._run_state_open is True:
             raise HomeAssistantError(
-                f"{self._zone_label} is watering. The run duration can only be changed while the zone is closed. "
+                f"{self._zone_label} is watering. The run duration can only be changed while the {self._zone_noun} is closed. "
                 "The change was not saved, so set it again once the run ends."
             )
         self._current_value = value
@@ -592,6 +605,15 @@ class RainPointHicStationDurationNumber(_RainPointDurationNumberBase):
     def _zone_label(self) -> str:
         """Name this entity's own station in the refusal message."""
         return f"Station {self._station_num}"
+
+    @property
+    def _zone_noun(self) -> str:
+        """Say station in the refusal sentence too.
+
+        Nothing on this controller is called a zone, in this integration or on
+        the hardware, so the message has to keep one word throughout.
+        """
+        return "station"
 
     @property
     def _open_run_attributes(self) -> dict[str, Any]:
