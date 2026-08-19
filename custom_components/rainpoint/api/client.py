@@ -73,7 +73,14 @@ class RainPointThrottledError(RainPointApiError):
 
 
 class RainPointClient:
+    """The RainPoint cloud API client every read and write in this integration goes through.
+
+    Holds the account credentials and the session token, refreshes the token on
+    demand, and exposes one method per cloud endpoint the integration uses.
+    """
+
     def __init__(self, area_code: str, email: str, password: str, session: aiohttp.ClientSession):
+        """Bind a client to one account, over a caller-supplied aiohttp session."""
         self._area_code = area_code
         self._email = email
         self._password = password  # cleartext, HA will store
