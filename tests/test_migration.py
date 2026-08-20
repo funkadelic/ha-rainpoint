@@ -869,6 +869,10 @@ class TestResidualSweepRetryCadence:
 
         first_pass_warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "No mid available" in r.message]
         assert len(first_pass_warnings) == 1, "the first decline for this hid must be loud"
+        # The reason separates the two conditions behind a decline, which call
+        # for opposite responses. This one is permanent until the cloud changes
+        # it, so the line must not read as something a later poll will fix.
+        assert "mid that is not a decimal integer" in first_pass_warnings[0].getMessage()
 
         caplog.clear()
         # A second, unrelated real hub changes the mapping so the gate reopens,
@@ -880,6 +884,54 @@ class TestResidualSweepRetryCadence:
         second_pass_debugs = [r for r in caplog.records if r.levelno == logging.DEBUG and "No mid available" in r.message]
         assert second_pass_warnings == [], "a repeat decline for the same hid must not warn a second time"
         assert len(second_pass_debugs) == 1
+        # The repeat line carries the reason too, because once a hid has been
+        # announced this is the only place a change in it is visible.
+        assert "mid that is not a decimal integer" in second_pass_debugs[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_a_decline_says_which_of_the_two_conditions_produced_it(self, hass, device_registry, caplog):
+        """A hub absent from this poll and one whose record is unreadable both
+        decline, and until the reason rode along they read identically.
+
+        They call for opposite responses. Absence is transient by construction:
+        a getDeviceByHid response can omit a hub the previous poll listed, which
+        is why this sweep re-runs on updates at all, so the deferral the line
+        promises is real. An unreadable mid is permanent until the cloud changes
+        it, because device.py writes it verbatim while this sweep filters on
+        isdigit, so waiting for a later poll achieves nothing.
+        """
+        import logging
+
+        import custom_components.rainpoint as rp
+
+        entry = _make_entry(hass)
+        device_registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub")
+
+        caplog.set_level(logging.DEBUG, logger="custom_components.rainpoint")
+        # A poll that carries a real hub, but not this hid's.
+        coordinator = _coordinator([_hub_record(hid=HID + 1, mid=300)])
+        rp._complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "No mid available" in r.message]
+        assert len(warnings) == 1
+        assert "no record for it in this poll" in warnings[0].getMessage()
+
+    def test_the_reason_reads_the_wrapper_record_as_no_record_at_all(self):
+        """The reason is derived from the same is_hub_record-filtered list the
+        sweep resolves candidates from, so a hid whose only top-level record is
+        the Bluetooth wrapper is reported as absent rather than as unreadable.
+
+        Called directly: the phrase is what production hands the log line, and
+        deriving it a second way here would only assert this test's own copy.
+        """
+        from custom_components.rainpoint import _residual_mid_decline_reason
+
+        # An unreadable mid on the record that is present, because a readable
+        # one resolves and never reaches the decline this phrase describes.
+        real_hubs = [_hub_record(hid=HID + 1, mid=-5)]
+
+        assert _residual_mid_decline_reason(str(HID), real_hubs) == "no record for it in this poll"
+        assert _residual_mid_decline_reason(str(HID + 1), real_hubs) == "its record carries a mid that is not a decimal integer"
 
 
 # ---------------------------------------------------------------------------
