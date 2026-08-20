@@ -1,5 +1,6 @@
 """Tests for RainPointCoordinator: data fetching, decoder dispatch, fallback, and error handling."""
 
+import ast
 import asyncio
 import logging
 import re
@@ -5975,6 +5976,221 @@ class TestHubConnectivityPushDuringInFlightPoll:
         # matching the state above rather than a stale value left over from a
         # snapshot the push never reached.
         assert coordinator._hub_disconnect_since.get((100, 200)) == _coord_module._status_entry_time({"time": self._PUSH_TS})
+
+
+class TestPollTailHasNoSuspensionPoint:
+    """Regression: the second half of the mid-poll push window, closed by
+    construction rather than by a merge.
+
+    The sibling class above pins that a push landing while the poll is
+    suspended inside its fetch survives. The window that left open was the one
+    after the prior_connectivity hoist: a push landing there would be thrown
+    away when DataUpdateCoordinator assigns the poll's return value over
+    self.data, and no ordering guard would ever see it.
+
+    That window is zero-width, and it is zero-width because of source
+    properties rather than any merge logic, which is why they are pinned here
+    rather than left to a comment. _async_update_data must not suspend after
+    the hoist, and the work below the hoist must stay in the poll rather than
+    being handed to the loop to run later, which would put it after the
+    assignment just as surely as an await would.
+
+    Two legs are deliberately not claimed. The paho hop that keeps a push off
+    the network thread is pinned in tests/api/test_mqtt.py, next to the code it
+    reads. And DataUpdateCoordinator resuming from `self.data = await
+    self._async_update_data()` without yielding is Home Assistant's behaviour,
+    not this integration's: nothing here can pin it, and a release that changed
+    it would reopen the window with this class still green.
+    """
+
+    _ALLOWED_NON_METHODS = frozenset({"_time_source"})
+    """Names dispatched off self in the tail that are attributes, not methods.
+
+    A callable held on the instance rather than defined on the class cannot be
+    resolved from the class body, so it would otherwise read as a method that
+    has gone missing. Kept as an explicit list so a genuinely missing method
+    still fails, and so adding one is a decision somebody makes.
+    """
+
+    _SCHEDULING_CALLS = frozenset(
+        {
+            "async_create_task",
+            "async_create_background_task",
+            "create_task",
+            "call_soon",
+            "call_soon_threadsafe",
+            "call_later",
+            "async_add_executor_job",
+            "add_job",
+            "async_add_job",
+            "async_run_hass_job",
+            "run_coroutine_threadsafe",
+        }
+    )
+    """Ways to move work off this poll and onto a later loop step.
+
+    An await is not the only door. Handing the reconcile to the loop leaves
+    _async_update_data free of awaits while the work itself lands after
+    DataUpdateCoordinator has already replaced self.data, which is the window
+    this class exists to keep shut.
+    """
+
+    @classmethod
+    def _coordinator_class(cls):
+        """Return the parsed RainPointCoordinator class body.
+
+        Read from source rather than from the loaded module because the
+        properties under test are the absence and presence of syntactic
+        constructs, which a runtime object cannot report. Every lookup below
+        fails with its own message rather than a bare StopIteration, since a
+        rename is the most likely reason one of them stops matching and the
+        reader needs to be told which name moved.
+        """
+        source = Path(_coord_module.__file__).read_text(encoding="utf-8")
+        module = ast.parse(source)
+        klass = next(
+            (node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "RainPointCoordinator"),
+            None,
+        )
+        assert klass is not None, "RainPointCoordinator not found in coordinator.py; it was renamed or moved"
+        return klass
+
+    @classmethod
+    def _methods(cls, klass):
+        """Return every method defined directly on the class, by name."""
+        return {node.name: node for node in klass.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+    @classmethod
+    def _tail(cls):
+        """Return (hoist line, _async_update_data node, methods by name)."""
+        klass = cls._coordinator_class()
+        methods = cls._methods(klass)
+        function = methods.get("_async_update_data")
+        assert function is not None, "_async_update_data not found on RainPointCoordinator; it was renamed"
+        assert isinstance(function, ast.AsyncFunctionDef), "_async_update_data is no longer a coroutine"
+        hoists = [
+            node.lineno
+            for node in ast.walk(function)
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+            and any(
+                isinstance(target, ast.Name) and target.id == "prior_connectivity"
+                for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            )
+        ]
+        # Every binding form is counted, not just a plain assignment, so an
+        # annotated or walrus rewrite reads as one hoist rather than as none.
+        assert len(hoists) == 1, f"expected exactly one prior_connectivity binding, found {len(hoists)}"
+        return hoists[0], function, methods
+
+    @classmethod
+    def _dispatched_names(cls, node, *, after=None):
+        """Return the coordinator method names this node calls off self.
+
+        Both spellings are collected. The class-level form exists so the
+        SimpleNamespace test fakes keep working, and the ordinary self form is
+        what a later edit is most likely to reach for, so a check that saw only
+        one of them would be satisfied by rewriting into the other.
+        """
+        return {
+            call.func.attr
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id in {"self", "RainPointCoordinator"}
+            and (after is None or call.lineno > after)
+        }
+
+    @classmethod
+    def _scheduled_names(cls, node, *, after=None):
+        """Return the loop-scheduling calls this node makes, by attribute name."""
+        return {
+            call.func.attr
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr in cls._SCHEDULING_CALLS
+            and (after is None or call.lineno > after)
+        }
+
+    @classmethod
+    def _reachable_from_the_tail(cls):
+        """Return every coordinator method the tail reaches, transitively.
+
+        Depth matters. A helper two levels down that starts running its work on
+        a later loop step moves it past the assignment exactly as a direct one
+        would, and a check that only looked at what the tail calls by name
+        would see a sync caller and pass.
+        """
+        hoist_line, function, methods = cls._tail()
+        pending = list(cls._dispatched_names(function, after=hoist_line))
+        assert pending, "expected the poll tail to dispatch at least one coordinator helper"
+        seen: set[str] = set()
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            target = methods.get(name)
+            if target is None:
+                continue
+            pending.extend(cls._dispatched_names(target))
+        return seen, methods
+
+    def test_nothing_after_the_prior_connectivity_hoist_awaits(self):
+        """No await, async for or async with exists between the hoist and the
+        return, so no push callback can run in that window."""
+        hoist_line, function, _methods = self._tail()
+
+        suspensions = sorted(
+            node.lineno
+            for node in ast.walk(function)
+            if isinstance(node, (ast.Await, ast.AsyncFor, ast.AsyncWith)) and node.lineno > hoist_line
+        )
+
+        assert suspensions == [], (
+            "_async_update_data suspends after the prior_connectivity hoist "
+            f"(line(s) {suspensions}), which reopens the window where a push "
+            "merged into self.data is discarded by the poll's wholesale replace"
+        )
+
+    def test_every_helper_the_tail_reaches_is_a_synchronous_method(self):
+        """Each name dispatched off self below the hoist, and each name those
+        reach in turn, resolves to a plain def on the class.
+
+        An unresolvable name fails rather than passing quietly. Reading the
+        runtime class instead would resolve anything at all, because
+        DataUpdateCoordinator is a MagicMock here and hands back a truthy child
+        for every attribute, so a missing method would look synchronous.
+        """
+        reachable, methods = self._reachable_from_the_tail()
+
+        coroutines = sorted(name for name in reachable if isinstance(methods.get(name), ast.AsyncFunctionDef))
+        unresolved = sorted(name for name in reachable if name not in methods and name not in self._ALLOWED_NON_METHODS)
+
+        assert coroutines == [], f"poll tail helper(s) {coroutines} are coroutines; the tail must stay synchronous"
+        assert unresolved == [], (
+            f"poll tail dispatches {unresolved}, which resolve to nothing on RainPointCoordinator. "
+            "Either the method was renamed, or it moved to a base class where this check cannot see it"
+        )
+
+    def test_the_tail_hands_no_work_to_a_later_loop_step(self):
+        """The other door out of this window, and the one an await check cannot
+        see. Scheduling the reconcile instead of running it leaves the tail
+        awaitless while the work lands after self.data has been replaced."""
+        hoist_line, function, _methods = self._tail()
+        reachable, methods = self._reachable_from_the_tail()
+
+        scheduled = self._scheduled_names(function, after=hoist_line)
+        for name in sorted(reachable):
+            target = methods.get(name)
+            if target is not None:
+                scheduled |= self._scheduled_names(target)
+
+        assert sorted(scheduled) == [], (
+            f"the poll tail schedules {sorted(scheduled)}; work handed to the loop runs after "
+            "DataUpdateCoordinator has assigned this poll's return value over self.data"
+        )
 
 
 class TestHubPushTracerEndToEnd:

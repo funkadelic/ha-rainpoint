@@ -1,9 +1,11 @@
 """Tests for RainPointMqttClient: connect lifecycle, credential redaction, reconnect supervision."""
 
+import ast
 import asyncio
 import inspect
 import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1793,3 +1795,182 @@ class TestStateListeners:
 
         assert calls == ["fired"]
         other.assert_called_once_with()
+
+
+class TestPushDispatchNeverRunsOnPahoThread:
+    """Every push into coordinator data is reached only after a hop onto the
+    event loop, never on the network thread paho calls back on.
+
+    Two things rest on this. Home Assistant state may not be touched off the
+    loop at all. And the poll's own tail relies on it: coordinator.py's
+    _async_update_data suspends nowhere between its prior_connectivity hoist
+    and its return, which only keeps a concurrent push out of that window if a
+    push cannot run except as a loop callback. A dispatch that reached the
+    coordinator straight off paho's thread would interleave with that
+    synchronous tail whatever the coordinator's own tests say.
+
+    Read from source rather than driven, because the property is about which
+    call paths exist, and a path that exists but was not exercised is exactly
+    the one that would be missed.
+    """
+
+    _PUSH_ENTRY_POINTS = frozenset({"apply_push_update", "apply_hub_push_update"})
+    """The two sanctioned entry points into coordinator data.
+
+    A third frame family means revisiting the dispatcher, and it would have to
+    be added here too, which is the reminder this list is for.
+    """
+
+    @staticmethod
+    def _module():
+        """Return the parsed api/mqtt.py."""
+        return ast.parse(Path(mqtt_module.__file__).read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _functions(module):
+        """Return every function in the module by name, refusing a collision.
+
+        One class defines all of these today. A duplicate name would make the
+        call graph below ambiguous and quietly resolve to whichever came last,
+        so it fails here instead.
+        """
+        found: dict[str, ast.AST] = {}
+        for node in ast.walk(module):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert node.name not in found, f"two functions named {node.name} in mqtt.py; the call graph cannot resolve it"
+                found[node.name] = node
+        return found
+
+    @staticmethod
+    def _self_calls(node):
+        """Return the names this function calls on self."""
+        return {
+            call.func.attr
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "self"
+        }
+
+    @staticmethod
+    def _hop_targets(node):
+        """Return the methods this function hands to the loop.
+
+        The first argument of a call_soon_threadsafe is the callback the loop
+        will run, so it is an edge that changes thread. It is deliberately not
+        an ordinary call edge: the walk below stops at it, which is what lets
+        the same walk answer "what runs on paho's thread".
+        """
+        targets = set()
+        for call in ast.walk(node):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "call_soon_threadsafe"
+                and call.args
+                and isinstance(call.args[0], ast.Attribute)
+                and isinstance(call.args[0].value, ast.Name)
+                and call.args[0].value.id == "self"
+            ):
+                targets.add(call.args[0].attr)
+        return targets
+
+    @staticmethod
+    def _paho_callbacks(module):
+        """Return the methods wired to paho's own on_* attributes.
+
+        Taken from the wiring rather than from a name convention, so a callback
+        added under any name is picked up, and one that is defined but never
+        wired is correctly ignored.
+        """
+        wired = set()
+        for node in ast.walk(module):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr.startswith("on_")
+                    and isinstance(node.value, ast.Attribute)
+                    and isinstance(node.value.value, ast.Name)
+                    and node.value.value.id == "self"
+                ):
+                    wired.add(node.value.attr)
+        return wired
+
+    @classmethod
+    def _walk(cls, functions, roots):
+        """Return every function reachable from these roots by ordinary calls.
+
+        A hop is not an ordinary call: call_soon_threadsafe takes its callback
+        as an argument rather than calling it, so it is never collected as an
+        edge and the walk halts there by construction.
+        """
+        seen: set[str] = set()
+        pending = list(roots)
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            node = functions.get(name)
+            if node is not None:
+                pending.extend(cls._self_calls(node))
+        return seen
+
+    @classmethod
+    def _dispatch_sites(cls, functions):
+        """Return the names of functions that push into coordinator data."""
+        return {
+            name
+            for name, node in functions.items()
+            if any(
+                isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr in cls._PUSH_ENTRY_POINTS
+                for call in ast.walk(node)
+            )
+        }
+
+    def test_no_push_dispatch_is_reachable_without_a_hop_onto_the_loop(self):
+        """Walking from paho's own callbacks, stopping at every hop, must reach
+        no push dispatch at all."""
+        module = self._module()
+        functions = self._functions(module)
+        callbacks = self._paho_callbacks(module)
+        assert callbacks, "no paho on_* callback is wired in mqtt.py; this check would prove nothing"
+
+        on_thread = self._walk(functions, callbacks)
+        dispatching = sorted(on_thread & self._dispatch_sites(functions))
+
+        assert dispatching == [], (
+            f"{dispatching} push into coordinator data while still on paho's network thread. "
+            "Every callback must hand off through hass.loop.call_soon_threadsafe first"
+        )
+
+    def test_the_push_dispatch_is_reachable_once_the_hop_has_happened(self):
+        """The other half, without which the check above passes on a module
+        that dispatches nothing at all.
+
+        Every dispatch site must sit inside the hopped region, so this both
+        proves the feature is wired and proves no dispatch site was left
+        outside the region the first test measured.
+        """
+        module = self._module()
+        functions = self._functions(module)
+        callbacks = self._paho_callbacks(module)
+
+        hopped: set[str] = set()
+        for name in callbacks:
+            node = functions.get(name)
+            assert node is not None, f"paho callback {name} is wired but not defined in this module"
+            hopped |= self._hop_targets(node)
+        assert hopped, "no callback hands anything to the loop; the hop is gone"
+
+        after_the_hop = self._walk(functions, hopped)
+        dispatch_sites = self._dispatch_sites(functions)
+
+        assert dispatch_sites, "nothing in mqtt.py pushes into coordinator data any more"
+        assert dispatch_sites <= after_the_hop, (
+            f"{sorted(dispatch_sites - after_the_hop)} push into coordinator data from outside the hopped "
+            "region, so no paho callback reaches them and nothing here says what thread they run on"
+        )
