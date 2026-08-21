@@ -2,6 +2,36 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.19.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.19.0...v1.19.1) (2026-08-21)
+
+### What's new
+
+**Pool sensors now show their readings**
+
+- Your HCS0528ARF or HCS015ARF was showing Unknown for temperature and battery. It now shows what the sensor sends.
+- The Pool High Temperature and Pool Low Temperature entities are removed. The sensor sends one reading, and the daily high and low the RainPoint app shows are worked out by the app itself. Home Assistant may offer a Repairs card to clear the two leftover rows, which also deletes their recorded history.
+
+**A Bluetooth-paired valve keeps its not-reporting notice**
+
+- A valve paired over Bluetooth rather than to a hub could lose that notice for a few minutes at a time and then start its wait over. It now stays put.
+
+### Thanks
+
+Thanks to **@jdnworx** for the diagnostics file and for checking the pool temperature against the RainPoint app, which pinned the conversion.
+
+
+### Fixed
+
+* protect the devices behind a Bluetooth wrapper record during a shrink ([#199](https://github.com/funkadelic/ha-rainpoint/issues/199)) ([f986dac](https://github.com/funkadelic/ha-rainpoint/commit/f986dac1b120c54180068cda7d33dde5d5b5fda3))
+* say why a hub's identity re-key was declined ([#198](https://github.com/funkadelic/ha-rainpoint/issues/198)) ([4a66828](https://github.com/funkadelic/ha-rainpoint/commit/4a6682838d76d1ba8869636e3e899c16aee1c8bb))
+* show the pool sensor's temperature instead of Unknown ([#202](https://github.com/funkadelic/ha-rainpoint/issues/202)) ([6980136](https://github.com/funkadelic/ha-rainpoint/commit/6980136f324eb4658d0c7bbec174fa22530aa042))
+
+
+### Other Changes
+
+* pin that a restored leftover entities card clears when the device returns ([#197](https://github.com/funkadelic/ha-rainpoint/issues/197)) ([6e4f79d](https://github.com/funkadelic/ha-rainpoint/commit/6e4f79d0a4c11e2272c444081bdac04190ae0a3a))
+* pin the poll tail that keeps a mid-poll hub push ([#196](https://github.com/funkadelic/ha-rainpoint/issues/196)) ([b4d3598](https://github.com/funkadelic/ha-rainpoint/commit/b4d3598c5e72006d5500c80a971aa1cb61f81ee2))
+
 ## [1.19.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.18.1...v1.19.0) (2026-08-19)
 
 
