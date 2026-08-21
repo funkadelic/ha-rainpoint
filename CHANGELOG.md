@@ -4,6 +4,21 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.19.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.19.0...v1.19.1) (2026-08-21)
 
+### What's new
+
+**Pool sensors now show their readings**
+
+- Your HCS0528ARF or HCS015ARF was showing Unknown for temperature and battery. It now shows what the sensor sends.
+- The Pool High Temperature and Pool Low Temperature entities are removed. The sensor sends one reading, and the daily high and low the RainPoint app shows are worked out by the app itself. Home Assistant may offer a Repairs card to clear the two leftover rows, which also deletes their recorded history.
+
+**A Bluetooth-paired valve keeps its not-reporting notice**
+
+- A valve paired over Bluetooth rather than to a hub could lose that notice for a few minutes at a time and then start its wait over. It now stays put.
+
+### Thanks
+
+Thanks to **@jdnworx** for the diagnostics file and for checking the pool temperature against the RainPoint app, which pinned the conversion.
+
 
 ### Fixed
 
