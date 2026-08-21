@@ -45,6 +45,7 @@ from tests.payload_samples import (
     MOISTURE_FULL_HEX_PAYLOAD,
     MOISTURE_SIMPLE_HEX_PAYLOAD,
     MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD,
+    POOL_HCS0528ARF_HEX_PAYLOAD,
     RAIN_HEX_PAYLOAD,
     SAMPLE_HIC801W_ALL_FRAMES,
     SAMPLE_HIC801W_REPORTER_FRAMES,
@@ -809,7 +810,7 @@ class TestBasicDecoders:
         """Decode pool."""
         result = decode_pool(BASIC_HEX_PAYLOAD)
         assert result["type"] == "pool"
-        assert result["rssi"] is not None
+        assert result["raw_bytes"] is not None
 
 
 class TestDecodeUnknown:
@@ -1252,11 +1253,12 @@ class TestBasicDecoderShortBufferBranches:
         assert result["type"] == "temphum"
         assert result["rssi"] is None
 
-    def test_decode_pool_short_buffer_leaves_rssi_none(self):
-        """0-byte buffer skips the rssi branch (HCS0528ARF)."""
+    def test_decode_pool_short_buffer_leaves_readings_none(self):
+        """0-byte buffer skips the field walk (HCS0528ARF)."""
         result = decode_pool("10#")
         assert result["type"] == "pool"
-        assert result["rssi"] is None
+        assert result["tempcurrent"] is None
+        assert result["battery_percent"] is None
 
     def test_decode_unknown_short_buffer_leaves_rssi_none(self):
         """0-byte buffer skips the rssi branch (catch-all fallback)."""
@@ -1320,7 +1322,55 @@ class TestBasicDecoderLogAndSwallowBranches:
         """No '#' separator raises in _parse_rainpoint_payload, caught and swallowed (HCS0528ARF)."""
         result = decode_pool("garbage_no_separator")
         assert result["type"] == "pool"
-        assert result["rssi"] is None
+        assert result["tempcurrent"] is None
+        assert result["battery_percent"] is None
+
+
+class TestPoolRealCapture:
+    """HCS0528ARF pool temperature, decoded from a reporter's real frame."""
+
+    def test_reports_temperature_battery_and_report_time(self):
+        """Every catalog datapoint the frame carries is read structurally."""
+        result = decode_pool(POOL_HCS0528ARF_HEX_PAYLOAD)
+
+        assert result["type"] == "pool"
+        assert result["decoder"] == "pool"
+        assert result["tempcurrent"] == pytest.approx(16.78, abs=0.01)
+        assert result["battery_percent"] == 100
+        assert result["report_time"] == "2026-08-20T11:39:43"
+
+    def test_temperature_matches_the_value_the_app_displayed(self):
+        """622 raw is Fahrenheit x 10 even with the app set to Celsius.
+
+        The reporter ran the app in Celsius and saw 16.8, which is what pins
+        the scale: a Celsius reading of the same raw word would be 62.2.
+        """
+        result = decode_pool(POOL_HCS0528ARF_HEX_PAYLOAD)
+
+        assert round(result["tempcurrent"], 1) == 16.8
+
+    def test_sub_freezing_reading_stays_negative(self):
+        """STA_TEM is S16, so a below-zero word must not wrap.
+
+        An unsigned read of -50 (5.0 F below zero) yields 65486, which would
+        surface as a plausible-looking but wildly wrong temperature.
+        """
+        # 0x85 is the STA_TEM header: wide form, index5 1 (field 9), two
+        # value bytes. 0xFFCE is -50 little-endian, or 5.0 F below zero.
+        result = decode_pool("10#85CEFF")
+
+        assert result["tempcurrent"] == pytest.approx(-20.56, abs=0.01)
+
+    def test_frame_without_temperature_reads_unknown(self):
+        """A frame carrying no STA_TEM record yields None, never a fabricated 0.
+
+        0xDC 0x01 is the STA_BAT record alone, so the frame decodes cleanly
+        and simply carries no temperature.
+        """
+        result = decode_pool("10#DC01")
+
+        assert result["tempcurrent"] is None
+        assert result["battery_percent"] == 100
 
 
 class TestHtv213ZoneUsageAndEventTime:

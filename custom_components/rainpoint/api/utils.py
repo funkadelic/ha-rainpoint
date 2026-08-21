@@ -12,6 +12,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Structural field indices, equal to the catalog's dpCode for the same
 # datapoint. Only the ones a hand-written decoder reads live here.
+STA_TEM_FIELD = 9
 STA_BAT_FIELD = 31
 STA_REPTIME_FIELD = 54
 
@@ -591,16 +592,20 @@ def _find_field_value(b: bytes, field: int, *, dp_id_prefixed: bool = False) -> 
     return None
 
 
-def _find_field_int(b: bytes, field: int, *, dp_id_prefixed: bool = False) -> int | None:
+def _find_field_int(b: bytes, field: int, *, dp_id_prefixed: bool = False, signed: bool = False) -> int | None:
     """Return the first ``field`` record in b as a little-endian integer, or None.
 
     Absent rather than zero when the record is missing, so a frame that simply
     does not carry a datapoint reads unknown instead of a fabricated reading.
+
+    ``signed`` follows the catalog's dpDataType for the datapoint being read.
+    It matters for the ones that legitimately go below zero: STA_TEM is S16, so
+    an unsigned read turns a sub-freezing reading into a value near 65535.
     """
     value_bytes = _find_field_value(b, field, dp_id_prefixed=dp_id_prefixed)
     if not value_bytes:
         return None
-    return int.from_bytes(bytes(value_bytes), "little")
+    return int.from_bytes(bytes(value_bytes), "little", signed=signed)
 
 
 def _decode_packed_report_time(raw: int) -> str | None:

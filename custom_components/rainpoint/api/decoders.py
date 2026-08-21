@@ -14,6 +14,7 @@ from .utils import (
     STA_DURATION_FIELD,
     STA_LAST_DURATION_FIELD,
     STA_LASTUSAGE_FIELD,
+    STA_TEM_FIELD,
     STA_TOTAL_TODAY_FIELD,
     STA_VFLOW_FIELD,
     STA_WATER_TOTAL_FIELD,
@@ -1857,25 +1858,43 @@ def decode_temphum(raw: str) -> dict:
 
 
 def decode_pool(raw: str) -> dict:
-    """Decode HCS0528ARF (pool/temperature) payload."""
+    """Decode the HCS0528ARF / HCS015ARF pool temperature payload.
+
+    The frame is walked structurally by dpCode rather than read at fixed
+    offsets, because the leading bytes are not a datapoint record and a
+    positional read lands on them. The catalog declares exactly STA_TEM,
+    STA_TREND, STA_BAT and STA_REPTIME for these models.
+
+    STA_TEM is signed and carries Fahrenheit x 10 regardless of the unit the
+    RainPoint app is set to display: a reporter running the app in Celsius
+    confirmed a raw 622 against an app reading of 16.8 C.
+
+    STA_TREND is left undecoded. No capture pairs its value with a known
+    direction, and the entities do not read it.
+    """
     from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding HCS0528ARF: %s"), raw)
+    _LOGGER.debug(debug_with_version("Decoding pool sensor: %s"), raw)
 
     result = {
         "type": "pool",
-        "rssi": None,
-        "decoder": "basic",
+        "decoder": "pool",
+        "tempcurrent": None,
+        "battery_percent": None,
     }
 
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _extract_rssi(b)
             result["raw_bytes"] = b
+            temp_f10 = _find_field_int(b, STA_TEM_FIELD, signed=True)
+            if temp_f10 is not None:
+                result["tempcurrent"] = _f10_to_c(temp_f10)
+            result["battery_percent"] = _battery_flag_to_percent(_extract_battery_flag(b))
+            _attach_report_time(result, b)
 
     except Exception:
-        _LOGGER.exception(debug_with_version("Error in HCS0528ARF decoder"))
+        _LOGGER.exception(debug_with_version("Error in pool sensor decoder"))
 
     return result
 

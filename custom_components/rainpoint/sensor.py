@@ -192,10 +192,16 @@ def _make_co2_entities(coordinator, key, info, base_slug):
 
 
 def _make_pool_entities(coordinator, key, info, base_slug):
+    """Entities for the HCS0528ARF / HCS015ARF pool temperature sensor.
+
+    No high/low pair: the frame carries a single STA_TEM reading, and the
+    daily min and max the RainPoint app shows are computed by the app itself
+    rather than reported by the device. The two entities that used to be built
+    here read keys no decoder ever wrote, so they were permanently unknown;
+    leftover rows are surfaced by the orphaned-entity repair flow.
+    """
     return [
         RainPointPoolCurrentTempSensor(coordinator, key, info, base_slug),
-        RainPointPoolHighTempSensor(coordinator, key, info, base_slug),
-        RainPointPoolLowTempSensor(coordinator, key, info, base_slug),
         RainPointPoolBatterySensor(coordinator, key, info, base_slug),
     ]
 
@@ -1187,38 +1193,6 @@ class RainPointPoolCurrentTempSensor(RainPointSensorBase):
         return data.get("tempcurrent") if data else None
 
 
-class RainPointPoolHighTempSensor(RainPointSensorBase):
-    _attr_device_class = SensorDeviceClass.TEMPERATURE
-    _attr_native_unit_of_measurement = "°C"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
-        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        self._attr_unique_id = f"rainpoint_{base_slug}_pool_high_temp"
-        self._attr_name = "Pool High Temperature"
-
-    @property
-    def native_value(self):
-        data = self._sensor_data
-        return data.get("temphigh") if data else None
-
-
-class RainPointPoolLowTempSensor(RainPointSensorBase):
-    _attr_device_class = SensorDeviceClass.TEMPERATURE
-    _attr_native_unit_of_measurement = "°C"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
-        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        self._attr_unique_id = f"rainpoint_{base_slug}_pool_low_temp"
-        self._attr_name = "Pool Low Temperature"
-
-    @property
-    def native_value(self):
-        data = self._sensor_data
-        return data.get("templow") if data else None
-
-
 class RainPointPoolBatterySensor(RainPointSensorBase):
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = "%"
@@ -1232,7 +1206,7 @@ class RainPointPoolBatterySensor(RainPointSensorBase):
     @property
     def native_value(self):
         data = self._sensor_data
-        return data.get("tempbatt") if data else None
+        return data.get("battery_percent") if data else None
 
 
 # HCS015ARF+ (Pool + Ambient temp/humidity)
