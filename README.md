@@ -66,7 +66,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Bluetooth valves | HTV210B* (hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
 | Irrigation controllers | HIC801W* | Valve per station, duration number per station, current watering station, a watering sensor per station, current run length and end time, program stations and stations completed |
 
-\* A model marked with an asterisk has been validated against the hardware itself, either on the maintainer's own devices or by an owner who ran the release and confirmed the readings and controls matched what the device was doing. Every other model is supported from captured payloads alone, which is enough to decode a reading but not to confirm it against the hardware.
+\* A model marked with an asterisk has been validated against the hardware itself, by one of three routes: on the maintainer's own devices, by an owner who ran the release and confirmed the readings and controls matched what the device was doing, or by an owner whose diagnostics file let a decoded reading be checked against the value the RainPoint app showed for the same device. Every other model is supported from captured payloads alone, which is enough to decode a reading but not to confirm it against the hardware.
 
 The **HTV210B** only reports to the cloud while paired through a hub. Used over Bluetooth alone, RainPoint still lists it under the hub, but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. No valve entity is created for it in that state either, so a control that provably cannot reach the hardware is never offered.
 
