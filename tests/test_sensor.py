@@ -63,8 +63,6 @@ from custom_components.rainpoint.sensor import (
     RainPointNotReportingSensor,
     RainPointPoolBatterySensor,
     RainPointPoolCurrentTempSensor,
-    RainPointPoolHighTempSensor,
-    RainPointPoolLowTempSensor,
     RainPointPoolPlusAmbientCurrentTempSensor,
     RainPointPoolPlusAmbientHighTempSensor,
     RainPointPoolPlusAmbientLowTempSensor,
@@ -938,9 +936,7 @@ _NATIVE_VALUE_CASES = [
     (RainPointCO2BatterySensor, "co2batt", "co2_battery", 90),
     # Pool
     (RainPointPoolCurrentTempSensor, "tempcurrent", "pool_current_temp", 24.0),
-    (RainPointPoolHighTempSensor, "temphigh", "pool_high_temp", 28.5),
-    (RainPointPoolLowTempSensor, "templow", "pool_low_temp", 20.0),
-    (RainPointPoolBatterySensor, "tempbatt", "pool_battery", 70),
+    (RainPointPoolBatterySensor, "battery_percent", "pool_battery", 70),
     # Pool Plus
     (RainPointPoolPlusPoolCurrentTempSensor, "pool_tempcurrent", "pool_plus_pool_current_temp", 25.5),
     (RainPointPoolPlusPoolHighTempSensor, "pool_temphigh", "pool_plus_pool_high_temp", 30.0),
@@ -1451,15 +1447,16 @@ class TestHCSSensorDispatch:
             addr=1,
             model=model,
             sub_name="Pool",
-            data={"tempcurrent": 24, "temphigh": 28, "templow": 20, "tempbatt": 80},
+            data={"tempcurrent": 24, "battery_percent": 80},
         )
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
         hass, entry = _make_hass(coordinator)
         captured = []
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
-        # 4 pool entities + 1 raw payload sensor
-        assert len(captured) == 5
+        # 2 pool entities + 1 raw payload sensor. No high/low pair: the device
+        # reports a single STA_TEM reading.
+        assert len(captured) == 3
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1549,8 +1546,8 @@ class TestHCSSensorDispatch:
         assert len(captured) == 10
 
     @pytest.mark.asyncio
-    async def test_pool_creates_4_entities(self):
-        """MODEL_POOL creates 4 reading sensors + 1 raw payload."""
+    async def test_pool_creates_2_entities(self):
+        """MODEL_POOL creates 2 reading sensors + 1 raw payload."""
         from custom_components.rainpoint.const import MODEL_POOL
 
         sensor_key = "100_200_1"
@@ -1560,14 +1557,14 @@ class TestHCSSensorDispatch:
             addr=1,
             model=MODEL_POOL,
             sub_name="Pool",
-            data={"tempcurrent": 24, "temphigh": 28, "templow": 20, "tempbatt": 85},
+            data={"tempcurrent": 24, "battery_percent": 85},
         )
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={sensor_key: sensor_info}))
         hass, entry = _make_hass(coordinator)
         captured = []
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
-        assert len(captured) == 5
+        assert len(captured) == 3
 
 
 class TestHtvValveDiagnosticDispatch:

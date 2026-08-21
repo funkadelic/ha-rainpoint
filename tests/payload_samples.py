@@ -94,6 +94,17 @@ MOISTURE_SIMPLE_HEX_PAYLOAD = "10#E1C600DC01881AFF0F5E21F718"
 # b[1]=0xC4=196-256=-60 RSSI; b[4]=0x01 STA_BAT; b[6]=0x25=37% moisture
 MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD = "10#E1C400DC018825FF0FE1C4FA19"
 
+# Real hex (10#) payload from a reporter's HCS0528ARF pool sensor (issue #201).
+# E7 4C02 6E02 DC 01 B8 05 85 6E02 FF0F EBB9281A
+# The leading bytes are not a datapoint record, which is why the frame is walked
+# structurally by dpCode rather than read at fixed offsets. Records found:
+#   STA_TEM (9)      = 622  -> 62.2 F -> 16.8 C, matching the reporter's app
+#   STA_TREND (22)   = 5    (left undecoded, no capture pins its meaning)
+#   STA_BAT (31)     = 1    -> 100%
+#   STA_REPTIME (54) unpacks to 2026-08-20T11:39:43, the device's own wall clock,
+#     which is 09:39:44Z in the cloud record's timestamp at UTC+2.
+POOL_HCS0528ARF_HEX_PAYLOAD = "10#E74C026E02DC01B805856E02FF0FEBB9281A"
+
 # Minimal hex payload for basic decoder smoke tests (2+ bytes: RSSI extractable).
 # E1=preamble, B0=rssi raw (176-256=-80), DC=tag, 01=value
 BASIC_HEX_PAYLOAD = "10#E1B000DC01"
