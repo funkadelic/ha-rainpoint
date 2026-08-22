@@ -16,8 +16,13 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_145,
     MODEL_VALVE_245,
     MODEL_VALVE_345,
+    MODEL_VALVE_445,
 )
-from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS
+from custom_components.rainpoint.coordinator import (
+    SILENT_DATA_TYPE,
+    SILENT_DEBOUNCE_POLLS,
+    _decode_subdevice_payload,
+)
 from custom_components.rainpoint.valve import (
     DEFAULT_DURATION_SECONDS,
     DEFAULT_HIC_DURATION_MINUTES,
@@ -44,6 +49,7 @@ from tests.payload_samples import (
     SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
+    SAMPLE_HTV445_TLV_PAYLOAD,
 )
 
 _UNSET = object()
@@ -620,6 +626,41 @@ class TestValveSetupEntry:
 
         assert [entity._zone_num for entity in captured] == [1, 2, 3]
         assert all(entity._sensor_info["model"] == MODEL_VALVE_345 for entity in captured)
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_creates_four_valves_from_a_real_htv445_frame(self):
+        """HTV445FRF gets one valve per zone, decoded from the reporter's own capture.
+
+        Driven off the real payload rather than a hand-built zones dict, so the
+        registry entry, the decoder and the zone fan-out are proven together.
+        """
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        sensors = {
+            "10_20_1": {
+                "hid": 10,
+                "mid": 20,
+                "addr": 1,
+                "sub_name": "HTV445",
+                "model": MODEL_VALVE_445,
+                "data": _decode_subdevice_payload(MODEL_VALVE_445, SAMPLE_HTV445_TLV_PAYLOAD),
+            }
+        }
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {"sensors": sensors}
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        hass.data = {DOMAIN: {"e1": {"coordinator": mock_coordinator}}}
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert [entity._zone_num for entity in captured] == [1, 2, 3, 4]
+        assert all(entity.is_closed for entity in captured)
 
     @pytest.mark.asyncio
     async def test_setup_entry_skips_non_valve_models(self):

@@ -115,6 +115,7 @@ def _decoder_for(model: str | None):
         "HTV245FRF": api.decode_htv213frf_valve,
         "HTV345FRF": api.decode_htv213frf_valve,
         "HTV405FRF": api.decode_htv213frf_valve,
+        "HTV445FRF": api.decode_htv213frf_valve,
     }
     return decoders.get(model or "")
 

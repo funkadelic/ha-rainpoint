@@ -48,6 +48,7 @@ from custom_components.rainpoint.generic_control import CONTROL_IDENTITY_ALLOWLI
 from tests.payload_samples import (
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
+    SAMPLE_HTV445_TLV_PAYLOAD,
     VALVE_HUB_APPLY_TLV_PAYLOAD,
     VALVE_HUB_TLV_PAYLOAD,
 )
@@ -56,6 +57,7 @@ from tests.payload_samples import (
 TLV_SAMPLES: dict[str, str] = {
     "SAMPLE_HTV245_TLV_PAYLOAD": SAMPLE_HTV245_TLV_PAYLOAD,
     "SAMPLE_HTV405_TLV_PAYLOAD": SAMPLE_HTV405_TLV_PAYLOAD,
+    "SAMPLE_HTV445_TLV_PAYLOAD": SAMPLE_HTV445_TLV_PAYLOAD,
     "VALVE_HUB_TLV_PAYLOAD": VALVE_HUB_TLV_PAYLOAD,
     "VALVE_HUB_APPLY_TLV_PAYLOAD": VALVE_HUB_APPLY_TLV_PAYLOAD,
 }
@@ -67,6 +69,7 @@ TLV_SAMPLES: dict[str, str] = {
 SAMPLE_MODEL: dict[str, str] = {
     "SAMPLE_HTV245_TLV_PAYLOAD": "HTV245FRF",
     "SAMPLE_HTV405_TLV_PAYLOAD": "HTV405FRF",
+    "SAMPLE_HTV445_TLV_PAYLOAD": "HTV445FRF",
     "VALVE_HUB_TLV_PAYLOAD": "HTV0540FRF",
     "VALVE_HUB_APPLY_TLV_PAYLOAD": "HTV0540FRF",
 }
@@ -181,6 +184,7 @@ class TestGroundTruthZoneOrdering:
         [
             (SAMPLE_HTV245_TLV_PAYLOAD, "HTV245FRF"),
             (SAMPLE_HTV405_TLV_PAYLOAD, "HTV405FRF"),
+            (SAMPLE_HTV445_TLV_PAYLOAD, "HTV445FRF"),
         ],
     )
     def test_wkstate_pairing_reproduces_trusted_per_zone_open_state(self, payload, model):
@@ -201,6 +205,7 @@ class TestGroundTruthZoneOrdering:
         [
             (SAMPLE_HTV245_TLV_PAYLOAD, "HTV245FRF"),
             (SAMPLE_HTV405_TLV_PAYLOAD, "HTV405FRF"),
+            (SAMPLE_HTV445_TLV_PAYLOAD, "HTV445FRF"),
         ],
     )
     def test_duration_pairing_reproduces_trusted_per_zone_duration(self, payload, model):

@@ -35,6 +35,16 @@ SAMPLE_HTV405_TLV_PAYLOAD = (
     "21B70000000022B70000000023B70000000024B70000000025AD000026AD000027AD000028AD0000FEFF0F5B55D219"
 )
 
+# Real hex (11#) payload from a reporter's HTV445FRF (4-zone valve), all zones idle.
+# Same record set as the HTV405FRF frame above, but the four 0x9F usage records
+# lead the frame ahead of the 0x17/0xE1 header, and zone 4 carries a non-zero
+# count (0x74 = 116) while zones 1-3 sit at zero.
+SAMPLE_HTV445_TLV_PAYLOAD = (
+    "11#299F000000002A9F000000002B9F000000002C9F7400000017E1D500"
+    "19D8001AD8001BD8001CD8001D201E201F20202018DC01"
+    "21B70000000022B70000000023B70000000024B70000000025AD000026AD000027AD000028AD0000FEFF0FF6202B1A"
+)
+
 # Real full hex (11#) status frames from the maintainer's HTV245FRF (2-zone valve).
 # Both end with a [dp_id 0xFE][STA_REPTIME header 0xFF 0x0F][4-byte packed wall
 # clock] record that the dp_id/type scan skips; the 0xFF 0x0F pair is that

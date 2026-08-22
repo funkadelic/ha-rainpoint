@@ -46,6 +46,7 @@ from .const import (
     MODEL_VALVE_245,
     MODEL_VALVE_345,
     MODEL_VALVE_405,
+    MODEL_VALVE_445,
 )
 from .coordinator import (
     NO_STATUS_PAYLOAD_MARKER,
@@ -378,6 +379,7 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     MODEL_VALVE_245: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_345: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_405: _make_htv_valve_diagnostic_entities,
+    MODEL_VALVE_445: _make_htv_valve_diagnostic_entities,
     MODEL_HTV210B: _make_htv210b_entities,
     MODEL_HIC801W: _make_hic801w_entities,
 }

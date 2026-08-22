@@ -33,6 +33,7 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_245,
     MODEL_VALVE_345,
     MODEL_VALVE_405,
+    MODEL_VALVE_445,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from custom_components.rainpoint.entity import late_adders, register_late_adder
@@ -103,6 +104,7 @@ from tests.payload_samples import (
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV345_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
+    SAMPLE_HTV445_TLV_PAYLOAD,
 )
 
 # ---------------------------------------------------------------------------
@@ -1571,7 +1573,7 @@ class TestHtvValveDiagnosticDispatch:
     """The HTV213/245 valve family gets battery + signal sensors from the sensor platform."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [MODEL_VALVE_213, MODEL_VALVE_245, MODEL_VALVE_345, MODEL_VALVE_405])
+    @pytest.mark.parametrize("model", [MODEL_VALVE_213, MODEL_VALVE_245, MODEL_VALVE_345, MODEL_VALVE_405, MODEL_VALVE_445])
     async def test_valve_family_creates_battery_and_rssi_sensors(self, model):
         """A valve entry yields a battery + RSSI sensor plus the raw payload sensor."""
         sensor_key = "100_200_1"
@@ -1900,6 +1902,14 @@ class TestWiderValveFamilyUsageEntities:
         assert all(e.native_value is None for e in usage)
         assert all(e.extra_state_attributes["last_usage_counts"] is None for e in usage)
 
+    @pytest.mark.asyncio
+    async def test_htv445_reads_usage_on_the_one_zone_that_reported_it(self):
+        """The HTV445FRF capture carries usage on zone 4 only, so the other three read zero."""
+        usage = await self._setup(MODEL_VALVE_445, SAMPLE_HTV445_TLV_PAYLOAD)
+        assert len(usage) == 4
+        assert [e.native_value for e in usage] == [0.0, 0.0, 0.0, pytest.approx(0.232)]
+        assert [e.extra_state_attributes["last_usage_counts"] for e in usage] == [0, 0, 0, 116]
+
 
 class TestWiderValveFamilyRunDurationEntities:
     """The 3- and 4-zone family members get the same per-zone run-duration entities."""
@@ -1935,6 +1945,14 @@ class TestWiderValveFamilyRunDurationEntities:
     async def test_htv405_gets_one_duration_entity_per_zone_in_ascending_order(self):
         """The 4-zone capture yields four duration entities, numbered 1 through 4, all idle, no gap and no extra."""
         durations = await self._setup(MODEL_VALVE_405, SAMPLE_HTV405_TLV_PAYLOAD)
+        assert len(durations) == 4
+        assert [e._zone_num for e in durations] == [1, 2, 3, 4]
+        assert [e.native_value for e in durations] == [0, 0, 0, 0]
+
+    @pytest.mark.asyncio
+    async def test_htv445_gets_one_duration_entity_per_zone_in_ascending_order(self):
+        """The HTV445FRF capture yields four duration entities, numbered 1 through 4, all idle."""
+        durations = await self._setup(MODEL_VALVE_445, SAMPLE_HTV445_TLV_PAYLOAD)
         assert len(durations) == 4
         assert [e._zone_num for e in durations] == [1, 2, 3, 4]
         assert [e.native_value for e in durations] == [0, 0, 0, 0]

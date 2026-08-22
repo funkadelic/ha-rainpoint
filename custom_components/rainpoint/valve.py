@@ -34,6 +34,7 @@ from .const import (
     MODEL_VALVE_245,
     MODEL_VALVE_345,
     MODEL_VALVE_405,
+    MODEL_VALVE_445,
     VALVE_MODELS,
 )
 from .coordinator import (
@@ -361,7 +362,13 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
         model = self._sensor_info.get("model", "")
         if model in (MODEL_VALVE_113, MODEL_VALVE_145):
             decoded = decode_htv145frf(raw_state)
-        elif model in (MODEL_VALVE_213, MODEL_VALVE_245, MODEL_VALVE_345, MODEL_VALVE_405):
+        elif model in (
+            MODEL_VALVE_213,
+            MODEL_VALVE_245,
+            MODEL_VALVE_345,
+            MODEL_VALVE_405,
+            MODEL_VALVE_445,
+        ):
             decoded = decode_htv213frf_valve(raw_state)
         else:
             decoded = decode_valve_hub(raw_state)

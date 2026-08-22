@@ -288,6 +288,7 @@ MODEL_HTV213FRF = "HTV213FRF"  # Single-zone RF irrigation timer (similar to HTV
 MODEL_HTV245FRF = "HTV245FRF"  # Irrigation valve (similar to HTV0540FRF)
 MODEL_HTV345FRF = "HTV345FRF"  # Irrigation valve variant (similar to HTV245FRF)
 MODEL_HTV405FRF = "HTV405FRF"  # 4-zone irrigation valve variant (similar to HTV245FRF)
+MODEL_HTV445FRF = "HTV445FRF"  # 4-zone irrigation valve variant (similar to HTV405FRF)
 MODEL_HTV0540FRF = "HTV0540FRF"  # Multi-zone valve hub (fully supported)
 MODEL_HTV210B = "HTV210B"  # Bluetooth valve; reports over RF as a normal hub sub-device once hub-paired
 MODEL_HIC801W = "HIC801W"  # 8-station irrigation controller; catalog variant 279 is the accessory
@@ -312,6 +313,7 @@ MODEL_VALVE_213 = MODEL_HTV213FRF
 MODEL_VALVE_245 = MODEL_HTV245FRF
 MODEL_VALVE_345 = MODEL_HTV345FRF
 MODEL_VALVE_405 = MODEL_HTV405FRF
+MODEL_VALVE_445 = MODEL_HTV445FRF
 MODEL_VALVE_HUB = MODEL_HTV0540FRF
 
 # Membership here enrols a model in three things at once: valve.py and
@@ -328,6 +330,7 @@ VALVE_MODELS = {
     MODEL_VALVE_245,
     MODEL_VALVE_345,
     MODEL_VALVE_405,
+    MODEL_VALVE_445,
     MODEL_HTV210B,
     # MODEL_HIC801W is still deliberately absent, and station control shipping
     # is what settled that rather than what changed it. This set means
@@ -367,6 +370,7 @@ HAND_WRITTEN_MODELS: frozenset[str] = frozenset(
         MODEL_VALVE_245,
         MODEL_VALVE_345,
         MODEL_VALVE_405,
+        MODEL_VALVE_445,
         MODEL_HTV210B,
         MODEL_HIC801W,
         MODEL_HCS005FRF,

@@ -64,6 +64,7 @@ from tests.payload_samples import (
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV345_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
+    SAMPLE_HTV445_TLV_PAYLOAD,
     VALVE_HUB_TLV_PAYLOAD,
 )
 
@@ -208,6 +209,33 @@ class TestDecodeHtv213frfValve:
             assert zone["open"] is False
             assert zone["duration_seconds"] == 0
             assert zone["state_raw"] == 0
+
+    # --- HTV445FRF (4-zone valve, reuses the HTV213/245 hex decoder) ---
+
+    def test_htv445_payload_decodes_four_zones_with_usage_on_zone_four(self):
+        """Real HTV445FRF (11#) payload decodes to four idle zones, only zone 4 having used water.
+
+        Unlike the HTV405FRF frame, this one leads with its four 0x9F usage
+        records ahead of the 0x17/0xE1 header, so it also pins that the dp scan
+        does not depend on the header arriving first.
+        """
+        result = decode_htv213frf_valve(SAMPLE_HTV445_TLV_PAYLOAD)
+
+        assert result["type"] == "valve_hub"
+        assert result["decoder"] == "htv213frf_hex"
+        assert result["hub_online"] is True
+        assert result["rssi_dbm"] == -43
+        assert result["battery_percent"] == 100
+
+        zones = result["zones"]
+        assert set(zones) == {1, 2, 3, 4}
+        for zone in zones.values():
+            assert zone["open"] is False
+            assert zone["duration_seconds"] == 0
+            assert zone["state_raw"] == 0
+
+        assert [zones[n]["last_usage_counts"] for n in (1, 2, 3, 4)] == [0, 0, 0, 116]
+        assert zones[4]["last_usage_gallons"] == pytest.approx(0.232)
 
     def test_htv345_payload_with_zone_dp_is_online(self):
         """HTV345FRF payloads with DP 0x19 but no hub DP are treated as online."""
