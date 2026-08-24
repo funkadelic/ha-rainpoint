@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.20.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.19.1...v1.20.0) (2026-08-24)
+
+
+### Added
+
+* add HTV445FRF 4-zone valve support ([#204](https://github.com/funkadelic/ha-rainpoint/issues/204)) ([35f4410](https://github.com/funkadelic/ha-rainpoint/commit/35f44100522c38862b11a3f342c04960d1d53596))
+
 ## [1.19.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.19.0...v1.19.1) (2026-08-21)
 
 ### What's new
