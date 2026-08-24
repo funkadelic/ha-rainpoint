@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -170,37 +171,54 @@ def _decoder_candidates() -> dict:
     return by_func
 
 
-def _decoder_trial(payload: str) -> list[str]:
+def _decoder_trial(payload: str, model: str | None = None) -> list[str]:
     """Run every registered decoder against the payload and report what parsed.
+
+    The model's own registered decoder is marked so it is never lost in the
+    ranking. It gets lost easily: on the HCS0528ARF pool capture the right
+    decoder returns fewer keys than two valve decoders that happily parse the
+    same bytes, and it sorts third.
 
     ponytail: scores a result by how many keys it returns, which is a crude
     proxy for "read something real". Good enough to rank candidates for a human
     to check; replace it with a per-family sanity assertion if it ever picks a
     confident wrong answer.
     """
+    from custom_components.rainpoint.coordinator import DECODER_REGISTRY
+
+    registered = DECODER_REGISTRY.get(model) if model else None
     results = []
     for func, models in _decoder_candidates().items():
         try:
             decoded = func(payload)
         except Exception as exc:  # a foreign payload is expected to break decoders
-            results.append((0, func.__name__, models, f"raised {type(exc).__name__}: {_clip(exc)}"))
+            results.append((0, func is registered, func.__name__, models, f"raised {type(exc).__name__}: {_clip(exc)}"))
             continue
         if not isinstance(decoded, dict) or not decoded:
-            results.append((0, func.__name__, models, "returned nothing"))
+            results.append((0, func is registered, func.__name__, models, "returned nothing"))
             continue
         if decoded.get("error"):
             # A decoder that parsed far enough to report its own failure has
             # declined the payload as surely as one that raised.
-            results.append((0, func.__name__, models, f"declined: {_clip(decoded['error'])}"))
+            results.append((0, func is registered, func.__name__, models, f"declined: {_clip(decoded['error'])}"))
             continue
         keys = [key for key in decoded if key not in {"type", "model", "raw_value", "generic"}]
-        results.append((len(keys), func.__name__, models, ", ".join(sorted(keys)) or "no readings"))
+        detail = ", ".join(sorted(keys)) or "no readings"
+        results.append((len(keys), func is registered, func.__name__, models, detail))
 
-    results.sort(key=lambda row: -row[0])
+    # The model's own decoder sorts first whatever it scored, so a right answer
+    # that reads fewer fields than a wrong one is still the first line read.
+    results.sort(key=lambda row: (not row[1], -row[0]))
     lines = ["decoder trial (a match is a candidate, not a decision):"]
-    for score, name, models, detail in results:
-        marker = "  ->" if score else "    "
-        lines.append(f"{marker} {name} ({', '.join(sorted(models))}): {detail}")
+    for score, is_registered, name, models, detail in results:
+        if is_registered:
+            marker = "  ##"
+        elif score:
+            marker = "  ->"
+        else:
+            marker = "    "
+        suffix = "  <- the registry already maps this model here" if is_registered else ""
+        lines.append(f"{marker} {name} ({', '.join(sorted(models))}): {detail}{suffix}")
     return lines
 
 
@@ -225,16 +243,60 @@ def _report(model: str | None, model_code, payload: str | None, extra: dict) -> 
 
     lines.append(f"payload: {payload}")
     lines.extend(_generic_lines(payload, model, model_code))
-    lines.extend(_decoder_trial(payload))
+    lines.extend(_decoder_trial(payload, model))
     return lines
+
+
+def _salvage(text: str) -> list[dict]:
+    """Scrape model and payload pairs out of a file that will not parse.
+
+    Reporters redact diagnostics by hand before attaching them, which is how
+    the HCS008FRF captures arrived: deleted blocks left dangling commas and
+    inline "## REMOVING FOR PRIVACY ##" markers, so the file is no longer JSON.
+    The three things triage needs survive that as plain text, and refusing the
+    file outright wastes a capture the reporter cannot always retake.
+
+    Pairs each payload with the nearest preceding model and modelCode, which
+    holds because the integration writes them in that order within a record.
+    """
+    records: list[dict] = []
+    model: str | None = None
+    model_code: str | None = None
+    for match in re.finditer(
+        r'"model"\s*:\s*"(?P<model>[^"]+)"'
+        r'|"model_code"\s*:\s*"?(?P<code>[0-9]+)"?'
+        r'|"value"\s*:\s*"(?P<payload>[0-9]+#[^"]*)"',
+        text,
+    ):
+        if match.group("model"):
+            model = match.group("model")
+        elif match.group("code"):
+            model_code = match.group("code")
+        else:
+            records.append({"model": model, "model_code": model_code, "payload": match.group("payload")})
+    return records
 
 
 def _triage_file(path: Path, model_filter: str | None) -> int:
     try:
-        dump = json.loads(path.read_text())
-    except (OSError, ValueError) as exc:
+        text = path.read_text()
+    except OSError as exc:
         print(f"Could not read {path}: {exc}", file=sys.stderr)
         return 1
+
+    try:
+        dump = json.loads(text)
+    except ValueError as exc:
+        print(f"{path.name} is not valid JSON ({exc}).", file=sys.stderr)
+        print("Reading it as text instead. A hand-redacted dump usually lands here.\n", file=sys.stderr)
+        salvaged = [record for record in _salvage(text) if not model_filter or record["model"] == model_filter]
+        if not salvaged:
+            print("Nothing recoverable: no model and payload pair found in the text.", file=sys.stderr)
+            return 1
+        for record in salvaged:
+            print("\n".join(_report(record["model"], record["model_code"], record["payload"], {})))
+            print()
+        return 0
 
     inner = dump["data"] if isinstance(dump.get("data"), dict) else dump
     version = (inner.get("integration") or {}).get("version")
