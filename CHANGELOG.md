@@ -4,6 +4,16 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.20.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.19.1...v1.20.0) (2026-08-24)
 
+### What's new
+
+**The HTV445FRF 4-zone valve hub is supported**
+
+- Each of the four zones gets a valve you can open and close, a run duration to set beside it, and run duration and water used sensors, the same as the other valve hubs.
+
+### Thanks
+
+Thanks to **@rohanpillai20** for the diagnostics file, and for running the beta build against their HTV445FRF to confirm the valves move and the water used readings match the RainPoint app.
+
 
 ### Added
 
