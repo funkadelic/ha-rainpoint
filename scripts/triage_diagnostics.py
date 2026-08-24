@@ -73,13 +73,19 @@ def _devices_from_dump(dump: dict) -> list[dict]:
     file downloaded from the UI is unwrapped first. A payload passed through
     some other route arrives unwrapped and still works.
     """
-    if isinstance(dump.get("data"), dict) and "sensors" in dump["data"]:
-        dump = dump["data"]
+    inner = dump.get("data")
+    if isinstance(inner, dict) and ("sensors" in inner or "device" in inner):
+        dump = inner
     sensors = dump.get("sensors")
     if isinstance(sensors, dict) and sensors:
         return [entry for entry in sensors.values() if isinstance(entry, dict)]
     device = dump.get("device")
-    return [device] if isinstance(device, dict) else []
+    # A device-scoped dump whose sensors map came back empty still carries a
+    # "device" block, but that block is identity only: no model and no payload.
+    # Reporting it would print an all-unknown record that reads as a finding.
+    if isinstance(device, dict) and ("model" in device or "raw_status" in device):
+        return [device]
+    return []
 
 
 def _payload_of(entry: dict) -> str | None:
@@ -105,10 +111,19 @@ def _catalog_summary(model: str | None, model_code) -> list[str]:
     lines = [f"catalog: model present, variants {', '.join(codes)}"]
     dp_entries = get_catalog_entry(model, model_code)
     if dp_entries is None:
-        lines.append(
-            "  variant unresolved: several coded variants and the device did not say which. "
-            "Ask the reporter for the modelCode, or read it from the dump's sub-device record."
-        )
+        if model_code is None:
+            lines.append(
+                "  variant unresolved: several coded variants and the device did not say which. "
+                "Ask the reporter for the modelCode, or read it from the dump's sub-device record."
+            )
+        else:
+            # A known model reporting a code the snapshot has never seen is the
+            # shape a genuinely new variant arrives in, so name it rather than
+            # sending the reporter to fetch a code they already supplied.
+            lines.append(
+                f"  variant unresolved: the device reports modelCode {model_code}, which this snapshot "
+                "does not list. Refresh the catalog before deciding this device is unknown."
+            )
         return lines
 
     ports = get_catalog_port_number(model, model_code)
@@ -332,11 +347,26 @@ def _selftest() -> int:
     output = "\n".join(lines)
     print(output)
 
-    assert "already supported: yes" in output, "HTV445FRF should read as hand-written"
-    assert "controlWorkMode (RF" in output, "4-zone valve should route to the RF endpoint"
-    assert "decode_htv213frf_valve" in output, "the HTV213/245 family decoder should be trialled"
-    generic_line = next(line for line in lines if line.startswith("generic decode:"))
-    assert "0 field(s)" not in generic_line, "the capture should yield generic fields"
+    generic_line = next((line for line in lines if line.startswith("generic decode:")), "")
+    # Checked rather than asserted: python -O drops assert statements, and a
+    # self-test that prints "ok" without having checked anything is worse than
+    # no self-test.
+    failures = [
+        message
+        for message, passed in (
+            ("HTV445FRF should read as hand-written", "already supported: yes" in output),
+            ("4-zone valve should route to the RF endpoint", "controlWorkMode (RF" in output),
+            ("the HTV213/245 family decoder should be trialled", "decode_htv213frf_valve" in output),
+            ("the capture should yield generic fields", bool(generic_line) and "0 field(s)" not in generic_line),
+        )
+        if not passed
+    ]
+    if failures:
+        print("\nselftest: FAILED", file=sys.stderr)
+        for message in failures:
+            print(f"  {message}", file=sys.stderr)
+        return 1
+
     print("\nselftest: ok")
     return 0
 
