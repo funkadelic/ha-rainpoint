@@ -66,6 +66,7 @@ from .const import (
     MODEL_VALVE_245,  # HTV245FRF support
     MODEL_VALVE_345,  # HTV345FRF support
     MODEL_VALVE_405,  # HTV405FRF support
+    MODEL_VALVE_445,  # HTV445FRF support
     MODEL_VALVE_HUB,
     VALVE_MODELS,
     debug_with_version,
@@ -225,6 +226,7 @@ DECODER_REGISTRY = {
     MODEL_VALVE_245: decode_htv213frf_valve,  # HTV245FRF uses custom decoder
     MODEL_VALVE_345: decode_htv213frf_valve,  # HTV345FRF uses custom decoder
     MODEL_VALVE_405: decode_htv213frf_valve,  # HTV405FRF uses custom decoder
+    MODEL_VALVE_445: decode_htv213frf_valve,  # HTV445FRF uses custom decoder
     MODEL_HTV210B: decode_htv210b,  # HTV210B structural record walk (hub-paired frames)
     MODEL_HIC801W: decode_hic801w,  # 8-station irrigation controller, read from the 279 accessory record
     # HCS sensor models (v1.3.0)
