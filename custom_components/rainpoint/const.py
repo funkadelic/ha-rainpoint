@@ -182,8 +182,8 @@ MQTT_PUSH_MAX_PAYLOAD_BYTES = 8192
 # UAT capture: "#P260731181730000016822282236547|0|1785521850011|112882164350#".
 # Section 1 decomposes as the "#P" prefix, a 12-digit YYMMDDHHMMSS stamp,
 # "0000", an 8-digit account id, and a 6-digit mid -- the mid is a fixed-width
-# tail, not an open-ended suffix, so a cross-check against it can slice
-# instead of scanning for a substring.
+# tail, not an open-ended suffix, so _frame_mid reads it by slicing a known
+# slot rather than scanning for a substring.
 MQTT_PUSH_HUB_FRAME_PREFIX = "#P"
 MQTT_PUSH_HUB_FRAME_SECTIONS = 4
 MQTT_PUSH_HUB_FRAME_TERMINATOR = "#"
@@ -191,7 +191,10 @@ MQTT_PUSH_HUB_FRAME_MID_WIDTH = 6
 # 2 prefix + 12 stamp + 4 fixed + 8 account + 6 mid. A section 1 of any other
 # length is a layout no capture has produced, so the mid slot cannot be read
 # from it by position and the frame is declined rather than guessed at.
-MQTT_PUSH_FRAME_SECTION_ONE_WIDTH = 32
+# Summed from its terms rather than written as 32, so widening the mid slot
+# cannot leave the total silently wrong and the slice reading the wrong
+# characters out of a section this width check then accepts.
+MQTT_PUSH_FRAME_SECTION_ONE_WIDTH = len(MQTT_PUSH_HUB_FRAME_PREFIX) + 12 + 4 + 8 + MQTT_PUSH_HUB_FRAME_MID_WIDTH
 
 # Hard cap on the per-client one-shot-per-shape unrecognised-downlink
 # bookkeeping. Keeps the set bounded against a hostile or chatty

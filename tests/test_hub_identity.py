@@ -498,3 +498,111 @@ class TestHubIdentityIsNotASensorKey:
         assert after.identifiers == {(DOMAIN, f"hub_{HID}_{MID_A}")}
         assert after.via_device_id is None
         assert device_registry.async_get(child.id).via_device_id == hub_row.id
+
+
+class TestPushReachesTheHubItNamesThroughARealCoordinator:
+    """The joint _frame_mid's int() crosses into the coordinator's mid comparison.
+
+    Both sides are otherwise tested against a mock of the other: every test in
+    tests/api/test_mqtt.py asserts against a MagicMock coordinator, and every
+    push test in tests/test_coordinator.py hands apply_*_push_update a mid the
+    test author picked. Before this branch the mid came from hub.get("mid")
+    itself, so the two sides were type-identical by construction and could not
+    disagree. Reading it out of the payload made that agreement load-bearing
+    across a parse, and nothing asserted it. The cloud is already known to
+    return mid as a string on one endpoint and an int on its sibling.
+    """
+
+    @staticmethod
+    def _push_client(hass, coordinator):
+        from custom_components.rainpoint.api.mqtt import RainPointMqttClient
+
+        rainpoint_client = MagicMock()
+        rainpoint_client.get_subscribe_status = AsyncMock(return_value={})
+        return RainPointMqttClient(
+            hass,
+            rainpoint_client,
+            entry=MagicMock(),
+            hub_device_name="hub-device",
+            hub_product_key="hub-pk",
+            coordinator=coordinator,
+            # The session is opened for hub A. Every assertion below is about a
+            # frame naming a different hub still landing correctly, which is the
+            # whole point of routing on the frame's own mid.
+            hub_mid=MID_A,
+            paho_client_factory=MagicMock(return_value=MagicMock()),
+            time_source=lambda: 1000.0,
+        )
+
+    @staticmethod
+    def _subdevice_frame(mid, raw_value, ts=1785420009999):
+        """A captured-shape sub-device envelope naming a specific hub."""
+        import json
+
+        inner = {"D01": {"time": ts, "value": raw_value}}
+        param = "|".join(["#P" + "0" * 24 + f"{mid:06d}", json.dumps(inner), str(ts), "abcdef012345#"])
+        return json.dumps({"method": "thing.service.property.set", "params": {"param": param}, "version": "1.0.0"}).encode()
+
+    @staticmethod
+    def _hub_frame(mid, connected, ts=1785521850011):
+        return f"#P{'0' * 24}{mid:06d}|{1 if connected else 0}|{ts}|112882164350#".encode()
+
+    @pytest.mark.asyncio
+    async def test_a_captured_sub_device_frame_reaches_the_hub_it_names(self, hass):
+        """A real payload, parsed by the real client, applied by the real coordinator.
+
+        Hub A is the only hub with a sub-device, so its reading is the one that
+        can move. If _frame_mid's int() and the poll's hub["mid"] ever stop
+        agreeing, this drops at "unknown mid" and goes red, where the two
+        halves' own tests stay green.
+        """
+        entry = _make_entry(hass)
+        coordinator = await _two_hub_coordinator(hass, entry)
+        client = self._push_client(hass, coordinator)
+
+        sensor_key = f"{HID}_{MID_A}_1"
+        before = coordinator.data["sensors"][sensor_key]
+
+        client._handle_message("topic", self._subdevice_frame(MID_A, VALVE_ZONES_TLV_PAYLOAD))
+
+        assert coordinator.data["sensors"][sensor_key] is not before, "the frame never reached the hub it named"
+        assert client.last_message_at_for(MID_A) == 1000.0
+
+    @pytest.mark.asyncio
+    async def test_a_captured_hub_frame_reaches_the_other_hub_and_leaves_the_session_hub_alone(self, hass):
+        """The same joint on the connectivity entry point, for the hub the
+        session was NOT opened for: that is what "one session serves every hub"
+        has to mean, and a mid that failed to cross would silently fall back to
+        touching nothing."""
+        entry = _make_entry(hass)
+        coordinator = await _two_hub_coordinator(hass, entry)
+        client = self._push_client(hass, coordinator)
+
+        client._handle_message("topic", self._hub_frame(MID_B, connected=False))
+
+        from custom_components.rainpoint.coordinator import HUB_DISCONNECTED
+
+        connectivity = coordinator.data["hub_connectivity"]
+        assert connectivity[MID_B]["state"] == HUB_DISCONNECTED
+        assert connectivity.get(MID_A, {}).get("state") != HUB_DISCONNECTED, "the edge landed on the wrong hub"
+        assert client.last_message_at_for(MID_B) == 1000.0
+        assert client.last_message_at_for(MID_A) is None
+
+    @pytest.mark.asyncio
+    async def test_a_frame_naming_an_unknown_mid_stamps_no_clock(self, hass):
+        """The per-hub clock map is keyed on a payload field. Stamping before the
+        coordinator resolves the mid let any mid a frame named take a permanent
+        entry, for a hub no entity reads, in a class that caps its only other
+        payload-keyed structure on purpose."""
+        entry = _make_entry(hass)
+        coordinator = await _two_hub_coordinator(hass, entry)
+        client = self._push_client(hass, coordinator)
+
+        unknown_mid = 999999
+        client._handle_message("topic", self._hub_frame(unknown_mid, connected=True))
+
+        assert client.last_message_at_for(unknown_mid) is None
+        assert client._last_message_at_by_mid == {}
+        # The session clock still advances: an unattributable frame is still
+        # proof the pipe is alive, which is the distinction between the two.
+        assert client.last_message_at == 1000.0

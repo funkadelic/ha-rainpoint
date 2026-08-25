@@ -122,10 +122,14 @@ def _resolve_hub_identity(coordinator) -> tuple[str | None, str | None, int | No
 
     Hub discovery already scans all configured homes; this just picks the first
     hub record the coordinator collected. The mid and hid are returned alongside
-    the credential-fetch identity because the push payload does not carry the mid
-    and the subscribeStatus envelope needs the hub's home id, while the observer
-    topic's deviceName is ephemeral, so the client must be told which hub it
-    belongs to at construction.
+    the credential-fetch identity because the subscribeStatus envelope needs
+    both, and the observer topic's deviceName is ephemeral, so the client must
+    be told which hub opened its session at construction.
+
+    That identity no longer bounds what the session reports for. Push frames do
+    carry the mid, in a fixed slot confirmed by a 2026-08-25 capture, so the
+    client routes each frame on the mid the frame names and one session serves
+    every hub on the account. See api/mqtt.py's _frame_mid.
     """
     hubs = (coordinator.data or {}).get("hubs", [])
     hub = first_hub_record(hubs)

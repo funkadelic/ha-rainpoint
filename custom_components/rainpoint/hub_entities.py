@@ -76,8 +76,13 @@ def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator) -> list[dict
     session's state, so it reads the same on every hub: it says this hub is
     covered by a channel that is up. Push Last Message is per hub, so it goes
     quiet when that one hub stops reporting while the others carry on.
+
+    Delegates rather than repeating the comprehension: the two answer different
+    questions and are kept separate so either can diverge, but while the answer
+    is the same it should be computed once, so a change to what counts as a hub
+    cannot reach one set of entities and not the other.
     """
-    return [hub for hub in _hub_records(coordinator) if is_hub_record(hub)]
+    return resolve_connectivity_hubs(coordinator)
 
 
 def resolve_connectivity_hubs(coordinator: RainPointCoordinator) -> list[dict]:
@@ -438,6 +443,18 @@ class RainPointPushLastMessageSensor(_RainPointPushDiagnosticBase, SensorEntity)
     steps), so it is converted to an absolute UTC datetime for display by
     subtracting its age from the current wall-clock time. The rendered timestamp
     is stable between reads because the age grows in lockstep with the clock.
+
+    What this no longer covers, since it became per hub: the session clock it
+    used to read was stamped before any parse, so an undecodable payload still
+    advanced it and the entity meant "the pipe is alive". The per-hub clock is
+    stamped only after a frame is attributed to a known hub, so it means "this
+    hub is reporting" instead. A frame family this integration cannot recognize
+    now freezes every one of these while the push watchdog, which still reads
+    the session clock, stays quiet. That is the intended reading, not an
+    oversight: the two surfaces answer different questions on purpose.
+
+    A hub with nothing paired to it has nothing to send between connectivity
+    edges, so this stays None there rather than reporting a fault.
     """
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP

@@ -151,7 +151,7 @@ def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
 class _HubFrame(NamedTuple):
     """One recognized hub-level connectivity frame.
 
-    mid_tail is section 1 as parsed. It names the hub the edge belongs to, and
+    section_one is section 1 as parsed. It names the hub the edge belongs to, and
     _frame_mid reads the mid out of it; connected and changed_ts are the other
     two fields apply_hub_push_update consumes. It was for a long time a
     cross-check value only, never handed on, because the mid was believed
@@ -159,7 +159,7 @@ class _HubFrame(NamedTuple):
     trustworthy source. See _frame_mid for why that reversed.
     """
 
-    mid_tail: str
+    section_one: str
     connected: bool
     changed_ts: int
 
@@ -252,7 +252,7 @@ def _parse_hub_frame(payload: bytes) -> _HubFrame | None:
     except ValueError:
         return None
 
-    return _HubFrame(mid_tail=sections[0], connected=sections[1] == "1", changed_ts=changed_ts)
+    return _HubFrame(section_one=sections[0], connected=sections[1] == "1", changed_ts=changed_ts)
 
 
 # Bounded prefix a shape classification decodes -- large enough to see the
@@ -266,7 +266,7 @@ _SHAPE_KEY_PREFIX_BYTES = 256
 _SHAPE_KEY_MAX_CLASSIFIED_SECTIONS = 8
 
 
-def _push_envelope_mid_tail(payload: bytes) -> str | None:
+def _push_envelope_section_one(payload: bytes) -> str | None:
     """Return a sub-device envelope's section-1 identity, or None if it has none.
 
     Both downlink frame families share one structure, confirmed by a 2026-08-25
@@ -322,7 +322,12 @@ def _frame_mid(section_one: str) -> int | None:
     if len(section_one) != MQTT_PUSH_FRAME_SECTION_ONE_WIDTH:
         return None
     tail = section_one[-MQTT_PUSH_HUB_FRAME_MID_WIDTH:]
-    return int(tail) if tail.isdigit() else None
+    # isascii() and isdecimal(), never isdigit(). isdigit() is True for a
+    # superscript, where int() then raises and unwinds into the event loop,
+    # and True for a non-ASCII digit script, where int() then succeeds and
+    # routes a spelling no capture produced onto a real hub. This pair means
+    # exactly "int() will read this the way the capture spelled it".
+    return int(tail) if tail.isascii() and tail.isdecimal() else None
 
 
 def _section_class(section: str) -> str:
@@ -466,10 +471,13 @@ class RainPointMqttClient:
 
     @property
     def hub_mid(self):
-        """Return the mid of the single hub this client is bound to (or None).
+        """Return the mid of the hub whose credentials opened this session (or None).
 
-        The client is constructed for exactly one hub, so the push diagnostics
-        and any push updates belong to this hub only.
+        Not the mid of any frame's sender, and not a bound on what this client
+        reports for: _dispatch_push routes every frame on the mid the frame
+        itself names, so one session serves every hub on the account. This is
+        the construction identity, needed for the subscribeStatus envelope and
+        the credential fetch, and exported into diagnostics as such.
         """
         return self._hub_mid
 
@@ -849,8 +857,11 @@ class RainPointMqttClient:
         # Liveness clock: set BEFORE parse so an undecodable message still counts.
         self._last_message_at = self._time_source()
         _LOGGER.debug("RainPoint MQTT message received: topic=%s len=%s count=%s", topic, len(payload), self._message_count)
-        self._notify_state_listeners()
         self._dispatch_push(topic, payload)
+        # Single notify, and after the dispatch rather than before it: a handler
+        # may have stamped the per-hub clock, and firing first meant every
+        # attributable frame wrote each diagnostic entity's state twice.
+        self._notify_state_listeners()
 
     def _drop_if_no_coordinator(self) -> bool:
         """Return True (after logging) if a push arrived before coordinator wiring.
@@ -865,14 +876,57 @@ class RainPointMqttClient:
         return False
 
     def _note_hub_activity(self, mid: int) -> None:
-        """Stamp the per-hub liveness clock for a frame that resolved to a mid.
+        """Stamp the per-hub liveness clock for a frame that resolved to a known hub.
 
         Called from each handler after the frame is attributed and before it
         reaches the coordinator, so a frame dropped for having no readable
         identity never advances any hub's clock.
+
+        The mid is resolved against the poll's hubs first, and for two reasons.
+        Truthfulness: a mid the coordinator is about to drop must not advance a
+        clock no entity will ever read. Boundedness: without the check this map
+        takes one permanent entry per distinct mid a payload names, in a class
+        that caps its only comparable structure (_unrecognised_shapes) against
+        exactly that. The caller has already established the coordinator is
+        wired, via _drop_if_no_coordinator.
+
+        Notification is left to _handle_message, which fires once after the
+        whole dispatch.
         """
+        if not self._coordinator.knows_hub_mid(mid):
+            _LOGGER.debug("RainPoint MQTT frame named a mid this integration does not know; not stamping its clock")
+            return
         self._last_message_at_by_mid[mid] = self._time_source()
-        self._notify_state_listeners()
+
+    def _note_unreadable_identity(self, section_one: str | None) -> None:
+        """Announce once, at WARNING, that frames are being declined for their identity shape.
+
+        This is a total feature loss, not a dropped reading. A section 1 of an
+        unobserved width -- a 7-digit mid, a 9-digit account id -- fails the
+        width check for every frame of both families, so push goes inactive for
+        every hub on the account while Push Connected still reads on and the
+        watchdog stays quiet, because the session clock advances on inbound
+        bytes regardless. The retired suffix test tolerated an unobserved width
+        and still routed; the fixed slot buys precision by declining it, and
+        this is what keeps that trade from being silent.
+
+        One-shot per distinct width, sharing the bounded bookkeeping and the
+        reasoning of _dispatch_push's unrecognized-shape announcement: a signal
+        visible only under DEBUG is exactly the condition that hid the hub
+        connectivity frames for a whole milestone. Carries the width and
+        nothing else, because section 1 itself holds an account id and a stamp.
+        """
+        key = f"identity-width:{len(section_one) if section_one is not None else 'none'}"
+        if key in self._unrecognised_shapes or len(self._unrecognised_shapes) >= MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT:
+            return
+        self._unrecognised_shapes.add(key)
+        _LOGGER.warning(
+            "RainPoint MQTT is declining every push frame: the identity section is %s, not the %s "
+            "characters this integration can read. Push is inactive for every hub; the poll "
+            "continues as the fallback. Please open an issue so this layout can be supported.",
+            f"{len(section_one)} characters" if section_one is not None else "unreadable",
+            MQTT_PUSH_FRAME_SECTION_ONE_WIDTH,
+        )
 
     def _handle_subdevice_updates(self, updates: list[tuple[str, str, int]], payload: bytes) -> None:
         """Route a recognized sub-device envelope to apply_push_update.
@@ -893,10 +947,11 @@ class RainPointMqttClient:
         entry did not select: the session carries the whole account, and the
         unknown-mid drop is what keeps the unselected half out.
         """
-        section_one = _push_envelope_mid_tail(payload)
+        section_one = _push_envelope_section_one(payload)
         mid = _frame_mid(section_one) if section_one is not None else None
         if mid is None:
             _LOGGER.debug("RainPoint MQTT sub-device envelope carries no readable identity section; dropping")
+            self._note_unreadable_identity(section_one)
             return
         if self._drop_if_no_coordinator():
             return
@@ -907,14 +962,15 @@ class RainPointMqttClient:
     def _handle_hub_frame(self, frame: _HubFrame) -> None:
         """Route a recognized hub connectivity frame to apply_hub_push_update.
 
-        The edge is applied to the hub frame.mid_tail names, which is what lets
+        The edge is applied to the hub frame.section_one names, which is what lets
         one session report every hub's connectivity rather than only the hub it
         was built for. See _frame_mid for why reading the mid out of the frame
         is safe, and for what stopped being true when it became a source.
         """
-        mid = _frame_mid(frame.mid_tail)
+        mid = _frame_mid(frame.section_one)
         if mid is None:
             _LOGGER.debug("RainPoint MQTT hub frame carries no readable identity section; dropping")
+            self._note_unreadable_identity(frame.section_one)
             return
         if self._drop_if_no_coordinator():
             return

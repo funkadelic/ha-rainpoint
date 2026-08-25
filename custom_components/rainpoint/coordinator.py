@@ -990,6 +990,19 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._last_valve_command_at[(sensor_key, zone_num)] = command_dt
         return command_dt
 
+    def knows_hub_mid(self, mid: int) -> bool:
+        """Return whether the last poll discovered a hub with this mid.
+
+        A read-only question the push client asks before stamping its per-hub
+        liveness clock, so a mid it is about to be dropped for cannot advance a
+        clock or take a permanent entry in a map keyed on a payload field.
+
+        Deliberately the same resolution the two apply_*_push_update entry
+        points do, so the two cannot disagree: a mid that would be dropped
+        there must not be counted as activity here.
+        """
+        return any(h.get("mid") == mid for h in (self.data or {}).get("hubs", []))
+
     def apply_push_update(self, mid: int, sid: str, raw_value: str, device_ts: int | None) -> None:
         """Merge a single pushed sub-device reading into coordinator data.
 
