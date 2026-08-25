@@ -606,3 +606,44 @@ class TestPushReachesTheHubItNamesThroughARealCoordinator:
         # The session clock still advances: an unattributable frame is still
         # proof the pipe is alive, which is the distinction between the two.
         assert client.last_message_at == 1000.0
+
+    @pytest.mark.asyncio
+    async def test_a_hub_record_carrying_a_string_mid_still_receives_its_frames(self, hass):
+        """The cloud is already known to be inconsistent about mid's type across
+        endpoints, and this branch is what made the two sides have to agree
+        across a parse rather than being the same object. A string mid must not
+        silently kill push for that hub, which is what a bare == comparison did:
+        the frame would be dropped as an unknown mid, logged at DEBUG, and be
+        indistinguishable from a hub that really had left the account."""
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+
+        entry = _make_entry(hass)
+        record = _hub_record(MID_A, sub_devices=[{"addr": 1, "name": "Valve", "model": "HTV245FRF", "softVer": "127"}])
+        record["mid"] = str(MID_A)
+
+        client = MagicMock()
+        client.list_homes = AsyncMock(return_value=[{"hid": HID, "name": "Home"}])
+        client.get_devices_by_hid = AsyncMock(return_value=[record])
+        client.get_multiple_device_status = AsyncMock(
+            return_value=[
+                {"mid": MID_A, "subDeviceStatus": [{"id": "D01", "value": VALVE_ZONES_TLV_PAYLOAD, "time": 1785420002247}]}
+            ]
+        )
+        client.get_device_status = AsyncMock(return_value={})
+
+        coordinator = RainPointCoordinator(hass, client, entry)
+        hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})["coordinator"] = coordinator
+        await coordinator.async_config_entry_first_refresh()
+
+        # Normalised at ingestion, so every downstream consumer sees one type.
+        assert coordinator.data["hubs"][0]["mid"] == MID_A
+        assert isinstance(coordinator.data["hubs"][0]["mid"], int)
+
+        push_client = self._push_client(hass, coordinator)
+        sensor_key = f"{HID}_{MID_A}_1"
+        before = coordinator.data["sensors"][sensor_key]
+
+        push_client._handle_message("topic", self._subdevice_frame(MID_A, VALVE_ZONES_TLV_PAYLOAD))
+
+        assert coordinator.data["sensors"][sensor_key] is not before
+        assert push_client.last_message_at_for(MID_A) == 1000.0

@@ -901,14 +901,16 @@ class RainPointMqttClient:
     def _note_unreadable_identity(self, section_one: str | None) -> None:
         """Announce once, at WARNING, that frames are being declined for their identity shape.
 
-        This is a total feature loss, not a dropped reading. A section 1 of an
+        This is a lost feature, not a dropped reading. A section 1 of an
         unobserved width -- a 7-digit mid, a 9-digit account id -- fails the
-        width check for every frame of both families, so push goes inactive for
-        every hub on the account while Push Connected still reads on and the
-        watchdog stays quiet, because the session clock advances on inbound
-        bytes regardless. The retired suffix test tolerated an unobserved width
-        and still routed; the fixed slot buys precision by declining it, and
-        this is what keeps that trade from being silent.
+        width check for every frame that carries it, of both families, so any
+        hub sending them goes dark on push while Push Connected still reads on
+        and the watchdog stays quiet, because the session clock advances on
+        inbound bytes regardless. A wider account id takes every hub on the
+        account with it; a wider mid takes only its own. The retired suffix
+        test tolerated an unobserved width and still routed; the fixed slot
+        buys precision by declining it, and this is what keeps that trade from
+        being silent.
 
         One-shot per distinct width, sharing the bounded bookkeeping and the
         reasoning of _dispatch_push's unrecognized-shape announcement: a signal
@@ -921,9 +923,10 @@ class RainPointMqttClient:
             return
         self._unrecognised_shapes.add(key)
         _LOGGER.warning(
-            "RainPoint MQTT is declining every push frame: the identity section is %s, not the %s "
-            "characters this integration can read. Push is inactive for every hub; the poll "
-            "continues as the fallback. Please open an issue so this layout can be supported.",
+            "RainPoint MQTT declined a push frame: its identity section is %s, not the %s "
+            "characters this integration can read. Every frame carrying this layout is dropped, "
+            "so any hub sending them gets no push updates; the poll continues as the fallback. "
+            "Please open an issue so this layout can be supported.",
             f"{len(section_one)} characters" if section_one is not None else "unreadable",
             MQTT_PUSH_FRAME_SECTION_ONE_WIDTH,
         )

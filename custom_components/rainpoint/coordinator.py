@@ -456,6 +456,32 @@ def _sensor_keys_for_hub_keys(sensor_keys: Iterable[str], hub_keys: AbstractSet[
     return protected
 
 
+def _normalise_hub_mid(hub: dict) -> None:
+    """Coerce a numeric-string mid to int in place, at the one ingestion point.
+
+    Every hub record enters through _collect_hubs, so normalising there is what
+    lets the rest of this module treat mid as an int: the push entry points
+    compare it against the integer _frame_mid parses out of a payload, and
+    hub_connectivity is keyed by it from both the poll and the push side. A
+    string would not just fail to match, it would key the same hub twice.
+
+    Not a hypothetical typing worry. This API is already known to be
+    inconsistent about mid across endpoints: the capture behind
+    update_sub_param showed the app sending it as a string where the sibling
+    main/update endpoint takes an int. Nothing guarantees getDeviceByHid stays
+    on one side of that, and before the push channel read the mid out of the
+    payload the two sides were the same object, so the agreement cost nothing
+    to keep and nothing noticed it was load-bearing.
+
+    Anything that is not a plain decimal string is left exactly as it was.
+    Coercing further would invent a value; leaving it means the record simply
+    fails to match, which is the same fail-safe every other lookup here takes.
+    """
+    raw = hub.get("mid")
+    if isinstance(raw, str) and raw.isascii() and raw.isdecimal():
+        hub["mid"] = int(raw)
+
+
 def is_hub_record(hub: dict) -> bool:
     """Return True when a top-level device record is a real hub.
 
@@ -1492,6 +1518,9 @@ class RainPointCoordinator(DataUpdateCoordinator):
             for hub in devices:
                 hub_copy = dict(hub)
                 hub_copy["hid"] = hid
+                # On the copy, never the caller's record: the raw dict is still
+                # handed to _summarize_record below and to the diagnostics path.
+                _normalise_hub_mid(hub_copy)
                 # All devices are RainPoint hardware
                 hub_copy["brand"] = "RainPoint"
                 # The hub record's shape, for diagnosing which hub-level fields
