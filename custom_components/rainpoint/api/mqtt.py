@@ -262,8 +262,40 @@ _SHAPE_KEY_PREFIX_BYTES = 256
 _SHAPE_KEY_MAX_CLASSIFIED_SECTIONS = 8
 
 
-def _hub_frame_mid_matches(mid_tail: str, own: str) -> bool:
-    """Cross-check a hub frame's section-1 tail against the client's own mid.
+def _push_envelope_mid_tail(payload: bytes) -> str | None:
+    """Return a sub-device envelope's section-1 identity, or None if it has none.
+
+    Both downlink frame families share one structure, confirmed by a 2026-08-25
+    capture of a live valve run:
+
+        #P<stamp><0000><account><mid> | <payload> | <ms ts> | <propVer>#
+
+    and differ only in section 2, a JSON object of sub-device updates here and a
+    literal 0/1 for hub connectivity. _parse_push_envelope reads section 2 and
+    discards the rest, so this reaches back for section 1, which is what lets a
+    sub-device push be attributed rather than assumed.
+
+    Deliberately strict, and the failure it is guarding is asymmetric. Refusing
+    a real frame costs one reading until the next 120s poll, which is the
+    fallback the push channel never displaces. Accepting a frame that names
+    another hub writes a reading onto whichever device this hub happens to hold
+    at the same addr, because sids are per-hub indices. So anything that does
+    not present the confirmed shape returns None and the caller drops it.
+    """
+    param_str = _resolve_hub_frame_candidate(payload.decode("utf-8", "replace"))
+    sections = param_str.split(MQTT_PUSH_SECTION_DELIMITER)
+    if len(sections) != MQTT_PUSH_HUB_FRAME_SECTIONS:
+        return None
+    head = sections[0]
+    return head if head.startswith(MQTT_PUSH_HUB_FRAME_PREFIX) else None
+
+
+def _frame_mid_matches(mid_tail: str, own: str) -> bool:
+    """Cross-check a frame's section-1 tail against the client's own mid.
+
+    Shared by both frame families: the hub connectivity frame, which has always
+    carried its mid here, and the sub-device envelope, which was confirmed to
+    carry it in the same slot on 2026-08-25.
 
     A suffix test, unconditionally. Read the width check below as selecting a
     log line, not as gating the comparison: both paths run the same test.
@@ -307,7 +339,7 @@ def _hub_frame_mid_matches(mid_tail: str, own: str) -> bool:
     if mid_tail.endswith(own):
         return True
     _LOGGER.debug(
-        "RainPoint MQTT hub frame mid mismatch: frame_tail=%s hub_mid=%s",
+        "RainPoint MQTT frame mid mismatch: frame_tail=%s hub_mid=%s",
         mid_tail,
         own,
     )
@@ -843,20 +875,29 @@ class RainPointMqttClient:
         unrecognized downlink can still be diagnosed. Handled pushes of
         either family never have their contents logged.
 
-        KNOWN GAP, established by the same 2026-08-25 capture that disproved
-        the per-hub observer topic (see _hub_frame_mid_matches). The hub-frame
-        branch below cross-checks the frame's own mid before consuming it. The
-        sub-device branch has nothing to cross-check against: the envelope's
-        sub-device sections carry no hub identity this parser reads, so every
-        reading is stamped with self._hub_mid by construction. On a multi-hub
-        account a sub-device frame belonging to another hub is therefore
-        attributed to this client's hub, and because sids are per-hub indices
-        (D1 -> addr 1) it lands on whichever device this hub holds at that
-        addr, decoded against that device's model. Unreachable only while
-        every other hub on the account has no sub-devices of its own.
+        Both branches cross-check the frame's own mid before consuming it, and
+        both drop on a mismatch. That symmetry is new: the sub-device branch
+        used to stamp self._hub_mid unconditionally, which on a multi-hub
+        account attributed another hub's reading to this one, landing it on
+        whichever device this hub held at the same addr (sids are per-hub
+        indices, so D1 means addr 1 on every hub) and decoding it against that
+        device's model. The observer session is account-scoped, so those frames
+        do arrive; only the other hubs on this account having no sub-devices
+        kept it from biting.
+
+        The mid handed to the coordinator is still the construction-supplied
+        one, not the parsed tail. Routing a frame to the hub it actually names,
+        rather than merely refusing one that names a different hub, is the
+        multi-hub push question and is deliberately not answered here.
         """
         updates = _parse_push_envelope(payload)
         if updates:
+            mid_tail = _push_envelope_mid_tail(payload)
+            if mid_tail is None:
+                _LOGGER.debug("RainPoint MQTT sub-device envelope carries no identity section; dropping")
+                return
+            if not _frame_mid_matches(mid_tail, str(self._hub_mid)):
+                return
             if self._drop_if_no_coordinator():
                 return
             for sid, raw_value, device_ts in updates:
@@ -865,7 +906,7 @@ class RainPointMqttClient:
 
         frame = _parse_hub_frame(payload)
         if frame is not None:
-            if not _hub_frame_mid_matches(frame.mid_tail, str(self._hub_mid)):
+            if not _frame_mid_matches(frame.mid_tail, str(self._hub_mid)):
                 return
             if self._drop_if_no_coordinator():
                 return
