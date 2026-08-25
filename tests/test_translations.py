@@ -505,7 +505,7 @@ class TestHubWordingNamesHardwareOnly:
         repository host names in the badge URLs."""
         readme_path = Path(rainpoint_pkg.__file__).parent.parent.parent / "README.md"
         blob = readme_path.read_text(encoding="utf-8")
-        assert len(re.findall("hub", blob, re.IGNORECASE)) == 70
+        assert len(re.findall("hub", blob, re.IGNORECASE)) == 77
 
 
 class TestGenericControlFailedIssuePlaceholderParity:
