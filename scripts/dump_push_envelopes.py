@@ -53,7 +53,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _REQUEST_TIMEOUT_SECONDS = 60.0
 _DEFAULT_WATCH_SECONDS = 900
 _DEFAULT_OPEN_DURATION_SECONDS = 60
-_CONNECT_SETTLE_SECONDS = 10.0
+# How long to wait for the observer session to actually connect before giving
+# up on the --open command. async_start only launches the supervisor task, so
+# connection is asynchronous and a fixed sleep would be a guess: too short and
+# the command's own push lands before anything is listening, which is the one
+# frame the run exists to capture.
+_CONNECT_TIMEOUT_SECONDS = 30.0
+_CONNECT_POLL_SECONDS = 0.25
 
 # A hub connectivity frame captured 2026-07-31, used by --self-check so the
 # section splitter is exercised without credentials or hardware.
@@ -202,6 +208,21 @@ def _self_check() -> int:
     return 0
 
 
+async def _await_connection(mqtt_client, timeout: float = _CONNECT_TIMEOUT_SECONDS) -> bool:
+    """Wait for the observer session to report connected, or return False.
+
+    The supervisor retries indefinitely under backoff, so a session that has
+    not come up inside the timeout is not about to; the caller skips the valve
+    command rather than running water into a session nothing is listening on.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if mqtt_client.connected:
+            return True
+        await asyncio.sleep(_CONNECT_POLL_SECONDS)
+    return mqtt_client.connected
+
+
 async def _collect_hubs(client) -> list[dict]:
     """Return every hub record across every home, with hid injected."""
     hubs: list[dict] = []
@@ -319,30 +340,36 @@ async def _run_dump(args: argparse.Namespace, password: str) -> int:
         print("Waiting for downlink. Drive a valve zone to force a sub-device report.\n")
         sys.stdout.flush()
 
-        await mqtt_client.async_start()
-
-        if args.open is not None:
-            # Settle first: the supervisor connects in its own task, and a
-            # command sent before the socket is up would be answered by a push
-            # this session is not yet listening for.
-            await asyncio.sleep(_CONNECT_SETTLE_SECONDS)
-            addr, port = args.open
-            print(f"[{_stamp()}] opening addr={addr} port={port} for {args.open_duration}s")
-            sys.stdout.flush()
-            response = await client.control_work_mode(
-                mid=hub["mid"],
-                addr=addr,
-                device_name=hub["deviceName"],
-                product_key=hub["productKey"],
-                port=port,
-                mode=1,
-                duration=args.open_duration,
-            )
-            print(f"[{_stamp()}] controlWorkMode returned: {response!r}")
-            sys.stdout.flush()
-
-        deadline = time.monotonic() + args.seconds
+        # Everything from startup on runs under the disconnect, so a failure or
+        # a Ctrl-C anywhere below still tears the session down. async_disconnect
+        # tolerates a client that never connected, so starting the block before
+        # async_start costs nothing and covers startup itself.
         try:
+            await mqtt_client.async_start()
+
+            if args.open is not None:
+                if not await _await_connection(mqtt_client):
+                    print(
+                        f"Session did not connect within {_CONNECT_TIMEOUT_SECONDS:.0f}s; skipping the valve command.",
+                        file=sys.stderr,
+                    )
+                    return 1
+                addr, port = args.open
+                print(f"[{_stamp()}] opening addr={addr} port={port} for {args.open_duration}s")
+                sys.stdout.flush()
+                response = await client.control_work_mode(
+                    mid=hub["mid"],
+                    addr=addr,
+                    device_name=hub["deviceName"],
+                    product_key=hub["productKey"],
+                    port=port,
+                    mode=1,
+                    duration=args.open_duration,
+                )
+                print(f"[{_stamp()}] controlWorkMode returned: {response!r}")
+                sys.stdout.flush()
+
+            deadline = time.monotonic() + args.seconds
             while time.monotonic() < deadline:
                 await asyncio.sleep(1.0)
         except KeyboardInterrupt:
