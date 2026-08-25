@@ -82,6 +82,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--open",
         metavar="ADDR:PORT",
+        type=_parse_open_target,
         help=(
             "After connecting, run one valve zone on this session's own login so the "
             "capture does not need a second one. A separate login (another script, or "
@@ -100,11 +101,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _parse_open_target(value: str) -> tuple[int, int]:
-    """Parse an ADDR:PORT pair, raising ValueError on anything else."""
+    """Parse an ADDR:PORT pair for argparse's type=, rejecting anything else.
+
+    Wired as the argument's type so a bad value is refused before the script
+    does anything at all. Validating it at the call site instead would be too
+    late: by then the run has logged in, and a login invalidates whatever
+    session the account already had, so a typo would cost a running Home
+    Assistant install its token and its push channel.
+    """
     addr_text, _, port_text = value.partition(":")
-    addr, port = int(addr_text), int(port_text)
+    try:
+        addr, port = int(addr_text), int(port_text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected ADDR:PORT with both numeric, got {value!r}") from None
     if addr < 1 or port < 1:
-        raise ValueError("addr and port are 1-based")
+        raise argparse.ArgumentTypeError(f"addr and port are 1-based, got {value!r}")
     return addr, port
 
 
@@ -166,6 +177,15 @@ def _self_check() -> int:
     text, sections = _split_sections(b"not json at all")
     assert text == "not json at all"
     assert sections == []
+
+    assert _parse_open_target("1:2") == (1, 2)
+    for bad in ("3", "1:", "a:b", "0:1", "1:0"):
+        try:
+            _parse_open_target(bad)
+        except argparse.ArgumentTypeError:
+            continue
+        raise AssertionError(f"{bad!r} should have been rejected before the session opens")
+
     print("self-check passed")
     return 0
 
@@ -274,12 +294,12 @@ async def _run_dump(args: argparse.Namespace, password: str) -> int:
 
         await mqtt_client.async_start()
 
-        if args.open:
+        if args.open is not None:
             # Settle first: the supervisor connects in its own task, and a
             # command sent before the socket is up would be answered by a push
             # this session is not yet listening for.
             await asyncio.sleep(_CONNECT_SETTLE_SECONDS)
-            addr, port = _parse_open_target(args.open)
+            addr, port = args.open
             print(f"[{_stamp()}] opening addr={addr} port={port} for {args.open_duration}s")
             sys.stdout.flush()
             response = await client.control_work_mode(
