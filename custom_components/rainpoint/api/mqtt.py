@@ -861,61 +861,74 @@ class RainPointMqttClient:
             return True
         return False
 
-    def _dispatch_push(self, topic: str, payload: bytes) -> None:
-        """Parse the payload and route it to the coordinator entry point that
-        owns its frame family.
+    def _handle_subdevice_updates(self, updates: list[tuple[str, str, int]], payload: bytes) -> None:
+        """Route a recognized sub-device envelope to apply_push_update.
 
-        Two frame families arrive on the same downlink and are routed to two
-        different coordinator entry points, and never to both: a D-prefixed
-        sub-device JSON envelope goes to apply_push_update (unchanged, and
-        kept first so the hot path is byte-equivalent to before this frame
-        family existed); a pipe-delimited hub connectivity frame goes to
-        apply_hub_push_update. Anything recognized as neither is dropped; the
-        drop path logs a truncated payload preview at DEBUG so an
-        unrecognized downlink can still be diagnosed. Handled pushes of
-        either family never have their contents logged.
-
-        Both branches cross-check the frame's own mid before consuming it, and
-        both drop on a mismatch. That symmetry is new: the sub-device branch
-        used to stamp self._hub_mid unconditionally, which on a multi-hub
-        account attributed another hub's reading to this one, landing it on
-        whichever device this hub held at the same addr (sids are per-hub
-        indices, so D1 means addr 1 on every hub) and decoding it against that
-        device's model. The observer session is account-scoped, so those frames
-        do arrive; only the other hubs on this account having no sub-devices
-        kept it from biting.
+        The envelope's own section-1 mid is cross-checked against the hub this
+        client was built for, and a mismatch drops the whole envelope. The
+        sub-device branch used to stamp self._hub_mid unconditionally, which on
+        a multi-hub account attributed another hub's reading to this one,
+        landing it on whichever device this hub held at the same addr (sids are
+        per-hub indices, so D1 means addr 1 on every hub) and decoding it
+        against that device's model. The observer session is account-scoped, so
+        those frames do arrive; only the other hubs on this account having no
+        sub-devices kept it from biting.
 
         The mid handed to the coordinator is still the construction-supplied
         one, not the parsed tail. Routing a frame to the hub it actually names,
         rather than merely refusing one that names a different hub, is the
         multi-hub push question and is deliberately not answered here.
         """
+        mid_tail = _push_envelope_mid_tail(payload)
+        if mid_tail is None:
+            _LOGGER.debug("RainPoint MQTT sub-device envelope carries no identity section; dropping")
+            return
+        if not _frame_mid_matches(mid_tail, str(self._hub_mid)):
+            return
+        if self._drop_if_no_coordinator():
+            return
+        for sid, raw_value, device_ts in updates:
+            self._coordinator.apply_push_update(self._hub_mid, sid, raw_value, device_ts)
+
+    def _handle_hub_frame(self, frame: _HubFrame) -> None:
+        """Route a recognized hub connectivity frame to apply_hub_push_update.
+
+        frame.mid_tail is never passed on: the mid handed to the coordinator is
+        always self._hub_mid from construction, never one parsed out of the
+        payload. The cross-check is a defense in depth against a broker that
+        cross-delivers, which it does, not a source of the mid.
+        """
+        if not _frame_mid_matches(frame.mid_tail, str(self._hub_mid)):
+            return
+        if self._drop_if_no_coordinator():
+            return
+        self._coordinator.apply_hub_push_update(self._hub_mid, frame.connected, frame.changed_ts)
+
+    def _dispatch_push(self, topic: str, payload: bytes) -> None:
+        """Recognize the payload's frame family and hand it to that family's handler.
+
+        Two frame families arrive on the same downlink and are routed to two
+        different coordinator entry points, and never to both: a D-prefixed
+        sub-device JSON envelope goes to apply_push_update (kept first so the
+        hot path is byte-equivalent to before the second family existed); a
+        pipe-delimited hub connectivity frame goes to apply_hub_push_update.
+        Anything recognized as neither is dropped; the drop path logs a
+        truncated payload preview at DEBUG so an unrecognized downlink can
+        still be diagnosed. Handled pushes of either family never have their
+        contents logged.
+
+        Recognition lives here and consumption lives in the two handlers, so
+        this method stays a readable list of what a payload can be. Each
+        handler owns its own drops, and neither can fall through to the other.
+        """
         updates = _parse_push_envelope(payload)
         if updates:
-            mid_tail = _push_envelope_mid_tail(payload)
-            if mid_tail is None:
-                _LOGGER.debug("RainPoint MQTT sub-device envelope carries no identity section; dropping")
-                return
-            if not _frame_mid_matches(mid_tail, str(self._hub_mid)):
-                return
-            if self._drop_if_no_coordinator():
-                return
-            for sid, raw_value, device_ts in updates:
-                self._coordinator.apply_push_update(self._hub_mid, sid, raw_value, device_ts)
+            self._handle_subdevice_updates(updates, payload)
             return
 
         frame = _parse_hub_frame(payload)
         if frame is not None:
-            if not _frame_mid_matches(frame.mid_tail, str(self._hub_mid)):
-                return
-            if self._drop_if_no_coordinator():
-                return
-            # frame.mid_tail is never passed on: the mid handed to the
-            # coordinator is always self._hub_mid from construction, never one
-            # parsed out of the payload. The cross-check above is a defense
-            # in depth against a broker that ever cross-delivers, not a
-            # source of the mid.
-            self._coordinator.apply_hub_push_update(self._hub_mid, frame.connected, frame.changed_ts)
+            self._handle_hub_frame(frame)
             return
 
         # The first payload of a distinct unrecognized shape announces itself
