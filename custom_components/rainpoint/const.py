@@ -188,6 +188,10 @@ MQTT_PUSH_HUB_FRAME_PREFIX = "#P"
 MQTT_PUSH_HUB_FRAME_SECTIONS = 4
 MQTT_PUSH_HUB_FRAME_TERMINATOR = "#"
 MQTT_PUSH_HUB_FRAME_MID_WIDTH = 6
+# 2 prefix + 12 stamp + 4 fixed + 8 account + 6 mid. A section 1 of any other
+# length is a layout no capture has produced, so the mid slot cannot be read
+# from it by position and the frame is declined rather than guessed at.
+MQTT_PUSH_FRAME_SECTION_ONE_WIDTH = 32
 
 # Hard cap on the per-client one-shot-per-shape unrecognised-downlink
 # bookkeeping. Keeps the set bounded against a hostile or chatty

@@ -36,6 +36,7 @@ from ..const import (
     MQTT_BROKER_HOST_TEMPLATE,
     MQTT_BROKER_PORT,
     MQTT_KEEPALIVE,
+    MQTT_PUSH_FRAME_SECTION_ONE_WIDTH,
     MQTT_PUSH_HUB_FRAME_MID_WIDTH,
     MQTT_PUSH_HUB_FRAME_PREFIX,
     MQTT_PUSH_HUB_FRAME_SECTIONS,
@@ -150,9 +151,12 @@ def _parse_push_envelope(payload: bytes) -> list[tuple[str, str, int]]:
 class _HubFrame(NamedTuple):
     """One recognized hub-level connectivity frame.
 
-    mid_tail is section 1 as parsed -- the caller's cross-check value only;
-    it is never handed to the coordinator. connected and changed_ts
-    are the two fields apply_hub_push_update actually consumes.
+    mid_tail is section 1 as parsed. It names the hub the edge belongs to, and
+    _frame_mid reads the mid out of it; connected and changed_ts are the other
+    two fields apply_hub_push_update consumes. It was for a long time a
+    cross-check value only, never handed on, because the mid was believed
+    absent from the payload and the construction-supplied one was the only
+    trustworthy source. See _frame_mid for why that reversed.
     """
 
     mid_tail: str
@@ -290,60 +294,35 @@ def _push_envelope_mid_tail(payload: bytes) -> str | None:
     return head if head.startswith(MQTT_PUSH_HUB_FRAME_PREFIX) else None
 
 
-def _frame_mid_matches(mid_tail: str, own: str) -> bool:
-    """Cross-check a frame's section-1 tail against the client's own mid.
+def _frame_mid(section_one: str) -> int | None:
+    """Read the hub mid out of a frame's section-1 identity, or None.
 
-    Shared by both frame families: the hub connectivity frame, which has always
-    carried its mid here, and the sub-device envelope, which was confirmed to
-    carry it in the same slot on 2026-08-25.
+    THIS IS THE FRAME'S MID AS A SOURCE, which reverses the rule that stood
+    while the mid was believed absent from the payload. It is not: a
+    2026-08-25 capture confirmed both frame families carry it in the same
+    fixed slot, and taking it is what lets one account-scoped session serve
+    every hub instead of one hub with the rest silently on polling alone.
 
-    A suffix test, unconditionally. Read the width check below as selecting a
-    log line, not as gating the comparison: both paths run the same test.
+    What makes reading it safe is not this function. Both coordinator entry
+    points resolve the mid against the hubs the poll discovered and drop
+    anything else, so a pushed frame can only ever update a hub that already
+    exists in coordinator data. Push cannot invent a hub, rename one, or
+    reach a home this config entry did not select; the worst a malformed or
+    hostile identity can do is address nothing and be dropped. Do not remove
+    those drops on the grounds that this parser validates the mid, because it
+    deliberately does not: it validates only the shape.
 
-    What the test does and does not buy, stated precisely, because the
-    comment this replaced overstated it. When `own` is the observed width and
-    the frame's own mid is that width too, the suffix test is exactly a
-    fixed-width slot comparison, so no *other* mid of that same width can
-    satisfy it. It does NOT rule out a mid of some other width: with `own`
-    "236547", a frame from a hub whose mid is "1236547" ends in "236547" and
-    is accepted, and so is one whose mid is "36547" behind an account id
-    ending in "2". Both were equally true of the fixed-width slice this
-    replaced, which is why the swap is a no-op; neither is a regression.
-
-    That residual is accepted rather than engineered away: no capture has
-    produced a mid of any width but the observed one, and rejecting every
-    frame of an unobserved width would silently disable the feature for it.
-    The unobserved-width case is logged so it is at least visible.
-
-    CROSS-DELIVERY IS OBSERVED, NOT HYPOTHETICAL. An earlier version of this
-    docstring reasoned that the observer topic was per-hub, and on that basis
-    called this test defense in depth against a broker that might one day
-    cross-deliver. A 2026-08-25 capture on a two-hub account disproved it: a
-    hub disconnect frame whose section-1 tail named the second hub was
-    delivered to the session built for the first, on that session's own
-    observer topic, and this test is what dropped it. The observer topic is
-    account-scoped. This test is therefore load-bearing rather than
-    belt-and-braces, and the width residual above is the size of the hole
-    left in a guard that is now doing real work.
-
-    Never a source of the mid: the mid handed to the coordinator is always
-    the construction-supplied one.
+    The slot is fixed rather than suffix-matched. Section 1 is
+    prefix + 12-digit stamp + 4 fixed + 8-digit account + 6-digit mid, so a
+    section of any other length is a layout this has not seen and yields
+    None rather than a guess. That also retires the old suffix test's
+    residual, where a mid of an unobserved width could match another hub's
+    tail.
     """
-    if len(own) != MQTT_PUSH_HUB_FRAME_MID_WIDTH:
-        _LOGGER.debug(
-            "RainPoint MQTT hub frame mid cross-check used the suffix fallback (hub_mid=%s width=%s, expected width=%s)",
-            own,
-            len(own),
-            MQTT_PUSH_HUB_FRAME_MID_WIDTH,
-        )
-    if mid_tail.endswith(own):
-        return True
-    _LOGGER.debug(
-        "RainPoint MQTT frame mid mismatch: frame_tail=%s hub_mid=%s",
-        mid_tail,
-        own,
-    )
-    return False
+    if len(section_one) != MQTT_PUSH_FRAME_SECTION_ONE_WIDTH:
+        return None
+    tail = section_one[-MQTT_PUSH_HUB_FRAME_MID_WIDTH:]
+    return int(tail) if tail.isdigit() else None
 
 
 def _section_class(section: str) -> str:
@@ -429,12 +408,13 @@ class RainPointMqttClient:
         self._entry = entry
         self._hub_device_name = hub_device_name
         self._hub_product_key = hub_product_key
-        # The client is constructed per-hub, so the hub's mid is fixed for its
-        # lifetime. It is not present in (and must not be inferred from) the push
-        # payload or the ephemeral observer topic, so it is supplied here and
-        # passed straight into apply_push_update -- the only coordinator method
-        # this client ever calls.
         self._coordinator = coordinator
+        # Identifies the hub whose credentials open this session, and nothing
+        # else. It used to be the mid every pushed reading was stamped with,
+        # because the payload was believed to carry none; it does carry one,
+        # and _dispatch_push now routes on that instead, so this is no longer
+        # a claim about which hub a downlink frame came from. The session
+        # itself is account-scoped and carries every hub's traffic.
         self._hub_mid = hub_mid
         # The hub's home id, needed for the subscribeStatus envelope (hid/hidList).
         self._hub_hid = hub_hid
@@ -864,45 +844,47 @@ class RainPointMqttClient:
     def _handle_subdevice_updates(self, updates: list[tuple[str, str, int]], payload: bytes) -> None:
         """Route a recognized sub-device envelope to apply_push_update.
 
-        The envelope's own section-1 mid is cross-checked against the hub this
-        client was built for, and a mismatch drops the whole envelope. The
-        sub-device branch used to stamp self._hub_mid unconditionally, which on
-        a multi-hub account attributed another hub's reading to this one,
-        landing it on whichever device this hub held at the same addr (sids are
-        per-hub indices, so D1 means addr 1 on every hub) and decoding it
-        against that device's model. The observer session is account-scoped, so
-        those frames do arrive; only the other hubs on this account having no
-        sub-devices kept it from biting.
+        The mid comes from the envelope's own section 1, so a reading reaches
+        the hub it belongs to rather than the hub whose credentials opened this
+        session. This branch used to stamp self._hub_mid unconditionally, which
+        on a multi-hub account put another hub's reading onto whichever device
+        this hub held at the same addr (sids are per-hub indices, so D1 means
+        addr 1 on every hub), decoded against that device's model. The observer
+        session is account-scoped, so those frames do arrive; only the other
+        hubs having no sub-devices kept that from biting.
 
-        The mid handed to the coordinator is still the construction-supplied
-        one, not the parsed tail. Routing a frame to the hub it actually names,
-        rather than merely refusing one that names a different hub, is the
-        multi-hub push question and is deliberately not answered here.
+        An envelope whose section 1 cannot be read yields no mid and is dropped
+        here. One naming a mid this integration does not know is dropped by the
+        coordinator, which resolves every mid against the hubs the poll
+        discovered. That is also what contains a frame from a home the config
+        entry did not select: the session carries the whole account, and the
+        unknown-mid drop is what keeps the unselected half out.
         """
-        mid_tail = _push_envelope_mid_tail(payload)
-        if mid_tail is None:
-            _LOGGER.debug("RainPoint MQTT sub-device envelope carries no identity section; dropping")
-            return
-        if not _frame_mid_matches(mid_tail, str(self._hub_mid)):
+        section_one = _push_envelope_mid_tail(payload)
+        mid = _frame_mid(section_one) if section_one is not None else None
+        if mid is None:
+            _LOGGER.debug("RainPoint MQTT sub-device envelope carries no readable identity section; dropping")
             return
         if self._drop_if_no_coordinator():
             return
         for sid, raw_value, device_ts in updates:
-            self._coordinator.apply_push_update(self._hub_mid, sid, raw_value, device_ts)
+            self._coordinator.apply_push_update(mid, sid, raw_value, device_ts)
 
     def _handle_hub_frame(self, frame: _HubFrame) -> None:
         """Route a recognized hub connectivity frame to apply_hub_push_update.
 
-        frame.mid_tail is never passed on: the mid handed to the coordinator is
-        always self._hub_mid from construction, never one parsed out of the
-        payload. The cross-check is a defense in depth against a broker that
-        cross-delivers, which it does, not a source of the mid.
+        The edge is applied to the hub frame.mid_tail names, which is what lets
+        one session report every hub's connectivity rather than only the hub it
+        was built for. See _frame_mid for why reading the mid out of the frame
+        is safe, and for what stopped being true when it became a source.
         """
-        if not _frame_mid_matches(frame.mid_tail, str(self._hub_mid)):
+        mid = _frame_mid(frame.mid_tail)
+        if mid is None:
+            _LOGGER.debug("RainPoint MQTT hub frame carries no readable identity section; dropping")
             return
         if self._drop_if_no_coordinator():
             return
-        self._coordinator.apply_hub_push_update(self._hub_mid, frame.connected, frame.changed_ts)
+        self._coordinator.apply_hub_push_update(mid, frame.connected, frame.changed_ts)
 
     def _dispatch_push(self, topic: str, payload: bytes) -> None:
         """Recognize the payload's frame family and hand it to that family's handler.
