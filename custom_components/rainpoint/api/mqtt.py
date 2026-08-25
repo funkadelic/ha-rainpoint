@@ -403,6 +403,14 @@ class RainPointMqttClient:
         time_source=time.monotonic,
         wall_clock_source=time.time,
     ) -> None:
+        """Build the client for one hub's observer credentials.
+
+        The hub arguments name whose credentials open the session, not whose
+        traffic it carries: the session is account-scoped and every frame is
+        routed by the mid it names. The three factory and clock arguments are
+        test seams, and the two clocks are deliberately separate, one monotonic
+        for renewal bookkeeping and one wall-clock for the protocol timestamp.
+        """
         self._hass = hass
         self._client = client
         self._entry = entry

@@ -575,6 +575,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    """Create this entry's sensor entities and register the later-arrival sweeps."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 

@@ -886,6 +886,8 @@ class TestSubDeviceEnvelopeMidAttribution:
         assert (mid, sid) == (361277, "D01")
 
     def test_every_update_in_one_envelope_carries_that_envelope_s_mid(self):
+        """One envelope can hold several sub-devices, and they all belong to the
+        hub its section 1 names."""
         coordinator = MagicMock()
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
 

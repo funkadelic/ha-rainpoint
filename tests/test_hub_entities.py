@@ -83,14 +83,17 @@ class TestResolvePushDiagnosticHubs:
         return coord
 
     def test_no_hubs_returns_empty(self):
+        """An empty hub list yields no diagnostics rather than a phantom pair."""
         assert resolve_push_diagnostic_hubs(self._coord([])) == []
 
     def test_none_data_returns_empty(self):
+        """Before the first poll there is no hub list to build from."""
         coord = MagicMock()
         coord.data = None
         assert resolve_push_diagnostic_hubs(coord) == []
 
     def test_every_real_hub_gets_diagnostics(self):
+        """Both hubs on a two-hub account get their own pair."""
         hubs = [{"mid": 236547, "did": "17053410"}, {"mid": 361277, "did": "17051777"}]
         assert resolve_push_diagnostic_hubs(self._coord(hubs)) == hubs
 
@@ -105,10 +108,13 @@ class TestResolvePushDiagnosticHubs:
         assert resolve_push_diagnostic_hubs(self._coord([wrapper, real])) == [real]
 
     def test_returns_nothing_when_no_record_is_a_hub(self):
+        """An all-wrapper list yields nothing rather than a phantom hub."""
         hubs = [{"mid": 346965, "did": "", "mac": "", "productKey": "", "model": ""}]
         assert resolve_push_diagnostic_hubs(self._coord(hubs)) == []
 
     def test_accepts_dict_shaped_hubs(self):
+        """The hub collection is read through the shared shape helper, so a dict
+        of records works the same as a list."""
         hubs = {"a": {"mid": 111, "did": "d111"}, "b": {"mid": 222, "did": "d222"}}
         assert resolve_push_diagnostic_hubs(self._coord(hubs)) == [{"mid": 111, "did": "d111"}, {"mid": 222, "did": "d222"}]
 
