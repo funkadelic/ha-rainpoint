@@ -52,6 +52,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _REQUEST_TIMEOUT_SECONDS = 60.0
 _DEFAULT_WATCH_SECONDS = 900
+_DEFAULT_OPEN_DURATION_SECONDS = 60
+_CONNECT_SETTLE_SECONDS = 10.0
 
 # A hub connectivity frame captured 2026-07-31, used by --self-check so the
 # section splitter is exercised without credentials or hardware.
@@ -77,8 +79,33 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=_DEFAULT_WATCH_SECONDS,
         help=f"How long to stay connected and dump (default {_DEFAULT_WATCH_SECONDS}).",
     )
+    parser.add_argument(
+        "--open",
+        metavar="ADDR:PORT",
+        help=(
+            "After connecting, run one valve zone on this session's own login so the "
+            "capture does not need a second one. A separate login (another script, or "
+            "Home Assistant) invalidates this session's token: the cloud rejects the "
+            "displaced session with code 1004."
+        ),
+    )
+    parser.add_argument(
+        "--open-duration",
+        type=int,
+        default=_DEFAULT_OPEN_DURATION_SECONDS,
+        help=f"Run length in seconds for --open (default {_DEFAULT_OPEN_DURATION_SECONDS}).",
+    )
     parser.add_argument("--self-check", action="store_true", help="Run the parser self-check and exit.")
     return parser.parse_args(argv)
+
+
+def _parse_open_target(value: str) -> tuple[int, int]:
+    """Parse an ADDR:PORT pair, raising ValueError on anything else."""
+    addr_text, _, port_text = value.partition(":")
+    addr, port = int(addr_text), int(port_text)
+    if addr < 1 or port < 1:
+        raise ValueError("addr and port are 1-based")
+    return addr, port
 
 
 def _resolve_password() -> str:
@@ -246,6 +273,27 @@ async def _run_dump(args: argparse.Namespace, password: str) -> int:
         sys.stdout.flush()
 
         await mqtt_client.async_start()
+
+        if args.open:
+            # Settle first: the supervisor connects in its own task, and a
+            # command sent before the socket is up would be answered by a push
+            # this session is not yet listening for.
+            await asyncio.sleep(_CONNECT_SETTLE_SECONDS)
+            addr, port = _parse_open_target(args.open)
+            print(f"[{_stamp()}] opening addr={addr} port={port} for {args.open_duration}s")
+            sys.stdout.flush()
+            response = await client.control_work_mode(
+                mid=hub["mid"],
+                addr=addr,
+                device_name=hub["deviceName"],
+                product_key=hub["productKey"],
+                port=port,
+                mode=1,
+                duration=args.open_duration,
+            )
+            print(f"[{_stamp()}] controlWorkMode returned: {response!r}")
+            sys.stdout.flush()
+
         deadline = time.monotonic() + args.seconds
         try:
             while time.monotonic() < deadline:
