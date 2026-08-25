@@ -63,6 +63,7 @@ _SAMPLE_HUB_FRAME = (
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Build the parser and parse argv."""
     parser = argparse.ArgumentParser(
         description="Dump raw push envelopes from one observer session.",
     )
@@ -120,6 +121,11 @@ def _parse_open_target(value: str) -> tuple[int, int]:
 
 
 def _resolve_password() -> str:
+    """Return the password from the environment, prompting only on a terminal.
+
+    A non-interactive run gets an empty string rather than a blocked prompt, so
+    main can report the missing credential instead of hanging.
+    """
     password = os.environ.get("RAINPOINT_PASSWORD")
     if password:
         return password
@@ -129,6 +135,7 @@ def _resolve_password() -> str:
 
 
 def _stamp() -> str:
+    """Return the local time as HH:MM:SS.mmm, the prefix on every dumped line."""
     return datetime.now().astimezone().strftime("%H:%M:%S.%f")[:-3]
 
 
@@ -167,6 +174,11 @@ def _split_sections(payload: bytes) -> tuple[str | None, list[str]]:
 
 
 def _self_check() -> int:
+    """Exercise the section splitter and the --open parser, with no network.
+
+    Asserts rather than reports: this runs without credentials or hardware, so
+    it is the only check that survives having neither.
+    """
     sys.path.insert(0, str(_REPO_ROOT))
     text, sections = _split_sections(_SAMPLE_HUB_FRAME.encode())
     assert text == _SAMPLE_HUB_FRAME, "raw text should round-trip unchanged"
@@ -202,6 +214,7 @@ async def _collect_hubs(client) -> list[dict]:
 
 
 def _print_inventory(hubs: list[dict]) -> None:
+    """Print one row per hub, carrying the ids --mid and --open need."""
     print(f"{'mid':>10}  {'hid':>8}  {'model':<18}  {'subs':>4}  name")
     for hub in hubs:
         print(
@@ -217,13 +230,21 @@ class _HassShim:
     """The two hass attributes RainPointMqttClient actually touches."""
 
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Hold the loop the client hops onto from paho's network thread."""
         self.loop = loop
 
     async def async_add_executor_job(self, func, *args):
+        """Run a blocking call in the default executor, as Home Assistant does."""
         return await self.loop.run_in_executor(None, func, *args)
 
 
 def _build_dumping_client_class():
+    """Return a client subclass that prints frames instead of routing them.
+
+    Built inside a function so the integration import happens after main has
+    put the repository root on sys.path, which is what lets this run from a
+    checkout with nothing installed.
+    """
     from custom_components.rainpoint.api.mqtt import RainPointMqttClient
 
     class _DumpingMqttClient(RainPointMqttClient):
@@ -235,6 +256,7 @@ def _build_dumping_client_class():
         """
 
         def _dispatch_push(self, topic: str, payload: bytes) -> None:
+            """Print the envelope and its pipe sections, routing nothing."""
             text, sections = _split_sections(payload)
             print(f"\n=== {_stamp()}  len={len(payload)}  topic={topic}")
             print(f"raw: {text}")
@@ -251,6 +273,11 @@ def _build_dumping_client_class():
 
 
 async def _run_dump(args: argparse.Namespace, password: str) -> int:
+    """Log in, bind one observer session, optionally run a zone, and dump what arrives.
+
+    Returns a process exit code: 0 after a completed watch or an inventory
+    listing, 2 for a hub that cannot carry a session.
+    """
     import aiohttp
 
     from custom_components.rainpoint.api.client import RainPointClient
@@ -327,6 +354,7 @@ async def _run_dump(args: argparse.Namespace, password: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Validate arguments and credentials, then run the dump."""
     args = _parse_args(argv)
     if args.self_check:
         return _self_check()

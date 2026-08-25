@@ -849,6 +849,8 @@ class TestSubDeviceEnvelopeMidCrossCheck:
     """
 
     def test_envelope_naming_another_hub_is_dropped(self, caplog):
+        """A well-formed envelope carrying real readings is still refused when
+        its section 1 names a hub this client was not built for."""
         coordinator = MagicMock()
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
 
@@ -862,6 +864,7 @@ class TestSubDeviceEnvelopeMidCrossCheck:
         assert any("frame mid mismatch" in r.message for r in caplog.records)
 
     def test_envelope_naming_this_hub_is_dispatched(self):
+        """The same envelope naming this client's own hub reaches the coordinator."""
         coordinator = MagicMock()
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
 
@@ -893,6 +896,8 @@ class TestSubDeviceEnvelopeMidCrossCheck:
         ],
     )
     def test_envelope_without_a_usable_identity_section_is_dropped(self, param, caplog):
+        """No readable section 1 means no attribution, so the envelope is refused
+        rather than falling back to the construction-supplied mid."""
         coordinator = MagicMock()
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
         payload = json.dumps({"method": "thing.service.property.set", "params": {"param": param}, "version": "1.0.0"}).encode()
@@ -904,6 +909,7 @@ class TestSubDeviceEnvelopeMidCrossCheck:
         assert any("carries no identity section" in r.message for r in caplog.records)
 
     def test_mid_tail_helper_reads_section_one_of_a_captured_envelope(self):
+        """The helper returns section 1 verbatim, at the width the capture showed."""
         payload = _captured_push_payload({"D01": "11#ab"}, mid=236547)
         tail = mqtt_module._push_envelope_mid_tail(payload)
 
