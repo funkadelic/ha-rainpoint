@@ -195,12 +195,13 @@ class TestTwoHubsInOneHome:
         assert mids == {MID_A, MID_B}
 
     @pytest.mark.asyncio
-    async def test_the_push_diagnostics_stay_single_instance(self, hass):
-        """One push entity of each kind across both hubs, because the client binds to one.
+    async def test_the_push_diagnostics_cover_both_hubs(self, hass):
+        """One push entity of each kind per hub, and the ids stay distinct.
 
-        A property of how the push hub is resolved rather than of the id shape,
-        and it has to survive the re-key rather than doubling with everything
-        else.
+        A property of how the push hub is resolved rather than of the id shape.
+        These used to be single-instance because push reached one hub; both
+        hubs are covered now, so this is the case where the re-key has to hold:
+        two hubs each carrying a pair means four ids that must not collide.
         """
         import importlib
 
@@ -222,8 +223,10 @@ class TestTwoHubsInOneHome:
 
         connected = [e for e in captured if isinstance(e, RainPointPushConnectedBinarySensor)]
         last_message = [e for e in captured if isinstance(e, RainPointPushLastMessageSensor)]
-        assert len(connected) == 1
-        assert len(last_message) == 1
+        assert sorted(e._hub_info["mid"] for e in connected) == sorted([MID_A, MID_B])
+        assert sorted(e._hub_info["mid"] for e in last_message) == sorted([MID_A, MID_B])
+        ids = [e._attr_unique_id for e in connected + last_message]
+        assert len(set(ids)) == len(ids)
 
     @pytest.mark.asyncio
     async def test_both_entity_sets_survive_real_registration(self, hass, entity_registry):

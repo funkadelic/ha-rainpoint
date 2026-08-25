@@ -429,6 +429,11 @@ class RainPointMqttClient:
         self._paho = None
         self._message_count = 0
         self._last_message_at: float | None = None
+        # Per-hub liveness, keyed by the mid a frame named. Distinct from
+        # _last_message_at, which is stamped before any parse so an
+        # undecodable payload still proves the pipe is alive: a frame that
+        # cannot be attributed advances the session clock and no hub's.
+        self._last_message_at_by_mid: dict[int, float] = {}
         self._connected = False
         # One-shot-per-shape bookkeeping: dies with the client rather
         # than living for the process, and is bounded absolutely by
@@ -476,6 +481,16 @@ class RainPointMqttClient:
         return self._connected
 
     # --- observability state listeners ---
+
+    def last_message_at_for(self, mid) -> float | None:
+        """Return when a frame naming this mid last arrived, or None.
+
+        One session carries every hub on the account, so "is push up" and "is
+        this hub sending" are different questions. The session clock answers
+        the first and this answers the second, which is the only one that goes
+        quiet when a single hub stops reporting.
+        """
+        return self._last_message_at_by_mid.get(mid)
 
     def add_state_listener(self, listener: Callable[[], None]) -> None:
         """Register a callback fired whenever connection state or liveness changes.
@@ -841,6 +856,16 @@ class RainPointMqttClient:
             return True
         return False
 
+    def _note_hub_activity(self, mid: int) -> None:
+        """Stamp the per-hub liveness clock for a frame that resolved to a mid.
+
+        Called from each handler after the frame is attributed and before it
+        reaches the coordinator, so a frame dropped for having no readable
+        identity never advances any hub's clock.
+        """
+        self._last_message_at_by_mid[mid] = self._time_source()
+        self._notify_state_listeners()
+
     def _handle_subdevice_updates(self, updates: list[tuple[str, str, int]], payload: bytes) -> None:
         """Route a recognized sub-device envelope to apply_push_update.
 
@@ -867,6 +892,7 @@ class RainPointMqttClient:
             return
         if self._drop_if_no_coordinator():
             return
+        self._note_hub_activity(mid)
         for sid, raw_value, device_ts in updates:
             self._coordinator.apply_push_update(mid, sid, raw_value, device_ts)
 
@@ -884,6 +910,7 @@ class RainPointMqttClient:
             return
         if self._drop_if_no_coordinator():
             return
+        self._note_hub_activity(mid)
         self._coordinator.apply_hub_push_update(mid, frame.connected, frame.changed_ts)
 
     def _dispatch_push(self, topic: str, payload: bytes) -> None:

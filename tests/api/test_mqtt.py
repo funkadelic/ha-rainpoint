@@ -405,7 +405,9 @@ def _push_param_payload(inner):
     return _push_outer(params={"param": param})
 
 
-def _make_push_client(hass, fake_paho, coordinator, hub_mid=_DEFAULT_TEST_HUB_MID) -> RainPointMqttClient:
+def _make_push_client(
+    hass, fake_paho, coordinator, hub_mid=_DEFAULT_TEST_HUB_MID, time_source=lambda: 1000.0
+) -> RainPointMqttClient:
     """Build an MQTT client wired to a coordinator and a fixed hub mid."""
     rainpoint_client = MagicMock()
     rainpoint_client.get_subscribe_status = AsyncMock(return_value=_fake_creds())
@@ -419,7 +421,7 @@ def _make_push_client(hass, fake_paho, coordinator, hub_mid=_DEFAULT_TEST_HUB_MI
         coordinator=coordinator,
         hub_mid=hub_mid,
         paho_client_factory=factory,
-        time_source=lambda: 1000.0,
+        time_source=time_source,
     )
 
 
@@ -894,6 +896,21 @@ class TestSubDeviceEnvelopeMidAttribution:
 
         assert coordinator.apply_push_update.call_count == 2
         assert {call.args[0] for call in coordinator.apply_push_update.call_args_list} == {361277}
+
+    def test_per_hub_clock_advances_only_for_the_hub_a_frame_names(self):
+        """One session carries every hub, so the per-hub clock is what tells a
+        quiet hub apart from a quiet channel."""
+        coordinator = MagicMock()
+        clock = iter([100.0, 200.0, 300.0])
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547, time_source=lambda: next(clock))
+
+        assert client.last_message_at_for(236547) is None
+        assert client.last_message_at_for(361277) is None
+
+        client._dispatch_push("topic", _captured_push_payload({"D01": "11#ab"}, mid=361277))
+
+        assert client.last_message_at_for(361277) == 100.0
+        assert client.last_message_at_for(236547) is None
 
     @pytest.mark.parametrize(
         "param",

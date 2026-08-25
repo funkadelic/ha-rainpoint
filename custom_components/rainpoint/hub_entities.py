@@ -29,7 +29,6 @@ from .const import (
 )
 from .coordinator import (
     RainPointCoordinator,
-    first_hub_record,
     hub_connected_flag,
     hub_connectivity_record,
     is_hub_record,
@@ -63,35 +62,30 @@ def hub_record_for_mid(coordinator: RainPointCoordinator, mid) -> dict:
     return {}
 
 
-def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client) -> list[dict]:
-    """Return the hub(s) the push diagnostics belong to.
+def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator) -> list[dict]:
+    """Return every real hub, for building one pair of push diagnostics each.
 
-    The MQTT client is built for exactly one hub, so the connection and
-    last-message diagnostics are created only for that bound hub. Creating one
-    per configured hub would make every hub on a multi-hub account display the
-    shared client's state, even though push only ever targets the bound hub.
+    This used to return only the hub the MQTT client was built for, because
+    push reached that hub alone and showing the shared client's state on a
+    second hub would have claimed coverage it did not have. The session is
+    account-scoped and frames are now routed by the mid they name, so every
+    hub really is covered and each gets its own pair.
+
+    The two entities answer different questions, which is why the pair is
+    per-hub rather than one shared pair somewhere. Push Connected is the
+    session's state, so it reads the same on every hub: it says this hub is
+    covered by a channel that is up. Push Last Message is per hub, so it goes
+    quiet when that one hub stops reporting while the others carry on.
     """
-    hubs = _hub_records(coordinator)
-    if not hubs:
-        return []
-    bound_mid = getattr(mqtt_client, "hub_mid", None)
-    if bound_mid is not None:
-        match = next((hub for hub in hubs if hub.get("mid") == bound_mid), None)
-        if match is not None:
-            return [match]
-    # No mid to match on (or no matching hub): fall back to the first real hub,
-    # which is the one the client was built from. A Bluetooth wrapper record can
-    # occupy slot 0 without being a hub at all.
-    fallback = first_hub_record(hubs)
-    return [fallback] if fallback is not None else []
+    return [hub for hub in _hub_records(coordinator) if is_hub_record(hub)]
 
 
 def resolve_connectivity_hubs(coordinator: RainPointCoordinator) -> list[dict]:
     """Return every real hub, for building one cloud-connectivity entity each.
 
-    Unlike resolve_push_diagnostic_hubs, which returns only the single hub
-    the shared MQTT client is bound to, this returns every real hub: cloud
-    connectivity is a per-hub fact, not a property of the single MQTT client.
+    Cloud connectivity is a per-hub fact the poll reports directly, rather
+    than anything the MQTT client knows, so this stays separate from
+    resolve_push_diagnostic_hubs even though both now cover every hub.
     """
     return [hub for hub in _hub_records(coordinator) if is_hub_record(hub)]
 
@@ -458,8 +452,8 @@ class RainPointPushLastMessageSensor(_RainPointPushDiagnosticBase, SensorEntity)
 
     @property
     def native_value(self) -> datetime | None:
-        """Return the last-message time as an absolute UTC datetime, or None."""
-        last = self._mqtt_client.last_message_at
+        """Return this hub's last-message time as an absolute UTC datetime, or None."""
+        last = self._mqtt_client.last_message_at_for(self._hub_info.get("mid"))
         if last is None:
             return None
         age = self._time_source() - last

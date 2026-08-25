@@ -134,8 +134,7 @@ async def async_setup_entry(
     ]
     if mqtt_client is not None:
         entities.extend(
-            RainPointPushConnectedBinarySensor(mqtt_client, hub_info)
-            for hub_info in resolve_push_diagnostic_hubs(coordinator, mqtt_client)
+            RainPointPushConnectedBinarySensor(mqtt_client, hub_info) for hub_info in resolve_push_diagnostic_hubs(coordinator)
         )
 
     def build(key: str, info: dict) -> list:

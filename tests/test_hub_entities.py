@@ -67,7 +67,14 @@ class TestHubRecordForMid:
 
 
 class TestResolvePushDiagnosticHubs:
-    """resolve_push_diagnostic_hubs binds the diagnostics to the client's one hub."""
+    """resolve_push_diagnostic_hubs covers every real hub on the account.
+
+    It used to return the single hub the MQTT client was built for, because
+    push reached that hub alone. The session is account-scoped and frames are
+    routed by the mid they name, so every hub is covered and each gets its own
+    pair of diagnostics. The client is no longer a parameter: there is nothing
+    left for the resolver to ask it.
+    """
 
     @staticmethod
     def _coord(hubs):
@@ -76,56 +83,34 @@ class TestResolvePushDiagnosticHubs:
         return coord
 
     def test_no_hubs_returns_empty(self):
-        assert resolve_push_diagnostic_hubs(self._coord([]), MagicMock()) == []
+        assert resolve_push_diagnostic_hubs(self._coord([])) == []
 
     def test_none_data_returns_empty(self):
         coord = MagicMock()
         coord.data = None
-        assert resolve_push_diagnostic_hubs(coord, MagicMock()) == []
+        assert resolve_push_diagnostic_hubs(coord) == []
 
-    def test_returns_only_the_hub_matching_the_client_mid(self):
-        hubs = [{"mid": 111}, {"mid": 222}, {"mid": 333}]
-        client = MagicMock()
-        client.hub_mid = 222
-        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 222}]
+    def test_every_real_hub_gets_diagnostics(self):
+        hubs = [{"mid": 236547, "did": "17053410"}, {"mid": 361277, "did": "17051777"}]
+        assert resolve_push_diagnostic_hubs(self._coord(hubs)) == hubs
 
-    def test_falls_back_to_first_hub_when_mid_is_none(self):
-        """With no bound mid to match on, the first real hub is used."""
-        hubs = [{"mid": 111, "did": "d111"}, {"mid": 222, "did": "d222"}]
-        client = MagicMock()
-        client.hub_mid = None
-        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111, "did": "d111"}]
+    def test_skips_a_record_with_no_hub_identity(self):
+        """A Bluetooth wrapper carries no identity fields and is not a hub.
 
-    def test_falls_back_to_first_hub_when_no_hub_matches(self):
-        """A bound mid matching no hub falls back to the first real hub."""
-        hubs = [{"mid": 111, "did": "d111"}, {"mid": 222, "did": "d222"}]
-        client = MagicMock()
-        client.hub_mid = 999  # no such hub
-        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 111, "did": "d111"}]
-
-    def test_fallback_skips_a_record_with_no_hub_identity(self):
-        """A Bluetooth wrapper in slot 0 must not be mistaken for the bound hub.
-
-        Pairing a Bluetooth valve adds a parent record whose identity fields are
-        all empty strings. Taking hubs[0] blindly returned that record.
+        Pairing a Bluetooth valve adds a parent record whose identity fields
+        are all empty strings. It must not collect push diagnostics of its own.
         """
-        hubs = [{"mid": 346965, "did": "", "mac": "", "productKey": "", "model": ""}, {"mid": 236547, "did": "17053410"}]
-        client = MagicMock()
-        client.hub_mid = None
-        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 236547, "did": "17053410"}]
+        wrapper = {"mid": 346965, "did": "", "mac": "", "productKey": "", "model": ""}
+        real = {"mid": 236547, "did": "17053410"}
+        assert resolve_push_diagnostic_hubs(self._coord([wrapper, real])) == [real]
 
-    def test_fallback_returns_nothing_when_no_record_is_a_hub(self):
-        """All-wrapper hub list yields no push diagnostics rather than a phantom one."""
+    def test_returns_nothing_when_no_record_is_a_hub(self):
         hubs = [{"mid": 346965, "did": "", "mac": "", "productKey": "", "model": ""}]
-        client = MagicMock()
-        client.hub_mid = None
-        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == []
+        assert resolve_push_diagnostic_hubs(self._coord(hubs)) == []
 
     def test_accepts_dict_shaped_hubs(self):
-        hubs = {"a": {"mid": 111}, "b": {"mid": 222}}
-        client = MagicMock()
-        client.hub_mid = 222
-        assert resolve_push_diagnostic_hubs(self._coord(hubs), client) == [{"mid": 222}]
+        hubs = {"a": {"mid": 111, "did": "d111"}, "b": {"mid": 222, "did": "d222"}}
+        assert resolve_push_diagnostic_hubs(self._coord(hubs)) == [{"mid": 111, "did": "d111"}, {"mid": 222, "did": "d222"}]
 
 
 class TestResolveConnectivityHubs:
@@ -787,12 +772,18 @@ class TestRainPointHubBroadcastButton:
 
 
 class TestRainPointPushLastMessageSensor:
-    """Tests for the push last-message-age timestamp entity."""
+    """Tests for the push last-message-age timestamp entity.
+
+    The entity reads its OWN hub's clock, not the session's. One session
+    carries every hub, so a session-wide value would show a busy hub's
+    traffic on a hub that has gone quiet, which is the reading this entity
+    exists to make visible.
+    """
 
     def _make(self, last_message_at=None, now=1000.0):
         """Build the entity with an injected monotonic clock for deterministic age math."""
         mqtt_client = MagicMock()
-        mqtt_client.last_message_at = last_message_at
+        mqtt_client.last_message_at_for.return_value = last_message_at
         entity = RainPointPushLastMessageSensor(
             mqtt_client,
             _make_hub_info(),
@@ -804,6 +795,14 @@ class TestRainPointPushLastMessageSensor:
         """No message yet -> native_value is None."""
         entity, _ = self._make(last_message_at=None)
         assert entity.native_value is None
+
+    def test_reads_the_clock_for_its_own_hub(self):
+        """A quiet hub reads None while the session is busy elsewhere."""
+        entity, mqtt_client = self._make(last_message_at=None)
+        mqtt_client.last_message_at = 970.0  # session clock, must not be used
+
+        assert entity.native_value is None
+        mqtt_client.last_message_at_for.assert_called_once_with(_make_hub_info()["mid"])
 
     def test_native_value_is_message_wall_clock_time(self):
         """A monotonic last-message value converts to an absolute UTC datetime in the past."""
