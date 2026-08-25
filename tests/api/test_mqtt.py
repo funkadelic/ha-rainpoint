@@ -34,7 +34,14 @@ def _fake_creds(device_name="name-A", product_key="pk123") -> dict:
     }
 
 
-def _make_mqtt_client(hass, paho_instance, creds=None) -> RainPointMqttClient:
+# The mid _make_push_client binds by default. Shared with _captured_push_payload
+# so a payload built for the default client names that client's own hub: the
+# dispatcher cross-checks the two, and a mismatch here would only ever mean the
+# fixtures disagreed with each other.
+_DEFAULT_TEST_HUB_MID = 4242
+
+
+def _make_mqtt_client(hass, paho_instance, creds=None, hub_mid=_DEFAULT_TEST_HUB_MID) -> RainPointMqttClient:
     """Make an MQTT client wired to a fake paho instance via an injected factory."""
     rainpoint_client = MagicMock()
     rainpoint_client.get_subscribe_status = AsyncMock(return_value=creds or _fake_creds())
@@ -47,6 +54,7 @@ def _make_mqtt_client(hass, paho_instance, creds=None) -> RainPointMqttClient:
         entry=MagicMock(),
         hub_device_name="hub-device",
         hub_product_key="hub-pk",
+        hub_mid=hub_mid,
         paho_client_factory=factory,
         time_source=lambda: 1000.0,
     )
@@ -354,18 +362,24 @@ class TestSecretRedaction:
         assert "RainPoint MQTT connecting" in emitted
 
 
-def _captured_push_payload(subdevices, ts=1784707302285):
+def _captured_push_payload(subdevices, ts=1784707302285, mid=_DEFAULT_TEST_HUB_MID):
     """Build a realistic captured-shape push payload from the confirmed envelope.
 
     subdevices maps sid -> raw_value ("11#..." TLV strings). The "update"/"state"
     housekeeping keys are included so tests prove they are ignored.
+
+    Section 1 carries the mid in its last six characters, which the 2026-08-25
+    capture confirmed a real sub-device envelope does. It used to be 30 zeros,
+    which was only ever "some 32-character section"; a payload whose identity
+    slot names no hub cannot exercise the cross-check the dispatcher now runs.
+    Pass a different mid to build a frame belonging to another hub.
     """
     inner = {sid: {"time": ts, "value": value} for sid, value in subdevices.items()}
     inner["update"] = {"time": ts, "value": 1}
     inner["state"] = {"time": ts, "value": "0,-56"}
     param = "|".join(
         [
-            "#P" + "0" * 30,
+            "#P" + "0" * 24 + f"{mid:06d}",
             json.dumps(inner),
             str(ts),
             "abcdef012345#",
@@ -391,7 +405,7 @@ def _push_param_payload(inner):
     return _push_outer(params={"param": param})
 
 
-def _make_push_client(hass, fake_paho, coordinator, hub_mid=4242) -> RainPointMqttClient:
+def _make_push_client(hass, fake_paho, coordinator, hub_mid=_DEFAULT_TEST_HUB_MID) -> RainPointMqttClient:
     """Build an MQTT client wired to a coordinator and a fixed hub mid."""
     rainpoint_client = MagicMock()
     rainpoint_client.get_subscribe_status = AsyncMock(return_value=_fake_creds())
@@ -813,7 +827,7 @@ class TestHubFrameRouting:
         coordinator = MagicMock()
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
 
-        subdevice_payload = _captured_push_payload({"D01": "11#" + "0a1b" * 28})
+        subdevice_payload = _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=SAMPLE_HUB_FRAME_MID)
         client._dispatch_push("topic", subdevice_payload)
         coordinator.apply_push_update.assert_called_once()
         coordinator.apply_hub_push_update.assert_not_called()
@@ -822,6 +836,88 @@ class TestHubFrameRouting:
         client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
         coordinator.apply_hub_push_update.assert_called_once()
         coordinator.apply_push_update.assert_not_called()
+
+
+class TestSubDeviceEnvelopeMidCrossCheck:
+    """A sub-device envelope is attributed only after its own section-1 mid is
+    checked against the hub this client was built for.
+
+    The observer session is account-scoped (captured 2026-08-25: a second hub's
+    frame arrived on the first hub's session), and sids are per-hub indices, so
+    an unchecked foreign frame lands on whichever device this hub holds at the
+    same addr and is decoded against that device's model.
+    """
+
+    def test_envelope_naming_another_hub_is_dropped(self, caplog):
+        """A well-formed envelope carrying real readings is still refused when
+        its section 1 names a hub this client was not built for."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
+
+        # A well-formed envelope carrying real readings, from the other hub.
+        payload = _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=361277)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.mqtt"):
+            client._dispatch_push("topic", payload)
+
+        coordinator.apply_push_update.assert_not_called()
+        assert any("frame mid mismatch" in r.message for r in caplog.records)
+
+    def test_envelope_naming_this_hub_is_dispatched(self):
+        """The same envelope naming this client's own hub reaches the coordinator."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
+
+        client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=236547))
+
+        coordinator.apply_push_update.assert_called_once()
+        # The construction-supplied mid is still what reaches the coordinator;
+        # the parsed tail gates the dispatch and is never handed on.
+        assert coordinator.apply_push_update.call_args.args[0] == 236547
+
+    def test_same_addr_on_another_hub_cannot_overwrite_this_hubs_device(self):
+        """The concrete corruption this guard exists for: both hubs have a
+        device at addr 1, so an unchecked D01 from the other hub would be
+        merged onto this hub's addr 1."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
+
+        client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "dead" * 28}, mid=361277))
+
+        coordinator.apply_push_update.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "param",
+        [
+            # No #P prefix on section 1.
+            'XX000000000000000000000004242|{"D01": {"time": 1, "value": "11#ab"}}|1|2#',
+            # Only three sections, so no identity slot can be trusted.
+            '#P000000000000000000000004242|{"D01": {"time": 1, "value": "11#ab"}}|1#',
+        ],
+    )
+    def test_envelope_without_a_usable_identity_section_is_dropped(self, param, caplog):
+        """No readable section 1 means no attribution, so the envelope is refused
+        rather than falling back to the construction-supplied mid."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator)
+        payload = json.dumps({"method": "thing.service.property.set", "params": {"param": param}, "version": "1.0.0"}).encode()
+
+        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.mqtt"):
+            client._dispatch_push("topic", payload)
+
+        coordinator.apply_push_update.assert_not_called()
+        assert any("carries no identity section" in r.message for r in caplog.records)
+
+    def test_mid_tail_helper_reads_section_one_of_a_captured_envelope(self):
+        """The helper returns section 1 verbatim, at the width the capture showed."""
+        payload = _captured_push_payload({"D01": "11#ab"}, mid=236547)
+        tail = mqtt_module._push_envelope_mid_tail(payload)
+
+        assert tail is not None
+        assert tail.startswith("#P")
+        assert tail.endswith("236547")
+        # 2 prefix + 12 stamp + 4 fixed + 8 account + 6 mid, per the capture.
+        assert len(tail) == 32
 
 
 class TestUnrecognisedShapeLogging:
