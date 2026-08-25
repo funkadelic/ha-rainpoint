@@ -279,14 +279,23 @@ def _hub_frame_mid_matches(mid_tail: str, own: str) -> bool:
     replaced, which is why the swap is a no-op; neither is a regression.
 
     That residual is accepted rather than engineered away: no capture has
-    produced a mid of any width but the observed one, rejecting every frame
-    of an unobserved width would silently disable the feature for it, and the
-    observer topic is per-hub so cross-delivery is hypothetical.
+    produced a mid of any width but the observed one, and rejecting every
+    frame of an unobserved width would silently disable the feature for it.
     The unobserved-width case is logged so it is at least visible.
 
-    Defense in depth against a broker that ever cross-delivers, never a
-    source of the mid: the mid handed to the coordinator is always the
-    construction-supplied one.
+    CROSS-DELIVERY IS OBSERVED, NOT HYPOTHETICAL. An earlier version of this
+    docstring reasoned that the observer topic was per-hub, and on that basis
+    called this test defense in depth against a broker that might one day
+    cross-deliver. A 2026-08-25 capture on a two-hub account disproved it: a
+    hub disconnect frame whose section-1 tail named the second hub was
+    delivered to the session built for the first, on that session's own
+    observer topic, and this test is what dropped it. The observer topic is
+    account-scoped. This test is therefore load-bearing rather than
+    belt-and-braces, and the width residual above is the size of the hole
+    left in a guard that is now doing real work.
+
+    Never a source of the mid: the mid handed to the coordinator is always
+    the construction-supplied one.
     """
     if len(own) != MQTT_PUSH_HUB_FRAME_MID_WIDTH:
         _LOGGER.debug(
@@ -833,6 +842,18 @@ class RainPointMqttClient:
         drop path logs a truncated payload preview at DEBUG so an
         unrecognized downlink can still be diagnosed. Handled pushes of
         either family never have their contents logged.
+
+        KNOWN GAP, established by the same 2026-08-25 capture that disproved
+        the per-hub observer topic (see _hub_frame_mid_matches). The hub-frame
+        branch below cross-checks the frame's own mid before consuming it. The
+        sub-device branch has nothing to cross-check against: the envelope's
+        sub-device sections carry no hub identity this parser reads, so every
+        reading is stamped with self._hub_mid by construction. On a multi-hub
+        account a sub-device frame belonging to another hub is therefore
+        attributed to this client's hub, and because sids are per-hub indices
+        (D1 -> addr 1) it lands on whichever device this hub holds at that
+        addr, decoded against that device's model. Unreachable only while
+        every other hub on the account has no sub-devices of its own.
         """
         updates = _parse_push_envelope(payload)
         if updates:
