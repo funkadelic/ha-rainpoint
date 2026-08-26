@@ -186,7 +186,7 @@ class RainPointFirmwareVersionSensor(RainPointDiagnosticSensorBase):
 
 
 class RainPointLastUpdatedSensor(RainPointDiagnosticSensorBase):
-    """When this device's readings last changed, which is not when it was last heard from.
+    """When this device's readings last changed or it last restarted, not when it was last heard from.
 
     Named "Last Updated" until 2026-08-25, and that name caused a misdiagnosis
     worth recording here. The field is the RainPoint app's "last acquisition
