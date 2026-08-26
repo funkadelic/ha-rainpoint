@@ -2221,6 +2221,10 @@ class TestTopicKindKeepsIdentifiersOutOfTheLog:
             "/sys/pk/dn",
             "notatopic",
             "sys/pk/dn/thing/service/property/set",
+            "/sys/pk/dn/",
+            "/sys//dn/thing/service/property/set",
+            "/sys/pk//thing/service/property/set",
+            "/sys/pk/dn/thing//property/set",
             None,
             b"/sys/pk/dn/thing/service/property/set",
         ],
@@ -2233,15 +2237,56 @@ class TestTopicKindKeepsIdentifiersOutOfTheLog:
         """
         assert _topic_kind(topic) == "unrecognized"
 
-    def test_no_raw_topic_reaches_any_log_call(self):
+    def test_no_logger_call_takes_the_raw_topic_as_an_argument(self):
         """Pins the fix at the call sites, not just in the helper.
 
-        A later log line that formats `topic` directly would pass every test
-        above while reintroducing exactly the leak they describe.
+        Walks the AST rather than the text. The first version of this test
+        scanned lines containing "_LOGGER." for a bare `topic` argument, which
+        could not see the three multiline calls at all: their arguments sit on
+        their own lines, so swapping `_topic_kind(topic)` back to `topic` there
+        would have passed. The AST sees a call's arguments wherever they are
+        written.
         """
-        source = Path(mqtt_module.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(Path(mqtt_module.__file__).read_text(encoding="utf-8"))
 
-        assert "topic=%s" not in source
-        for line in source.splitlines():
-            if "_LOGGER." in line:
-                assert " topic," not in line, line
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "_LOGGER"):
+                continue
+            for arg in node.args:
+                if isinstance(arg, ast.Name) and arg.id == "topic":
+                    offenders.append(node.lineno)
+
+        assert offenders == [], f"raw topic passed to a logging call at line(s) {offenders}"
+
+    @pytest.mark.asyncio
+    async def test_the_info_announcement_carries_neither_identifier(self, caplog):
+        """The INFO branch is the one that reaches the default Home Assistant log.
+
+        Driven end to end rather than asserted on the helper, because this is the
+        record a user pastes into an issue without ever enabling debug logging.
+        """
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+        await client.async_start()
+        await _settle()
+
+        payload = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
+
+        with caplog.at_level(logging.DEBUG):
+            client._on_message(fake_paho, None, msg)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        assert caplog.records, "the unrecognized-shape path logged nothing"
+        for record in caplog.records:
+            assert "pk123" not in record.message
+            assert "name-A" not in record.message
+
+        await client.async_disconnect()

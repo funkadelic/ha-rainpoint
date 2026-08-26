@@ -362,7 +362,11 @@ def _topic_kind(topic) -> str:
     the mid a frame concerns is already logged by the decode path that consumes it.
     """
     parts = topic.split("/") if isinstance(topic, str) else []
-    if len(parts) >= 5 and parts[0] == "" and parts[1] == "sys":
+    # Every segment has to be non-empty, not just the right number of them.
+    # "/sys/pk/dn/" splits to five parts and would otherwise be "recognized",
+    # returning an empty string and logging a blank topic_kind, which is the one
+    # outcome the placeholder exists to prevent.
+    if len(parts) >= 5 and parts[0] == "" and parts[1] == "sys" and parts[2] and parts[3] and all(parts[4:]):
         return "/".join(parts[4:])
     return "unrecognized"
 
