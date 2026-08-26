@@ -425,6 +425,12 @@ class RainPointClient:
             if resp.status != 200:
                 raise RainPointApiError(f"get_hub_firmware_info HTTP {resp.status}")
             data = await resp.json()
+        # A non-object body would make every .get below raise AttributeError, and
+        # this method's caller treats an escaping exception as fatal to the entity
+        # rather than to one poll, so it is turned into the error type that caller
+        # already handles.
+        if not isinstance(data, dict):
+            raise RainPointApiError(f"get_hub_firmware_info returned {type(data).__name__}, not an object")
         _LOGGER.debug("API response: get_hub_firmware_info code=%s", data.get("code"))
         if data.get("code") != 0:
             self._maybe_invalidate_token(data.get("code"), request_token)

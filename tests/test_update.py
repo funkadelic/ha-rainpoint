@@ -194,6 +194,22 @@ class TestFirmwareUpdateEntity:
         assert entity.latest_version is None
 
     @pytest.mark.asyncio
+    async def test_malformed_info_is_not_read_as_up_to_date(self):
+        """A non-null "info" that is not an object must never render as current.
+
+        Non-null is the contract's way of saying an upgrade exists. Falling back
+        to the installed version for a shape nobody can parse would put a green
+        tick on a hub that has an upgrade waiting, which is the one wrong answer
+        worse than saying nothing.
+        """
+        entity, _client = _make_entity({"info": "unexpected", "softVer": "1.1.1032"})
+
+        await entity.async_update()
+
+        assert entity.installed_version == "1.1.1032"
+        assert entity.latest_version is None
+
+    @pytest.mark.asyncio
     async def test_empty_soft_ver_is_treated_as_no_version(self):
         """This cloud sends "" rather than omitting a key, so "" is not a version.
 
@@ -318,6 +334,20 @@ class TestGetHubFirmwareInfo:
 
         assert client._session.get.call_args.kwargs["params"] == {"mid": 361277}
         assert client._session.get.call_args[0][0].endswith("/app/device/firmware/upgrade/info/v2")
+
+    @pytest.mark.asyncio
+    async def test_non_object_body_raises_rather_than_attribute_error(self):
+        """A JSON body that is not an object must not reach .get().
+
+        An AttributeError here would escape async_update, which catches the
+        transport family and not that, and an exception escaping the first update
+        destroys the entity for the rest of the run.
+        """
+        client = _logged_in_client()
+        client._session.get = MagicMock(return_value=mock_json_response(["unexpected"]))
+
+        with pytest.raises(RainPointApiError, match="not an object"):
+            await client.get_hub_firmware_info(361277)
 
     @pytest.mark.asyncio
     async def test_http_error_raises(self):

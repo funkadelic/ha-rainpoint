@@ -94,14 +94,21 @@ class RainPointHubFirmwareUpdate(UpdateEntity, RainPointHubDevice):
 
         installed = data.get("softVer")
         info = data.get("info")
-        # Keyed on "info" being present rather than on versionName being truthy.
-        # A null "info" is the cloud saying this hub is current, and the envelope
-        # is byte-identical either way, so its presence is the entire signal;
-        # echoing the installed version there is what renders as "up to date".
-        # An offer that arrives without a version is malformed, and falling back
-        # to the installed version for it would render a real upgrade as up to
-        # date, so it is left unset and shows as unknown instead.
-        offered = info.get("versionName") if isinstance(info, dict) else installed
+        if info is None:
+            # The cloud saying this hub is current. The envelope is byte-identical
+            # either way, so a null "info" is the entire signal, and echoing the
+            # installed version is what renders as "up to date".
+            offered = installed
+        elif isinstance(info, dict):
+            # An offer with no version in it is malformed. Leaving latest unset
+            # shows unknown, which beats echoing the installed version and
+            # rendering a real upgrade as up to date.
+            offered = info.get("versionName")
+        else:
+            # Non-null but not an object. Non-null is the contract's way of saying
+            # an upgrade exists, so this must not fall back to the installed
+            # version and report the hub as current.
+            offered = None
 
         # Truthiness rather than "is not None" throughout: this cloud sends ""
         # rather than omitting a key, which is the shape is_hub_record was written
