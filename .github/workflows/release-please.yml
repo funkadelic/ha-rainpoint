@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+  # A push event is not guaranteed to arrive. The 1.21.0 release merge landed on
+  # main and fired no push-triggered workflow at all, so no tag was cut and there
+  # was no failed run to re-run. Dispatching is the recovery path, and it needs
+  # no commit to main to reach it. The action is idempotent: a dispatch with no
+  # release pending only re-checks the release PR.
+  workflow_dispatch:
 
 permissions:
   contents: read
