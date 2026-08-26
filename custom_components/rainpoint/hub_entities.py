@@ -29,7 +29,6 @@ from .const import (
 )
 from .coordinator import (
     RainPointCoordinator,
-    first_hub_record,
     hub_connected_flag,
     hub_connectivity_record,
     is_hub_record,
@@ -63,35 +62,35 @@ def hub_record_for_mid(coordinator: RainPointCoordinator, mid) -> dict:
     return {}
 
 
-def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator, mqtt_client) -> list[dict]:
-    """Return the hub(s) the push diagnostics belong to.
+def resolve_push_diagnostic_hubs(coordinator: RainPointCoordinator) -> list[dict]:
+    """Return every real hub, for building one pair of push diagnostics each.
 
-    The MQTT client is built for exactly one hub, so the connection and
-    last-message diagnostics are created only for that bound hub. Creating one
-    per configured hub would make every hub on a multi-hub account display the
-    shared client's state, even though push only ever targets the bound hub.
+    This used to return only the hub the MQTT client was built for, because
+    push reached that hub alone and showing the shared client's state on a
+    second hub would have claimed coverage it did not have. The session is
+    account-scoped and frames are now routed by the mid they name, so every
+    hub really is covered and each gets its own pair.
+
+    The two entities answer different questions, which is why the pair is
+    per-hub rather than one shared pair somewhere. Push Connected is the
+    session's state, so it reads the same on every hub: it says this hub is
+    covered by a channel that is up. Push Last Message is per hub, so it goes
+    quiet when that one hub stops reporting while the others carry on.
+
+    Delegates rather than repeating the comprehension: the two answer different
+    questions and are kept separate so either can diverge, but while the answer
+    is the same it should be computed once, so a change to what counts as a hub
+    cannot reach one set of entities and not the other.
     """
-    hubs = _hub_records(coordinator)
-    if not hubs:
-        return []
-    bound_mid = getattr(mqtt_client, "hub_mid", None)
-    if bound_mid is not None:
-        match = next((hub for hub in hubs if hub.get("mid") == bound_mid), None)
-        if match is not None:
-            return [match]
-    # No mid to match on (or no matching hub): fall back to the first real hub,
-    # which is the one the client was built from. A Bluetooth wrapper record can
-    # occupy slot 0 without being a hub at all.
-    fallback = first_hub_record(hubs)
-    return [fallback] if fallback is not None else []
+    return resolve_connectivity_hubs(coordinator)
 
 
 def resolve_connectivity_hubs(coordinator: RainPointCoordinator) -> list[dict]:
     """Return every real hub, for building one cloud-connectivity entity each.
 
-    Unlike resolve_push_diagnostic_hubs, which returns only the single hub
-    the shared MQTT client is bound to, this returns every real hub: cloud
-    connectivity is a per-hub fact, not a property of the single MQTT client.
+    Cloud connectivity is a per-hub fact the poll reports directly, rather
+    than anything the MQTT client knows, so this stays separate from
+    resolve_push_diagnostic_hubs even though both now cover every hub.
     """
     return [hub for hub in _hub_records(coordinator) if is_hub_record(hub)]
 
@@ -444,6 +443,18 @@ class RainPointPushLastMessageSensor(_RainPointPushDiagnosticBase, SensorEntity)
     steps), so it is converted to an absolute UTC datetime for display by
     subtracting its age from the current wall-clock time. The rendered timestamp
     is stable between reads because the age grows in lockstep with the clock.
+
+    What this no longer covers, since it became per hub: the session clock it
+    used to read was stamped before any parse, so an undecodable payload still
+    advanced it and the entity meant "the pipe is alive". The per-hub clock is
+    stamped only after a frame is attributed to a known hub, so it means "this
+    hub is reporting" instead. A frame family this integration cannot recognize
+    now freezes every one of these while the push watchdog, which still reads
+    the session clock, stays quiet. That is the intended reading, not an
+    oversight: the two surfaces answer different questions on purpose.
+
+    A hub with nothing paired to it has nothing to send between connectivity
+    edges, so this stays None there rather than reporting a fault.
     """
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
@@ -458,8 +469,8 @@ class RainPointPushLastMessageSensor(_RainPointPushDiagnosticBase, SensorEntity)
 
     @property
     def native_value(self) -> datetime | None:
-        """Return the last-message time as an absolute UTC datetime, or None."""
-        last = self._mqtt_client.last_message_at
+        """Return this hub's last-message time as an absolute UTC datetime, or None."""
+        last = self._mqtt_client.last_message_at_for(self._hub_info.get("mid"))
         if last is None:
             return None
         age = self._time_source() - last

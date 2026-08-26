@@ -74,14 +74,18 @@ class TestBinarySensorSetupEntry:
         assert isinstance(entities[0], RainPointHubConnectivityBinarySensor)
 
     @pytest.mark.asyncio
-    async def test_one_connected_entity_bound_to_the_clients_hub(self):
-        """Exactly one push-connected sensor is created, for the hub the single
-        MQTT client is bound to -- not one per configured hub (which would show
-        unrelated hubs the shared client's state). Connectivity entities exist
-        for every hub alongside it, so the assertion is by type, not by count."""
+    async def test_every_hub_gets_a_push_connected_entity(self):
+        """One push-connected sensor per real hub, not one for the whole account.
+
+        It used to be created only for the hub the MQTT client was built for,
+        which understated the coverage: the session is account-scoped and
+        frames are routed by the mid they name, so both hubs are genuinely
+        covered. The entity reports the shared session's state, which is the
+        same answer for every hub.
+        """
         hubs = [_hub(100, "Hub 1", mid=111), _hub(200, "Hub 2", mid=222)]
         client = MagicMock()
-        client.hub_mid = 222  # client is bound to the second hub
+        client.hub_mid = 222
         hass, entry, _coord = _make_hass(hubs=hubs, mqtt_client=client)
         add = MagicMock()
 
@@ -90,9 +94,7 @@ class TestBinarySensorSetupEntry:
         add.assert_called_once()
         entities = add.call_args[0][0]
         push_entities = [e for e in entities if isinstance(e, RainPointPushConnectedBinarySensor)]
-        assert len(push_entities) == 1
-        # Bound to the second hub (mid 222), not the first (mid 111).
-        assert push_entities[0]._hub_info["mid"] == 222
+        assert sorted(e._hub_info["mid"] for e in push_entities) == [111, 222]
 
     @pytest.mark.asyncio
     async def test_no_hubs_adds_no_entities(self):

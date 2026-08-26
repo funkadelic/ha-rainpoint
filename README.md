@@ -193,6 +193,8 @@ Poll and push do different jobs, not the same job at different speeds, which is 
 
 Push carries two kinds of update: new readings from individual devices, and a hub going offline or coming back. The second is what makes [a hub outage](#when-a-hub-goes-offline) visible almost immediately rather than up to two minutes later. This speeds up the Cloud Connection entity and the recovery side, not the Repairs notice itself: that notice waits until the hub has been offline for a few minutes, deliberately, so a brief blip doesn't flap a card on and off.
 
+If your account has more than one hub, push covers all of them over the same single connection, and every update is applied to the hub it came from. Hub online and offline changes are confirmed to arrive this way for every hub. Device readings are expected to as well, and are handled the same way when they do, but that has not yet been confirmed on an account with devices paired to a second hub. Either way polling keeps every hub's readings up to date on the 120-second cadence.
+
 ### Enabling or disabling push
 
 1. Go to **Settings → Devices & Services → RainPoint Cloud → Configure**.
@@ -203,7 +205,7 @@ To turn push back on, revisit the same **Configure** screen and check **Enable p
 
 ### Telling whether push is working
 
-Enabling push adds two hub-level diagnostic entities: **`<hub> Push Connected`** (on when the MQTT client is connected) and **`<hub> Push Last Message`** (timestamp of the last message received). If the push connection drops and stays down while polling keeps devices updating, Home Assistant raises a **Settings → Repairs** issue so you know to look. (A channel that stays connected but quietly stops sending updates looks the same as an idle one, so that case is not flagged.)
+Enabling push adds two diagnostic entities to every hub: **`<hub> Push Connected`** (on when the push connection is up) and **`<hub> Push Last Message`** (when that hub last sent something). With more than one hub, Push Connected reads the same on each, because one connection serves them all, while Push Last Message is that hub's own. A hub with nothing paired to it has nothing to send, so its Push Last Message stays blank until that hub next goes offline or comes back; on a hub with devices, a time noticeably older than the rest means that hub has gone quiet. These entities are created when the integration loads, so a hub you add later gets its pair after you reload the integration. If the push connection drops and stays down while polling keeps devices updating, Home Assistant raises a **Settings → Repairs** issue so you know to look. (A channel that stays connected but quietly stops sending updates looks the same as an idle one, so that case is not flagged.)
 
 A separate case is push never starting in the first place: if push is enabled but the integration can't find a usable hub to connect to, it logs a warning and also raises its own **Settings → Repairs** card so you don't have to be watching the log to notice. Polling keeps your devices updating in the meantime. This check only runs when the integration (re)loads, so after fixing the underlying cause, reload the integration or toggle push off and back on to clear the card.
 

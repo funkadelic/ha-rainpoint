@@ -456,6 +456,32 @@ def _sensor_keys_for_hub_keys(sensor_keys: Iterable[str], hub_keys: AbstractSet[
     return protected
 
 
+def _normalise_hub_mid(hub: dict) -> None:
+    """Coerce a numeric-string mid to int in place, at the one ingestion point.
+
+    Every hub record enters through _collect_hubs, so normalising there is what
+    lets the rest of this module treat mid as an int: the push entry points
+    compare it against the integer _frame_mid parses out of a payload, and
+    hub_connectivity is keyed by it from both the poll and the push side. A
+    string would not just fail to match, it would key the same hub twice.
+
+    Not a hypothetical typing worry. This API is already known to be
+    inconsistent about mid across endpoints: the capture behind
+    update_sub_param showed the app sending it as a string where the sibling
+    main/update endpoint takes an int. Nothing guarantees getDeviceByHid stays
+    on one side of that, and before the push channel read the mid out of the
+    payload the two sides were the same object, so the agreement cost nothing
+    to keep and nothing noticed it was load-bearing.
+
+    Anything that is not a plain decimal string is left exactly as it was.
+    Coercing further would invent a value; leaving it means the record simply
+    fails to match, which is the same fail-safe every other lookup here takes.
+    """
+    raw = hub.get("mid")
+    if isinstance(raw, str) and raw.isascii() and raw.isdecimal():
+        hub["mid"] = int(raw)
+
+
 def is_hub_record(hub: dict) -> bool:
     """Return True when a top-level device record is a real hub.
 
@@ -990,6 +1016,19 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._last_valve_command_at[(sensor_key, zone_num)] = command_dt
         return command_dt
 
+    def knows_hub_mid(self, mid: int) -> bool:
+        """Return whether the last poll discovered a hub with this mid.
+
+        A read-only question the push client asks before stamping its per-hub
+        liveness clock, so a mid it is about to be dropped for cannot advance a
+        clock or take a permanent entry in a map keyed on a payload field.
+
+        Deliberately the same resolution the two apply_*_push_update entry
+        points do, so the two cannot disagree: a mid that would be dropped
+        there must not be counted as activity here.
+        """
+        return any(h.get("mid") == mid for h in (self.data or {}).get("hubs", []))
+
     def apply_push_update(self, mid: int, sid: str, raw_value: str, device_ts: int | None) -> None:
         """Merge a single pushed sub-device reading into coordinator data.
 
@@ -1479,6 +1518,9 @@ class RainPointCoordinator(DataUpdateCoordinator):
             for hub in devices:
                 hub_copy = dict(hub)
                 hub_copy["hid"] = hid
+                # On the copy, never the caller's record: the raw dict is still
+                # handed to _summarize_record below and to the diagnostics path.
+                _normalise_hub_mid(hub_copy)
                 # All devices are RainPoint hardware
                 hub_copy["brand"] = "RainPoint"
                 # The hub record's shape, for diagnosing which hub-level fields

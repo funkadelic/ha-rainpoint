@@ -575,6 +575,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    """Create this entry's sensor entities and register the later-arrival sweeps."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
@@ -599,7 +600,7 @@ async def async_setup_entry(
     # the MQTT client's liveness clock, not coordinator.data).
     mqtt_client = data.get("mqtt_client")
     if mqtt_client is not None:
-        for hub_info in resolve_push_diagnostic_hubs(coordinator, mqtt_client):
+        for hub_info in resolve_push_diagnostic_hubs(coordinator):
             entities.append(RainPointPushLastMessageSensor(mqtt_client, hub_info))
 
     if entities:

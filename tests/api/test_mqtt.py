@@ -405,7 +405,9 @@ def _push_param_payload(inner):
     return _push_outer(params={"param": param})
 
 
-def _make_push_client(hass, fake_paho, coordinator, hub_mid=_DEFAULT_TEST_HUB_MID) -> RainPointMqttClient:
+def _make_push_client(
+    hass, fake_paho, coordinator, hub_mid=_DEFAULT_TEST_HUB_MID, time_source=lambda: 1000.0
+) -> RainPointMqttClient:
     """Build an MQTT client wired to a coordinator and a fixed hub mid."""
     rainpoint_client = MagicMock()
     rainpoint_client.get_subscribe_status = AsyncMock(return_value=_fake_creds())
@@ -419,7 +421,7 @@ def _make_push_client(hass, fake_paho, coordinator, hub_mid=_DEFAULT_TEST_HUB_MI
         coordinator=coordinator,
         hub_mid=hub_mid,
         paho_client_factory=factory,
-        time_source=lambda: 1000.0,
+        time_source=time_source,
     )
 
 
@@ -764,8 +766,9 @@ class TestHubFrameParsing:
 
 class TestHubFrameRouting:
     """_dispatch_push routes a recognized hub frame to apply_hub_push_update,
-    always with the client's own construction-supplied mid, never the frame's
-    parsed mid_tail."""
+    with the mid the frame's own section 1 names rather than the client's
+    construction-supplied one, which is what lets one session serve every
+    hub."""
 
     def test_hub_frame_reaches_apply_hub_push_update_with_the_clients_own_mid(self):
         coordinator = MagicMock()
@@ -776,40 +779,64 @@ class TestHubFrameRouting:
         coordinator.apply_hub_push_update.assert_called_once_with(SAMPLE_HUB_FRAME_MID, False, 1785521850011)
         coordinator.apply_push_update.assert_not_called()
 
-    def test_differing_six_digit_mid_drops_without_calling_either_entry_point(self):
-        """The equal-width exact-slice path: a genuinely different 6-digit mid
-        cannot satisfy the fixed-width comparison."""
+    def test_frame_naming_another_hub_is_routed_to_that_hub(self):
+        """The client no longer compares the frame against the hub it was built
+        for. One session carries the whole account, so a frame naming a
+        different hub is that hub's edge and is delivered as such; the
+        coordinator is what decides whether that mid is a hub it knows."""
         coordinator = MagicMock()
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=999999)
 
         client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
 
-        coordinator.apply_hub_push_update.assert_not_called()
+        coordinator.apply_hub_push_update.assert_called_once_with(SAMPLE_HUB_FRAME_MID, False, 1785521850011)
         coordinator.apply_push_update.assert_not_called()
 
-    def test_fallback_width_mismatch_drops(self):
-        """own is 7 digits, not the observed 6-digit width, so the suffix
-        fallback applies -- and still correctly rejects a genuinely different
-        tail."""
+    def test_section_one_of_an_unexpected_width_is_declined_not_guessed(self):
+        """The residual the retired suffix test carried is closed. A mid of an
+        unobserved width used to be admitted whenever it happened to be a
+        suffix of the frame's real mid, which on a multi-hub account means
+        one hub's edge landing on another. The slot is fixed now, so a
+        section 1 that is not the captured width yields no mid at all."""
         coordinator = MagicMock()
-        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=1236547)
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator)
 
-        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+        client._dispatch_push("topic", b"#P123|0|1785521850011|112882164350#")
 
         coordinator.apply_hub_push_update.assert_not_called()
 
-    def test_fallback_width_admits_a_proper_suffix_mid_as_documented_residual(self):
-        """own is 5 digits, not the observed 6-digit width, and happens to be a
-        proper suffix of the frame's real mid: the fallback path admits it.
-        This is the documented, accepted residual for an unobserved mid
-        width -- degrading to a weaker check beats dropping every frame and
-        silently disabling the feature for that width."""
+    def test_mid_is_read_from_the_fixed_slot_not_the_whole_tail(self):
+        """A 5-digit value that is a proper suffix of the real mid must not be
+        what the frame resolves to: the slot is the last six characters of a
+        32-character section 1, read exactly."""
+        assert mqtt_module._frame_mid("#P260731181730000016822282236547") == SAMPLE_HUB_FRAME_MID
+        assert mqtt_module._frame_mid("#P26073118173000001682228223654") is None
+        assert mqtt_module._frame_mid("#P2607311817300000168222822365470") is None
+        # A well-formed width whose slot is not numeric resolves to nothing.
+        assert mqtt_module._frame_mid("#P26073118173000001682228223654X") is None
+
+    def test_a_slot_that_is_digit_shaped_but_not_ascii_decimal_resolves_to_nothing(self):
+        """str.isdigit() is True for both of these and is why the guard is not it.
+        A superscript made int() raise, straight out of a call_soon_threadsafe
+        callback and into the event loop, breaking this module's fail-safe
+        contract; a non-ASCII digit script made int() succeed, routing a
+        spelling no capture produced onto a real hub."""
+        assert "23654\u00b2".isdigit()
+        assert mqtt_module._frame_mid("#P26073118173000001682228223654\u00b2") is None
+
+        assert "\u0662\u0663\u0666\u0665\u0664\u0667".isdigit()
+        assert mqtt_module._frame_mid("#P260731181730000016822282\u0662\u0663\u0666\u0665\u0664\u0667") is None
+
+    def test_a_hostile_identity_is_dropped_rather_than_raising_through_dispatch(self):
+        """End to end, since the defect was an exception escaping the handler:
+        the frame passes every recognition clause and must still be declined."""
         coordinator = MagicMock()
-        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=36547)
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
 
-        client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
+        client._dispatch_push("topic", "#P26073118173000001682228223654\u00b2|0|1785521850011|112882164350#".encode())
 
-        coordinator.apply_hub_push_update.assert_called_once_with(36547, False, 1785521850011)
+        coordinator.apply_hub_push_update.assert_not_called()
+        coordinator.apply_push_update.assert_not_called()
 
     def test_coordinator_not_wired_drops_a_recognized_hub_frame(self, caplog):
         client = _make_push_client(MagicMock(), MagicMock(), coordinator=None, hub_mid=SAMPLE_HUB_FRAME_MID)
@@ -838,30 +865,26 @@ class TestHubFrameRouting:
         coordinator.apply_push_update.assert_not_called()
 
 
-class TestSubDeviceEnvelopeMidCrossCheck:
-    """A sub-device envelope is attributed only after its own section-1 mid is
-    checked against the hub this client was built for.
+class TestSubDeviceEnvelopeMidAttribution:
+    """A sub-device envelope is attributed to the hub its own section-1 names.
 
     The observer session is account-scoped (captured 2026-08-25: a second hub's
     frame arrived on the first hub's session), and sids are per-hub indices, so
-    an unchecked foreign frame lands on whichever device this hub holds at the
-    same addr and is decoded against that device's model.
+    stamping the construction-supplied mid put another hub's reading onto
+    whichever device this hub held at the same addr. Reading the frame's own
+    mid is both the fix for that and what makes one session serve every hub.
     """
 
-    def test_envelope_naming_another_hub_is_dropped(self, caplog):
-        """A well-formed envelope carrying real readings is still refused when
-        its section 1 names a hub this client was not built for."""
+    def test_envelope_is_attributed_to_the_hub_it_names_not_the_bound_one(self):
+        """A well-formed envelope naming another hub reaches that hub, rather
+        than being refused for not naming the one this client was built for."""
         coordinator = MagicMock()
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
 
-        # A well-formed envelope carrying real readings, from the other hub.
-        payload = _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=361277)
+        client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=361277))
 
-        with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.mqtt"):
-            client._dispatch_push("topic", payload)
-
-        coordinator.apply_push_update.assert_not_called()
-        assert any("frame mid mismatch" in r.message for r in caplog.records)
+        coordinator.apply_push_update.assert_called_once()
+        assert coordinator.apply_push_update.call_args.args[0] == 361277
 
     def test_envelope_naming_this_hub_is_dispatched(self):
         """The same envelope naming this client's own hub reaches the coordinator."""
@@ -871,20 +894,49 @@ class TestSubDeviceEnvelopeMidCrossCheck:
         client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=236547))
 
         coordinator.apply_push_update.assert_called_once()
-        # The construction-supplied mid is still what reaches the coordinator;
-        # the parsed tail gates the dispatch and is never handed on.
         assert coordinator.apply_push_update.call_args.args[0] == 236547
 
-    def test_same_addr_on_another_hub_cannot_overwrite_this_hubs_device(self):
-        """The concrete corruption this guard exists for: both hubs have a
-        device at addr 1, so an unchecked D01 from the other hub would be
-        merged onto this hub's addr 1."""
+    def test_same_addr_on_another_hub_no_longer_lands_on_this_hubs_device(self):
+        """The concrete corruption this closes: both hubs have a device at addr
+        1, and D01 means addr 1 on either. The reading must carry the other
+        hub's mid, so the coordinator resolves it to that hub's addr 1 rather
+        than to this hub's."""
         coordinator = MagicMock()
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
 
         client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "dead" * 28}, mid=361277))
 
-        coordinator.apply_push_update.assert_not_called()
+        mid, sid, _raw, _ts = coordinator.apply_push_update.call_args.args
+        assert (mid, sid) == (361277, "D01")
+
+    def test_every_update_in_one_envelope_carries_that_envelope_s_mid(self):
+        """One envelope can hold several sub-devices, and they all belong to the
+        hub its section 1 names."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
+
+        client._dispatch_push(
+            "topic",
+            _captured_push_payload({"D01": "11#" + "0a1b" * 28, "D02": "10#" + "0a1b" * 6}, mid=361277),
+        )
+
+        assert coordinator.apply_push_update.call_count == 2
+        assert {call.args[0] for call in coordinator.apply_push_update.call_args_list} == {361277}
+
+    def test_per_hub_clock_advances_only_for_the_hub_a_frame_names(self):
+        """One session carries every hub, so the per-hub clock is what tells a
+        quiet hub apart from a quiet channel."""
+        coordinator = MagicMock()
+        clock = iter([100.0, 200.0, 300.0])
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547, time_source=lambda: next(clock))
+
+        assert client.last_message_at_for(236547) is None
+        assert client.last_message_at_for(361277) is None
+
+        client._dispatch_push("topic", _captured_push_payload({"D01": "11#ab"}, mid=361277))
+
+        assert client.last_message_at_for(361277) == 100.0
+        assert client.last_message_at_for(236547) is None
 
     @pytest.mark.parametrize(
         "param",
@@ -906,18 +958,18 @@ class TestSubDeviceEnvelopeMidCrossCheck:
             client._dispatch_push("topic", payload)
 
         coordinator.apply_push_update.assert_not_called()
-        assert any("carries no identity section" in r.message for r in caplog.records)
+        assert any("no readable identity section" in r.message for r in caplog.records)
 
-    def test_mid_tail_helper_reads_section_one_of_a_captured_envelope(self):
+    def test_section_one_helper_reads_section_one_of_a_captured_envelope(self):
         """The helper returns section 1 verbatim, at the width the capture showed."""
         payload = _captured_push_payload({"D01": "11#ab"}, mid=236547)
-        tail = mqtt_module._push_envelope_mid_tail(payload)
+        tail = mqtt_module._push_envelope_section_one(payload)
 
         assert tail is not None
         assert tail.startswith("#P")
-        assert tail.endswith("236547")
         # 2 prefix + 12 stamp + 4 fixed + 8 account + 6 mid, per the capture.
         assert len(tail) == 32
+        assert mqtt_module._frame_mid(tail) == 236547
 
 
 class TestUnrecognisedShapeLogging:
@@ -2070,3 +2122,64 @@ class TestPushDispatchNeverRunsOnPahoThread:
             f"{sorted(dispatch_sites - after_the_hop)} push into coordinator data from outside the hopped "
             "region, so no paho callback reaches them and nothing here says what thread they run on"
         )
+
+
+class TestUnreadableIdentityIsVisible:
+    """An identity section of an unobserved width is a total feature loss, not a
+    dropped reading, so it announces itself in an ordinary log.
+
+    The retired suffix test matched a mid of any width and still routed. The
+    fixed slot buys precision by declining the whole layout instead: one extra
+    digit in the mid or the account id and every frame of both families is
+    dropped, for every hub, permanently, while Push Connected still reads on and
+    the watchdog stays quiet because the session clock advances on inbound bytes
+    regardless. A DEBUG-only signal for that is the exact condition that hid the
+    hub connectivity frames for a whole milestone.
+    """
+
+    # 2 prefix + 24 filler + a 7-digit mid: one character wider than any capture.
+    OVERWIDE_SECTION_ONE = "#P" + "0" * 24 + "2365470"
+
+    def _overwide_hub_frame(self):
+        return f"{self.OVERWIDE_SECTION_ONE}|0|1785521850011|112882164350#".encode()
+
+    def test_an_unobserved_identity_width_warns_once_and_carries_only_the_width(self, caplog):
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator)
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.api.mqtt"):
+            client._dispatch_push("topic", self._overwide_hub_frame())
+            client._dispatch_push("topic", self._overwide_hub_frame())
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, "a per-frame warning would turn a total outage into recurring noise"
+        message = warnings[0].getMessage()
+        assert "33 characters" in message
+        # Section 1 holds an account id and a stamp; only its width may be logged.
+        assert self.OVERWIDE_SECTION_ONE not in message
+        assert "2365470" not in message
+        coordinator.apply_hub_push_update.assert_not_called()
+
+    def test_a_sub_device_envelope_with_no_identity_section_warns_too(self, caplog):
+        """The other shape of the same failure: an envelope this parses as
+        sub-device updates but whose section 1 cannot be read at all."""
+        param = "|".join(["not-a-prefix", json.dumps({"D01": {"time": 1, "value": "11#ab"}}), "1", "2#"])
+        payload = json.dumps({"method": "thing.service.property.set", "params": {"param": param}, "version": "1.0.0"}).encode()
+        client = _make_push_client(MagicMock(), MagicMock(), MagicMock())
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.api.mqtt"):
+            client._dispatch_push("topic", payload)
+
+        assert any("unreadable" in r.getMessage() for r in caplog.records if r.levelno == logging.WARNING)
+
+    def test_the_announcement_respects_the_bounded_bookkeeping(self, caplog):
+        """It shares _unrecognised_shapes, so a full set declines to add another
+        key rather than logging on every frame forever."""
+        client = _make_push_client(MagicMock(), MagicMock(), MagicMock())
+        client._unrecognised_shapes = {f"filler-{i}" for i in range(mqtt_module.MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT)}
+
+        with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.api.mqtt"):
+            client._dispatch_push("topic", self._overwide_hub_frame())
+
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(client._unrecognised_shapes) == mqtt_module.MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT
