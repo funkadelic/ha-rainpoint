@@ -180,10 +180,41 @@ class RainPointHubFirmwareSensor(RainPointHubSensorBase):
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_firmware"
         self._attr_name = "Firmware Version"
+        # The most recent version any poll actually carried, which is what an
+        # absent hub falls back to. Seeded from the build-time snapshot so a
+        # hub already missing at setup still reports what the device list last
+        # held, and overwritten by every live read from there on. Falling back
+        # to the snapshot itself would hand back the pre-upgrade version after
+        # an upgrade, which is the staleness this entity exists to avoid
+        # rather than a safe resting value.
+        self._last_known_version: str | None = hub_info.get("softVer")
 
     @property
     def native_value(self) -> str | None:
-        return self._hub_info.get("softVer")
+        """Return the hub's firmware version, preferring this poll's record.
+
+        Read live rather than off self._hub_info, which is the snapshot taken
+        when the entity was built and which nothing in this package reassigns.
+        A firmware version is the one field on that snapshot that really
+        changes while an entity lives: an upgrade lands, the cloud's record
+        moves, and a frozen read went on reporting the pre-upgrade version
+        until the config entry was reloaded. The update entity beside it
+        fetches its own data every poll, so the two reported different
+        versions for the same hub until that reload.
+
+        Holding the last live value when no record matches is deliberate, and
+        is why this differs from RainPointHubRSSISensor, which returns None in
+        the same case. RSSI is a measurement and unknown is the honest reading
+        of a hub the poll cannot see. A firmware version is metadata that does
+        not change while the hub is unreachable, so flickering it to unknown
+        and back across a single missed poll would be noise rather than
+        information. The device list is exactly what goes missing during the
+        outage HUB_ABSENT_DEBOUNCE_POLLS exists to absorb.
+        """
+        live = hub_record_for_mid(self.coordinator, self._hub_info.get("mid")).get("softVer")
+        if live:
+            self._last_known_version = live
+        return self._last_known_version
 
 
 class RainPointHubMACSensor(RainPointHubSensorBase):
@@ -358,25 +389,49 @@ class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDev
         """Build the RF channel selector from the hub's supported-channel bitmask.
 
         Options come from the hub's function blob and the current option from
-        its recich field; both resolve to nothing selectable when absent.
+        its recich field; both resolve to nothing selectable when absent. Both
+        are read per poll rather than captured here, since a channel changed
+        in the RainPoint app moves recich on the hub's record and a value
+        captured at construction would never follow it.
         """
         CoordinatorEntity.__init__(self, coordinator)
         RainPointHubDevice.__init__(self, hub_info)
         self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_channel"
         self._attr_name = "RF Communication Channel"
-        self._attr_options = _hub_rf_channel_options(hub_info)
-        # Current channel comes from the hub record; None renders as unknown when
-        # the field is absent. Selecting a channel is still unsupported (below).
-        current = _hub_rf_current_channel(hub_info)
-        self._attr_current_option = str(current) if current is not None else None
 
     @property
     def available(self) -> bool:
         return True
 
     @property
+    def _record(self) -> dict:
+        """Return this hub's own live record, or {} when none exists yet."""
+        return hub_record_for_mid(self.coordinator, self._hub_info.get("mid"))
+
+    @property
+    def options(self) -> list[str]:
+        """Return the channels this hub offers, falling back to the snapshot.
+
+        Unlike current_option below, this reads through to the build-time
+        snapshot when no live record matches. The supported-channel bitmask is
+        a hardware capability rather than a setting, so it cannot change while
+        the hub is missing, and holding the real list beats dropping to the
+        1 through 16 fallback for the length of an outage.
+        """
+        return _hub_rf_channel_options(self._record or self._hub_info)
+
+    @property
     def current_option(self) -> str | None:
-        return self._attr_current_option
+        """Return the channel this poll reports, or None when the hub is absent.
+
+        Reads only the live record, which is what RainPointHubBroadcastSwitch
+        and the sub-device transmission-power select both do for their own
+        settings. A channel is a setting someone can change in the RainPoint
+        app while the hub is out of the device list, so unlike a firmware
+        version there is no last-known value that stays true across a gap.
+        """
+        current = _hub_rf_current_channel(self._record)
+        return str(current) if current is not None else None
 
     async def async_select_option(self, option: str) -> None:
         """Change the RF channel."""
