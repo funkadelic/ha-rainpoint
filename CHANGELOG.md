@@ -2,6 +2,28 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.21.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.20.0...v1.21.0) (2026-08-26)
+
+
+### Added
+
+* bring live updates to every hub on the account ([#211](https://github.com/funkadelic/ha-rainpoint/issues/211)) ([1a6e472](https://github.com/funkadelic/ha-rainpoint/commit/1a6e472bb035458e22e1c924179e625e2dac50a7))
+* show firmware updates for sub-devices too ([#215](https://github.com/funkadelic/ha-rainpoint/issues/215)) ([e77d4a0](https://github.com/funkadelic/ha-rainpoint/commit/e77d4a06340e369547db4b0e4a9b09b0185ba652))
+* show hub firmware updates in Home Assistant ([#212](https://github.com/funkadelic/ha-rainpoint/issues/212)) ([f173af1](https://github.com/funkadelic/ha-rainpoint/commit/f173af13b013f2b3bc32d0a3608e47f57154cfa8))
+
+
+### Fixed
+
+* handle multiple hubs paired to the same account ([220cbe0](https://github.com/funkadelic/ha-rainpoint/commit/220cbe011fadbf080ddf2c1c49e7984046846d00))
+* keep device identifiers out of the push channel's log lines ([#214](https://github.com/funkadelic/ha-rainpoint/issues/214)) ([65b9eaf](https://github.com/funkadelic/ha-rainpoint/commit/65b9eafd727143a3a10f8ea92d36876fce800152))
+* name the last-data-change sensor for what it reports ([#213](https://github.com/funkadelic/ha-rainpoint/issues/213)) ([8bc490c](https://github.com/funkadelic/ha-rainpoint/commit/8bc490c888f29ae26c2fa2d1e24443f2ec6373cc))
+
+
+### Other Changes
+
+* bump astral-sh/setup-uv from 9.0.0 to 10.0.1 ([#209](https://github.com/funkadelic/ha-rainpoint/issues/209)) ([7a5dd6c](https://github.com/funkadelic/ha-rainpoint/commit/7a5dd6c2e77db894d7f6320fde758b9c5a86ce39))
+* **scripts:** triage a diagnostics file for new-model support ([#206](https://github.com/funkadelic/ha-rainpoint/issues/206)) ([312fe34](https://github.com/funkadelic/ha-rainpoint/commit/312fe341b5258bcb692d6d9d230693bb59d754a5))
+
 ## [1.20.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.19.1...v1.20.0) (2026-08-24)
 
 ### What's new
