@@ -421,6 +421,50 @@ class TestRainPointHubFirmwareSensor:
         RainPointHubFirmwareSensor.__init__(sensor, coord, hub_info)
         assert sensor.native_value is None
 
+    def test_native_value_follows_an_upgrade(self):
+        """A version that moved after the entity was built is the one reported.
+
+        The regression this sensor shipped with: self._hub_info is the
+        build-time snapshot and nothing reassigns it, so an upgrade landing in
+        a later poll left the sensor reporting the pre-upgrade version while
+        the update entity beside it reported the new one.
+        """
+        coord = _make_coordinator()
+        hub_info = _make_hub_info(soft_ver="1.1.1032")
+        sensor = RainPointHubFirmwareSensor.__new__(RainPointHubFirmwareSensor)
+        RainPointHubFirmwareSensor.__init__(sensor, coord, hub_info)
+        assert sensor.native_value == "1.1.1032"
+
+        coord.data["hubs"] = [dict(hub_info, softVer="1.1.1041")]
+        assert sensor.native_value == "1.1.1041"
+
+    def test_native_value_reads_only_its_own_hub(self):
+        """Another hub's record in the same poll does not feed this sensor."""
+        coord = _make_coordinator()
+        hub_info = _make_hub_info(mid=1001, soft_ver="2.0")
+        sensor = RainPointHubFirmwareSensor.__new__(RainPointHubFirmwareSensor)
+        RainPointHubFirmwareSensor.__init__(sensor, coord, hub_info)
+        coord.data["hubs"] = [{"mid": 1002, "softVer": "9.9"}]
+        assert sensor.native_value == "2.0"
+
+    def test_native_value_holds_across_a_missed_poll(self):
+        """A hub absent from the device list keeps its last known version.
+
+        Deliberately unlike RainPointHubRSSISensor, which reads unknown in the
+        same case. A firmware version does not change while the hub is
+        unreachable, so flickering it across the outage that
+        HUB_ABSENT_DEBOUNCE_POLLS absorbs would be noise.
+        """
+        coord = _make_coordinator()
+        hub_info = _make_hub_info(mid=1001, soft_ver="1.1.1041")
+        sensor = RainPointHubFirmwareSensor.__new__(RainPointHubFirmwareSensor)
+        RainPointHubFirmwareSensor.__init__(sensor, coord, hub_info)
+        coord.data["hubs"] = [dict(hub_info, softVer="1.1.1041")]
+        assert sensor.native_value == "1.1.1041"
+
+        coord.data["hubs"] = []
+        assert sensor.native_value == "1.1.1041"
+
     def test_unique_id_contains_firmware(self):
         """unique_id should contain 'firmware'."""
         sensor = self._make()

@@ -183,7 +183,27 @@ class RainPointHubFirmwareSensor(RainPointHubSensorBase):
 
     @property
     def native_value(self) -> str | None:
-        return self._hub_info.get("softVer")
+        """Return the hub's firmware version, preferring this poll's record.
+
+        Read live rather than off self._hub_info, which is the snapshot taken
+        when the entity was built and which nothing in this package reassigns.
+        A firmware version is the one field on that snapshot that really
+        changes while an entity lives: an upgrade lands, the cloud's record
+        moves, and a frozen read went on reporting the pre-upgrade version
+        until the config entry was reloaded. The update entity beside it
+        fetches its own data every poll, so the two disagreed about the same
+        hub for as long as that lasted.
+
+        Falling back to the snapshot when no live record matches is
+        deliberate, and is why this differs from RainPointHubRSSISensor, which
+        returns None in the same case. RSSI is a measurement and unknown is
+        the honest reading of a hub the poll cannot see. A firmware version is
+        metadata that does not change while the hub is unreachable, so
+        flickering it to unknown and back across a single missed poll would be
+        noise rather than information. The device list is exactly what goes
+        missing during the outage HUB_ABSENT_DEBOUNCE_POLLS exists to absorb.
+        """
+        return (hub_record_for_mid(self.coordinator, self._hub_info.get("mid")) or self._hub_info).get("softVer")
 
 
 class RainPointHubMACSensor(RainPointHubSensorBase):
