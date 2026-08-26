@@ -180,6 +180,14 @@ class RainPointHubFirmwareSensor(RainPointHubSensorBase):
         super().__init__(coordinator, hub_info)
         self._attr_unique_id = f"{HUB_UNIQUE_ID_PREFIX}{hub_info.get('hid', 'unknown')}_{hub_info.get('mid', 'unknown')}_firmware"
         self._attr_name = "Firmware Version"
+        # The most recent version any poll actually carried, which is what an
+        # absent hub falls back to. Seeded from the build-time snapshot so a
+        # hub already missing at setup still reports what the device list last
+        # held, and overwritten by every live read from there on. Falling back
+        # to the snapshot itself would hand back the pre-upgrade version after
+        # an upgrade, which is the staleness this entity exists to avoid
+        # rather than a safe resting value.
+        self._last_known_version: str | None = hub_info.get("softVer")
 
     @property
     def native_value(self) -> str | None:
@@ -191,19 +199,22 @@ class RainPointHubFirmwareSensor(RainPointHubSensorBase):
         changes while an entity lives: an upgrade lands, the cloud's record
         moves, and a frozen read went on reporting the pre-upgrade version
         until the config entry was reloaded. The update entity beside it
-        fetches its own data every poll, so the two disagreed about the same
-        hub for as long as that lasted.
+        fetches its own data every poll, so the two reported different
+        versions for the same hub until that reload.
 
-        Falling back to the snapshot when no live record matches is
-        deliberate, and is why this differs from RainPointHubRSSISensor, which
-        returns None in the same case. RSSI is a measurement and unknown is
-        the honest reading of a hub the poll cannot see. A firmware version is
-        metadata that does not change while the hub is unreachable, so
-        flickering it to unknown and back across a single missed poll would be
-        noise rather than information. The device list is exactly what goes
-        missing during the outage HUB_ABSENT_DEBOUNCE_POLLS exists to absorb.
+        Holding the last live value when no record matches is deliberate, and
+        is why this differs from RainPointHubRSSISensor, which returns None in
+        the same case. RSSI is a measurement and unknown is the honest reading
+        of a hub the poll cannot see. A firmware version is metadata that does
+        not change while the hub is unreachable, so flickering it to unknown
+        and back across a single missed poll would be noise rather than
+        information. The device list is exactly what goes missing during the
+        outage HUB_ABSENT_DEBOUNCE_POLLS exists to absorb.
         """
-        return (hub_record_for_mid(self.coordinator, self._hub_info.get("mid")) or self._hub_info).get("softVer")
+        live = hub_record_for_mid(self.coordinator, self._hub_info.get("mid")).get("softVer")
+        if live:
+            self._last_known_version = live
+        return self._last_known_version
 
 
 class RainPointHubMACSensor(RainPointHubSensorBase):

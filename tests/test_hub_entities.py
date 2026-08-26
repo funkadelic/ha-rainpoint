@@ -447,23 +447,39 @@ class TestRainPointHubFirmwareSensor:
         coord.data["hubs"] = [{"mid": 1002, "softVer": "9.9"}]
         assert sensor.native_value == "2.0"
 
-    def test_native_value_holds_across_a_missed_poll(self):
-        """A hub absent from the device list keeps its last known version.
+    def test_native_value_holds_the_upgraded_version_across_a_missed_poll(self):
+        """An upgrade then an absence keeps the upgraded version, not the snapshot.
 
-        Deliberately unlike RainPointHubRSSISensor, which reads unknown in the
-        same case. A firmware version does not change while the hub is
-        unreachable, so flickering it across the outage that
-        HUB_ABSENT_DEBOUNCE_POLLS absorbs would be noise.
+        Drive the real sequence rather than asserting the end state: build at
+        the pre-upgrade version, upgrade, then take the hub out of the device
+        list. Seeding the snapshot at the upgraded version instead would let
+        the fallback and the live value coincide, and the sensor could regress
+        to the pre-upgrade version with the test still green.
+
+        Holding rather than blanking is deliberate, and unlike
+        RainPointHubRSSISensor, which reads unknown in the same case. A
+        firmware version does not change while the hub is unreachable, so
+        flickering it across the outage that HUB_ABSENT_DEBOUNCE_POLLS absorbs
+        would be noise.
         """
         coord = _make_coordinator()
-        hub_info = _make_hub_info(mid=1001, soft_ver="1.1.1041")
+        hub_info = _make_hub_info(mid=1001, soft_ver="1.1.1032")
         sensor = RainPointHubFirmwareSensor.__new__(RainPointHubFirmwareSensor)
         RainPointHubFirmwareSensor.__init__(sensor, coord, hub_info)
+
         coord.data["hubs"] = [dict(hub_info, softVer="1.1.1041")]
         assert sensor.native_value == "1.1.1041"
 
         coord.data["hubs"] = []
         assert sensor.native_value == "1.1.1041"
+
+    def test_native_value_holds_the_snapshot_when_absent_from_the_first_poll(self):
+        """A hub never seen live still reports what the build-time record held."""
+        coord = _make_coordinator()
+        hub_info = _make_hub_info(mid=1001, soft_ver="1.1.1032")
+        sensor = RainPointHubFirmwareSensor.__new__(RainPointHubFirmwareSensor)
+        RainPointHubFirmwareSensor.__init__(sensor, coord, hub_info)
+        assert sensor.native_value == "1.1.1032"
 
     def test_unique_id_contains_firmware(self):
         """unique_id should contain 'firmware'."""
