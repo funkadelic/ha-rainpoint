@@ -186,7 +186,24 @@ class RainPointFirmwareVersionSensor(RainPointDiagnosticSensorBase):
 
 
 class RainPointLastUpdatedSensor(RainPointDiagnosticSensorBase):
-    """Last updated timestamp diagnostic sensor."""
+    """When this device's readings last changed or it last restarted, not when it was last heard from.
+
+    Named "Last Updated" until 2026-08-25, and that name caused a misdiagnosis
+    worth recording here. The field is the RainPoint app's "last acquisition
+    time", and the app prints a disclaimer beside it: the collection time
+    updates only when device data changes or the device restarts, and an
+    unchanged collection time does not mean the device is offline. A soil sensor
+    reading a steady 40 percent produces no change events and so no new
+    timestamp, for hours, while being perfectly healthy.
+
+    So this value's age is not a liveness signal and nothing should be built on
+    treating it as one. The old name invited exactly that reading, in Home
+    Assistant where the app's disclaimer is not on screen next to it.
+
+    The unique_id keeps its _last_updated suffix deliberately: it is persisted
+    in the entity registry, and renaming the display label must not move the
+    identity or take the recorded history with it.
+    """
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_icon = "mdi:clock-outline"
@@ -194,7 +211,7 @@ class RainPointLastUpdatedSensor(RainPointDiagnosticSensorBase):
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
         self._attr_unique_id = f"rainpoint_{base_slug}_last_updated"
-        self._attr_name = "Last Updated"
+        self._attr_name = "Last Data Change"
 
     @property
     def native_value(self) -> datetime | None:
