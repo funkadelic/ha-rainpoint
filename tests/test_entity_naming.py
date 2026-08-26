@@ -220,8 +220,15 @@ for info in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
         # __new__ without __init__: has_entity_name reads only the class
         # attribute, so no constructor arguments have to be invented for 70+
         # classes, and the value read is the one the resolved MRO supplies.
+        # An abstract base cannot be __new__'d at all, so it is read through a
+        # throwaway concrete subclass: the flag resolves through the same MRO,
+        # and skipping it instead would quietly exempt every shared platform
+        # base from the rule this sweep exists to enforce.
+        target = obj
+        if getattr(obj, "__abstractmethods__", frozenset()):
+            target = type("_Concrete", (obj,), {name: (lambda self: None) for name in obj.__abstractmethods__})
         try:
-            resolved = object.__new__(obj).has_entity_name
+            resolved = object.__new__(target).has_entity_name
         except Exception as err:
             resolved = repr(err)
         if resolved is not True:

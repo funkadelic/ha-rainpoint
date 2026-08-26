@@ -407,38 +407,62 @@ class RainPointClient:
     async def get_hub_firmware_info(self, mid: int) -> dict:
         """Return one hub's firmware check result: {"info": ..., "softVer": ...}.
 
-        The envelope is identical whether or not an upgrade exists, code 0 in
-        both cases, so "info" being null is the only signal that the hub is
-        current. Callers branch on that rather than on a status code.
-
         "softVer" is the installed version and is the same string the device
         record carries, so a caller that wants both versions needs this call
         alone and no cross-reference against the poll snapshot.
         """
+        return await self._get_firmware_info(
+            "get_hub_firmware_info", f"{self._base_url}/app/device/firmware/upgrade/info/v2", {"mid": mid}
+        )
+
+    async def get_sub_firmware_info(self, sid: int) -> dict:
+        """Return one sub-device's firmware check result, same shape as the hub's.
+
+        A different endpoint and a different addressing scheme -- `sid`, the
+        same one update_sub_param writes against, not the `addr` the control
+        paths use -- but the envelope is byte for byte what the hub check
+        returns, confirmed against an HTV245FRF, an HCS026FRF and an HTV210B on
+        2026-08-25. That is what lets both share the decode below and the one
+        entity base above them.
+
+        Answered for all three of those models even though the RainPoint app
+        offers a "check for updates" link on the HTV210B alone, so this is not
+        gated on a model list.
+        """
+        return await self._get_firmware_info(
+            "get_sub_firmware_info", f"{self._base_url}/app/device/sub/firmware/upgrade/info", {"sid": sid}
+        )
+
+    async def _get_firmware_info(self, label: str, url: str, params: dict) -> dict:
+        """Run one firmware check and return its payload dict.
+
+        The envelope is identical whether or not an upgrade exists, code 0 in
+        both cases, so "info" being null is the only signal that the device is
+        current. Callers branch on that rather than on a status code.
+
+        The params carry an addressing identifier and stay out of the log line.
+        """
         await self.ensure_logged_in()
-        url = f"{self._base_url}/app/device/firmware/upgrade/info/v2"
-        params = {"mid": mid}
-        # mid is an addressing identifier and stays out of the log line.
-        _LOGGER.debug("API call: get_hub_firmware_info URL=%s", url)
+        _LOGGER.debug("API call: %s URL=%s", label, url)
         request_token = self._token
         async with self._session.get(url, headers=self._auth_headers(), params=params) as resp:
             if resp.status != 200:
-                raise RainPointApiError(f"get_hub_firmware_info HTTP {resp.status}")
+                raise RainPointApiError(f"{label} HTTP {resp.status}")
             data = await resp.json()
         # A non-object body would make every .get below raise AttributeError, and
         # this method's caller treats an escaping exception as fatal to the entity
         # rather than to one poll, so it is turned into the error type that caller
         # already handles.
         if not isinstance(data, dict):
-            raise RainPointApiError(f"get_hub_firmware_info returned {type(data).__name__}, not an object")
-        _LOGGER.debug("API response: get_hub_firmware_info code=%s", data.get("code"))
+            raise RainPointApiError(f"{label} returned {type(data).__name__}, not an object")
+        _LOGGER.debug("API response: %s code=%s", label, data.get("code"))
         if data.get("code") != 0:
             self._maybe_invalidate_token(data.get("code"), request_token)
-            _LOGGER.debug("get_hub_firmware_info failed response: %s", _RecordSummary(data))
-            raise RainPointApiError(f"get_hub_firmware_info failed: code {data.get('code')}")
+            _LOGGER.debug("%s failed response: %s", label, _RecordSummary(data))
+            raise RainPointApiError(f"{label} failed: code {data.get('code')}")
         payload = data.get("data") or {}
         if not isinstance(payload, dict):
-            _LOGGER.debug("get_hub_firmware_info returned an unusable data shape: %s", type(payload).__name__)
+            _LOGGER.debug("%s returned an unusable data shape: %s", label, type(payload).__name__)
             return {}
         return payload
 

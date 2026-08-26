@@ -1017,3 +1017,31 @@ class TestDeviceIdentityMapEdges:
 
         assert "182509_236547_1" in result["devices"]
         assert all(not key.startswith("unrecognised_device-row-bad") for key in result["devices"])
+
+
+class TestSensorEntryAllowListParity:
+    """The allow-list against the builder it allow-lists.
+
+    _SENSOR_ENTRY_FIELDS decides which coordinator sensor-entry keys reach a
+    bug report. It is a frozenset in a different module from the builder, so a
+    key added to _build_sensor_entry is dropped from every diagnostics download
+    silently, with a green suite. That is how "sid" went missing: it reached the
+    coordinator entry and the cloud-record allow-list on the same day and never
+    reached this one.
+    """
+
+    def test_every_key_the_coordinator_builds_is_allow_listed(self):
+        """A new sensor-entry key must be a deliberate include or a deliberate omission."""
+        from custom_components.rainpoint.coordinator import _build_sensor_entry
+        from custom_components.rainpoint.diagnostics import _SENSOR_ENTRY_FIELDS
+
+        entry = _build_sensor_entry(
+            {"hid": 1, "name": "Hub", "homeName": "Home", "deviceName": "dn", "productKey": "pk"},
+            {"addr": 1, "sid": 504942, "name": "Valve", "model": "HTV210B", "modelCode": 41, "softVer": "1.0"},
+            2,
+            1,
+            {},
+            {},
+        )
+
+        assert set(entry) <= _SENSOR_ENTRY_FIELDS, sorted(set(entry) - _SENSOR_ENTRY_FIELDS)
