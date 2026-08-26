@@ -505,7 +505,9 @@ class TestHubWordingNamesHardwareOnly:
         repository host names in the badge URLs."""
         readme_path = Path(rainpoint_pkg.__file__).parent.parent.parent / "README.md"
         blob = readme_path.read_text(encoding="utf-8")
-        assert len(re.findall("hub", blob, re.IGNORECASE)) == 84
+        # 84 before the Hub Firmware Update entity was documented, which added
+        # three: the entity name, the per-hub scope and the bricking warning.
+        assert len(re.findall("hub", blob, re.IGNORECASE)) == 87
 
 
 class TestGenericControlFailedIssuePlaceholderParity:

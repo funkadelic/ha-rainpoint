@@ -64,6 +64,7 @@ _NAMING_MODULES = (
     "generic_entities.py",
     "generic_control.py",
     "binary_sensor.py",
+    "update.py",
 )
 
 _BARE_DEVICE_NAMES = frozenset({"sub_name", "device_name", "hub_name"})
