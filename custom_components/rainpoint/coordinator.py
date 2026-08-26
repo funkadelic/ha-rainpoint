@@ -901,6 +901,12 @@ def _build_sensor_entry(
         "model": sub.get("model"),
         "model_code": sub.get("modelCode"),
         "firmware_version": sub.get("softVer"),
+        # The cloud's own sub-device id, a different addressing scheme from
+        # addr and the only one the settings-write and firmware-check
+        # endpoints accept. select.py re-fetches it per write because a write
+        # must splice against a fresh read; a read-only consumer takes it from
+        # here instead of issuing its own listing call.
+        "sid": sub.get("sid"),
         "device_name": hub.get("deviceName"),
         "product_key": hub.get("productKey"),
         "hub_paired": is_hub_record(hub),

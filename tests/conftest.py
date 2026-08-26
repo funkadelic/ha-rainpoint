@@ -6,6 +6,7 @@ Home Assistant instance.
 """
 
 import sys
+from abc import ABC
 from datetime import UTC
 from types import ModuleType
 from unittest.mock import MagicMock
@@ -360,6 +361,18 @@ class _CoordinatorEntity(_HABaseEntity):
         """Init helper."""
         self.coordinator = coordinator
 
+    @property
+    def should_poll(self) -> bool:
+        """Mirror BaseCoordinatorEntity.should_poll, which hard-returns False.
+
+        Not the _attr_ this stub's own base reads: the real class shadows
+        Entity's _attr_-reading property outright and sits ahead of it in the
+        MRO, so an entity mixed onto a CoordinatorEntity is never polled no
+        matter what it sets. A stub that fell through to the _attr_ read a
+        self-polling entity as polled while production did not poll it at all.
+        """
+        return False
+
     def _handle_coordinator_update(self) -> None:
         """Match the real hook's default body: write state on every coordinator update.
 
@@ -485,8 +498,8 @@ sys.modules["homeassistant.components.binary_sensor"].BinarySensorEntity = _Bina
 sys.modules["homeassistant.components.binary_sensor"].BinarySensorDeviceClass = MagicMock()
 
 
-class _UpdateEntity:
-    """Flat stand-in for homeassistant.components.update.UpdateEntity.
+class _UpdateEntity(_HABaseEntity, ABC):
+    """Stand-in for homeassistant.components.update.UpdateEntity.
 
     Added for the same reason _ButtonEntity was: update arrived after that
     conversion and was then the only platform base still resolving to the real
@@ -496,6 +509,16 @@ class _UpdateEntity:
     the harness was proving something about a hierarchy the flat-class scheme
     does not describe. The three value properties are carried because production
     reads them, not the _attr_ backing attributes.
+
+    Rooted in _HABaseEntity rather than flat, unlike its siblings, because this
+    is the one platform base an entity may inherit from alone: the sub-device
+    firmware entity carries no device mixin, so a flat stub left it without the
+    unique_id and should_poll that real UpdateEntity gets from Entity.
+
+    ABC for the same fidelity reason: real Entity's metaclass is ABCMeta-derived,
+    so an abstract method on a production base is enforced at construction. A
+    stub with a plain metaclass would let a subclass that never implemented one
+    be built in a test and fail only in a live install.
     """
 
     _attr_installed_version = None

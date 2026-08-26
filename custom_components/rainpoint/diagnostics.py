@@ -216,6 +216,7 @@ _SENSOR_ENTRY_FIELDS = frozenset(
         "model_code",
         "product_key",
         "raw_status",
+        "sid",
         "sub_name",
     }
 )
