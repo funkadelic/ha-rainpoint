@@ -53,6 +53,11 @@ class RainPointFirmwareUpdate(UpdateEntity):
     _attr_device_class = UpdateDeviceClass.FIRMWARE
     _attr_has_entity_name = True
     _attr_name = "Firmware Update"
+    # Match the "Firmware Version" sensors that sit beside this entity on the same
+    # device page (diagnostic_sensors.py and hub_entities.py both use mdi:chip), so
+    # the pair reads as one subject. The update domain declares no firmware
+    # device-class icon of its own, so without this the fallback is mdi:package-up.
+    _attr_icon = "mdi:chip"
 
     @abstractmethod
     async def _fetch_firmware_info(self) -> dict:
@@ -64,6 +69,18 @@ class RainPointFirmwareUpdate(UpdateEntity):
         of its first update and be dropped for the run of the config entry. The
         marker moves that failure to construction, where a test sees it.
         """
+
+    @property
+    def entity_picture(self) -> str | None:
+        """Show an icon rather than the RainPoint logo.
+
+        UpdateEntity.entity_picture returns the brands.home-assistant.io image for
+        the integration domain, and a picture outranks an icon in the frontend, so
+        _attr_icon above does nothing while this inherits. Every other entity this
+        integration ships is an icon, and a lone logo among them reads as a
+        different kind of row rather than as a firmware reading.
+        """
+        return None
 
     @property
     def available(self) -> bool:
