@@ -345,6 +345,32 @@ def _section_class(section: str) -> str:
     return "O"  # other
 
 
+def _topic_kind(topic) -> str:
+    """Return a downlink topic's action suffix, with its addressing segments gone.
+
+    An Aliyun downlink topic is /sys/{productKey}/{deviceName}/{action...}, so
+    logging one whole publishes two identifiers the house rule keeps out of these
+    paths entirely. That went unnoticed because a topic reads as routing metadata
+    rather than as record content, and the unrecognized-shape branch below reasons
+    carefully about not logging the payload at INFO while logging the topic there.
+
+    Only the known shape is unwrapped. Anything else returns a placeholder rather
+    than a best-effort trim: a topic this does not recognise is one whose segments
+    cannot be assumed safe, and echoing it to find out is the failure the function
+    exists to prevent. The action suffix is what has diagnostic value anyway, since
+    it is what separates a property/set downlink from any other frame family, and
+    the mid a frame concerns is already logged by the decode path that consumes it.
+    """
+    parts = topic.split("/") if isinstance(topic, str) else []
+    # Every segment has to be non-empty, not just the right number of them.
+    # "/sys/pk/dn/" splits to five parts and would otherwise be "recognized",
+    # returning an empty string and logging a blank topic_kind, which is the one
+    # outcome the placeholder exists to prevent.
+    if len(parts) >= 5 and parts[0] == "" and parts[1] == "sys" and parts[2] and parts[3] and all(parts[4:]):
+        return "/".join(parts[4:])
+    return "unrecognized"
+
+
 def _shape_key(payload: bytes) -> str:
     """Classify a payload's structural shape for the one-shot-per-shape log.
 
@@ -856,7 +882,12 @@ class RainPointMqttClient:
         self._message_count += 1
         # Liveness clock: set BEFORE parse so an undecodable message still counts.
         self._last_message_at = self._time_source()
-        _LOGGER.debug("RainPoint MQTT message received: topic=%s len=%s count=%s", topic, len(payload), self._message_count)
+        _LOGGER.debug(
+            "RainPoint MQTT message received: topic_kind=%s len=%s count=%s",
+            _topic_kind(topic),
+            len(payload),
+            self._message_count,
+        )
         self._dispatch_push(topic, payload)
         # Single notify, and after the dispatch rather than before it: a handler
         # may have stamped the per-hub clock, and firing first meant every
@@ -1024,22 +1055,22 @@ class RainPointMqttClient:
         if shape_key not in self._unrecognised_shapes and len(self._unrecognised_shapes) < MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT:
             self._unrecognised_shapes.add(shape_key)
             _LOGGER.info(
-                "RainPoint MQTT push carried an unrecognized downlink shape: topic=%s shape=%s "
+                "RainPoint MQTT push carried an unrecognized downlink shape: topic_kind=%s shape=%s "
                 "(enable debug logging for this integration to capture the payload)",
-                topic,
+                _topic_kind(topic),
                 shape_key,
             )
             if _LOGGER.isEnabledFor(logging.DEBUG):
                 _LOGGER.debug(
-                    "RainPoint MQTT push unrecognized downlink shape %s: topic=%s payload=%s",
+                    "RainPoint MQTT push unrecognized downlink shape %s: topic_kind=%s payload=%s",
                     shape_key,
-                    topic,
+                    _topic_kind(topic),
                     _payload_preview(payload),
                 )
         elif _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(
-                "RainPoint MQTT push carried no sub-device or hub update: topic=%s payload=%s",
-                topic,
+                "RainPoint MQTT push carried no sub-device or hub update: topic_kind=%s payload=%s",
+                _topic_kind(topic),
                 _payload_preview(payload),
             )
 

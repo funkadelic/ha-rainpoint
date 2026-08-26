@@ -13,7 +13,7 @@ import paho.mqtt.client as paho
 import pytest
 
 import custom_components.rainpoint.api.mqtt as mqtt_module
-from custom_components.rainpoint.api.mqtt import RainPointMqttClient, RainPointMqttError
+from custom_components.rainpoint.api.mqtt import RainPointMqttClient, RainPointMqttError, _topic_kind
 from tests.payload_samples import (
     SAMPLE_HUB_DISCONNECT_FRAME,
     SAMPLE_HUB_FRAME_MID,
@@ -132,11 +132,17 @@ class TestConnectDoesNotSubscribe:
 
 
 class TestMessageReceiptLogging:
-    """Logs topic + byte-length + running count at DEBUG, never payload contents."""
+    """Logs the topic's action suffix + byte-length + running count at DEBUG.
+
+    Never the payload, and since 2026-08-25 never the topic's addressing
+    segments either: this test used to assert the whole topic appeared in the
+    record, which pinned a productKey and a deviceName into the log as intended
+    behaviour.
+    """
 
     @pytest.mark.asyncio
-    async def test_on_message_logs_topic_len_and_count_not_payload(self, caplog):
-        """Driving on_message produces exactly one debug record with topic + int len, no raw bytes."""
+    async def test_on_message_logs_topic_kind_len_and_count_not_payload(self, caplog):
+        """Driving on_message produces exactly one debug record with the action suffix + int len, no raw bytes."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -159,7 +165,9 @@ class TestMessageReceiptLogging:
         receipt_records = [r for r in caplog.records if "message received" in r.message]
         assert len(receipt_records) == 1
         record = receipt_records[0]
-        assert msg.topic in record.message
+        assert "thing/service/property/set" in record.message
+        assert "pk123" not in record.message
+        assert "name-A" not in record.message
         assert "425" in record.message
         assert payload.decode() not in record.message
 
@@ -2183,3 +2191,102 @@ class TestUnreadableIdentityIsVisible:
 
         assert not [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(client._unrecognised_shapes) == mqtt_module.MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT
+
+
+class TestTopicKindKeepsIdentifiersOutOfTheLog:
+    """The downlink topic embeds a productKey and a deviceName.
+
+    Both are addressing identifiers the house rule bars from these paths, and
+    the unrecognized-shape branch logs the topic at INFO, which reaches the
+    default Home Assistant log rather than only a debug session.
+    """
+
+    def test_the_real_captured_topic_loses_both_identifiers(self):
+        """The shape is the one observed on the wire, not an invented one."""
+        topic = "/sys/a3iCXW3C5CP/0ct1T72LlR7exSXOG2UU/thing/service/property/set"
+
+        kind = _topic_kind(topic)
+
+        assert kind == "thing/service/property/set"
+        assert "a3iCXW3C5CP" not in kind
+        assert "0ct1T72LlR7exSXOG2UU" not in kind
+
+    @pytest.mark.parametrize(
+        "topic",
+        [
+            "",
+            "/",
+            "/sys",
+            "/sys/pk",
+            "/sys/pk/dn",
+            "notatopic",
+            "sys/pk/dn/thing/service/property/set",
+            "/sys/pk/dn/",
+            "/sys//dn/thing/service/property/set",
+            "/sys/pk//thing/service/property/set",
+            "/sys/pk/dn/thing//property/set",
+            None,
+            b"/sys/pk/dn/thing/service/property/set",
+        ],
+    )
+    def test_anything_unrecognized_echoes_nothing(self, topic):
+        """An unparsed topic must not be trimmed on a guess and logged anyway.
+
+        A shape this does not recognise is one whose segments cannot be assumed
+        safe, so the placeholder is the whole point rather than a fallback.
+        """
+        assert _topic_kind(topic) == "unrecognized"
+
+    def test_no_logger_call_takes_the_raw_topic_as_an_argument(self):
+        """Pins the fix at the call sites, not just in the helper.
+
+        Walks the AST rather than the text. The first version of this test
+        scanned lines containing "_LOGGER." for a bare `topic` argument, which
+        could not see the three multiline calls at all: their arguments sit on
+        their own lines, so swapping `_topic_kind(topic)` back to `topic` there
+        would have passed. The AST sees a call's arguments wherever they are
+        written.
+        """
+        tree = ast.parse(Path(mqtt_module.__file__).read_text(encoding="utf-8"))
+
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "_LOGGER"):
+                continue
+            for arg in node.args:
+                if isinstance(arg, ast.Name) and arg.id == "topic":
+                    offenders.append(node.lineno)
+
+        assert offenders == [], f"raw topic passed to a logging call at line(s) {offenders}"
+
+    @pytest.mark.asyncio
+    async def test_the_info_announcement_carries_neither_identifier(self, caplog):
+        """The INFO branch is the one that reaches the default Home Assistant log.
+
+        Driven end to end rather than asserted on the helper, because this is the
+        record a user pastes into an issue without ever enabling debug logging.
+        """
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client = _make_mqtt_client(hass, fake_paho)
+        await client.async_start()
+        await _settle()
+
+        payload = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
+        msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=payload)
+
+        with caplog.at_level(logging.DEBUG):
+            client._on_message(fake_paho, None, msg)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        assert caplog.records, "the unrecognized-shape path logged nothing"
+        for record in caplog.records:
+            assert "pk123" not in record.message
+            assert "name-A" not in record.message
+
+        await client.async_disconnect()
