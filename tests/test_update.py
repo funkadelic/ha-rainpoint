@@ -153,32 +153,6 @@ class TestFirmwareUpdateEntity:
         assert entity.available is True
 
     @pytest.mark.asyncio
-    async def test_a_re_keyed_sid_is_picked_up_without_a_reload(self):
-        """The cloud re-keys a sub-device's sid when it is re-paired.
-
-        The maintainer's HTV210B was 491657 before one and 504942 after. A device
-        re-paired into the same hub and address keeps this entity, so an id read
-        once at construction would address something the cloud has retired for
-        the life of the config entry.
-        """
-        entity, client = _make_sub_entity(payload=CURRENT_PAYLOAD, sid=491657)
-        entity._coordinator.data["sensors"]["100_200_1"]["sid"] = 504942
-
-        await entity.async_update()
-
-        client.get_sub_firmware_info.assert_awaited_once_with(504942)
-
-    @pytest.mark.asyncio
-    async def test_a_poll_that_has_not_carried_this_device_falls_back(self):
-        """An entry missing from the snapshot must not send None as an address."""
-        entity, client = _make_sub_entity(payload=CURRENT_PAYLOAD)
-        entity._coordinator.data["sensors"].clear()
-
-        await entity.async_update()
-
-        client.get_sub_firmware_info.assert_awaited_once_with(504942)
-
-    @pytest.mark.asyncio
     async def test_api_error_goes_unavailable_rather_than_stale(self):
         """A failed check must not keep presenting the last known versions as live."""
         entity, _client = _make_entity(UPGRADE_PAYLOAD)
@@ -458,6 +432,32 @@ class TestSubFirmwareUpdateEntity:
     async def test_check_is_addressed_by_sid(self):
         """sid, not addr and not mid: the settings endpoints' scheme, not the control ones'."""
         entity, client = _make_sub_entity(payload=CURRENT_PAYLOAD)
+
+        await entity.async_update()
+
+        client.get_sub_firmware_info.assert_awaited_once_with(504942)
+
+    @pytest.mark.asyncio
+    async def test_a_re_keyed_sid_is_picked_up_without_a_reload(self):
+        """The cloud re-keys a sub-device's sid when it is re-paired.
+
+        The maintainer's HTV210B was 491657 before one and 504942 after. A device
+        re-paired into the same hub and address keeps this entity, so an id read
+        once at construction would address something the cloud has retired for
+        the life of the config entry.
+        """
+        entity, client = _make_sub_entity(payload=CURRENT_PAYLOAD, sid=491657)
+        entity._coordinator.data["sensors"]["100_200_1"]["sid"] = 504942
+
+        await entity.async_update()
+
+        client.get_sub_firmware_info.assert_awaited_once_with(504942)
+
+    @pytest.mark.asyncio
+    async def test_a_poll_that_has_not_carried_this_device_falls_back(self):
+        """An entry missing from the snapshot must not send None as an address."""
+        entity, client = _make_sub_entity(payload=CURRENT_PAYLOAD)
+        entity._coordinator.data["sensors"].clear()
 
         await entity.async_update()
 
