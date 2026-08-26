@@ -4,6 +4,15 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.21.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.21.0...v1.21.1) (2026-08-26)
 
+### What's new
+
+**Hub readings that used to need a restart**
+
+- After your hub installs a firmware upgrade, the Firmware Version reading now updates on its own. It used to show the old version until you restarted Home Assistant or reloaded the integration, so the same hub reported two different versions at once.
+- The RF Communication Channel now follows the hub. A channel changed in the RainPoint app used to stay at its old value in Home Assistant until a reload.
+
+The Firmware Update entity also shows a firmware icon now, rather than the RainPoint logo.
+
 
 ### Fixed
 
