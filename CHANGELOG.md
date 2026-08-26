@@ -2,6 +2,19 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.21.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.21.0...v1.21.1) (2026-08-26)
+
+
+### Fixed
+
+* keep the hub firmware version and RF channel up to date ([#219](https://github.com/funkadelic/ha-rainpoint/issues/219)) ([fec1ea6](https://github.com/funkadelic/ha-rainpoint/commit/fec1ea6ce4c2328a960fd5ad52268404e816324b))
+* show a firmware icon on the update entity instead of the RainPoint logo ([#218](https://github.com/funkadelic/ha-rainpoint/issues/218)) ([c8b3b11](https://github.com/funkadelic/ha-rainpoint/commit/c8b3b1104d33baeca21d37c06e7dc4de1d86f420))
+
+
+### Other Changes
+
+* allow the release workflow to be dispatched by hand ([#216](https://github.com/funkadelic/ha-rainpoint/issues/216)) ([414889e](https://github.com/funkadelic/ha-rainpoint/commit/414889ee1822f9e510a9af77dd7d0d8980e02a4b))
+
 ## [1.21.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.20.0...v1.21.0) (2026-08-26)
 
 ### What's new
