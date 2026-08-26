@@ -345,6 +345,16 @@ class _HABaseEntity:
         """Mirror Entity.should_poll, which decides whether a platform is polled."""
         return self._attr_should_poll
 
+    @property
+    def icon(self):
+        """Mirror Entity.icon, the surface the frontend reads.
+
+        Carried for the same reason as unique_id above: production sets
+        _attr_icon and the frontend resolves the property, so a test asserting
+        on the backing attribute is not testing what is displayed.
+        """
+        return getattr(self, "_attr_icon", None)
+
     async def async_will_remove_from_hass(self):
         """No-op teardown hook, matching Entity's awaitable base implementation."""
 
@@ -539,6 +549,20 @@ class _UpdateEntity(_HABaseEntity, ABC):
     def release_summary(self):
         """Mirror UpdateEntity.release_summary."""
         return self._attr_release_summary
+
+    @property
+    def entity_picture(self):
+        """Mirror UpdateEntity.entity_picture, which is a brand image, not None.
+
+        Real UpdateEntity builds this from the platform name and returns it
+        unconditionally, so it is the one Entity surface this platform base
+        inherits as a non-None value. Carried because a stub that fell through
+        to Entity's None default would let an assertion that this integration
+        clears the picture pass whether or not it actually does. The literal
+        stands in for the URL real Home Assistant composes; only its
+        non-None-ness is what any test here depends on.
+        """
+        return "https://brands.home-assistant.io/_/rainpoint/icon.png"
 
 
 sys.modules["homeassistant.components.button"].ButtonEntity = _ButtonEntity

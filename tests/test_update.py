@@ -424,6 +424,22 @@ class TestSharedFirmwareUpdateBase:
         with pytest.raises(TypeError, match="abstract"):
             RainPointFirmwareUpdate()
 
+    def test_both_entities_show_an_icon_rather_than_the_brand_logo(self):
+        """UpdateEntity.entity_picture returns the integration's brands.home-assistant.io
+        image, and a picture outranks an icon in the frontend, so leaving it inherited
+        would show the RainPoint logo and make _attr_icon dead. Both halves are asserted
+        because clearing the picture without the icon falls back to mdi:package-up rather
+        than to the mdi:chip its Firmware Version sibling uses.
+        """
+        hub_entity = RainPointHubFirmwareUpdate(MagicMock(), make_hub_info())
+        sub_entity = RainPointSubFirmwareUpdate(MagicMock(), MagicMock(), "182509_361277_1", {"sid": 504942})
+
+        for entity in (hub_entity, sub_entity):
+            assert entity.entity_picture is None
+            assert entity.icon == "mdi:chip"
+
+        assert hub_entity.icon == RainPointHubFirmwareSensor(MagicMock(), make_hub_info()).icon
+
 
 class TestSubFirmwareUpdateEntity:
     """The sub-device half: same decode, different endpoint and addressing."""
