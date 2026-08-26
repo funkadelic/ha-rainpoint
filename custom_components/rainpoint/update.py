@@ -150,10 +150,9 @@ class RainPointSubFirmwareUpdate(RainPointFirmwareUpdate):
     Deliberately not a RainPointSubDeviceEntity, unlike every other sub-device
     platform. That base is a CoordinatorEntity, and CoordinatorEntity's own
     should_poll hard-returns False from ahead of the _attr_-reading one in the
-    MRO, so an entity mixed onto it is never polled no matter what it sets. This
-    entity reads nothing from a poll snapshot anyway: every value it shows comes
-    from its own cloud call, so it takes the device page from the same helper
-    that base uses and keeps its own polling.
+    MRO, so an entity mixed onto it is never polled no matter what it sets. It
+    still holds the coordinator, just not as that base: nothing it displays comes
+    from a poll snapshot, but its addressing does, and that has to stay live.
 
     Built for every sub-device carrying a sid, with no model gate. The RainPoint
     app offers a "check for updates" link on the HTV210B alone, but the endpoint
@@ -170,9 +169,11 @@ class RainPointSubFirmwareUpdate(RainPointFirmwareUpdate):
     about.
     """
 
-    def __init__(self, client, sensor_key: str, sensor_info: dict) -> None:
+    def __init__(self, coordinator: RainPointCoordinator, client, sensor_key: str, sensor_info: dict) -> None:
         """Key the entity to the sub-device and start out with nothing to report."""
+        self._coordinator = coordinator
         self._client = client
+        self._sensor_key = sensor_key
         self._sensor_info = sensor_info
         self._sid = sensor_info.get("sid")
         # sensor_key rather than a slug rebuilt from the record's identity
@@ -191,8 +192,21 @@ class RainPointSubFirmwareUpdate(RainPointFirmwareUpdate):
         return build_sub_device_info(self._sensor_info)
 
     async def _fetch_firmware_info(self) -> dict:
-        """Check this sub-device's firmware, addressed by its sid."""
-        return await self._client.get_sub_firmware_info(self._sid)
+        """Check this sub-device's firmware, addressed by its current sid.
+
+        Read through the coordinator rather than off the record captured at
+        construction, which device.py's own note asks of any value that changes
+        after setup. sid is one: the maintainer's HTV210B was 491657 before it
+        was re-paired and 504942 after. A device re-paired into the same hub and
+        address keeps this entity, so a frozen sid would leave it checking an id
+        the cloud has retired for the life of the config entry.
+
+        The constructor's value is the fallback, for the poll that has not
+        carried this device yet, and it is the same id either way until a
+        re-pair.
+        """
+        current = ((self._coordinator.data or {}).get("sensors", {}) or {}).get(self._sensor_key) or {}
+        return await self._client.get_sub_firmware_info(current.get("sid") or self._sid)
 
 
 async def async_setup_entry(
@@ -225,7 +239,7 @@ async def async_setup_entry(
         """Return the update entity for one sub-device, or none if it has no sid."""
         if info.get("sid") is None:
             return []
-        return [RainPointSubFirmwareUpdate(client, key, info)]
+        return [RainPointSubFirmwareUpdate(coordinator, client, key, info)]
 
     # Wrapped so a late-added entity gets the same first check the setup pass
     # gets. LateEntityAdder calls its adder with the entities alone, and this

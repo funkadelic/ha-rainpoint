@@ -153,6 +153,32 @@ class TestFirmwareUpdateEntity:
         assert entity.available is True
 
     @pytest.mark.asyncio
+    async def test_a_re_keyed_sid_is_picked_up_without_a_reload(self):
+        """The cloud re-keys a sub-device's sid when it is re-paired.
+
+        The maintainer's HTV210B was 491657 before one and 504942 after. A device
+        re-paired into the same hub and address keeps this entity, so an id read
+        once at construction would address something the cloud has retired for
+        the life of the config entry.
+        """
+        entity, client = _make_sub_entity(payload=CURRENT_PAYLOAD, sid=491657)
+        entity._coordinator.data["sensors"]["100_200_1"]["sid"] = 504942
+
+        await entity.async_update()
+
+        client.get_sub_firmware_info.assert_awaited_once_with(504942)
+
+    @pytest.mark.asyncio
+    async def test_a_poll_that_has_not_carried_this_device_falls_back(self):
+        """An entry missing from the snapshot must not send None as an address."""
+        entity, client = _make_sub_entity(payload=CURRENT_PAYLOAD)
+        entity._coordinator.data["sensors"].clear()
+
+        await entity.async_update()
+
+        client.get_sub_firmware_info.assert_awaited_once_with(504942)
+
+    @pytest.mark.asyncio
     async def test_api_error_goes_unavailable_rather_than_stale(self):
         """A failed check must not keep presenting the last known versions as live."""
         entity, _client = _make_entity(UPGRADE_PAYLOAD)
@@ -394,24 +420,20 @@ class TestGetHubFirmwareInfo:
         assert await client.get_hub_firmware_info(361277) == {}
 
 
-def _sub_info(sid=504942, data=None, model="HTV210B"):
-    """Return one canonical coordinator sensor entry for a sub-device."""
+def _make_sub_entity(payload=None, error=None, sid=504942, data=None):
+    """Return a sub-device entity wired to a client that answers with payload (or raises)."""
     coordinator = make_sensor_coordinator(
-        model=model,
+        model="HTV210B",
         data={} if data is None else data,
         extra_sensor_info={"sid": sid},
     )
-    return coordinator.data["sensors"]["100_200_1"]
-
-
-def _make_sub_entity(payload=None, error=None, sid=504942, data=None):
-    """Return a sub-device entity wired to a client that answers with payload (or raises)."""
     client = MagicMock()
     client.get_sub_firmware_info = AsyncMock(
         side_effect=error if error is not None else None,
         return_value=payload,
     )
-    return RainPointSubFirmwareUpdate(client, "100_200_1", _sub_info(sid=sid, data=data)), client
+    entity = RainPointSubFirmwareUpdate(coordinator, client, "100_200_1", coordinator.data["sensors"]["100_200_1"])
+    return entity, client
 
 
 class TestSharedFirmwareUpdateBase:
@@ -489,7 +511,7 @@ class TestSubFirmwareUpdateEntity:
         """The sub-device already has a Firmware Version diagnostic sensor on its own suffix."""
         coordinator = make_sensor_coordinator(extra_sensor_info={"sid": 1})
         info = coordinator.data["sensors"]["100_200_1"]
-        entity = RainPointSubFirmwareUpdate(MagicMock(), "100_200_1", info)
+        entity = RainPointSubFirmwareUpdate(coordinator, MagicMock(), "100_200_1", info)
         sensor = RainPointFirmwareVersionSensor(coordinator, "100_200_1", info, "100_200_1")
 
         assert entity.unique_id == "rainpoint_100_200_1_firmware_update"
@@ -750,7 +772,7 @@ import sys
 from custom_components.rainpoint.update import RainPointHubFirmwareUpdate, RainPointSubFirmwareUpdate
 
 hub = RainPointHubFirmwareUpdate(None, {"hid": 1, "mid": 2})
-sub = RainPointSubFirmwareUpdate(None, "1_2_1", {"hid": 1, "mid": 2, "addr": 1, "sid": 3})
+sub = RainPointSubFirmwareUpdate(None, None, "1_2_1", {"hid": 1, "mid": 2, "addr": 1, "sid": 3})
 json.dump({"hub": hub.should_poll, "sub": sub.should_poll}, sys.stdout)
 """
 
