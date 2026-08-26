@@ -4,6 +4,21 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.21.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.20.0...v1.21.0) (2026-08-26)
 
+### What's new
+
+**Firmware updates show up in Home Assistant**
+
+- Every hub and every sub-device now has a Firmware Update entity. It shows the version the device is running and whether RainPoint is offering a newer one, and it checks when Home Assistant starts and every six hours after that.
+- You still install the update from the RainPoint app. RainPoint's changelog is not shown, because RainPoint sends it in Chinese whatever language the app asks for.
+
+**Live updates now reach every hub on your account**
+
+- If you have more than one hub, only one of them was getting live updates and the rest waited for the two-minute poll. All of them are live now.
+
+**"Last Updated" is now called "Last Data Change"**
+
+- The old name read as "last heard from". It moves only when a device's readings change or the device restarts, so a steady sensor can leave it unchanged for hours while the device is fine. This is a display change only. No entity ID changed and no history was lost.
+
 
 ### Added
 
