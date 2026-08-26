@@ -41,12 +41,12 @@ MID_WRAPPER = 202
 CONVERGENCE_HID = 4242
 CONVERGENCE_MID = 777
 
-HUB_PLATFORMS = ("sensor", "select", "switch", "binary_sensor")
+HUB_PLATFORMS = ("sensor", "select", "switch", "binary_sensor", "update")
 
 # What each hub-owning platform contributes per real hub. Stated per platform
 # rather than only as a total, so a platform that kept a singular id cannot hide
 # inside a union that is large enough overall.
-PER_HUB_COUNTS = {"sensor": 4, "select": 1, "switch": 1, "binary_sensor": 1}
+PER_HUB_COUNTS = {"sensor": 4, "select": 1, "switch": 1, "binary_sensor": 1, "update": 1}
 
 
 def _hub_record(mid, *, real=True, sub_devices=()):
@@ -109,7 +109,12 @@ async def _two_hub_coordinator(hass, entry):
     client.get_device_status = AsyncMock(return_value={})
 
     coordinator = RainPointCoordinator(hass, client, entry)
-    hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})["coordinator"] = coordinator
+    entry_store = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
+    entry_store["coordinator"] = coordinator
+    # The update platform reads the client straight from the entry store rather
+    # than through the coordinator, so a harness that stored only the coordinator
+    # would build zero update entities and read as a platform that adds nothing.
+    entry_store["client"] = client
     await coordinator.async_config_entry_first_refresh()
     return coordinator
 

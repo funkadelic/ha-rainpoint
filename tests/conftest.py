@@ -172,6 +172,7 @@ _HA_STUBS = [
     "homeassistant.components.number",
     "homeassistant.components.switch",
     "homeassistant.components.button",
+    "homeassistant.components.update",
     "homeassistant.components.repairs",
     "homeassistant.const",
     "homeassistant.data_entry_flow",
@@ -327,6 +328,22 @@ class _HABaseEntity:
             return description.has_entity_name
         return False
 
+    @property
+    def unique_id(self):
+        """Mirror Entity.unique_id, the surface Home Assistant reads.
+
+        Carried for the same reason as has_entity_name above: the registry
+        consults the property, never the _attr_ backing attribute, so a test
+        that asserts on the backing attribute is not testing what production
+        reads. Purely additive, since without it any access raised.
+        """
+        return self._attr_unique_id
+
+    @property
+    def should_poll(self) -> bool:
+        """Mirror Entity.should_poll, which decides whether a platform is polled."""
+        return self._attr_should_poll
+
     async def async_will_remove_from_hass(self):
         """No-op teardown hook, matching Entity's awaitable base implementation."""
 
@@ -466,7 +483,45 @@ sys.modules["homeassistant.components.select"].SelectEntity = _SelectEntity
 sys.modules["homeassistant.components.switch"].SwitchEntity = _SwitchEntity
 sys.modules["homeassistant.components.binary_sensor"].BinarySensorEntity = _BinarySensorEntity
 sys.modules["homeassistant.components.binary_sensor"].BinarySensorDeviceClass = MagicMock()
+
+
+class _UpdateEntity:
+    """Flat stand-in for homeassistant.components.update.UpdateEntity.
+
+    Added for the same reason _ButtonEntity was: update arrived after that
+    conversion and was then the only platform base still resolving to the real
+    Home Assistant class, which left the hub's update entity rooted somewhere
+    none of its siblings are. Worse than cosmetic here, because real UpdateEntity
+    drags in real Entity and the resulting MRO skipped _HABaseEntity outright, so
+    the harness was proving something about a hierarchy the flat-class scheme
+    does not describe. The three value properties are carried because production
+    reads them, not the _attr_ backing attributes.
+    """
+
+    _attr_installed_version = None
+    _attr_latest_version = None
+    _attr_release_summary = None
+
+    @property
+    def installed_version(self):
+        """Mirror UpdateEntity.installed_version."""
+        return self._attr_installed_version
+
+    @property
+    def latest_version(self):
+        """Mirror UpdateEntity.latest_version."""
+        return self._attr_latest_version
+
+    @property
+    def release_summary(self):
+        """Mirror UpdateEntity.release_summary."""
+        return self._attr_release_summary
+
+
 sys.modules["homeassistant.components.button"].ButtonEntity = _ButtonEntity
+sys.modules["homeassistant.components.update"].UpdateEntity = _UpdateEntity
+sys.modules["homeassistant.components.update"].UpdateDeviceClass = MagicMock()
+sys.modules["homeassistant.components.update"].UpdateEntityFeature = MagicMock()
 
 
 # ---------------------------------------------------------------------------

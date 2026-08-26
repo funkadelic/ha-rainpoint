@@ -43,6 +43,7 @@ from custom_components.rainpoint.hub_entities import (
 from custom_components.rainpoint.number import RainPointZoneDurationNumber
 from custom_components.rainpoint.select import RainPointSubDevicePowerSelect
 from custom_components.rainpoint.sensor import RainPointMoisturePercentSensor, RainPointZoneStateSensor
+from custom_components.rainpoint.update import RainPointHubFirmwareUpdate
 from custom_components.rainpoint.valve import RainPointValveEntity
 from tests.helpers import make_sensor_entry
 
@@ -419,10 +420,10 @@ class TestRenamedHubComposesShortName:
 
 
 class TestEveryHubEntitySetsHasEntityName:
-    """Covers the six hub entity families that root at RainPointHubDevice."""
+    """Covers the seven hub entity families that root at RainPointHubDevice."""
 
-    def test_all_six_hub_families_carry_the_flag(self):
-        """Constructs one instance of each of the six hub entity families that
+    def test_all_seven_hub_families_carry_the_flag(self):
+        """Constructs one instance of each of the seven hub entity families that
         root at RainPointHubDevice, rather than reading the flag off the base
         class, so a family that stopped inheriting the base would be caught."""
         coordinator = _mock_hub_coordinator()
@@ -435,8 +436,17 @@ class TestEveryHubEntitySetsHasEntityName:
         push_connected = RainPointPushConnectedBinarySensor(mqtt_client, hub_info)
         broadcast_switch = RainPointHubBroadcastSwitch(coordinator, hub_info)
         broadcast_button = RainPointHubBroadcastButton(coordinator, hub_info)
+        firmware_update = RainPointHubFirmwareUpdate(MagicMock(), hub_info)
 
-        for entity in (rssi, connectivity, channel_select, push_connected, broadcast_switch, broadcast_button):
+        for entity in (
+            rssi,
+            connectivity,
+            channel_select,
+            push_connected,
+            broadcast_switch,
+            broadcast_button,
+            firmware_update,
+        ):
             assert entity.has_entity_name is True
 
 
@@ -452,6 +462,12 @@ class TestHubEntityUniqueIdsUnchanged:
 
         assert rssi._attr_unique_id == f"rainpoint_hub_{HUB_HID}_{HUB_MID}_rssi"
         assert device_id_sensor._attr_unique_id == f"rainpoint_hub_{HUB_HID}_{HUB_MID}_device_id"
+
+        # The update entity is pinned alongside them because its suffix is a
+        # member of _HUB_MIGRATABLE_SUFFIXES, so moving it would silently break
+        # the hub identity migration as well as the registry rows themselves.
+        firmware_update = RainPointHubFirmwareUpdate(MagicMock(), _hub_info(name="RainPoint Hub"))
+        assert firmware_update._attr_unique_id == f"rainpoint_hub_{HUB_HID}_{HUB_MID}_firmware_update"
 
 
 class TestEveryConvertedPlatformSetsHasEntityName:

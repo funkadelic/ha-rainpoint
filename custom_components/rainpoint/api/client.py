@@ -404,6 +404,38 @@ class RainPointClient:
             raise RainPointApiError(f"getDeviceByHid failed: code {data.get('code')}")
         return data.get("data", [])
 
+    async def get_hub_firmware_info(self, mid: int) -> dict:
+        """Return one hub's firmware check result: {"info": ..., "softVer": ...}.
+
+        The envelope is identical whether or not an upgrade exists, code 0 in
+        both cases, so "info" being null is the only signal that the hub is
+        current. Callers branch on that rather than on a status code.
+
+        "softVer" is the installed version and is the same string the device
+        record carries, so a caller that wants both versions needs this call
+        alone and no cross-reference against the poll snapshot.
+        """
+        await self.ensure_logged_in()
+        url = f"{self._base_url}/app/device/firmware/upgrade/info/v2"
+        params = {"mid": mid}
+        # mid is an addressing identifier and stays out of the log line.
+        _LOGGER.debug("API call: get_hub_firmware_info URL=%s", url)
+        request_token = self._token
+        async with self._session.get(url, headers=self._auth_headers(), params=params) as resp:
+            if resp.status != 200:
+                raise RainPointApiError(f"get_hub_firmware_info HTTP {resp.status}")
+            data = await resp.json()
+        _LOGGER.debug("API response: get_hub_firmware_info code=%s", data.get("code"))
+        if data.get("code") != 0:
+            self._maybe_invalidate_token(data.get("code"), request_token)
+            _LOGGER.debug("get_hub_firmware_info failed response: %s", _RecordSummary(data))
+            raise RainPointApiError(f"get_hub_firmware_info failed: code {data.get('code')}")
+        payload = data.get("data") or {}
+        if not isinstance(payload, dict):
+            _LOGGER.debug("get_hub_firmware_info returned an unusable data shape: %s", type(payload).__name__)
+            return {}
+        return payload
+
     async def get_multiple_device_status(self, devices: list[dict]) -> list[dict]:
         """Get status for multiple devices in one API call (more efficient)."""
         await self.ensure_logged_in()
