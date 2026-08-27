@@ -73,10 +73,12 @@ _SENTINEL = object()
 # the flow-meter registry entry is decode_flowmeter, an alias for
 # decode_flow_meter, whose __name__ differs from the registry key, and a
 # hand-typed string would encode that mismatch rather than survive it.
-# decode_pool is deliberately absent: MODEL_POOL and MODEL_HCS0528ARF are the
-# same string, so the registry dict literal's later MODEL_HCS0528ARF entry
-# overwrites the earlier MODEL_POOL one, and DECODER_REGISTRY never actually
-# dispatches decode_pool. decode_hcs0528arf already covers that key. A wrong
+# decode_pool is deliberately absent: the registry's entry for the pool sensor
+# is decode_hcs0528arf, a passthrough that calls decode_pool, so a set built
+# from the registry's own function names never carries decode_pool and naming
+# it here would exempt a decoder the guard below cannot reach. The literal
+# used to carry a second, shadowed entry spelled MODEL_POOL, which is where
+# this exemption's original wording came from; that entry is gone. A wrong
 # entry here is a written false statement about what that decoder reports: if
 # this set ever names a decoder that does report a run state, it is silencing
 # a real failure of TestRunStateEvidenceNoteDriftGuard below rather than

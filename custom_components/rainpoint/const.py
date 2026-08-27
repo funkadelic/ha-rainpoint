@@ -368,7 +368,6 @@ HAND_WRITTEN_MODELS: frozenset[str] = frozenset(
         MODEL_TEMPHUM,
         MODEL_FLOWMETER,
         MODEL_CO2,
-        MODEL_POOL,
         MODEL_POOL_PLUS,
         MODEL_VALVE_HUB,
         MODEL_VALVE_113,
