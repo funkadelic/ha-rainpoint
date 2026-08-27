@@ -34,6 +34,7 @@ from custom_components.rainpoint.const import (
     MODEL_HCS026FRF,
     PUSH_HUB_IDENTITY_ISSUE_ID,
 )
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 from custom_components.rainpoint.repairs import push_hub_identity_issue_id
 from tests.helpers import VALVE_ZONES_TLV_PAYLOAD, make_silent_wrapper_hub_record
 
@@ -3245,7 +3246,7 @@ class TestDeviceFirmwareRefresh:
         return record
 
     @classmethod
-    def _build_coordinator(cls, versions):
+    def _build_coordinator(cls, versions, silent=False):
         """Build a real coordinator whose every poll re-reads `versions`.
 
         The mutable holder is what makes an upgrade expressible: the cloud
@@ -3256,11 +3257,14 @@ class TestDeviceFirmwareRefresh:
 
         client = AsyncMock()
         client.get_devices_by_hid.side_effect = lambda hid: [cls._hub_record(*versions)]
-        # A reporting sub-device, not a silent one: a silent placeholder is a
-        # different case and carries no firmware version at all, so it would
-        # quietly remove the half of this sweep that reads sensor records.
+        # A reporting sub-device by default. The silent case is not the same
+        # shape and is driven separately, rather than assumed equivalent: a
+        # status response that arrives naming nobody is what increments the
+        # silence debounce.
         client.get_multiple_device_status.return_value = [
-            {"mid": cls.MID, "subDeviceStatus": [{"id": "D01", "value": VALVE_ZONES_TLV_PAYLOAD, "time": 1785420002247}]}
+            {"mid": cls.MID, "subDeviceStatus": []}
+            if silent
+            else {"mid": cls.MID, "subDeviceStatus": [{"id": "D01", "value": VALVE_ZONES_TLV_PAYLOAD, "time": 1785420002247}]}
         ]
 
         entry = MagicMock()
@@ -3340,6 +3344,95 @@ class TestDeviceFirmwareRefresh:
             # Settled again: the row reads back what the cloud says.
             await coordinator.async_refresh()
             assert len(writes) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_silent_sub_device_still_has_its_firmware_refreshed(self):
+        """The silent device drives its own timeline rather than borrowing the
+        reporting one's.
+
+        A silent placeholder is built through the same _build_sensor_entry a
+        live decode uses, so it carries the firmware version the cloud listed
+        even though the device has reported no status: the version comes from
+        the device list, and talking is a different fact. Asserted across the
+        silence debounce, because the key does not exist until it lands, and
+        substituting a reporting device here would delete the whole case.
+        """
+        versions = ["1.1.1041", "128"]
+        coordinator, hass, entry = self._build_coordinator(versions, silent=True)
+        rows = self._rows(sub_version="127")
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_firmware_on_updates(hass, entry, coordinator)
+
+            # Below the debounce: the sub-device has no sensor key at all yet,
+            # so there is nothing to read a version off.
+            assert self.SUB_ROW not in coordinator.data["sensors"]
+            assert writes == []
+
+            await coordinator.async_refresh()
+            await coordinator.async_refresh()
+
+            record = coordinator.data["sensors"][self.SUB_ROW]
+            assert record["data"]["type"] == SILENT_DATA_TYPE
+            assert record["firmware_version"] == "128"
+            assert ("sub-row", "128") in writes
+
+    @pytest.mark.asyncio
+    async def test_two_hubs_sharing_a_mid_do_not_take_each_other_version(self):
+        """Hub identity is (hid, mid), and a record that is not a hub supplies
+        no version at all.
+
+        A config entry can carry several hids, and the top-level list also
+        holds the Bluetooth wrapper record, which is not a hub. Keyed on mid
+        alone, the last record to mention this mid would decide both rows: the
+        wrapper is placed last here precisely so an unfiltered map would hand
+        its version to a real hub.
+        """
+        second_hid = 101
+        wrapper = {
+            "mid": self.MID,
+            "name": "",
+            "homeName": "Home",
+            "did": "",
+            "mac": "",
+            "productKey": "",
+            "model": "",
+            "deviceName": "",
+            "softVer": "9.9.9",
+            "subDevices": [],
+        }
+
+        def _devices_by_hid(hid):
+            """Return one real hub per home, both at the same mid, plus a wrapper."""
+            record = self._hub_record("1.1.1042" if hid == self.HID else "2.2.2", None)
+            return [record, wrapper] if hid == self.HID else [record]
+
+        coordinator, hass, entry = self._build_coordinator(["unused", None])
+        coordinator._client.get_devices_by_hid.side_effect = _devices_by_hid
+        entry.data = {"hids": [self.HID, second_hid]}
+        coordinator._hids = [self.HID, second_hid]
+
+        rows = [
+            SimpleNamespace(id="hub-a", identifiers={(DOMAIN, self.HUB_ROW)}, sw_version="1.1.1041"),
+            SimpleNamespace(id="hub-b", identifiers={(DOMAIN, f"hub_{second_hid}_{self.MID}")}, sw_version="1.1.1041"),
+        ]
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_firmware(hass, entry, coordinator)
+
+        assert sorted(writes) == [("hub-a", "1.1.1042"), ("hub-b", "2.2.2")]
 
     @pytest.mark.asyncio
     async def test_a_poll_that_reports_no_version_leaves_the_row_alone(self):

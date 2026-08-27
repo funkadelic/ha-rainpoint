@@ -674,12 +674,18 @@ def _refresh_device_firmware(hass: HomeAssistant, entry: ConfigEntry, coordinato
     different device rather than a stale field.
 
     Writes only a truthy version that differs from the row's. A poll that omits
-    the field, a silent sub-device's placeholder record, and a payload the
-    coordinator could not read all yield nothing here, so the sweep never
-    blanks a version it cannot currently see: the last known version on the
-    page is better than an empty field, and the update entity is the surface
-    that speaks to availability. That also makes a repeat sweep over settled
-    devices a genuine no-op, with no registry call at all.
+    the field and a payload the coordinator could not read both yield nothing
+    here, so the sweep never blanks a version it cannot currently see: the last
+    known version on the page is better than an empty field, and the update
+    entity is the surface that speaks to availability. That also makes a repeat
+    sweep over settled devices a genuine no-op, with no registry call at all.
+
+    A silent sub-device is refreshed like any other, and that is deliberate
+    rather than incidental. _build_silent_subdevice builds its placeholder
+    through the same _build_sensor_entry a live decode uses, so the record
+    carries the firmware_version the cloud listed even though the device has
+    reported no status; the version comes from the device list, which is a
+    different fact from whether the device is talking.
 
     Synchronous and never raises, like the sweeps beside it, and guarded the
     same way: the registry fetch, each coordinator read, and each row's
@@ -693,11 +699,17 @@ def _refresh_device_firmware(hass: HomeAssistant, entry: ConfigEntry, coordinato
         return
 
     sensors = _read_current_sensors(coordinator, "refreshing no sub-device firmware this pass")
+    # Keyed by (hid, mid) and filtered through is_hub_record, which is the same
+    # pair and the same filter the residual re-key resolves hub identity with.
+    # mid alone is not an identity here: a config entry can carry several hids,
+    # and the top-level list also holds records that are not hubs at all, so a
+    # single-key map can hand one row the version that belongs to another.
+    #
     # None means the read raised, and an unreadable hub list must refresh
     # nothing rather than blank anything; the empty list it degrades to says
     # "no hub versions to compare against", which is the same outcome.
     hubs = _read_current_hubs(coordinator) or []
-    hub_versions = {str(hub.get("mid")): hub.get("softVer") for hub in hubs}
+    hub_versions = {(str(hub.get("hid")), str(hub.get("mid"))): hub.get("softVer") for hub in hubs if is_hub_record(hub)}
 
     for row in rows:
         try:
@@ -708,9 +720,10 @@ def _refresh_device_firmware(hass: HomeAssistant, entry: ConfigEntry, coordinato
             hub_identity = _hub_identity(key)
             if hub_identity is not None:
                 # An old-shape hub row carries no mid and is the identity
-                # re-key's problem, not this sweep's; it resolves to no
-                # version and is skipped.
-                version = hub_versions.get(str(hub_identity[1]))
+                # re-key's problem, not this sweep's; its (hid, None) pair
+                # matches nothing here, so it resolves to no version and is
+                # skipped.
+                version = hub_versions.get((hub_identity[0], str(hub_identity[1])))
             else:
                 record = sensors.get(key)
                 version = record.get("firmware_version") if isinstance(record, dict) else None
