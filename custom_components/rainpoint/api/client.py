@@ -26,6 +26,20 @@ _LOGGER = logging.getLogger(__name__)
 # sustained ban.
 _LOGIN_COOLDOWN_SECONDS = 120
 
+# How far back _maybe_invalidate_token looks when deciding whether the session
+# rejections it is seeing are a flood rather than a one-off displacement. A
+# genuine displacement is one rejection: something logged in elsewhere, this
+# session was expired, and the next call re-authenticated. A code the cloud
+# returns for some other reason on a polled endpoint produces one rejection per
+# poll forever, because the transition guard below bounds invalidations within a
+# token generation and every forced re-login starts a new one. At the default
+# 120s poll that is 30 rejections an hour, so a window of an hour reads as a
+# flood only when the pattern is really sustained, and a user who displaces
+# their own session twice in an afternoon still gets a single INFO line each
+# time. Visibility only: nothing here throttles, and the cost of the flood is
+# unchanged until the bounding question is settled.
+_INVALIDATION_FLOOD_WINDOW_SECONDS = 3600
+
 # The RainPoint cloud edge (nginx) returns a bare HTTP 403 for Home Assistant's
 # default aiohttp User-Agent ("HomeAssistant/<ver> aiohttp/<ver> Python/<ver>")
 # before the request reaches the application, so every API call must send a
@@ -97,6 +111,10 @@ class RainPointClient:
         # supervisor) coalesce into one request instead of firing several
         # simultaneous login POSTs while the token is invalid.
         self._login_lock = asyncio.Lock()
+        # When each recent session invalidation happened, pruned to the flood
+        # window. Only the log line reads it, so a client that never sees a
+        # rejection carries an empty list forever.
+        self._recent_invalidations: list[datetime] = []
         # Set when the server throttles the login endpoint; blocks further
         # network login attempts until it passes.
         self._login_cooldown_until: datetime | None = None
@@ -203,7 +221,7 @@ class RainPointClient:
             and request_token == self._token
             and self._token_expires_at is not None
         ):
-            _LOGGER.info("RainPoint session rejected (code %s); forcing re-login on the next call", code)
+            self._record_invalidation(code)
             self._token_expires_at = None
             for callback in self._token_invalidated_listeners:
                 # Isolate each callback in its own try/except, mirroring the
@@ -215,6 +233,42 @@ class RainPointClient:
                     callback()
                 except Exception:
                     _LOGGER.exception("RainPoint token-invalidated listener raised; continuing")
+
+    def _record_invalidation(self, code) -> None:
+        """Log this invalidation, at WARNING once it is one of several in the window.
+
+        Every forced re-login used to log the same INFO line, so a session
+        displaced once on Tuesday and a session re-authenticating every two
+        minutes since Tuesday read identically in a support log. The count and
+        the window are what separate them, and they are what a reporter can
+        paste without knowing any of this.
+
+        Counted per client rather than per token generation on purpose: the
+        transition guard already holds each generation to one invalidation, so
+        a count that reset with the generation could never exceed one and would
+        say nothing. This is the cross-generation view that guard cannot give.
+
+        Says nothing about which code carries which meaning, since neither
+        1001 nor 1004 is settled, and reports only what was observed. Carries
+        no identifier: the numeric code, a count and a window are the whole
+        line.
+        """
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(seconds=_INVALIDATION_FLOOD_WINDOW_SECONDS)
+        self._recent_invalidations = [seen for seen in self._recent_invalidations if seen > cutoff]
+        self._recent_invalidations.append(now)
+
+        if len(self._recent_invalidations) > 1:
+            _LOGGER.warning(
+                "RainPoint session rejected %s times in the last %s minutes (code %s); "
+                "each rejection forces a full re-login, so a code that is not really a session "
+                "rejection costs one login per poll",
+                len(self._recent_invalidations),
+                _INVALIDATION_FLOOD_WINDOW_SECONDS // 60,
+                code,
+            )
+            return
+        _LOGGER.info("RainPoint session rejected (code %s); forcing re-login on the next call", code)
 
     # --- login / auth ---
 

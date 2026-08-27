@@ -7,10 +7,11 @@ import importlib.util
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import custom_components.rainpoint.api.client as _client_module
 import custom_components.rainpoint.api.product_catalog as product_catalog
 from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointThrottledError
 from custom_components.rainpoint.api.client import _SESSION_REJECTED_CODES, _USER_AGENT
@@ -1210,6 +1211,75 @@ class TestDisplacedSessionRecovery:
         await client.get_devices_by_hid(hid=42)
 
         assert client._session.post.call_count == 1
+
+
+class TestSessionInvalidationFloodVisibility:
+    """A sustained rejection reads differently in the log from a one-off one.
+
+    The cost itself is unchanged: a rejection still forces one re-login, and
+    bounding that is a separate decision. What changes is that a reporter's
+    log now says whether it happened once or keeps happening, which is the
+    thing nobody could tell before.
+    """
+
+    async def test_second_rejection_in_a_new_generation_warns_with_a_count(self, caplog):
+        """Two rejections across two token generations warn, and say how many.
+
+        Drives the real cross-generation sequence rather than calling the
+        recorder twice: first rejection expires the token, the next call's
+        ensure_logged_in re-logs in and starts a new generation, and the
+        second rejection carries that fresh token, so the transition guard
+        acts a second time. That is exactly the loop a persistent non-session
+        code produces once per poll, and the guard that bounds one generation
+        cannot see it.
+        """
+        client = _make_client()
+        client._token = "first-generation-token"
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+
+        rejection = {"code": 1004, "msg": "session rejected"}
+        client._session.get = MagicMock(side_effect=[_mock_response(rejection), _mock_response(rejection)])
+        client._session.post = MagicMock(return_value=_mock_response(_login_json_body()))
+
+        with caplog.at_level(logging.INFO):
+            for _ in range(2):
+                with pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 1004"):
+                    await client.get_devices_by_hid(hid=42)
+
+        assert client._session.post.call_count == 1
+        assert client._token == "rotated-token"
+
+        warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "rejected 2 times in the last 60 minutes" in warnings[0].getMessage()
+        assert "code 1004" in warnings[0].getMessage()
+
+    def test_one_rejection_stays_at_info(self):
+        """A single displacement is normal and must not shout."""
+        client = _make_client()
+
+        with patch.object(_client_module._LOGGER, "warning") as warning, patch.object(_client_module._LOGGER, "info") as info:
+            client._record_invalidation(1001)
+
+        warning.assert_not_called()
+        assert info.call_count == 1
+
+    def test_a_rejection_older_than_the_window_does_not_count(self):
+        """The window is a window, not a lifetime counter.
+
+        An install that is displaced once a month must keep reading as a
+        one-off, so the stale timestamp is dropped rather than accumulated.
+        """
+        client = _make_client()
+        client._recent_invalidations = [
+            datetime.now(UTC) - timedelta(seconds=_client_module._INVALIDATION_FLOOD_WINDOW_SECONDS + 1)
+        ]
+
+        with patch.object(_client_module._LOGGER, "warning") as warning:
+            client._record_invalidation(1004)
+
+        warning.assert_not_called()
+        assert len(client._recent_invalidations) == 1
 
 
 class TestTokenInvalidationListeners:
