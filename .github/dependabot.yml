@@ -16,6 +16,12 @@ updates:
   # Monitor Python (pip) dependencies
   - package-ecosystem: "pip"
     directory: "/"
+    # requirements-test-min.txt pins the oldest supported Home Assistant on
+    # purpose. Dependabot's ignore rules cannot be scoped to one file, so
+    # without this it bumps that pin to match requirements-test.txt and the
+    # oldest supported release stops being tested.
+    exclude-paths:
+      - "requirements-test-min.txt"
     schedule:
       interval: "weekly"
     commit-message:

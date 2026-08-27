@@ -13,12 +13,10 @@
 # 0.13.316 is the last release supporting Python 3.13, and 0.13.317 moved to
 # 3.14. Raising it drops the older half of the range this file exists to cover.
 #
-# The .pip extension is deliberate and this file must not be renamed back to
-# .txt. Dependabot's pip fetcher discovers requirements files by extension
-# first (.txt and .in), and its ignore rules are keyed per ecosystem and
-# directory, never per file, so with both files named .txt it could not be
-# told to leave this one alone. It opened a bump PR against this pin every
-# time the other file moved. pip does not care what the file is called.
+# Dependabot is kept off this file by an exclude-paths entry in
+# .github/dependabot.yml. Its ignore rules are keyed per ecosystem and
+# directory, never per file, so without that entry it opened a bump PR against
+# this pin every time the other file moved. Leave the entry in place.
 pytest-homeassistant-custom-component==0.13.316
 pytest-asyncio>=1.3.0
 pytest-cov>=7.0.0
