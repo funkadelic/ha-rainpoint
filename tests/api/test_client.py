@@ -1222,47 +1222,66 @@ class TestSessionInvalidationFloodVisibility:
     thing nobody could tell before.
     """
 
-    async def test_second_rejection_in_a_new_generation_warns_with_a_count(self, caplog):
-        """Two rejections across two token generations warn, and say how many.
+    @pytest.mark.asyncio
+    async def test_a_sustained_rejection_across_generations_warns_with_a_count(self, caplog):
+        """Rejections across successive token generations warn, and say how many.
 
         Drives the real cross-generation sequence rather than calling the
-        recorder twice: first rejection expires the token, the next call's
-        ensure_logged_in re-logs in and starts a new generation, and the
-        second rejection carries that fresh token, so the transition guard
-        acts a second time. That is exactly the loop a persistent non-session
-        code produces once per poll, and the guard that bounds one generation
-        cannot see it.
+        recorder repeatedly: each rejection expires the token, the next call's
+        ensure_logged_in re-logs in and starts a new generation, and the next
+        rejection carries that fresh token, so the transition guard acts
+        again. That is exactly the loop a persistent non-session code produces
+        once per poll, and the guard that bounds one generation cannot see it.
+
+        Asserted as a timeline, because the threshold is the whole point: two
+        rejections are still two ordinary displacements and must stay quiet,
+        and the third is what turns the pattern into a rate worth reporting.
         """
         client = _make_client()
         client._token = "first-generation-token"
         client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
 
         rejection = {"code": 1004, "msg": "session rejected"}
-        client._session.get = MagicMock(side_effect=[_mock_response(rejection), _mock_response(rejection)])
+        client._session.get = MagicMock(side_effect=[_mock_response(rejection) for _ in range(3)])
         client._session.post = MagicMock(return_value=_mock_response(_login_json_body()))
 
-        with caplog.at_level(logging.INFO):
-            for _ in range(2):
-                with pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 1004"):
-                    await client.get_devices_by_hid(hid=42)
+        async def _reject_once():
+            """Drive one rejected call, re-logging in first if the token is expired."""
+            with pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 1004"):
+                await client.get_devices_by_hid(hid=42)
 
-        assert client._session.post.call_count == 1
+        with caplog.at_level(logging.INFO):
+            await _reject_once()
+            await _reject_once()
+
+            assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+
+            await _reject_once()
+
+        # Two recovery logins: the first call carried the token it was given.
+        assert client._session.post.call_count == 2
         assert client._token == "rotated-token"
 
         warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
         assert len(warnings) == 1
-        assert "rejected 2 times in the last 60 minutes" in warnings[0].getMessage()
+        assert "rejected 3 times in the last 60 minutes" in warnings[0].getMessage()
         assert "code 1004" in warnings[0].getMessage()
 
-    def test_one_rejection_stays_at_info(self):
-        """A single displacement is normal and must not shout."""
+    def test_displacements_below_the_threshold_stay_at_info(self):
+        """Ordinary displacements are normal and must not shout.
+
+        Two inside the window is an account someone also uses from the app,
+        not a fault, and a WARNING on that is a false alarm in the log a
+        reporter pastes.
+        """
         client = _make_client()
 
         with patch.object(_client_module._LOGGER, "warning") as warning, patch.object(_client_module._LOGGER, "info") as info:
             client._record_invalidation(1001)
+            client._record_invalidation(1001)
 
         warning.assert_not_called()
-        assert info.call_count == 1
+        assert info.call_count == 2
 
     def test_a_rejection_older_than_the_window_does_not_count(self):
         """The window is a window, not a lifetime counter.
@@ -1271,9 +1290,8 @@ class TestSessionInvalidationFloodVisibility:
         one-off, so the stale timestamp is dropped rather than accumulated.
         """
         client = _make_client()
-        client._recent_invalidations = [
-            datetime.now(UTC) - timedelta(seconds=_client_module._INVALIDATION_FLOOD_WINDOW_SECONDS + 1)
-        ]
+        stale = datetime.now(UTC) - timedelta(seconds=_client_module._INVALIDATION_FLOOD_WINDOW_SECONDS + 1)
+        client._recent_invalidations = [stale] * _client_module._INVALIDATION_FLOOD_MIN_COUNT
 
         with patch.object(_client_module._LOGGER, "warning") as warning:
             client._record_invalidation(1004)

@@ -27,18 +27,25 @@ _LOGGER = logging.getLogger(__name__)
 _LOGIN_COOLDOWN_SECONDS = 120
 
 # How far back _maybe_invalidate_token looks when deciding whether the session
-# rejections it is seeing are a flood rather than a one-off displacement. A
-# genuine displacement is one rejection: something logged in elsewhere, this
-# session was expired, and the next call re-authenticated. A code the cloud
-# returns for some other reason on a polled endpoint produces one rejection per
-# poll forever, because the transition guard below bounds invalidations within a
-# token generation and every forced re-login starts a new one. At the default
-# 120s poll that is 30 rejections an hour, so a window of an hour reads as a
-# flood only when the pattern is really sustained, and a user who displaces
-# their own session twice in an afternoon still gets a single INFO line each
-# time. Visibility only: nothing here throttles, and the cost of the flood is
-# unchanged until the bounding question is settled.
+# rejections it is seeing are a flood rather than one-off displacements, and how
+# many it takes. A genuine displacement is one rejection: something logged in
+# elsewhere, this session was expired, and the next call re-authenticated. A
+# code the cloud returns for some other reason on a polled endpoint produces one
+# rejection per poll forever, because the transition guard below bounds
+# invalidations within a token generation and every forced re-login starts a new
+# one.
+#
+# Three rather than two, because two unrelated displacements inside an hour is
+# an ordinary afternoon on an account someone also uses from the app, and a
+# WARNING on that is a false alarm in a support log. Nothing is lost by waiting:
+# at the default 120s poll a real flood is 30 an hour, so it reaches three
+# within about four minutes and every rejection after that keeps the line in
+# front of the reader.
+#
+# Visibility only: nothing here throttles, and the cost is unchanged until the
+# bounding question is settled.
 _INVALIDATION_FLOOD_WINDOW_SECONDS = 3600
+_INVALIDATION_FLOOD_MIN_COUNT = 3
 
 # The RainPoint cloud edge (nginx) returns a bare HTTP 403 for Home Assistant's
 # default aiohttp User-Agent ("HomeAssistant/<ver> aiohttp/<ver> Python/<ver>")
@@ -243,6 +250,11 @@ class RainPointClient:
         the window are what separate them, and they are what a reporter can
         paste without knowing any of this.
 
+        Reports the rate it observed and stops there. Whether the code really
+        means a displaced session is exactly what is unsettled about 1001 and
+        1004, so a line asserting the rejections are bogus would be stating the
+        thing nobody has confirmed.
+
         Counted per client rather than per token generation on purpose: the
         transition guard already holds each generation to one invalidation, so
         a count that reset with the generation could never exceed one and would
@@ -258,11 +270,11 @@ class RainPointClient:
         self._recent_invalidations = [seen for seen in self._recent_invalidations if seen > cutoff]
         self._recent_invalidations.append(now)
 
-        if len(self._recent_invalidations) > 1:
+        if len(self._recent_invalidations) >= _INVALIDATION_FLOOD_MIN_COUNT:
             _LOGGER.warning(
                 "RainPoint session rejected %s times in the last %s minutes (code %s); "
-                "each rejection forces a full re-login, so a code that is not really a session "
-                "rejection costs one login per poll",
+                "each rejection forces a full re-login, so at this rate the account is being "
+                "logged in once per poll",
                 len(self._recent_invalidations),
                 _INVALIDATION_FLOOD_WINDOW_SECONDS // 60,
                 code,
