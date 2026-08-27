@@ -270,6 +270,8 @@ MODEL_RAIN = MODEL_HCS012ARF
 MODEL_TEMPHUM = MODEL_HCS014ARF
 MODEL_FLOWMETER = MODEL_HCS008FRF
 MODEL_CO2 = MODEL_HCS0530THO
+# Not a second model: sensor.py keys its entity factories off this name, but a
+# registry keyed on both spellings holds one entry and silently drops the other.
 MODEL_POOL = MODEL_HCS0528ARF
 MODEL_POOL_PLUS = MODEL_HCS015ARF_PLUS
 MODEL_DISPLAY_HUB = MODEL_HWS019WRF_V2
