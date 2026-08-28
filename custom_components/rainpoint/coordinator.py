@@ -33,7 +33,6 @@ from .api import (
     decode_hws019wrf_v2,
     decode_moisture_full,
     decode_moisture_simple,
-    decode_pool,
     decode_pool_plus,
     decode_rain,
     decode_temphum,
@@ -56,7 +55,6 @@ from .const import (
     MODEL_HTV210B,  # HTV210B support
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
-    MODEL_POOL,
     MODEL_POOL_PLUS,
     MODEL_RAIN,
     MODEL_TEMPHUM,
@@ -217,7 +215,6 @@ DECODER_REGISTRY = {
     MODEL_TEMPHUM: decode_temphum,
     MODEL_FLOWMETER: decode_flowmeter,
     MODEL_CO2: decode_co2,
-    MODEL_POOL: decode_pool,
     MODEL_POOL_PLUS: decode_pool_plus,
     MODEL_VALVE_HUB: decode_valve_hub,
     MODEL_VALVE_113: decode_htv145frf,  # HTV113FRF shares the HTV145FRF single-outlet 10# format

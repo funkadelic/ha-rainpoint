@@ -39,13 +39,19 @@ DECODER_REGISTRY = _coord_module.DECODER_REGISTRY
 SILENT_DATA_TYPE = _coord_module.SILENT_DATA_TYPE
 
 import custom_components.rainpoint.repairs as _repairs_module  # noqa: E402
-from custom_components.rainpoint.api import RainPointApiError, decode_htv145frf  # noqa: E402
+from custom_components.rainpoint.api import (  # noqa: E402
+    RainPointApiError,
+    decode_hcs0528arf,
+    decode_htv145frf,
+    decode_pool,
+)
 from custom_components.rainpoint.const import (  # noqa: E402
     CONF_HIDS,
     DOMAIN,
     MODEL_CO2,
     MODEL_DISPLAY_HUB,
     MODEL_FLOWMETER,
+    MODEL_HCS0528ARF,
     MODEL_HIC801W,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
@@ -69,6 +75,7 @@ from custom_components.rainpoint.repairs import (  # noqa: E402
 from tests.payload_samples import (  # noqa: E402
     CATALOG_ANCHOR_MODEL,
     HWS019WRF_V2_PAYLOAD,
+    POOL_HCS0528ARF_HEX_PAYLOAD,
     SAMPLE_HIC801W_ALL_FRAMES,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
@@ -4810,6 +4817,60 @@ class TestDecoderRegistry:
 
         offenders = {model: fn.__name__ for model, fn in DECODER_REGISTRY.items() if fn.__name__ in passthrough}
         assert not offenders, f"registered models decode nothing: {offenders}"
+
+    def test_no_two_registry_keys_resolve_to_the_same_model_string(self):
+        """Every key in the DECODER_REGISTRY literal must name a distinct model.
+
+        Model constants carry legacy aliases (MODEL_POOL is MODEL_HCS0528ARF),
+        so two differently-named keys can be the same string, and the later
+        one silently wins. That is not a decode bug on its own, both entries
+        having pointed at equivalent decoders, but it makes the literal lie
+        about itself: anything deriving a set from DECODER_REGISTRY sees a
+        decoder the source appears to register and the dict does not hold.
+
+        Read from the source rather than the built dict on purpose. The dict
+        has already collapsed the duplicate by the time it can be imported, so
+        only the literal still carries the evidence.
+        """
+        import ast
+        from pathlib import Path
+
+        from custom_components.rainpoint import const
+
+        tree = ast.parse(Path(_coord_module.__file__).read_text())
+        literal = next(
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "DECODER_REGISTRY" for target in node.targets)
+        )
+
+        resolved: dict[str, str] = {}
+        collisions: dict[str, list[str]] = {}
+        for key in literal.keys:
+            assert isinstance(key, ast.Name), f"registry key {ast.dump(key)} is not a model constant"
+            model = getattr(const, key.id)
+            if model in resolved:
+                collisions.setdefault(model, [resolved[model]]).append(key.id)
+            resolved[model] = key.id
+
+        assert not collisions, f"registry keys resolving to the same model string: {collisions}"
+        assert len(resolved) == len(DECODER_REGISTRY)
+
+    def test_hcs0528arf_dispatches_through_registry_to_the_pool_decoder(self):
+        """The pool sensor decodes through its one remaining registry entry.
+
+        Pinned via dispatch rather than by calling decode_hcs0528arf, because
+        what broke here before was the registry wiring and not the decoder:
+        MODEL_POOL and MODEL_HCS0528ARF are the same string, so the literal
+        held two entries for this model and only the later one ever ran.
+        """
+        assert DECODER_REGISTRY[MODEL_HCS0528ARF] is decode_hcs0528arf
+
+        dispatched = _coord_module._decode_subdevice_payload(MODEL_HCS0528ARF, POOL_HCS0528ARF_HEX_PAYLOAD)
+
+        assert dispatched == decode_pool(POOL_HCS0528ARF_HEX_PAYLOAD)
+        assert dispatched["type"] == "pool"
 
     def test_valve_113_dispatches_through_registry_to_htv145_decoder(self):
         """HTV113FRF is decoded by reusing the HTV145FRF decoder. Assert the wiring

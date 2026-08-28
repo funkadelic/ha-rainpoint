@@ -1921,8 +1921,15 @@ def decode_hcs015arf(raw: str) -> dict:
 
 
 def decode_hcs0528arf(raw: str) -> dict:
-    """Decode HCS0528ARF (pool temperature sensor)."""
-    return decode_pool(raw)  # pragma: no cover - stub passthrough - decode_pool covered separately
+    """Decode HCS0528ARF (pool temperature sensor).
+
+    The registry's only entry for this model, and therefore the line every
+    HCS0528ARF payload is dispatched through. It carried a no-cover pragma
+    while MODEL_POOL held a second, shadowing entry for the same string; that
+    entry is gone, so this line is covered through the registry like any
+    other decoder rather than excused as an unreached stub.
+    """
+    return decode_pool(raw)
 
 
 # Additional HCS variant decoders - placeholder implementations
