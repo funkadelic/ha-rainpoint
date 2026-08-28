@@ -327,6 +327,20 @@ def _derive(harness: _Harness, *, adders=None, live_keys=frozenset({SENSOR_KEY})
         return _build_leftover_row_pairs(hass, entry, entry_store, live_keys, device_rows)
 
 
+def _ledger_offer(hass, key: str = SENSOR_KEY) -> set[tuple[str, str]]:
+    """Every (domain, unique_id) this session's adders recorded for one key.
+
+    The offer the departed-key card carried before it could see a registry, so
+    a test comparing against it is asserting what the scan added rather than
+    what the ledgers already held.
+    """
+    return {
+        (adder.domain, unique_id)
+        for adder in hass.data[DOMAIN][ENTRY_ID][LATE_ADDER_STORE_KEY]
+        for unique_id in adder.ledger.unique_ids_for(key)
+    }
+
+
 def _ledger_snapshot(hass) -> list[tuple[str, frozenset[str]]]:
     """Every adder's ledger contents, flattened so it can be compared later."""
     snapshot = []
@@ -2035,3 +2049,125 @@ class TestTheNarrowedPropertiesHoldInSource:
             if isinstance(node, ast.Compare) and any(isinstance(op, ast.In | ast.NotIn) for op in node.ops)
         }
         assert {test for test in containments if "unique_id" in test} <= {"GENERIC_UNIQUE_ID_MARKER in unique_id"}
+
+
+class TestARetiredEntityClassOnADepartedKey:
+    """The departed-key card reaches rows no ledger holds.
+
+    An entity class deleted from the code emits nothing into any adder, so its
+    registry rows are invisible to the ledgers the departed-key card is built
+    from. While the device is on the account those rows are the still-present
+    shape's business, which is what every test above is about. Once the device
+    leaves, that shape stops applying to them and nothing else could name them,
+    so they stranded. These drive the same scan over the aged-out keys, which
+    is what closes that.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_row_no_ledger_holds_is_offered_and_removed_after_the_device_leaves(self):
+        """The whole path, in the order a real install runs it, with the
+        device leaving before the still-present card could be answered."""
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, client = await _armed_install(harness)
+            harness.add_leftover_row()
+
+            with harness.patched():
+                # The hub stops listing its child before the still-present
+                # card's own window could run out, which is the ordering that
+                # stranded the row.
+                client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+                for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS - 1):
+                    await coordinator.async_refresh()
+                assert create.call_count == 0
+
+                await coordinator.async_refresh()
+                assert create.call_count == 1
+
+                kwargs = create.call_args.kwargs
+                # The departed-key shape, so the offer is the removal scope
+                # outright rather than a ceiling over a re-derivation.
+                assert kwargs["data"]["sensor_key"] == SENSOR_KEY
+                assert "leftover_pairs" not in kwargs["data"]
+                offered = {tuple(pair) for pair in kwargs["data"]["orphaned_pairs"]}
+                # Both populations, in one offer: everything the adders emitted
+                # for this key, and the one row nothing alive has held all
+                # session. The ledger half is what the card offered before this
+                # scan existed, so naming the extra pair on its own is what
+                # separates a widened offer from an unchanged one.
+                assert offered == _ledger_offer(hass) | {("sensor", LEFTOVER_UNIQUE_ID)}
+                assert kwargs["translation_placeholders"]["entity_count"] == str(len(offered))
+
+                flow = await async_create_fix_flow(hass, create.call_args.args[2], kwargs["data"])
+                flow.hass = hass
+                shown = await flow.async_step_init()
+                assert shown["step_id"] == "confirm"
+                assert harness.removed == []
+
+                result = await flow.async_step_confirm({})
+                assert result["type"] == "create_entry"
+
+            # The row the ledgers could not name is taken with the rest.
+            assert LEFTOVER_ENTITY_ID in harness.removed
+
+    @pytest.mark.asyncio
+    async def test_a_device_row_no_ledger_holds_stays_out_of_reach(self):
+        """The anchor that did not widen.
+
+        The offer grew inside a key some adder recorded this session. A device
+        row whose identifier resolves to no such key is still unreachable from
+        both shapes, which is what keeps an old-shape row and a foreign row
+        out of a removal that deletes recorder history permanently.
+        """
+        old_shape_key = f"{SENSOR_KEY}_v1"
+        harness = _Harness(device_rows=[_sub_device_row(), _sub_device_row("device_old", old_shape_key)])
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, client = await _armed_install(harness)
+            harness.add_leftover_row(
+                f"sensor.rainpoint_{old_shape_key}_moisture",
+                f"rainpoint_{old_shape_key}_moisture",
+                device_id="device_old",
+            )
+
+            with harness.patched():
+                client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+                for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                    await coordinator.async_refresh()
+
+                assert create.call_count == 1
+                offered = {tuple(pair) for pair in create.call_args.kwargs["data"]["orphaned_pairs"]}
+                assert offered == _ledger_offer(hass)
+
+                flow = await async_create_fix_flow(hass, create.call_args.args[2], create.call_args.kwargs["data"])
+                flow.hass = hass
+                await flow.async_step_init()
+                await flow.async_step_confirm({})
+
+            assert f"sensor.rainpoint_{old_shape_key}_moisture" not in harness.removed
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_registry_leaves_the_card_at_what_its_ledgers_hold(self):
+        """A failed scan costs the extras and nothing else.
+
+        The departed-key card is derived from coordinator data and the ledgers,
+        neither of which needs a registry, so a registry that cannot be read
+        must still raise the card it raised before this scan existed rather
+        than raise none at all.
+        """
+        harness = _Harness()
+
+        with _patched_issue_registry() as (create, _delete):
+            coordinator, hass, _entry, client = await _armed_install(harness)
+            harness.add_leftover_row()
+            harness.entity_get_raises = True
+
+            with harness.patched():
+                client.get_devices_by_hid.return_value = _hub_record(with_child=False)
+                for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS):
+                    await coordinator.async_refresh()
+
+            assert create.call_count == 1
+            offered = {tuple(pair) for pair in create.call_args.kwargs["data"]["orphaned_pairs"]}
+            assert offered == _ledger_offer(hass)
