@@ -32,6 +32,7 @@ from .const import (
     UNIQUE_ID_PREFIX,
 )
 from .coordinator import ORPHANED_KEY_DEBOUNCE_POLLS, SILENT_DATA_TYPE, first_hub_record, is_hub_record
+from .device import hub_display_name, sub_device_display_name
 from .entity import late_adders
 from .repairs import (
     OrphanedEntitiesRecord,
@@ -652,29 +653,51 @@ def _reconcile_sub_device_parents_on_updates(hass: HomeAssistant, entry: ConfigE
     entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
 
-def _reported_firmware_version(key: str, sensors: Mapping, hub_versions: Mapping) -> str | None:
-    """Return the version the current poll reports for one device row's key, or None.
+def _reported_device_fields(key: str, sensors: Mapping, hub_records: Mapping) -> dict[str, Any]:
+    """Return the registry fields the current poll reports for one device row's key.
 
     One resolver for both row shapes, because the identifier is what says
     which shape a row is: a hub row's key carries the hub prefix and resolves
     against the hub records, and anything else is a sub-device key and
     resolves against the poll's sensor records.
 
-    None covers every way the poll can fail to name a version, and the caller
-    treats them alike: an old-shape hub row, whose (hid, None) pair matches no
-    hub; a key the current poll does not mention; a record that is not a dict,
-    which is a payload problem rather than a version of None; and a record
-    that simply carries no version.
+    An empty mapping covers every way the poll can fail to describe a row, and
+    the caller treats them alike: an old-shape hub row, whose (hid, None) pair
+    matches no hub; a key the current poll does not mention; and a record that
+    is not a dict, which is a payload problem rather than a row of Nones. A
+    field the record simply does not carry arrives as None and is dropped by
+    the caller's own truthiness test, in the same place a stale value is.
+
+    The names are composed by device.py's own composers rather than read off a
+    field, because neither shape's name is a cloud field on its own: a hub
+    falls back to a fixed string and a sub-device to its model and address,
+    and the cloud names a sub-device only when its owner did. Composing them
+    here a second time would drift from what the DeviceInfo wrote, and this
+    sweep compares against exactly that.
+
+    A sub-device record with no address contributes its version and no name.
+    That record cannot have built an entity in the first place, so the case is
+    unreachable rather than merely rare, but resolving the name is the only
+    read here that can raise on a partial record and the version has no reason
+    to be lost with it.
     """
     hub_identity = _hub_identity(key)
     if hub_identity is not None:
-        return hub_versions.get((hub_identity[0], str(hub_identity[1])))
+        hub = hub_records.get((hub_identity[0], str(hub_identity[1])))
+        if hub is None:
+            return {}
+        return {"sw_version": hub.get("softVer"), "name": hub_display_name(hub)}
     record = sensors.get(key)
-    return record.get("firmware_version") if isinstance(record, dict) else None
+    if not isinstance(record, dict):
+        return {}
+    fields: dict[str, Any] = {"sw_version": record.get("firmware_version")}
+    if record.get("addr") is not None:
+        fields["name"] = sub_device_display_name(record)
+    return fields
 
 
-def _refresh_device_firmware(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
-    """Write the firmware version the cloud now reports onto the device row.
+def _refresh_device_registry_fields(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Write the firmware version and name the cloud now reports onto the device row.
 
     A DeviceInfo is read once, while an entity is being added, and never
     again: nothing in Home Assistant re-reads the property, so making it
@@ -686,13 +709,18 @@ def _refresh_device_firmware(hass: HomeAssistant, entry: ConfigEntry, coordinato
     update entity and the Firmware Version sensor beside it both move, so the
     same install shows two versions at once and the stale one is the headline.
 
-    Only sw_version is swept. The device row also takes its name from the
-    cloud record and goes stale in the same way, but an owner who renamed the
-    device in Home Assistant has name_by_user set and must not be overwritten
-    by a cloud rename, which is a decision about whose name wins rather than a
-    refresh, and it is tracked separately. model and hw_version can move only
-    if RainPoint replaces the hardware behind an identity, which is a
-    different device rather than a stale field.
+    sw_version and name are swept, and nothing else. model and hw_version can
+    move only if RainPoint replaces the hardware behind an identity, which is
+    a different device rather than a stale field.
+
+    Writing name does not overwrite an owner who renamed the device in Home
+    Assistant, and that is Home Assistant's arbitration rather than a check
+    here: a rename in the UI sets name_by_user, which is a separate field on
+    the row, and every surface that displays a device reads name_by_user or
+    name in that order. So the integration owns name, the owner owns
+    name_by_user, and refreshing the first leaves the second exactly where its
+    owner put it. That is what the entry tracking this had left open as a
+    decision about whose name wins; Home Assistant had already made it.
 
     Writes only a truthy version that differs from the row's. A poll that omits
     the field and a payload the coordinator could not read both yield nothing
@@ -730,7 +758,7 @@ def _refresh_device_firmware(hass: HomeAssistant, entry: ConfigEntry, coordinato
     # nothing rather than blank anything; the empty list it degrades to says
     # "no hub versions to compare against", which is the same outcome.
     hubs = _read_current_hubs(coordinator) or []
-    hub_versions = {(str(hub.get("hid")), str(hub.get("mid"))): hub.get("softVer") for hub in hubs if is_hub_record(hub)}
+    hub_records = {(str(hub.get("hid")), str(hub.get("mid"))): hub for hub in hubs if is_hub_record(hub)}
 
     for row in rows:
         try:
@@ -738,34 +766,46 @@ def _refresh_device_firmware(hass: HomeAssistant, entry: ConfigEntry, coordinato
             if key is None:
                 continue
 
-            version = _reported_firmware_version(key, sensors, hub_versions)
-            if not version or version == getattr(row, "sw_version", None):
+            # Truthiness rather than "is not None" on purpose, and it is the
+            # same gate both fields already needed: a poll that omits a field
+            # and a payload the coordinator could not read both arrive here as
+            # a false value, and neither may blank a row.
+            changed = {
+                field: value
+                for field, value in _reported_device_fields(key, sensors, hub_records).items()
+                if value and value != getattr(row, field, None)
+            }
+            if not changed:
                 continue
 
-            registry.async_update_device(row.id, sw_version=version)
-            _LOGGER.debug("Refreshed the firmware version on device row %s", row.id)
+            registry.async_update_device(row.id, **changed)
+            # The field names are this integration's own and the row id is
+            # Home Assistant's; neither is a cloud-supplied value, and the
+            # values themselves stay out of the line for that reason.
+            _LOGGER.debug("Refreshed %s on device row %s", ", ".join(sorted(changed)), row.id)
         except Exception as exc:
-            _LOGGER.debug("Could not refresh firmware on device registry row %s: %s", getattr(row, "id", None), exc)
+            _LOGGER.debug("Could not refresh device registry row %s: %s", getattr(row, "id", None), exc)
             continue
 
 
-def _refresh_device_firmware_on_updates(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
-    """Run the firmware refresh now, then again on every coordinator update.
+def _refresh_device_registry_fields_on_updates(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Run the registry refresh now, then again on every coordinator update.
 
     Every update rather than a narrowed subset, unlike the parenting sweep
     next door: that one narrows because its only write is destructive and
-    irreversible within the session, while this one writes a version straight
+    irreversible within the session, while this one writes each field straight
     off the record it just read and rewrites it the moment the record says
     something else. An upgrade also lands mid-session by definition, since it
-    is the running install that installs it, so a sweep that waited for a new
-    sensor key would never see the case it exists for.
+    is the running install that installs it, and so does a rename in the
+    RainPoint app, so a sweep that waited for a new sensor key would never see
+    either case it exists for.
     """
-    _refresh_device_firmware(hass, entry, coordinator)
+    _refresh_device_registry_fields(hass, entry, coordinator)
 
     @callback
     def _on_coordinator_update() -> None:
         """Re-sweep on every update; a settled device makes no registry call."""
-        _refresh_device_firmware(hass, entry, coordinator)
+        _refresh_device_registry_fields(hass, entry, coordinator)
 
     entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
@@ -2764,7 +2804,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _remove_withdrawn_probe_entities(hass, entry)
     await _async_remove_withdrawn_probe_store(hass)
     _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
-    _refresh_device_firmware_on_updates(hass, entry, coordinator)
+    _refresh_device_registry_fields_on_updates(hass, entry, coordinator)
     _sync_orphaned_entity_issues_on_updates(hass, entry, coordinator)
 
     # An options change (e.g. toggling push) reloads through the existing

@@ -44,6 +44,32 @@ def _identifies_one_hub(mac: str) -> bool:
     return not int(mac[:2], 16) & _MULTICAST_BIT
 
 
+def sub_device_display_name(sensor_info: dict) -> str:
+    """Return the name a sub-device's device row carries.
+
+    Split out of the DeviceInfo below so the registry refresh in __init__.py
+    composes the name the same way rather than a second time. Two call sites
+    reading one cloud field would drift the moment either fallback changed,
+    and the fallbacks are the whole substance here: the cloud names a
+    sub-device only when its owner did, so most rows are named from the model
+    and the address instead.
+    """
+    addr = sensor_info["addr"]
+    model = sensor_info.get("model")
+    return sensor_info.get("sub_name") or (f"{model} {addr}" if model else f"Device {addr}")
+
+
+def hub_display_name(hub_info: dict) -> str:
+    """Return the name a hub's device row carries.
+
+    Here for the same reason as sub_device_display_name above: the registry
+    refresh needs the composed name, not the raw field, and one expression in
+    two files is one expression too many on a surface where a mismatch means
+    the sweep rewrites a row on every single update.
+    """
+    return hub_info.get("name") or "RainPoint Hub"
+
+
 def build_sub_device_info(sensor_info: dict) -> DeviceInfo:
     """Return the device registry entry for one sub-device.
 
@@ -126,7 +152,7 @@ def build_sub_device_info(sensor_info: dict) -> DeviceInfo:
         optional["via_device"] = (DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{hid}_{mid}")
     return DeviceInfo(
         identifiers={(DOMAIN, f"{hid}_{mid}_{addr}")},
-        name=sensor_info.get("sub_name") or (f"{model} {addr}" if model else f"Device {addr}"),
+        name=sub_device_display_name(sensor_info),
         manufacturer="RainPoint",  # RainPoint is the actual device manufacturer
         model=model or "Unknown",
         sw_version=sensor_info.get("firmware_version"),
@@ -213,7 +239,7 @@ class RainPointHubDevice(Entity):
             optional["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
         return DeviceInfo(
             identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{self._hub_info['hid']}_{self._hub_info['mid']}")},
-            name=self._hub_info.get("name") or "RainPoint Hub",
+            name=hub_display_name(self._hub_info),
             manufacturer="RainPoint",  # RainPoint is the actual device manufacturer
             model=self._hub_info.get("model") or "Unknown",
             sw_version=self._hub_info.get("softVer"),
