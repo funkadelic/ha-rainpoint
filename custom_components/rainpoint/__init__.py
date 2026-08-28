@@ -652,6 +652,27 @@ def _reconcile_sub_device_parents_on_updates(hass: HomeAssistant, entry: ConfigE
     entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
 
+def _reported_firmware_version(key: str, sensors: Mapping, hub_versions: Mapping) -> str | None:
+    """Return the version the current poll reports for one device row's key, or None.
+
+    One resolver for both row shapes, because the identifier is what says
+    which shape a row is: a hub row's key carries the hub prefix and resolves
+    against the hub records, and anything else is a sub-device key and
+    resolves against the poll's sensor records.
+
+    None covers every way the poll can fail to name a version, and the caller
+    treats them alike: an old-shape hub row, whose (hid, None) pair matches no
+    hub; a key the current poll does not mention; a record that is not a dict,
+    which is a payload problem rather than a version of None; and a record
+    that simply carries no version.
+    """
+    hub_identity = _hub_identity(key)
+    if hub_identity is not None:
+        return hub_versions.get((hub_identity[0], str(hub_identity[1])))
+    record = sensors.get(key)
+    return record.get("firmware_version") if isinstance(record, dict) else None
+
+
 def _refresh_device_firmware(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Write the firmware version the cloud now reports onto the device row.
 
@@ -717,17 +738,7 @@ def _refresh_device_firmware(hass: HomeAssistant, entry: ConfigEntry, coordinato
             if key is None:
                 continue
 
-            hub_identity = _hub_identity(key)
-            if hub_identity is not None:
-                # An old-shape hub row carries no mid and is the identity
-                # re-key's problem, not this sweep's; its (hid, None) pair
-                # matches nothing here, so it resolves to no version and is
-                # skipped.
-                version = hub_versions.get((hub_identity[0], str(hub_identity[1])))
-            else:
-                record = sensors.get(key)
-                version = record.get("firmware_version") if isinstance(record, dict) else None
-
+            version = _reported_firmware_version(key, sensors, hub_versions)
             if not version or version == getattr(row, "sw_version", None):
                 continue
 
