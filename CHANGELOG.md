@@ -4,6 +4,11 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.21.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.21.1...v1.21.2) (2026-08-28)
 
+### What's new
+
+- The Firmware field at the top of a device page now updates after an upgrade, on hubs and sensors alike. 1.21.1 fixed the Firmware Version reading, but the header above it kept the old value until a restart or reload, so one page could show two different versions at once.
+- If something keeps signing this integration out of your RainPoint account, the log now warns you after the third time in an hour and says how many, which is the line to quote if you report it. A single sign-out, which is what you get when you log in on the RainPoint phone app, still logs quietly.
+
 
 ### Fixed
 
