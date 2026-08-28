@@ -18,6 +18,8 @@ from custom_components.rainpoint import (
     _generic_row_removal_reason,
     _reconcile_sub_device_parents,
     _reconcile_sub_device_parents_on_updates,
+    _refresh_device_firmware,
+    _refresh_device_firmware_on_updates,
     _remove_stale_generic_entities,
     _remove_withdrawn_probe_entities,
     async_reload_integration,
@@ -32,8 +34,9 @@ from custom_components.rainpoint.const import (
     MODEL_HCS026FRF,
     PUSH_HUB_IDENTITY_ISSUE_ID,
 )
+from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 from custom_components.rainpoint.repairs import push_hub_identity_issue_id
-from tests.helpers import make_silent_wrapper_hub_record
+from tests.helpers import VALVE_ZONES_TLV_PAYLOAD, make_silent_wrapper_hub_record
 
 
 def _make_entry(entry_id="test_entry_id"):
@@ -2827,11 +2830,13 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
         listener at all, so it contributes none of the registrations counted
         below.
 
-        The orphaned entity sweep's wrapper is the second registration. It
-        arms unconditionally, unlike the re-key's, because both its raise and
-        its clear are idempotent and it walks no registry on the update path.
-        Counting both rather than loosening the assertion keeps this test able
-        to catch an accidental extra listener."""
+        The firmware refresh's wrapper is the second registration and the
+        orphaned entity sweep's is the third. Both arm unconditionally, unlike
+        the re-key's, because their writes are idempotent: the refresh writes
+        only a version that differs from the row's, and the sweep's raise and
+        clear are both repeatable. Counting all three rather than loosening
+        the assertion keeps this test able to catch an accidental extra
+        listener."""
         hass = _make_hass()
         entry = _make_entry()
 
@@ -2851,7 +2856,7 @@ class TestReconcileSubDeviceParentsCallSiteOrdering:
         ):
             await async_setup_entry(hass, entry)
 
-        assert mock_coordinator.async_add_listener.call_count == 2
+        assert mock_coordinator.async_add_listener.call_count == 3
         entry.async_on_unload.assert_any_call(mock_coordinator.async_add_listener.return_value)
 
 
@@ -3200,3 +3205,331 @@ class TestRemoveWithdrawnProbeStore:
         store.async_remove = AsyncMock(side_effect=RuntimeError("no such file"))
         with patch("custom_components.rainpoint.Store", return_value=store):
             await _async_remove_withdrawn_probe_store(MagicMock())
+
+
+class TestDeviceFirmwareRefresh:
+    """The device page's Firmware field follows an upgrade without a reload.
+
+    A DeviceInfo is read once, while an entity is added, so the fix that made
+    the Firmware Version sensor read live does nothing here: only an explicit
+    registry write moves the device row. These drive the real construct,
+    first-refresh, sweep, poll sequence, because asserting an end state would
+    pass against a setup-only sweep that can never see an upgrade: an upgrade
+    lands mid-session by definition.
+    """
+
+    ENTRY_ID = "firmware_entry"
+    HID = 100
+    MID = 555
+    ADDR = 1
+    HUB_ROW = "hub_100_555"
+    SUB_ROW = "100_555_1"
+
+    @classmethod
+    def _hub_record(cls, hub_version, sub_version):
+        """Return one real hub record carrying one sub-device."""
+        record = {
+            "mid": cls.MID,
+            "name": "Hub",
+            "homeName": "Home",
+            "did": "did-555",
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "productKey": "pk1",
+            "model": "HWG023WBRF-V2",
+            "deviceName": "d",
+            "subDevices": [{"addr": cls.ADDR, "name": "Valve", "model": "HTV245FRF"}],
+        }
+        if hub_version is not None:
+            record["softVer"] = hub_version
+        if sub_version is not None:
+            record["subDevices"][0]["softVer"] = sub_version
+        return record
+
+    @classmethod
+    def _build_coordinator(cls, versions, silent=False):
+        """Build a real coordinator whose every poll re-reads `versions`.
+
+        The mutable holder is what makes an upgrade expressible: the cloud
+        starts reporting a new version between two polls of one session,
+        which is the only way this ever happens on a real install.
+        """
+        from custom_components.rainpoint.coordinator import RainPointCoordinator
+
+        client = AsyncMock()
+        client.get_devices_by_hid.side_effect = lambda hid: [cls._hub_record(*versions)]
+        # A reporting sub-device by default. The silent case is not the same
+        # shape and is driven separately, rather than assumed equivalent: a
+        # status response that arrives naming nobody is what increments the
+        # silence debounce.
+        client.get_multiple_device_status.return_value = [
+            {"mid": cls.MID, "subDeviceStatus": []}
+            if silent
+            else {"mid": cls.MID, "subDeviceStatus": [{"id": "D01", "value": VALVE_ZONES_TLV_PAYLOAD, "time": 1785420002247}]}
+        ]
+
+        entry = MagicMock()
+        entry.entry_id = cls.ENTRY_ID
+        entry.data = {"hids": [cls.HID]}
+        entry.options = {}
+
+        hass = MagicMock()
+        hass.data = {DOMAIN: {cls.ENTRY_ID: {}}}
+
+        return RainPointCoordinator(hass, client, entry), hass, entry
+
+    @classmethod
+    def _make_device_registry(cls, rows):
+        """Return (writes, async_get, async_entries) over rows that read back written.
+
+        Rows carry the version they were last written, so a repeat sweep sees
+        a settled device and makes no call, which is the difference between an
+        idempotent sweep and one that rewrites the same value forever.
+        """
+        writes = []
+
+        class _FakeDeviceRegistry:
+            def async_update_device(self, device_id, *, sw_version):
+                """Record one firmware write and settle the row it wrote."""
+                writes.append((device_id, sw_version))
+                for row in rows:
+                    if row.id == device_id:
+                        row.sw_version = sw_version
+
+        registry = _FakeDeviceRegistry()
+
+        def _async_get(hass):
+            return registry
+
+        def _async_entries_for_config_entry(reg, entry_id):
+            return list(rows) if entry_id == cls.ENTRY_ID else []
+
+        return writes, _async_get, _async_entries_for_config_entry
+
+    @classmethod
+    def _rows(cls, hub_version="1.1.1041", sub_version="127"):
+        """Return one hub row and one sub-device row at the given versions."""
+        return [
+            SimpleNamespace(id="hub-row", identifiers={(DOMAIN, cls.HUB_ROW)}, sw_version=hub_version),
+            SimpleNamespace(id="sub-row", identifiers={(DOMAIN, cls.SUB_ROW)}, sw_version=sub_version),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_upgrade_mid_session_reaches_both_device_rows(self):
+        """The reported symptom as a timeline: settled at setup, written on
+        the poll that first reports the new version, and quiet after."""
+        versions = ["1.1.1041", "127"]
+        coordinator, hass, entry = self._build_coordinator(versions)
+        rows = self._rows()
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_firmware_on_updates(hass, entry, coordinator)
+
+            # Both rows already carry what the cloud reports, so a sweep that
+            # rewrote unconditionally would be indistinguishable here.
+            assert writes == []
+
+            versions[0] = "1.1.1042"
+            versions[1] = "128"
+            await coordinator.async_refresh()
+
+            assert writes == [("hub-row", "1.1.1042"), ("sub-row", "128")]
+            assert [row.sw_version for row in rows] == ["1.1.1042", "128"]
+
+            # Settled again: the row reads back what the cloud says.
+            await coordinator.async_refresh()
+            assert len(writes) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_silent_sub_device_still_has_its_firmware_refreshed(self):
+        """The silent device drives its own timeline rather than borrowing the
+        reporting one's.
+
+        A silent placeholder is built through the same _build_sensor_entry a
+        live decode uses, so it carries the firmware version the cloud listed
+        even though the device has reported no status: the version comes from
+        the device list, and talking is a different fact. Asserted across the
+        silence debounce, because the key does not exist until it lands, and
+        substituting a reporting device here would delete the whole case.
+        """
+        versions = ["1.1.1041", "128"]
+        coordinator, hass, entry = self._build_coordinator(versions, silent=True)
+        rows = self._rows(sub_version="127")
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_firmware_on_updates(hass, entry, coordinator)
+
+            # Below the debounce: the sub-device has no sensor key at all yet,
+            # so there is nothing to read a version off.
+            assert self.SUB_ROW not in coordinator.data["sensors"]
+            assert writes == []
+
+            await coordinator.async_refresh()
+            await coordinator.async_refresh()
+
+            record = coordinator.data["sensors"][self.SUB_ROW]
+            assert record["data"]["type"] == SILENT_DATA_TYPE
+            assert record["firmware_version"] == "128"
+            assert ("sub-row", "128") in writes
+
+    @pytest.mark.asyncio
+    async def test_two_hubs_sharing_a_mid_do_not_take_each_other_version(self):
+        """Hub identity is (hid, mid), and a record that is not a hub supplies
+        no version at all.
+
+        A config entry can carry several hids, and the top-level list also
+        holds the Bluetooth wrapper record, which is not a hub. Keyed on mid
+        alone, the last record to mention this mid would decide both rows: the
+        wrapper is placed last here precisely so an unfiltered map would hand
+        its version to a real hub.
+        """
+        second_hid = 101
+        wrapper = {
+            "mid": self.MID,
+            "name": "",
+            "homeName": "Home",
+            "did": "",
+            "mac": "",
+            "productKey": "",
+            "model": "",
+            "deviceName": "",
+            "softVer": "9.9.9",
+            "subDevices": [],
+        }
+
+        def _devices_by_hid(hid):
+            """Return one real hub per home, both at the same mid, plus a wrapper."""
+            record = self._hub_record("1.1.1042" if hid == self.HID else "2.2.2", None)
+            return [record, wrapper] if hid == self.HID else [record]
+
+        coordinator, hass, entry = self._build_coordinator(["unused", None])
+        coordinator._client.get_devices_by_hid.side_effect = _devices_by_hid
+        entry.data = {"hids": [self.HID, second_hid]}
+        coordinator._hids = [self.HID, second_hid]
+
+        rows = [
+            SimpleNamespace(id="hub-a", identifiers={(DOMAIN, self.HUB_ROW)}, sw_version="1.1.1041"),
+            SimpleNamespace(id="hub-b", identifiers={(DOMAIN, f"hub_{second_hid}_{self.MID}")}, sw_version="1.1.1041"),
+        ]
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_firmware(hass, entry, coordinator)
+
+        assert sorted(writes) == [("hub-a", "1.1.1042"), ("hub-b", "2.2.2")]
+
+    @pytest.mark.asyncio
+    async def test_a_poll_that_reports_no_version_leaves_the_row_alone(self):
+        """A missing version is not an empty one.
+
+        The last known version on the page beats a blank field, and the
+        update entity is the surface that speaks to availability.
+        """
+        coordinator, hass, entry = self._build_coordinator([None, None])
+        rows = self._rows()
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_firmware(hass, entry, coordinator)
+
+        assert writes == []
+        assert [row.sw_version for row in rows] == ["1.1.1041", "127"]
+
+    @pytest.mark.asyncio
+    async def test_rows_this_sweep_cannot_resolve_are_skipped(self):
+        """Three shapes that must produce no write and no raise: a row with no
+        DOMAIN identifier, an old-shape hub row carrying no mid, and a row
+        whose identifiers cannot be read at all."""
+
+        class _RaisingRow:
+            id = "raising-row"
+
+            @property
+            def identifiers(self):
+                raise RuntimeError("registry row unreadable")
+
+        coordinator, hass, entry = self._build_coordinator(["1.1.1042", "128"])
+        rows = [
+            SimpleNamespace(id="foreign-row", identifiers={("other_domain", "whatever")}, sw_version=None),
+            SimpleNamespace(id="old-shape-hub", identifiers={(DOMAIN, "hub_100")}, sw_version=None),
+            _RaisingRow(),
+        ]
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_firmware(hass, entry, coordinator)
+
+        assert writes == []
+
+    @pytest.mark.asyncio
+    async def test_a_non_dict_sensor_record_is_not_read_for_a_version(self):
+        """The record shape is assumed, never guaranteed: it is built from a
+        cloud payload, so a non-dict must skip rather than raise."""
+        coordinator, hass, entry = self._build_coordinator(["1.1.1041", "127"])
+        rows = self._rows(sub_version="126")
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+        coordinator.data["sensors"][self.SUB_ROW] = "not a record"
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_firmware(hass, entry, coordinator)
+
+        assert writes == []
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_registry_skips_the_sweep_entirely(self):
+        """A registry problem must never abort config-entry setup."""
+        coordinator, hass, entry = self._build_coordinator(["1.1.1042", "128"])
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with patch("custom_components.rainpoint.dr.async_get", side_effect=RuntimeError("no registry")):
+            _refresh_device_firmware(hass, entry, coordinator)
+
+    @pytest.mark.asyncio
+    async def test_unreadable_hub_records_refresh_nothing_rather_than_blanking(self):
+        """An unreadable hub list is "cannot look", which writes nothing."""
+        coordinator, hass, entry = self._build_coordinator(["1.1.1042", "128"])
+        rows = self._rows()
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+            patch("custom_components.rainpoint._read_current_hubs", return_value=None),
+        ):
+            _refresh_device_firmware(hass, entry, coordinator)
+
+        assert ("hub-row", "1.1.1042") not in writes
