@@ -2,6 +2,21 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.21.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.21.1...v1.21.2) (2026-08-28)
+
+
+### Fixed
+
+* show the current firmware version on the device page after an upgrade ([#225](https://github.com/funkadelic/ha-rainpoint/issues/225)) ([f4f3c3a](https://github.com/funkadelic/ha-rainpoint/commit/f4f3c3aeb83b9c4710694571e9d6e9a451592162))
+* warn in the log when the account keeps getting signed out ([#224](https://github.com/funkadelic/ha-rainpoint/issues/224)) ([bcfb480](https://github.com/funkadelic/ha-rainpoint/commit/bcfb4806665480efee1549bb0f7e40452bede48e))
+
+
+### Other Changes
+
+* bump pytest-homeassistant-custom-component from 0.13.356 to 0.13.357 ([#222](https://github.com/funkadelic/ha-rainpoint/issues/222)) ([ab5c23e](https://github.com/funkadelic/ha-rainpoint/commit/ab5c23e728575ed38e49e3e79a807869656ad99d))
+* keep Dependabot off the minimum-version test pins ([#220](https://github.com/funkadelic/ha-rainpoint/issues/220)) ([b9e74d9](https://github.com/funkadelic/ha-rainpoint/commit/b9e74d9d74f6dd5fbf976c4831ed971bf420409f))
+* remove a duplicate pool sensor entry from the model list ([#223](https://github.com/funkadelic/ha-rainpoint/issues/223)) ([b128901](https://github.com/funkadelic/ha-rainpoint/commit/b128901b37bb581db9cf8c48b798d98dac9f36c8))
+
 ## [1.21.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.21.0...v1.21.1) (2026-08-26)
 
 ### What's new
