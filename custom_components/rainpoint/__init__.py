@@ -960,22 +960,36 @@ def _hub_name_for_sensor_key(sensor_key: str, device_names: Mapping) -> str | No
 
 
 def _build_leftover_row_pairs(
-    hass: HomeAssistant, entry: ConfigEntry, entry_store: dict, live_keys, device_rows, entity_ids: dict | None = None
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    entry_store: dict,
+    candidate_keys,
+    device_rows,
+    entity_ids: dict | None = None,
 ) -> dict[str, frozenset[tuple[str, str]]] | None:
-    """Return the dead rows sitting on a still-present device, or None if unread.
+    """Return the dead rows sitting on the named keys' devices, or None if unread.
 
-    The second candidate derivation on this surface, and the mirror image of
-    the first. _build_orphaned_entity_records reaches a row through the ledgers
-    of a key that has left the enumeration; this reaches a row on a key that is
-    still in the current poll, and precisely because no ledger holds it.
+    The registry-derived half of this surface, and the only derivation that can
+    see a row no ledger holds. _build_orphaned_entity_records reaches a row
+    through the ledgers of a key that has left the enumeration; this reaches a
+    row through the device registry, which is what makes it the only one that
+    can name a row left behind by an entity class since deleted from the code.
+
+    ``candidate_keys`` is the caller's, and it is what decides which shape's
+    question this is answering. The still-present shape passes the keys in the
+    current poll and gets the dead rows on a device the account still lists.
+    The departed-key shape passes the aged-out keys and gets the rows its own
+    ledgers cannot name, which it then offers alongside them. The scan is one
+    scan either way: only the key set differs, and the per-row gates are the
+    same gates.
 
     Scope rule, stated as a prohibition rather than a description: a registry
     row reaches a sensor key only through its device row's DOMAIN identifier,
-    never through its own unique_id. A row written under a previous unique_id
-    shape sits on a device row whose identifier resolves to something no adder
-    recorded this session, so it fails the candidate-key test at the same gate
-    that excludes a foreign row, and stays unreachable from the card and from
-    the fix flow.
+    never through its own unique_id, and only for a key some adder recorded
+    this session. A row on a device row whose identifier resolves to something
+    no ledger holds -- an old-shape device row, a foreign row -- fails the
+    candidate-key test and stays unreachable from the card and from the fix
+    flow, on both shapes.
 
     The gates that decide a single row live in _leftover_pair_for_row, which
     this calls once per row that resolved to a candidate key. What stays here
@@ -1022,10 +1036,12 @@ def _build_leftover_row_pairs(
 
     ledger_pairs = _ledger_pairs_by_key(late_adders(entry_store))
     declared_domains = _declared_adder_domains(entry_store)
-    # A key has to be both in this session's ledgers and in the current poll.
-    # The first half is what keeps an old-shape or foreign device row out; the
-    # second is what makes this shape mutually exclusive with the aged-out one.
-    candidate_keys = set(ledger_pairs) & set(live_keys)
+    # A key has to be in this session's ledgers as well as in the set the
+    # caller named. That intersection is what keeps an old-shape or foreign
+    # device row out, and it is the half that does not vary by shape: the
+    # caller's set decides which devices are being asked about, and the
+    # ledgers decide which of them this integration owns entities for.
+    candidate_keys = set(ledger_pairs) & set(candidate_keys)
     if not candidate_keys:
         return {}
 
@@ -1234,16 +1250,32 @@ def _build_orphaned_entity_records(
     leftover_pairs: dict | None = None,
     device_names: dict | None = None,
     leftover_entity_ids: dict | None = None,
+    departed_extra_pairs: dict | None = None,
 ) -> list:
     """Translate this session's adder ledgers into plain records for the card.
 
     Scope rule for the departed-key shape, stated as a prohibition rather than
-    a description: a key with no recorded unique_id yields no record, so a
-    registry row this session's adders did not emit can never be named by that
-    shape's card, never reach the fix flow through it, and never be removed by
-    it. That protects two populations by construction -- every row from a
-    previous session, and every row written under a previous unique_id
-    shape -- neither of which any ledger holds.
+    a description: a key with no recorded unique_id yields no record at all, so
+    a device row whose identifier resolves to a key no adder recorded this
+    session can never be named by that shape's card, never reach the fix flow
+    through it, and never be removed by it. That is what keeps an old-shape
+    device row and a foreign row out, and it is unchanged.
+
+    What a record may offer within such a key is wider than its ledger, and
+    that is ``departed_extra_pairs``. An entity class deleted from the code
+    emits nothing into any ledger, so its rows were invisible to this shape
+    forever: on a key the account still lists they are the still-present
+    shape's business, but once the device leaves, that shape stops applying and
+    the rows strand with nothing able to name them. The caller derives them
+    from the entity registry, through the same per-row gates the still-present
+    shape uses, and hands them in; this function still reads no registry of its
+    own.
+
+    The population that widens is a row on a departed key that this session's
+    adders did not emit, which is the same population the still-present shape
+    already offers on a key that is present. What does not widen is the set of
+    keys, and that is the anchor: a device row nothing in this session claims
+    is still unreachable from both shapes.
 
     ``leftover_pairs`` carries the second shape: rows on a key that is still in
     the current poll, derived from the registry rather than from any ledger and
@@ -1291,6 +1323,7 @@ def _build_orphaned_entity_records(
     """
     ledger_pairs, descriptors = _ledger_pairs_and_descriptors(entry_store)
     leftover_pairs = leftover_pairs or {}
+    departed_extra_pairs = departed_extra_pairs or {}
     device_names = device_names or {}
     leftover_entity_ids = leftover_entity_ids or {}
     records = []
@@ -1316,7 +1349,16 @@ def _build_orphaned_entity_records(
                 # listing. Passing one or the other here is what keeps the count
                 # the card renders and the pairs its Submit is held to from ever
                 # coming from two different places.
-                offered_pairs=leftover_pairs.get(key, frozenset()) if leftover else key_ledger_pairs,
+                offered_pairs=(
+                    leftover_pairs.get(key, frozenset())
+                    if leftover
+                    # A union rather than a replacement: the ledger names the
+                    # rows this session emitted for the key, and the extras name
+                    # the ones nothing alive holds. Neither is a subset of the
+                    # other, and dropping either would strand exactly the rows
+                    # the other cannot see.
+                    else frozenset(key_ledger_pairs) | departed_extra_pairs.get(key, frozenset())
+                ),
                 device_names=device_names,
                 entity_ids=leftover_entity_ids.get(key, ()),
             )
@@ -1531,8 +1573,16 @@ def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordi
 
     Two candidate derivations feed one card per sensor key. The coordinator's
     aged-out set names keys RainPoint has stopped listing; the registry scan
-    names dead rows on keys it still lists. They are mutually exclusive for one
-    key by construction, so the record builder only has to order them.
+    names dead rows. They are mutually exclusive for one key by construction,
+    because the scan is asked about the current poll's keys for the card that
+    speaks of a present device, so the record builder only has to order them.
+
+    The scan runs a second time over the aged-out keys, and what it finds there
+    is not a card of its own: it widens the offer of the departed-key card that
+    key already gets. A row from an entity class since deleted from the code is
+    in no ledger, so that card could not name it, and once the device has left
+    the account nothing else can either. Both passes share the device rows
+    fetched here.
 
     ``counts`` is the caller's per-entry debounce state, mutated in place. A
     caller that passes None gets a throwaway window, which can never reach the
@@ -1579,13 +1629,28 @@ def _sync_orphaned_entity_issues(hass: HomeAssistant, entry: ConfigEntry, coordi
         # and clearing normally in the same pass.
         blind_leftover = leftover is None
         leftover = leftover or {}
+        aged_out = _read_aged_out_keys(coordinator)
+        # The same scan, asked about the keys the hub has stopped listing. It
+        # is the only way a row from an entity class since deleted from the
+        # code can be named at all: nothing emitted it this session, so no
+        # ledger holds it, and once its device has left the account the
+        # still-present shape no longer applies to it either.
+        #
+        # No entity ids are collected for these. The departed card names counts
+        # rather than rows, and half a list, ledger pairs unnamed beside named
+        # extras, would read worse than none.
+        #
+        # None is a failed registry read and degrades to no extras, which is
+        # the card this shape already raised before it could see them.
+        departed_extra = (_build_leftover_row_pairs(hass, entry, entry_store, aged_out, device_rows) if aged_out else {}) or {}
         records = _build_orphaned_entity_records(
             entry_store,
             entry.entry_id,
-            _read_aged_out_keys(coordinator),
+            aged_out,
             leftover,
             device_names,
             _name_leftover_pairs(leftover, entity_ids),
+            departed_extra,
         )
         manager.async_sync(records, hold_leftover=blind_leftover)
     except Exception as exc:
@@ -2105,8 +2170,11 @@ def _drop_removed_bookkeeping(
     # dropping the returning entity.
     #
     # Empty in the ordinary case, on both shapes: the still-present shape
-    # resolves no ledger pairs at all, and on the departed-key shape the
-    # offer is built from the same ledgers this reads back.
+    # resolves no ledger pairs at all, and the departed-key shape's offer
+    # contains the whole of the ledger it reads back. That offer is wider than
+    # the ledger now, since it also carries rows nothing in this session
+    # emitted, but a wider offer can only shrink this set and never grow it:
+    # a pair with no adder behind it has no bookkeeping to hold or drop.
     untouched = frozenset(ledger_pairs) - doomed
     if untouched:
         _LOGGER.debug(
