@@ -1177,20 +1177,23 @@ class TestValveAvailabilityPushedReconnect:
         assert valve.extra_state_attributes["hub_connected"] is True
 
 
-async def _build_dp_valve_tracer_timeline():
+async def _build_dp_valve_tracer_timeline(model_code=41):
     """Construct -> first refresh -> platform setup for a hub-paired HTV210B.
 
     Returns (coordinator, client, entities), entities sorted by zone number.
     Mirrors _build_valve_availability_timeline's shape for the DP endpoint's
     own fixture rather than reusing it, since this one needs a different
     model and a different subDevices shape (modelCode carried).
+
+    model_code reaches the fixture so a caller can run the same timeline with
+    a code the committed catalog does not list.
     """
     from custom_components.rainpoint.const import CONF_HIDS
     from custom_components.rainpoint.coordinator import RainPointCoordinator
     from custom_components.rainpoint.valve import async_setup_entry
 
     client = AsyncMock()
-    client.get_devices_by_hid.return_value = htv210b_hub_devices()
+    client.get_devices_by_hid.return_value = htv210b_hub_devices(model_code=model_code)
     client.get_multiple_device_status.return_value = htv210b_status()
 
     entry = MagicMock()
@@ -1239,6 +1242,20 @@ class TestDpValveTracer:
     async def test_setup_builds_dp_entities_for_both_zones(self):
         """A hub-paired HTV210B produces RainPointDpValveEntity for zones 1 and 2."""
         _coordinator, _client, entities = await _build_dp_valve_tracer_timeline()
+
+        assert [e._zone_num for e in entities] == [1, 2]
+        assert all(isinstance(e, RainPointDpValveEntity) for e in entities)
+
+    @pytest.mark.asyncio
+    async def test_setup_still_builds_dp_entities_under_a_drifted_model_code(self):
+        """The same hardware reported under a model code the catalog does not
+        list. The pair no longer resolves to a variant, and the model answers
+        for it: both zones keep the datapoint endpoint. Routing them to the RF
+        endpoint instead would build valves that look healthy and are rejected
+        by the cloud on every command, which is what this install had before
+        the DP path existed at all.
+        """
+        _coordinator, _client, entities = await _build_dp_valve_tracer_timeline(model_code=999)
 
         assert [e._zone_num for e in entities] == [1, 2]
         assert all(isinstance(e, RainPointDpValveEntity) for e in entities)

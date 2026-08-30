@@ -91,12 +91,13 @@ class TestHasBluetoothControlIdentity:
         """HTV245FRF's single variant declares CTL_WATER, never CTL_BT_WATER."""
         assert has_bluetooth_control_identity("HTV245FRF", None) is False
 
-    def test_false_for_an_ambiguous_pair_the_catalog_cannot_resolve(self, monkeypatch):
+    def test_true_for_an_unresolvable_pair_whose_variants_all_agree(self, monkeypatch):
         """A synthetic two-variant model with no matching code and no uncoded
         bucket resolves to None, following TestEvaluateControlGateSynthetic's
         precedent (tests/test_generic_control.py) for shapes no committed
-        variant exhibits: an unresolvable pair must route to the RF path
-        rather than guess."""
+        variant exhibits. Which variant it is does not change the answer when
+        every variant declares the identity, so this is the model's answer
+        rather than a guess at the variant's."""
         catalog = {
             "SYNTH_AMBIGUOUS": {
                 "1": {"portNumber": 1, "dp": [{"dpCode": 1, "identity": "CTL_BT_WATER", "dpPort": 1}]},
@@ -105,7 +106,44 @@ class TestHasBluetoothControlIdentity:
         }
         monkeypatch.setattr(product_catalog_module, "_CATALOG", catalog)
 
-        assert has_bluetooth_control_identity("SYNTH_AMBIGUOUS", None) is False
+        assert has_bluetooth_control_identity("SYNTH_AMBIGUOUS", None) is True
+
+    def test_false_for_an_unresolvable_pair_whose_variants_disagree(self, monkeypatch):
+        """No committed model mixes the two endpoints across its variants. If
+        one ever does, the model cannot answer for a variant the catalog could
+        not resolve, and the RF default stands."""
+        catalog = {
+            "SYNTH_MIXED": {
+                "1": {"portNumber": 1, "dp": [{"dpCode": 1, "identity": "CTL_BT_WATER", "dpPort": 1}]},
+                "2": {"portNumber": 2, "dp": [{"dpCode": 1, "identity": "CTL_WATER", "dpPort": 1}]},
+            }
+        }
+        monkeypatch.setattr(product_catalog_module, "_CATALOG", catalog)
+
+        assert has_bluetooth_control_identity("SYNTH_MIXED", None) is False
+
+    def test_true_for_a_bluetooth_model_the_catalog_lists_under_another_code(self):
+        """The failure this predicate was widened for. A catalog refresh that
+        moves the HTV210B to a model code the committed snapshot does not
+        carry leaves the pair unresolvable, and the RF endpoint rejects this
+        model outright, so the old collapse to False would have built a valve
+        entity that errors on every command."""
+        assert has_bluetooth_control_identity("HTV210B", 999) is True
+
+    def test_false_for_an_rf_model_the_catalog_lists_under_another_code(self):
+        """The same drift on an RF model changes nothing: its only variant
+        declares CTL_WATER, so the model answers RF for the unresolved code."""
+        assert has_bluetooth_control_identity("HTV245FRF", 999) is False
+
+    def test_false_for_every_valve_model_when_the_catalog_is_empty(self, monkeypatch):
+        """product_catalog degrades a bad snapshot to an empty catalog rather
+        than raising. Every valve model must still route RF in that state:
+        withdrawing the routing would strip working control from installs over
+        a file this integration failed to read."""
+        monkeypatch.setattr(product_catalog_module, "_CATALOG", {})
+
+        for model in VALVE_MODELS:
+            assert has_bluetooth_control_identity(model, None) is False
 
     def test_true_regardless_of_where_the_identity_sits_in_the_dp_list(self, monkeypatch):
         """The walk does not depend on entry order, and a non-dict entry in
