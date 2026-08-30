@@ -222,8 +222,13 @@ def make_valve_zone_status_open(mid=20, sid="D01", time_ms=1785420002247):
     return [{"mid": mid, "subDeviceStatus": [{"id": sid, "value": VALVE_ZONE1_OPEN_TLV_PAYLOAD, "time": time_ms}]}]
 
 
-def htv210b_hub_devices(mid=20, addr=1):
-    """A getDeviceByHid hub record carrying one hub-paired HTV210B sub-device."""
+def htv210b_hub_devices(mid=20, addr=1, model_code=41):
+    """A getDeviceByHid hub record carrying one hub-paired HTV210B sub-device.
+
+    model_code is a parameter so a test can report the model under a code the
+    committed catalog does not carry, which is what a catalog refresh looks
+    like from the integration's side.
+    """
     return [
         {
             "mid": mid,
@@ -231,7 +236,7 @@ def htv210b_hub_devices(mid=20, addr=1):
             "deviceName": "hub-mac",
             "productKey": "hub-pk",
             "homeName": "H",
-            "subDevices": [{"addr": addr, "name": "BT Valve", "model": MODEL_HTV210B, "modelCode": 41, "softVer": "1.0"}],
+            "subDevices": [{"addr": addr, "name": "BT Valve", "model": MODEL_HTV210B, "modelCode": model_code, "softVer": "1.0"}],
         }
     ]
 
