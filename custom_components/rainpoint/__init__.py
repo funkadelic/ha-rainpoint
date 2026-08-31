@@ -375,6 +375,16 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
     generic_enabled = entry.options.get(CONF_GENERIC_ENTITIES_ENABLED, False)
     control_enabled = entry.options.get(CONF_GENERIC_CONTROL_ENABLED, False)
 
+    # The new-controls notices go with the controls they announced. They are
+    # persistent and nothing re-evaluates them, so leaving them would both
+    # strand cards naming deleted entities and, because that notice dedupes
+    # against the issue registry, suppress the fresh one a later re-enable
+    # owes every device once the consent stamp is cleared. Ahead of the
+    # entity-registry lookup because it reads and writes only the issue
+    # registry, so an unreadable entity registry must not skip it too.
+    if not control_enabled:
+        async_withdraw_new_controls_cards(hass, entry.entry_id)
+
     registry, rows = _fetch_registry_rows(
         er.async_get, er.async_entries_for_config_entry, hass, entry, "the generic entity sweep"
     )
@@ -387,14 +397,6 @@ def _remove_stale_generic_entities(hass: HomeAssistant, entry: ConfigEntry, coor
     # abandon the toggle-off path, which must remove every generic row and
     # needs none of this data to do it.
     sensors = _read_current_sensors(coordinator, "sweeping without graduation data")
-
-    # The new-controls notices go with the controls they announced. They are
-    # persistent and nothing re-evaluates them, so leaving them would both
-    # strand cards naming deleted entities and, because that notice dedupes
-    # against the issue registry, suppress the fresh one a later re-enable
-    # owes every device once the consent stamp is cleared.
-    if not control_enabled:
-        async_withdraw_new_controls_cards(hass, entry.entry_id)
 
     for row in rows:
         # The reason lookup reads the coordinator's sensor records, which come
