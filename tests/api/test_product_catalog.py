@@ -316,6 +316,7 @@ class TestCatalogFingerprint:
         return _fingerprint_catalog(_read_catalog_bytes(path))
 
     def test_fingerprint_is_twelve_hex_characters(self, tmp_path):
+        """Short enough to sit in an entity attribute, and hex so it renders anywhere."""
         path = tmp_path / "catalog.json"
         path.write_text(json.dumps({"MODEL": {"1": {"portNumber": 1, "dp": []}}}), encoding="utf-8")
 
@@ -325,6 +326,7 @@ class TestCatalogFingerprint:
         assert all(char in "0123456789abcdef" for char in fingerprint)
 
     def test_same_bytes_fingerprint_the_same_and_different_bytes_do_not(self, tmp_path):
+        """The property the label rests on: it identifies one snapshot, not the release it shipped in."""
         first = tmp_path / "a.json"
         second = tmp_path / "b.json"
         third = tmp_path / "c.json"
@@ -348,9 +350,11 @@ class TestCatalogFingerprint:
         assert self._fingerprint_path(path) is not None
 
     def test_missing_file_fingerprints_as_none(self, tmp_path):
+        """No bytes is not an empty hash, and a reading from no catalog carries no label."""
         assert self._fingerprint_path(tmp_path / "does-not-exist.json") is None
 
     def test_oversized_file_fingerprints_as_none_without_reading(self, tmp_path, monkeypatch):
+        """The size cap is checked before the read, so an oversized file is never hashed."""
         monkeypatch.setattr(product_catalog_module, "_CATALOG_MAX_BYTES", 10)
         oversized_path = tmp_path / "oversized.json"
         oversized_path.write_text(json.dumps({"MODEL": [{"dpCode": 1}]}), encoding="utf-8")
@@ -368,6 +372,7 @@ class TestCatalogFingerprint:
         assert fingerprint == _fingerprint_catalog(path.read_bytes())
 
     def test_a_missing_file_loads_as_an_empty_catalog_with_no_fingerprint(self, tmp_path):
+        """Both halves degrade together, so nothing claims a snapshot that was never read."""
         catalog, fingerprint = _load_catalog_and_fingerprint(tmp_path / "nope.json")
 
         assert catalog == {}

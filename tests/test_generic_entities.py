@@ -1595,6 +1595,7 @@ class TestRainPointGenericSensorAttributes:
     """Tests for the seven-key provenance attribute allowlist."""
 
     def test_every_provenance_key_present(self):
+        """All seven keys are published together; a partial set cannot place a reading."""
         dp_entry = _dp("STA_RSSI", dp_port=0, dp_code=10, data_type="U8")
         fields = [_decoded_field("STA_RSSI", 42, 0, width_mismatch=False)]
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))

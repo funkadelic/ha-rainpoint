@@ -789,6 +789,7 @@ class TestOptionsFlowControlConsentStamp:
 
     @pytest.mark.asyncio
     async def test_saving_control_on_stamps_the_eligible_keys(self):
+        """The save is the consent event, so it records the devices it covered."""
         flow = _make_options_flow(sensors=_control_eligible_sensors())
 
         await flow.async_step_init(

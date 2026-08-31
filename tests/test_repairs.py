@@ -1358,6 +1358,7 @@ class TestNewGenericControlsNotice:
         )
 
     def test_notice_is_non_fixable_persistent_and_carries_the_datapoint_count(self, issue_mocks):
+        """There is nothing for a fix flow to do, and the count is what tells the user how much appeared."""
         create, _delete = issue_mocks
 
         async_notify_new_generic_controls(
@@ -1397,6 +1398,7 @@ class TestNewGenericControlsNotice:
         assert create.call_args.kwargs["data"] == {"entry_id": "e1"}
 
     def test_the_address_is_rendered_so_two_identical_models_are_distinguishable(self, issue_mocks):
+        """Two of the same model on one hub differ only by address, and the model alone would not say which."""
         create, _delete = issue_mocks
 
         async_notify_new_generic_controls(
@@ -1437,11 +1439,13 @@ class TestWithdrawEntryCardsCoversTheNewControlsNotice:
     """The notice is raised once, is persistent, and nothing re-evaluates it."""
 
     def _registry_with(self, *issue_ids, data=None):
+        """An issue registry holding `issue_ids`, each carrying `data`."""
         registry = MagicMock()
         registry.issues = {(DOMAIN, issue_id): SimpleNamespace(data=data) for issue_id in issue_ids}
         return registry
 
     def test_both_prefixes_are_withdrawn(self, issue_mocks):
+        """Removing the entry takes the leftover-entity card and the new-controls notice with it."""
         _create, delete = issue_mocks
         orphan_id = orphaned_entities_issue_id("100_200_1", "e1")
         notice_id = new_generic_controls_issue_id("100_200_1", "e1", "valve")
@@ -1454,6 +1458,7 @@ class TestWithdrawEntryCardsCoversTheNewControlsNotice:
         assert withdrawn == {orphan_id, notice_id}
 
     def test_another_entrys_notice_is_left_alone(self, issue_mocks):
+        """Two accounts can hold the same sensor key, so the entry id is what scopes the sweep."""
         _create, delete = issue_mocks
         mine = new_generic_controls_issue_id("100_200_1", "e1", "valve")
         theirs = new_generic_controls_issue_id("100_200_1", "e2", "valve")
@@ -1490,11 +1495,13 @@ class TestWithdrawNewControlsCardsOnToggleOff:
     """
 
     def _registry_with(self, *issue_ids):
+        """An issue registry holding `issue_ids`, all belonging to entry e1."""
         registry = MagicMock()
         registry.issues = {(DOMAIN, issue_id): SimpleNamespace(data={"entry_id": "e1"}) for issue_id in issue_ids}
         return registry
 
     def test_this_entrys_notices_are_withdrawn(self, issue_mocks):
+        """Every notice this entry raised goes, across both control kinds."""
         _create, delete = issue_mocks
         first = new_generic_controls_issue_id("100_200_1", "e1", "valve")
         second = new_generic_controls_issue_id("100_200_2", "e1", "switch")
@@ -1516,6 +1523,7 @@ class TestWithdrawNewControlsCardsOnToggleOff:
         delete.assert_not_called()
 
     def test_another_entrys_notices_are_left_alone(self, issue_mocks):
+        """Turning the toggle off on one entry must not clear another entry's cards."""
         _create, delete = issue_mocks
         mine = new_generic_controls_issue_id("100_200_1", "e1", "valve")
         theirs = new_generic_controls_issue_id("100_200_1", "e2", "valve")
@@ -1536,6 +1544,7 @@ class TestWithdrawNewControlsCardsOnToggleOff:
             async_withdraw_new_controls_cards(MagicMock(), "e1")
 
     def test_one_card_that_refuses_to_go_does_not_strand_the_rest(self, issue_mocks):
+        """A card left standing would keep suppressing the notice a re-enable owes that device."""
         _create, delete = issue_mocks
         first = new_generic_controls_issue_id("100_200_1", "e1", "valve")
         second = new_generic_controls_issue_id("100_200_2", "e1", "valve")

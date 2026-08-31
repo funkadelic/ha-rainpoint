@@ -1389,6 +1389,7 @@ class TestNewControlsNoticeTimeline:
 
     @staticmethod
     def _entry_with(consented, coordinator):
+        """An entry with generic control on and `consented` as its consent stamp."""
         hass, entry = _make_hass_and_entry(
             coordinator,
             {CONF_GENERIC_CONTROL_ENABLED: True, CONF_GENERIC_CONTROL_ACKED_KEYS: consented},
@@ -1419,6 +1420,7 @@ class TestNewControlsNoticeTimeline:
 
     @pytest.mark.asyncio
     async def test_only_the_device_absent_from_the_stamp_is_announced(self, monkeypatch):
+        """The stamped fleet stays quiet while a device arriving after it is announced."""
         from custom_components.rainpoint.entity import late_adders
         from custom_components.rainpoint.valve import async_setup_entry
 
@@ -1679,6 +1681,7 @@ class TestRainPointGenericSwitchConstruction:
         assert entity._attr_icon == generic_control_module.GENERIC_CONTROL_MARKER_ICON
 
     def test_extra_state_attributes_exposes_the_fixed_on_duration(self):
+        """A switch has no duration control, so the value its on command sends is published instead."""
         entity, _, _ = _build_anchor_switch()
 
         assert entity.extra_state_attributes["on_command_duration_seconds"] == DEFAULT_CONTROL_DURATION_SECONDS
@@ -1707,6 +1710,7 @@ class TestControlProvenanceAttributes:
     """
 
     def test_valve_publishes_the_full_allowlist(self):
+        """Every provenance key a report needs to place an actuating entity in the catalog."""
         entity, _, _ = _build_anchor_valve()
 
         attrs = entity.extra_state_attributes
@@ -1793,6 +1797,7 @@ class TestNewControlsNotice:
     """A device that gains controls it has never had raises the notice once."""
 
     def test_notice_raised_when_no_row_is_already_registered(self, monkeypatch):
+        """No stamp and no registered row is the unstamped install gaining its first controls."""
         _patch_control_registry(monkeypatch, entity_id=None)
         notify = MagicMock()
         monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
@@ -1823,6 +1828,7 @@ class TestNewControlsNotice:
         registry.async_get_entity_id.assert_called_with("valve", DOMAIN, entity.unique_id)
 
     def test_switch_reports_its_own_domain(self, monkeypatch):
+        """The card names what appeared, so a switch must not be announced as a valve."""
         _patch_control_registry(monkeypatch, entity_id=None)
         notify = MagicMock()
         monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
