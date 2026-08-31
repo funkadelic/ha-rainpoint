@@ -387,6 +387,43 @@ def async_notify_new_generic_controls(
         _LOGGER.debug("Failed to create the new-generic-controls repair issue: %s", issue_exc)
 
 
+@callback
+def async_withdraw_new_controls_cards(hass: HomeAssistant, entry_id: str) -> None:
+    """Withdraw this entry's new-controls notices when generic control is turned off.
+
+    The card is persistent and nothing re-evaluates it, so without this it
+    outlives the controls it announced: it keeps naming entities the
+    toggle-off sweep has already deleted, and because
+    async_notify_new_generic_controls dedupes against the issue registry, the
+    standing card then suppresses the fresh notice a later re-enable should
+    raise. Turning the toggle off clears the consent stamp, so every device is
+    unconsented again and every one of them is owed that notice.
+
+    Scoped by the entry's own prefix, the same scoping
+    async_withdraw_entry_cards uses. Never raises: this runs inside config
+    entry setup, where an exception would fail the whole entry over a card.
+    """
+    prefix = f"{NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX}_{entry_id}_"
+    try:
+        registry = ir.async_get(hass)
+        # Materialized before the delete loop mutates the mapping it reads,
+        # the same hazard async_withdraw_entry_cards guards against.
+        issue_ids = sorted(
+            issue_id
+            for (domain, issue_id), issue in registry.issues.items()
+            if domain == DOMAIN and issue_id.startswith(prefix) and _issue_belongs_to_entry(issue, entry_id)
+        )
+    except Exception as exc:
+        _LOGGER.debug("Could not read the issue registry to withdraw new-controls cards: %s", exc)
+        return
+    for issue_id in issue_ids:
+        try:
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+            _LOGGER.debug("Generic control is disabled; withdrawing its new-controls notice (id=%s)", issue_id)
+        except Exception as exc:
+            _LOGGER.debug("Failed to withdraw the new-controls notice (id=%s): %s", issue_id, exc)
+
+
 @dataclass(frozen=True)
 class SilentDeviceRecord:
     """One sub-device's current silence state, as plain data for the Repairs surface.

@@ -172,9 +172,20 @@ def _fingerprint_catalog(raw: bytes | None) -> str | None:
     return hashlib.sha256(raw).hexdigest()[:12]
 
 
-_CATALOG_RAW: bytes | None = _read_catalog_bytes(_CATALOG_PATH)
-_CATALOG: dict = _parse_catalog(_CATALOG_RAW)
-_CATALOG_FINGERPRINT: str | None = _fingerprint_catalog(_CATALOG_RAW)
+def _load_catalog_and_fingerprint(path: Path) -> tuple[dict, str | None]:
+    """Return (catalog, fingerprint) from a single read of the file.
+
+    One read serves both, so the fingerprint provably labels the bytes the
+    catalog was parsed from rather than a second, independent read of the same
+    path. The bytes are local to this call and are released when it returns:
+    retaining them at module level would pin the whole file, up to
+    _CATALOG_MAX_BYTES, for the process lifetime to produce twelve characters.
+    """
+    raw = _read_catalog_bytes(path)
+    return _parse_catalog(raw), _fingerprint_catalog(raw)
+
+
+_CATALOG, _CATALOG_FINGERPRINT = _load_catalog_and_fingerprint(_CATALOG_PATH)
 
 
 def get_catalog_fingerprint() -> str | None:

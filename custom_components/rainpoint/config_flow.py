@@ -358,31 +358,57 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
         toggle off drops the stamp, so a later re-enable consents afresh
         rather than against a stale list.
 
+        When the devices cannot be enumerated at all, the stamp already in
+        options is carried forward rather than replaced with an empty one.
+        async_create_entry replaces the whole options dict, so doing nothing
+        would drop it, and an empty stamp is not "consented to nothing" here:
+        it would announce every device the user had just consented to the
+        moment the entry came back. That happens for real, when Options is
+        opened while the entry is retrying against a cloud outage.
+
         Returns a new dict; the caller's user_input is never mutated.
         """
         options = dict(user_input)
         if not options.get(CONF_GENERIC_CONTROL_ENABLED):
             options.pop(CONF_GENERIC_CONTROL_ACKED_KEYS, None)
             return options
-        options[CONF_GENERIC_CONTROL_ACKED_KEYS] = sorted(self._control_eligible_keys())
+        keys = self._control_eligible_keys()
+        if keys is None:
+            previous = self.config_entry.options.get(CONF_GENERIC_CONTROL_ACKED_KEYS)
+            if previous is not None:
+                options[CONF_GENERIC_CONTROL_ACKED_KEYS] = previous
+            return options
+        options[CONF_GENERIC_CONTROL_ACKED_KEYS] = sorted(keys)
         return options
 
-    def _control_eligible_keys(self) -> set[str]:
-        """Return the sub-device keys the control gate would admit right now.
+    def _control_eligible_keys(self) -> set[str] | None:
+        """Return the sub-device keys the control gate would admit, or None if unknowable.
 
-        Degrades to an empty set when the entry is not loaded or the poll has
-        carried nothing, which is the conservative direction: an empty stamp
-        announces the first device that does appear rather than silently
-        consenting to devices this flow never saw.
+        None and the empty set are different answers and the caller treats
+        them differently. None means the devices could not be enumerated (the
+        entry is not loaded, no poll has landed, or the records are
+        unreadable), so the previous stamp stands. An empty set is a real
+        observation: devices were enumerated and none is eligible.
+
+        Records that are not dicts are skipped rather than allowed to raise,
+        matching valve.py and switch.py, which filter the same way so one
+        malformed sub-device cannot take out a whole builder loop. It matters
+        more here: this runs inline in async_create_entry, so anything raising
+        aborts the save with "Unknown error occurred", including a save that
+        was turning generic control off.
         """
-        from .generic_control import evaluate_control_gate
-
         entry_store = (self.hass.data.get(DOMAIN) or {}).get(self.config_entry.entry_id) or {}
         coordinator = entry_store.get("coordinator")
-        sensors = (getattr(coordinator, "data", None) or {}).get("sensors") or {}
+        sensors = (getattr(coordinator, "data", None) or {}).get("sensors")
+        if not isinstance(sensors, dict):
+            return None
+
+        from .generic_control import evaluate_control_gate
+
         keys = set()
         for key, info in sensors.items():
-            info = info or {}
+            if not isinstance(info, dict):
+                continue
             if (info.get("data") or {}).get("type") != "unknown":
                 continue
             if evaluate_control_gate(info.get("model"), info.get("model_code")).passed:

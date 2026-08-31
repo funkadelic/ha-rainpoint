@@ -9,8 +9,10 @@ from custom_components.rainpoint.api.product_catalog import (
     UNCODED_VARIANT,
     _fingerprint_catalog,
     _load_catalog,
+    _load_catalog_and_fingerprint,
     _normalize_model_variants,
     _normalize_variant_record,
+    _parse_catalog,
     _read_catalog_bytes,
     get_catalog_fingerprint,
     get_catalog_port_number,
@@ -345,10 +347,26 @@ class TestCatalogFingerprint:
 
         assert self._fingerprint_path(oversized_path) is None
 
-    def test_the_fingerprint_describes_the_bytes_the_catalog_was_parsed_from(self):
+    def test_the_fingerprint_describes_the_bytes_the_catalog_was_parsed_from(self, tmp_path):
         """One read serves both, so the label cannot describe a different read of the file."""
-        assert _fingerprint_catalog(product_catalog_module._CATALOG_RAW) == product_catalog_module._CATALOG_FINGERPRINT
-        assert product_catalog_module._parse_catalog(product_catalog_module._CATALOG_RAW) == product_catalog_module._CATALOG
+        path = tmp_path / "catalog.json"
+        path.write_text(json.dumps({"MODEL": {"1": {"portNumber": 1, "dp": []}}}), encoding="utf-8")
+
+        catalog, fingerprint = _load_catalog_and_fingerprint(path)
+
+        assert catalog == _parse_catalog(path.read_bytes())
+        assert fingerprint == _fingerprint_catalog(path.read_bytes())
+
+    def test_a_missing_file_loads_as_an_empty_catalog_with_no_fingerprint(self, tmp_path):
+        catalog, fingerprint = _load_catalog_and_fingerprint(tmp_path / "nope.json")
+
+        assert catalog == {}
+        assert fingerprint is None
+
+    def test_the_catalog_bytes_are_not_retained_at_module_level(self):
+        """Up to _CATALOG_MAX_BYTES would otherwise be pinned for the process
+        lifetime to produce twelve characters."""
+        assert not hasattr(product_catalog_module, "_CATALOG_RAW")
 
     def test_a_path_with_an_embedded_null_degrades_rather_than_raising(self, tmp_path):
         """stat() raises ValueError, not OSError, and this runs at import time."""
