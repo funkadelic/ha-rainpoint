@@ -2,6 +2,25 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.22.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.21.2...v1.22.0) (2026-08-31)
+
+
+### Added
+
+* show where an unverified reading came from, and say when a device gains controls ([#232](https://github.com/funkadelic/ha-rainpoint/issues/232)) ([bbe3380](https://github.com/funkadelic/ha-rainpoint/commit/bbe33804717e6177dab945954937c1a64d191864))
+
+
+### Fixed
+
+* keep a Bluetooth valve on its own endpoint when the catalog cannot place its variant ([#231](https://github.com/funkadelic/ha-rainpoint/issues/231)) ([827b33c](https://github.com/funkadelic/ha-rainpoint/commit/827b33c80bed1064d5ecbd409e20d2b5291795d4))
+* offer the rows a retired entity class left behind when its device leaves ([#227](https://github.com/funkadelic/ha-rainpoint/issues/227)) ([4067c1e](https://github.com/funkadelic/ha-rainpoint/commit/4067c1e97f19d5deaf7c2440c95bb5c649044608))
+* show a device's current name on its device page after a rename ([#226](https://github.com/funkadelic/ha-rainpoint/issues/226)) ([0f92438](https://github.com/funkadelic/ha-rainpoint/commit/0f9243802d1adecc850edd3b1a492e2b2d141350))
+
+
+### Other Changes
+
+* attribute Codecov test analytics results to their source files ([#229](https://github.com/funkadelic/ha-rainpoint/issues/229)) ([af4068f](https://github.com/funkadelic/ha-rainpoint/commit/af4068fde8c026d0b6c141aee3f39fc665934b1a))
+
 ## [1.21.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.21.1...v1.21.2) (2026-08-28)
 
 ### What's new
