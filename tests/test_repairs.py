@@ -1317,57 +1317,134 @@ class TestPushHubIdentityIssueId:
 class TestNewGenericControlsNotice:
     """Consent was given for the devices in front of the user; a later one gets named."""
 
-    def test_id_shape_is_entry_scoped(self):
-        """A sensor key is not unique across two entries resolving the same home."""
-        assert new_generic_controls_issue_id("100_200_1", "e1") == (f"{NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX}_e1_100_200_1")
-        assert new_generic_controls_issue_id("100_200_1", "e1") != new_generic_controls_issue_id("100_200_1", "e2")
+    @pytest.fixture(autouse=True)
+    def _empty_issue_registry(self):
+        """Make the raise-once guard read "not yet raised".
 
-    def test_notice_is_non_fixable_and_carries_the_datapoint_count(self, issue_mocks):
+        A bare MagicMock returns a truthy MagicMock from async_get_issue,
+        which reads as already-raised and would short-circuit every test here.
+        """
+        registry = MagicMock()
+        registry.async_get_issue.return_value = None
+        with patch.object(repairs.ir, "async_get", return_value=registry):
+            yield registry
+
+    def test_an_already_raised_card_is_not_raised_again(self, issue_mocks, _empty_issue_registry):
+        """The builders reach this on every coordinator update and every push
+        frame for a device that stays off the stamp; only the first should log."""
+        create, _delete = issue_mocks
+        _empty_issue_registry.async_get_issue.return_value = SimpleNamespace(domain=DOMAIN)
+
+        async_notify_new_generic_controls(
+            MagicMock(), "e1", "100_200_1", model="HTV445FRF", addr=1, count=1, control_kind="valve"
+        )
+
+        create.assert_not_called()
+
+    def test_id_shape_is_entry_and_platform_scoped(self):
+        """A sensor key is not unique across two entries, and one device can raise from two platforms."""
+        assert new_generic_controls_issue_id("100_200_1", "e1", "valve") == (
+            f"{NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX}_e1_valve_100_200_1"
+        )
+        assert new_generic_controls_issue_id("100_200_1", "e1", "valve") != new_generic_controls_issue_id(
+            "100_200_1", "e2", "valve"
+        )
+
+    def test_valve_and_switch_on_one_device_do_not_share_a_card(self):
+        """Sharing an id would let whichever set up last overwrite the other's count."""
+        assert new_generic_controls_issue_id("100_200_1", "e1", "valve") != new_generic_controls_issue_id(
+            "100_200_1", "e1", "switch"
+        )
+
+    def test_notice_is_non_fixable_persistent_and_carries_the_datapoint_count(self, issue_mocks):
         create, _delete = issue_mocks
 
-        async_notify_new_generic_controls(MagicMock(), "e1", "100_200_1", model="HTV445FRF", count=4, control_kind="valve")
+        async_notify_new_generic_controls(
+            MagicMock(), "e1", "100_200_1", model="HTV445FRF", addr=1, count=4, control_kind="valve"
+        )
 
         create.assert_called_once()
         _hass, domain, issue_id = create.call_args.args
         assert domain == DOMAIN
-        assert issue_id == new_generic_controls_issue_id("100_200_1", "e1")
+        assert issue_id == new_generic_controls_issue_id("100_200_1", "e1", "valve")
         kwargs = create.call_args.kwargs
         assert kwargs["is_fixable"] is False
         assert kwargs["translation_key"] == NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX
         assert kwargs["translation_placeholders"]["count"] == "4"
         assert kwargs["translation_placeholders"]["control_kind"] == "valve"
 
-    def test_model_placeholder_is_sanitized(self, issue_mocks):
-        """The card renders as Markdown, so a cloud-supplied model could plant a link."""
+    def test_the_card_is_persistent(self, issue_mocks):
+        """Not decoration. Home Assistant restores a non-persistent issue with
+        active=False, and the next setup finds the key stamped and never raises
+        it again, so a restart would silently retire the one-shot notice."""
         create, _delete = issue_mocks
 
         async_notify_new_generic_controls(
-            MagicMock(), "e1", "100_200_1", model="[x](http://evil)", count=1, control_kind="switch"
+            MagicMock(), "e1", "100_200_1", model="HTV445FRF", addr=1, count=1, control_kind="valve"
         )
 
-        assert "](" not in create.call_args.kwargs["translation_placeholders"]["model"]
+        assert create.call_args.kwargs["is_persistent"] is True
+
+    def test_the_card_publishes_its_own_entry_id(self, issue_mocks):
+        """So the withdrawal scan is not resting on the prefix test alone."""
+        create, _delete = issue_mocks
+
+        async_notify_new_generic_controls(
+            MagicMock(), "e1", "100_200_1", model="HTV445FRF", addr=1, count=1, control_kind="valve"
+        )
+
+        assert create.call_args.kwargs["data"] == {"entry_id": "e1"}
+
+    def test_the_address_is_rendered_so_two_identical_models_are_distinguishable(self, issue_mocks):
+        create, _delete = issue_mocks
+
+        async_notify_new_generic_controls(
+            MagicMock(), "e1", "100_200_2", model="HTV445FRF", addr=2, count=1, control_kind="valve"
+        )
+
+        assert create.call_args.kwargs["translation_placeholders"]["address"] == "2"
+
+    def test_cloud_supplied_placeholders_are_sanitized(self, issue_mocks):
+        """The card renders as Markdown, so a cloud-supplied value could plant a link."""
+        create, _delete = issue_mocks
+
+        async_notify_new_generic_controls(
+            MagicMock(),
+            "e1",
+            "100_200_1",
+            model="[x](http://evil)",
+            addr="[y](http://evil)",
+            count=1,
+            control_kind="switch",
+        )
+
+        placeholders = create.call_args.kwargs["translation_placeholders"]
+        assert "](" not in placeholders["model"]
+        assert "](" not in placeholders["address"]
 
     def test_a_registry_failure_never_propagates(self, issue_mocks):
         """A Repairs failure must not abort platform setup."""
         create, _delete = issue_mocks
         create.side_effect = RuntimeError("registry gone")
 
-        async_notify_new_generic_controls(MagicMock(), "e1", "100_200_1", model="HTV445FRF", count=1, control_kind="valve")
+        async_notify_new_generic_controls(
+            MagicMock(), "e1", "100_200_1", model="HTV445FRF", addr=1, count=1, control_kind="valve"
+        )
 
 
 class TestWithdrawEntryCardsCoversTheNewControlsNotice:
-    """The notice is raised once and nothing re-evaluates it, so entry removal must take it."""
+    """The notice is raised once, is persistent, and nothing re-evaluates it."""
 
-    def _registry_with(self, *issue_ids):
+    def _registry_with(self, *issue_ids, data=None):
         registry = MagicMock()
-        registry.issues = {(DOMAIN, issue_id): SimpleNamespace(data=None) for issue_id in issue_ids}
+        registry.issues = {(DOMAIN, issue_id): SimpleNamespace(data=data) for issue_id in issue_ids}
         return registry
 
     def test_both_prefixes_are_withdrawn(self, issue_mocks):
         _create, delete = issue_mocks
         orphan_id = orphaned_entities_issue_id("100_200_1", "e1")
-        notice_id = new_generic_controls_issue_id("100_200_1", "e1")
-        registry = self._registry_with(orphan_id, notice_id)
+        notice_id = new_generic_controls_issue_id("100_200_1", "e1", "valve")
+        registry = self._registry_with(orphan_id, notice_id, data={"entry_id": "e1"})
 
         with patch.object(repairs.ir, "async_get", return_value=registry):
             async_withdraw_entry_cards(MagicMock(), "e1")
@@ -1377,9 +1454,13 @@ class TestWithdrawEntryCardsCoversTheNewControlsNotice:
 
     def test_another_entrys_notice_is_left_alone(self, issue_mocks):
         _create, delete = issue_mocks
-        mine = new_generic_controls_issue_id("100_200_1", "e1")
-        theirs = new_generic_controls_issue_id("100_200_1", "e2")
-        registry = self._registry_with(mine, theirs)
+        mine = new_generic_controls_issue_id("100_200_1", "e1", "valve")
+        theirs = new_generic_controls_issue_id("100_200_1", "e2", "valve")
+        registry = MagicMock()
+        registry.issues = {
+            (DOMAIN, mine): SimpleNamespace(data={"entry_id": "e1"}),
+            (DOMAIN, theirs): SimpleNamespace(data={"entry_id": "e2"}),
+        }
 
         with patch.object(repairs.ir, "async_get", return_value=registry):
             async_withdraw_entry_cards(MagicMock(), "e1")

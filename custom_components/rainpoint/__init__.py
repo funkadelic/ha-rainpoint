@@ -2969,8 +2969,11 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     manager and the entry store have both gone, and the issue registry is the
     only place these cards still exist.
 
-    The two non-fixable card families need nothing here. They are rebuilt from
-    every poll, are not persistent, and a removed entry simply stops polling.
+    The two poll-driven non-fixable card families need nothing here. They are
+    rebuilt from every poll, are not persistent, and a removed entry simply
+    stops polling. The new-generic-controls notice is the third non-fixable
+    family and is not one of them: it is raised once and is persistent, so
+    the registry scan takes its prefix too.
     """
     async_withdraw_entry_cards(hass, entry.entry_id)
 

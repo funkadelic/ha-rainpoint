@@ -11,6 +11,7 @@ from custom_components.rainpoint.api.product_catalog import (
     _load_catalog,
     _normalize_model_variants,
     _normalize_variant_record,
+    _read_catalog_bytes,
     get_catalog_fingerprint,
     get_catalog_port_number,
 )
@@ -297,11 +298,16 @@ class TestLoadCatalogFailSoft:
 class TestCatalogFingerprint:
     """The snapshot fingerprint identifies which catalog produced a reading."""
 
+    @staticmethod
+    def _fingerprint_path(path):
+        """Fingerprint a file the way import time does: one read, then hash it."""
+        return _fingerprint_catalog(_read_catalog_bytes(path))
+
     def test_fingerprint_is_twelve_hex_characters(self, tmp_path):
         path = tmp_path / "catalog.json"
         path.write_text(json.dumps({"MODEL": {"1": {"portNumber": 1, "dp": []}}}), encoding="utf-8")
 
-        fingerprint = _fingerprint_catalog(path)
+        fingerprint = self._fingerprint_path(path)
 
         assert len(fingerprint) == 12
         assert all(char in "0123456789abcdef" for char in fingerprint)
@@ -314,8 +320,8 @@ class TestCatalogFingerprint:
         second.write_text('{"MODEL": {}}', encoding="utf-8")
         third.write_text('{"OTHER": {}}', encoding="utf-8")
 
-        assert _fingerprint_catalog(first) == _fingerprint_catalog(second)
-        assert _fingerprint_catalog(first) != _fingerprint_catalog(third)
+        assert self._fingerprint_path(first) == self._fingerprint_path(second)
+        assert self._fingerprint_path(first) != self._fingerprint_path(third)
 
     def test_unparseable_catalog_still_fingerprints(self, tmp_path):
         """Hashes raw bytes, so a file this loader degrades to {} is still identifiable.
@@ -327,17 +333,26 @@ class TestCatalogFingerprint:
         path.write_text("{not valid json", encoding="utf-8")
 
         assert _load_catalog(path) == {}
-        assert _fingerprint_catalog(path) is not None
+        assert self._fingerprint_path(path) is not None
 
     def test_missing_file_fingerprints_as_none(self, tmp_path):
-        assert _fingerprint_catalog(tmp_path / "does-not-exist.json") is None
+        assert self._fingerprint_path(tmp_path / "does-not-exist.json") is None
 
     def test_oversized_file_fingerprints_as_none_without_reading(self, tmp_path, monkeypatch):
         monkeypatch.setattr(product_catalog_module, "_CATALOG_MAX_BYTES", 10)
         oversized_path = tmp_path / "oversized.json"
         oversized_path.write_text(json.dumps({"MODEL": [{"dpCode": 1}]}), encoding="utf-8")
 
-        assert _fingerprint_catalog(oversized_path) is None
+        assert self._fingerprint_path(oversized_path) is None
+
+    def test_the_fingerprint_describes_the_bytes_the_catalog_was_parsed_from(self):
+        """One read serves both, so the label cannot describe a different read of the file."""
+        assert _fingerprint_catalog(product_catalog_module._CATALOG_RAW) == product_catalog_module._CATALOG_FINGERPRINT
+        assert product_catalog_module._parse_catalog(product_catalog_module._CATALOG_RAW) == product_catalog_module._CATALOG
+
+    def test_a_path_with_an_embedded_null_degrades_rather_than_raising(self, tmp_path):
+        """stat() raises ValueError, not OSError, and this runs at import time."""
+        assert _read_catalog_bytes(tmp_path / "bad\x00name.json") is None
 
     def test_shipped_catalog_exposes_a_fingerprint(self):
         """The committed snapshot is readable, so the accessor is never None in a real install."""

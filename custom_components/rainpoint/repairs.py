@@ -292,15 +292,21 @@ def async_sync_push_hub_identity_issue(hass: HomeAssistant, entry_id: str, *, un
         )
 
 
-def new_generic_controls_issue_id(sensor_key: str, entry_id: str) -> str:
-    """Return the per-device new-controls issue id; the string is itself the dedup key.
+def new_generic_controls_issue_id(sensor_key: str, entry_id: str, control_kind: str) -> str:
+    """Return the per-device, per-platform new-controls issue id; the string is the dedup key.
 
     Scoped by entry_id for the reason ``orphaned_entities_issue_id`` is: a
     sensor key is not unique across two config entries resolving the same
-    home, and an unscoped id would let one entry's notice stand in for the
-    other's.
+    home.
+
+    Scoped by control_kind as well, because one sub-device can raise this from
+    two platforms with different counts. Sharing an id would let whichever set
+    up last overwrite the other's placeholders, so a device gaining four valve
+    controls and one switch would report only the switch. No committed catalog
+    variant declares both CTL_WATER and CTL_SOCK today, but the catalog is
+    refreshed weekly by a scheduled job that reviews no code.
     """
-    return f"{NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX}_{entry_id}_{sensor_key}"
+    return f"{NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX}_{entry_id}_{control_kind}_{sensor_key}"
 
 
 @callback
@@ -310,47 +316,69 @@ def async_notify_new_generic_controls(
     sensor_key: str,
     *,
     model: str | None,
+    addr: Any,
     count: int,
     control_kind: str,
 ) -> None:
-    """Raise the notice that a sub-device gained control entities it never had.
+    """Raise the notice that a sub-device gained control entities for the first time.
 
-    The opt-in toggle is consent for the devices in front of the user when
-    they flipped it. A device discovered later gains its controls from that
-    same consent without anyone seeing it happen, and the late adders make
-    that reachable without a restart. This names it.
+    The opt-in toggle is consent for the devices the user was looking at when
+    they saved it. A device absent from that consent stamp gained its controls
+    without anyone seeing it happen, and the late adders make that reachable
+    without a restart.
 
     Deliberately not fixable and deliberately not blocking. The entity works
     from the moment it exists: a control that is registered but refuses every
     command is the failure shape this integration already warns about
-    elsewhere, and it would be self-inflicted here. Dismissing the card is
-    the acknowledgement.
+    elsewhere, and it would be self-inflicted here. Dismissing the card is the
+    acknowledgement.
 
-    Not rebuilt from each poll, unlike the two non-fixable managers: those
-    describe a condition that can clear, while "this device is new to
-    control" is a one-shot event with nothing to re-evaluate. It stands until
-    the user dismisses it.
+    ``is_persistent`` is the load-bearing flag, not decoration. Home Assistant
+    restores a non-persistent issue with ``active=False``, so a restart would
+    destroy this card, and the next setup would find the rows registered and
+    the key stamped and never raise it again. Unlike the two poll-driven
+    non-fixable managers there is nothing to rebuild it from: this is a
+    one-shot event, not a condition. Dismissal still sticks across the flag,
+    because ``dismissed_version`` survives both the restore and the
+    ``async_get_or_create`` replace.
 
-    ``model`` is the only cloud-supplied placeholder and is sanitized on the
-    way in, since Home Assistant renders this card as Markdown. Never raises:
-    a Repairs failure must not abort platform setup.
+    ``addr`` is carried because two identical models on one account otherwise
+    render two indistinguishable cards, the same reason the silent-device card
+    renders one. Both it and ``model`` are cloud-supplied and sanitized on the
+    way in, since Home Assistant renders this card as Markdown. ``count`` and
+    ``control_kind`` are ours, so neither needs it.
+
+    Never raises: a Repairs failure must not abort platform setup.
     """
+    issue_id = new_generic_controls_issue_id(sensor_key, entry_id, control_kind)
     try:
+        # The valve late adder re-runs its builder for every key on every
+        # coordinator update and every push frame, so this is reached
+        # repeatedly for a device that stays off the consent stamp. Raising
+        # the same issue again is a registry no-op, but the log line below is
+        # not, and this sits on the push hot path. The registry is also the
+        # durable answer: the card is persistent, so a dismissed one is still
+        # present here and is correctly left alone.
+        if ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None:
+            return
         ir.async_create_issue(
             hass,
             DOMAIN,
-            new_generic_controls_issue_id(sensor_key, entry_id),
+            issue_id,
             is_fixable=False,
+            is_persistent=True,
             severity=ir.IssueSeverity.WARNING,
             translation_key=NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX,
             translation_placeholders={
                 "model": _sanitize_placeholder(model),
+                "address": _sanitize_placeholder(addr),
                 "count": str(count),
-                "control_kind": _sanitize_placeholder(control_kind),
+                "control_kind": control_kind,
             },
+            data={"entry_id": entry_id},
         )
         _LOGGER.info(
-            "Generic control entities appeared for a sub-device that had none (model=%s, %s %s controls); raising notice",
+            "Generic controls appeared for a sub-device outside the consent stamp (model=%s, %s %s); raising notice",
             model,
             count,
             control_kind,
@@ -826,14 +854,14 @@ def _issue_belongs_to_entry(issue, entry_id: str) -> bool:
     try:
         published = (getattr(issue, "data", None) or {}).get("entry_id")
     except Exception as exc:
-        _LOGGER.debug("Could not read the entry id a leftover entities card names: %s", exc)
+        _LOGGER.debug("Could not read the entry id a withdrawable card names: %s", exc)
         return True
     return published is None or published == entry_id
 
 
 @callback
 def async_withdraw_entry_cards(hass: HomeAssistant, entry_id: str) -> None:
-    """Withdraw one config entry's leftover-entity cards, without its manager.
+    """Withdraw one config entry's leftover-entity and new-controls cards, without its manager.
 
     The removal-path counterpart of RainPointOrphanedEntityIssues.async_clear_all,
     and it exists because Home Assistant unloads a config entry before it
@@ -853,9 +881,10 @@ def async_withdraw_entry_cards(hass: HomeAssistant, entry_id: str) -> None:
     prefixes of their own and are deliberately not listed, because they are
     rebuilt from every poll and a removed entry simply stops polling. The
     new-controls notice has no such backstop: it is raised once, when a device
-    first gains controls, and nothing re-evaluates it, so a removed entry would
-    strand it. It publishes no ``entry_id`` of its own, which puts it on
-    _issue_belongs_to_entry's documented prefix fallback.
+    first gains controls, nothing re-evaluates it, and it is persistent, so a
+    removed entry would strand it across restarts rather than only for a
+    session. It publishes its own ``entry_id`` for the same reason the
+    leftover card does, so the prefix test is not the only thing scoping it.
 
     Never raises. This runs on Home Assistant's removal path, where an exception
     would surface as a failed integration removal, and a card left standing is
@@ -883,11 +912,11 @@ def async_withdraw_entry_cards(hass: HomeAssistant, entry_id: str) -> None:
         try:
             ir.async_delete_issue(hass, DOMAIN, issue_id)
             _LOGGER.info(
-                "This config entry is being removed; withdrawing its leftover entities repair issue (id=%s)",
+                "This config entry is being removed; withdrawing its repair issue (id=%s)",
                 issue_id,
             )
         except Exception as exc:
-            _LOGGER.debug("Failed to withdraw the leftover entities repair issue (id=%s): %s", issue_id, exc)
+            _LOGGER.debug("Failed to withdraw the repair issue (id=%s): %s", issue_id, exc)
 
 
 class RainPointOrphanedEntityIssues:

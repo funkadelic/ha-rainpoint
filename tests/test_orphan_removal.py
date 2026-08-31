@@ -2495,4 +2495,4 @@ class TestTheCardsGoWhenTheEntryDoes:
 
         assert (DOMAIN, first) in held
         assert (DOMAIN, second) not in held
-        assert [r.getMessage() for r in caplog.records if "Failed to withdraw the leftover entities" in r.getMessage()]
+        assert [r.getMessage() for r in caplog.records if "Failed to withdraw the repair issue" in r.getMessage()]

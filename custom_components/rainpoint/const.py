@@ -62,6 +62,15 @@ HUB_UNIQUE_ID_PREFIX = f"{DOMAIN}_hub_"
 
 # === Generic (catalog-driven) control entity factory ===
 CONF_GENERIC_CONTROL_ENABLED = "generic_control_enabled"
+# The sub-device keys that were already control-eligible when the user last
+# saved the control toggle on. This is the consent baseline the new-controls
+# notice measures against, and it lives in options because the entity registry
+# cannot serve as one: __init__._generic_control_row_removal_reason deletes
+# every control-namespace row for the entry whenever the toggle is off, so an
+# off-and-on again would re-announce the whole fleet. Absent means "written by
+# a version before this key existed", which falls back to the registry rather
+# than announcing everything on upgrade.
+CONF_GENERIC_CONTROL_ACKED_KEYS = "generic_control_acked_keys"
 # The control marker is nested inside GENERIC_UNIQUE_ID_MARKER rather than
 # given a top-level marker of its own. That keeps the existing __init__.py
 # registry sweep guard (which matches on GENERIC_UNIQUE_ID_MARKER alone)

@@ -87,22 +87,30 @@ def _normalize_model_variants(value: object) -> dict | None:
 def _load_catalog(path: Path) -> dict:
     """Load the catalog JSON at path, degrading to {} on any failure.
 
-    Rejects the file outright, without reading its contents, when it exceeds
-    _CATALOG_MAX_BYTES. Rejects any parsed value that is not a JSON object.
-    Never raises: every failure mode (missing file, unreadable file, invalid
-    JSON, oversized file, wrong top-level shape) returns an empty dict.
+    Reads the file and parses it. Import-time loading goes through
+    _read_catalog_bytes and _parse_catalog instead, so the snapshot
+    fingerprint can be taken from the same bytes the catalog was parsed from;
+    this wrapper is the standalone path-in form.
+    """
+    return _parse_catalog(_read_catalog_bytes(path))
+
+
+def _parse_catalog(raw: bytes | None) -> dict:
+    """Parse catalog bytes into the model -> modelCode -> record mapping, or {}.
+
+    Rejects any parsed value that is not a JSON object. Never raises: every
+    failure mode (no bytes, invalid JSON, wrong top-level shape) returns an
+    empty dict.
 
     json.JSONDecodeError is a ValueError subclass, so the ValueError arm
     below covers malformed JSON as well as a non-str/bytes payload.
     """
+    if raw is None:
+        return {}
     try:
-        if path.stat().st_size > _CATALOG_MAX_BYTES:
-            _LOGGER.debug("product_catalog.json exceeds size cap, skipping load: %s", path)
-            return {}
-        with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError) as exc:
-        _LOGGER.debug("product_catalog.json missing or invalid, degrading to empty catalog: %s", exc)
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        _LOGGER.debug("product_catalog.json is invalid, degrading to empty catalog: %s", exc)
         return {}
 
     if not isinstance(data, dict):
@@ -119,31 +127,54 @@ def _load_catalog(path: Path) -> dict:
     return catalog
 
 
-def _fingerprint_catalog(path: Path) -> str | None:
-    """Return a short content hash of the catalog file, or None when it cannot be read.
+def _read_catalog_bytes(path: Path) -> bytes | None:
+    """Return the catalog file's raw bytes, or None when it cannot be used.
+
+    One read serves both the parse and the fingerprint, so the fingerprint
+    provably describes the bytes that produced _CATALOG rather than a second,
+    independent read of the same path.
+
+    Never raises. ValueError is caught alongside OSError for the same reason
+    _load_catalog catches it: this runs at import time, where anything
+    escaping fails the component import outright, and Path.stat can raise
+    ValueError on a path with an embedded null.
+    """
+    try:
+        if path.stat().st_size > _CATALOG_MAX_BYTES:
+            _LOGGER.debug("product_catalog.json exceeds size cap, skipping load: %s", path)
+            return None
+        return path.read_bytes()
+    except (OSError, ValueError) as exc:
+        _LOGGER.debug("product_catalog.json missing or unreadable, degrading to empty catalog: %s", exc)
+        return None
+
+
+def _fingerprint_catalog(raw: bytes | None) -> str | None:
+    """Return a short content hash of the catalog bytes, or None when there are none.
 
     Identifies which snapshot produced a reading, which the integration
     version cannot: the catalog is refreshed by its own script and can change
     in a PR that ships no code, and a hand-edited or partially-refreshed file
-    reads as the release it sits in. Hashes the raw bytes rather than the
-    parsed catalog, so a file this loader degraded to {} still fingerprints as
-    itself and a report against it can be told apart from a missing file.
+    reads as the release it sits in.
 
-    Never raises, for the same reason _load_catalog does not: this runs at
-    import time, and an unreadable catalog already degrades to no catalog
-    rather than a failed component import.
+    Hashes the raw bytes rather than the parsed catalog, so a file that
+    _parse_catalog degraded to {} still fingerprints as itself and a report
+    against a corrupt catalog can be told apart from one against no catalog.
+    The cost is that a whitespace-only reformat changes the fingerprint for
+    identical content, which is the right trade for a label whose job is to
+    identify a file.
+
+    Never raises: hashing bytes already in memory has no failure mode this
+    module can degrade around, and there is no I/O left to fail.
     """
-    try:
-        if path.stat().st_size > _CATALOG_MAX_BYTES:
-            return None
-        return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
-    except OSError as exc:
-        _LOGGER.debug("Could not fingerprint product_catalog.json: %s", exc)
+    if raw is None:
         return None
+    return hashlib.sha256(raw).hexdigest()[:12]
 
 
-_CATALOG: dict = _load_catalog(_CATALOG_PATH)
-_CATALOG_FINGERPRINT: str | None = _fingerprint_catalog(_CATALOG_PATH)
+_CATALOG_RAW: bytes | None = _read_catalog_bytes(_CATALOG_PATH)
+_CATALOG: dict = _parse_catalog(_CATALOG_RAW)
+_CATALOG_FINGERPRINT: str | None = _fingerprint_catalog(_CATALOG_RAW)
 
 
 def get_catalog_fingerprint() -> str | None:

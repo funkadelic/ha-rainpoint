@@ -13,6 +13,7 @@ from custom_components.rainpoint.api import product_catalog as product_catalog_m
 from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.api.product_catalog import UNCODED_VARIANT
 from custom_components.rainpoint.const import (
+    CONF_GENERIC_CONTROL_ACKED_KEYS,
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
     GENERIC_CONTROL_ISSUE_ID_PREFIX,
@@ -21,7 +22,6 @@ from custom_components.rainpoint.const import (
     GENERIC_UNIQUE_ID_MARKER,
     HAND_WRITTEN_MODELS,
     MODEL_VALVE_245,
-    UNIQUE_ID_PREFIX,
     VALVE_MODELS,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
@@ -1355,57 +1355,182 @@ class TestGenericValveConfiguredDuration:
 # ---------------------------------------------------------------------------
 
 
+def _patch_issue_registry(monkeypatch):
+    """Patch repairs' issue registry with one that actually remembers.
+
+    A bare MagicMock returns a truthy MagicMock from async_get_issue, which
+    reads as "already raised" and silently short-circuits every notice, so a
+    test on this path has to hold real state.
+    """
+    from custom_components.rainpoint import repairs as repairs_module
+
+    raised: dict = {}
+    registry = MagicMock()
+    registry.async_get_issue.side_effect = lambda domain, issue_id: raised.get((domain, issue_id))
+    monkeypatch.setattr(repairs_module.ir, "async_get", lambda hass: registry)
+    monkeypatch.setattr(
+        repairs_module.ir,
+        "async_create_issue",
+        lambda hass, domain, issue_id, **kw: raised.setdefault((domain, issue_id), kw),
+    )
+    return raised
+
+
 class TestNewControlsNoticeTimeline:
     """Driven in the real order, because the notice is a question about *when*.
 
-    The consent gap this closes only exists across time: the user enabled
-    controls for the devices they had, and a later one inherits that consent
-    silently. Asserting against a snapshot that already contains both devices
-    would pass while the late-adder path was dead.
+    The consent gap this closes only exists across time: the user consented to
+    the devices on the form, and a later one inherits that consent silently.
+    Asserting against a snapshot that already contains both devices would pass
+    while the whole path was dead.
     """
 
+    @staticmethod
+    def _entry_with(consented, coordinator):
+        hass, entry = _make_hass_and_entry(
+            coordinator,
+            {CONF_GENERIC_CONTROL_ENABLED: True, CONF_GENERIC_CONTROL_ACKED_KEYS: consented},
+        )
+        coordinator.config_entry = entry
+        return hass, entry
+
     @pytest.mark.asyncio
-    async def test_only_the_device_that_arrives_after_setup_is_announced(self, monkeypatch):
-        from custom_components.rainpoint.entity import late_adders
+    async def test_fresh_enable_announces_nothing(self, monkeypatch):
+        """The path every real user reaches first, and the one a registry-only
+        test cannot see: at first enable no control row exists for anyone, so
+        the registry reads the whole fleet as brand new."""
         from custom_components.rainpoint.valve import async_setup_entry
 
-        first_key = "100_200_1"
-        first_info = _anchor_sensor_info()
-        later_key = "100_200_2"
-        later_info = copy.deepcopy(first_info)
-        later_info["addr"] = 2
-
-        # The first device was controlled in an earlier session, so its row is
-        # already registered; the later one has never been seen here.
-        already_registered = f"{UNIQUE_ID_PREFIX}{first_key}{GENERIC_CONTROL_UNIQUE_ID_MARKER}ctl_water_p1"
-
-        def registered(domain, platform, unique_id):
-            return "valve.first" if unique_id == already_registered else None
-
-        registry = _patch_control_registry(monkeypatch)
-        registry.async_get_entity_id.side_effect = registered
+        _patch_control_registry(monkeypatch, entity_id=None)
         notify = MagicMock()
         monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
 
-        coordinator = _make_coordinator(first_key, first_info)
-        hass, entry = _make_hass_and_entry(coordinator, {CONF_GENERIC_CONTROL_ENABLED: True})
-        captured = []
-        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
-        await async_setup_entry(hass, entry, async_add_entities)
+        sensor_key = "100_200_1"
+        coordinator = _make_coordinator(sensor_key, _anchor_sensor_info())
+        hass, entry = self._entry_with([sensor_key], coordinator)
 
-        # Setup announces nothing: the only device present was already controlled here.
+        captured = []
+        await async_setup_entry(hass, entry, MagicMock(side_effect=lambda ents, **kw: captured.extend(ents)))
+
         assert captured != []
         notify.assert_not_called()
 
-        # Now the later device turns up, through the same late adder the
-        # coordinator listener drives. No reload, no second setup call.
-        adder = late_adders(hass.data[DOMAIN][entry.entry_id])[0]
+    @pytest.mark.asyncio
+    async def test_only_the_device_absent_from_the_stamp_is_announced(self, monkeypatch):
+        from custom_components.rainpoint.entity import late_adders
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        _patch_control_registry(monkeypatch, entity_id=None)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        first_key = "100_200_1"
+        first_info = _anchor_sensor_info()
+        coordinator = _make_coordinator(first_key, first_info)
+        hass, entry = self._entry_with([first_key], coordinator)
+
+        captured = []
+        await async_setup_entry(hass, entry, MagicMock(side_effect=lambda ents, **kw: captured.extend(ents)))
+        assert captured != []
+        notify.assert_not_called()
+
+        later_key = "100_200_2"
+        later_info = copy.deepcopy(first_info)
+        later_info["addr"] = 2
         coordinator.data["sensors"][later_key] = later_info
+        adder = late_adders(hass.data[DOMAIN][entry.entry_id])[0]
         emitted = adder.collect(later_key, later_info)
 
         assert emitted != []
         assert notify.call_count == 1
         assert notify.call_args.args[2] == later_key
+
+    @pytest.mark.asyncio
+    async def test_the_same_key_is_not_re_announced_on_every_coordinator_update(self, monkeypatch):
+        """The valve late adder re-runs build() for every key on every update
+        and every push frame, so this is reached over and over for a device
+        that stays off the stamp. Raised once, and no repeated log line on the
+        push hot path."""
+        from custom_components.rainpoint.entity import late_adders
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        _patch_control_registry(monkeypatch, entity_id=None)
+        raised = _patch_issue_registry(monkeypatch)
+
+        first_key = "100_200_1"
+        coordinator = _make_coordinator(first_key, _anchor_sensor_info())
+        hass, entry = self._entry_with([first_key], coordinator)
+        await async_setup_entry(hass, entry, MagicMock())
+
+        later_key = "100_200_2"
+        later_info = copy.deepcopy(_anchor_sensor_info())
+        later_info["addr"] = 2
+        coordinator.data["sensors"][later_key] = later_info
+        adder = late_adders(hass.data[DOMAIN][entry.entry_id])[0]
+
+        adder.collect(later_key, later_info)
+        assert len(raised) == 1
+        adder.collect(later_key, later_info)
+        adder.collect(later_key, later_info)
+
+        assert len(raised) == 1
+
+    @pytest.mark.asyncio
+    async def test_turning_the_toggle_off_and_on_does_not_re_announce_the_fleet(self, monkeypatch):
+        """The registry cannot be the baseline: __init__ deletes every
+        control-namespace row for the entry while the toggle is off, so a
+        registry-only test reads the whole fleet as new on the way back."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        _patch_control_registry(monkeypatch, entity_id=None)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        sensor_key = "100_200_1"
+        coordinator = _make_coordinator(sensor_key, _anchor_sensor_info())
+        hass, entry = self._entry_with([sensor_key], coordinator)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_an_install_upgraded_before_the_stamp_existed_falls_back_to_the_registry(self, monkeypatch):
+        """No stamp means "written by an older version", not "nothing consented".
+        Its control rows are already registered, so nothing is announced."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        _patch_control_registry(monkeypatch, entity_id="valve.already_here")
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        sensor_key = "100_200_1"
+        coordinator = _make_coordinator(sensor_key, _anchor_sensor_info())
+        hass, entry = _make_hass_and_entry(coordinator, {CONF_GENERIC_CONTROL_ENABLED: True})
+        coordinator.config_entry = entry
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_notice_carries_a_real_entry_id(self, monkeypatch):
+        """The issue id's entry scoping is the whole point of
+        new_generic_controls_issue_id, and a MagicMock coordinator
+        auto-vivifies any attribute, so it has to be asserted against a real one."""
+        from custom_components.rainpoint.repairs import new_generic_controls_issue_id
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        _patch_control_registry(monkeypatch, entity_id=None)
+        raised = _patch_issue_registry(monkeypatch)
+
+        sensor_key = "100_200_1"
+        coordinator = _make_coordinator(sensor_key, _anchor_sensor_info())
+        hass, entry = self._entry_with([], coordinator)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert list(raised) == [(DOMAIN, new_generic_controls_issue_id(sensor_key, "test_entry", "valve"))]
 
 
 # ---------------------------------------------------------------------------
@@ -1558,21 +1683,46 @@ class TestControlProvenanceAttributes:
         assert "dp_port" in attrs
         assert "command_port" in attrs
 
+    def test_run_state_width_mismatch_is_false_at_a_declared_width(self):
+        """generic_run_state_open refuses a reading at an unvalidated width, and
+        nothing else the user can see explains a control stuck at unknown."""
+        entity, _, _ = _build_anchor_valve(fields=[_run_state_field(1, 1)])
+
+        assert entity.extra_state_attributes["run_state_width_mismatch"] is False
+
+    def test_run_state_width_mismatch_is_none_when_the_poll_carries_no_record(self):
+        """A different answer from False, which is why it is not defaulted."""
+        entity, _, _ = _build_anchor_valve(fields=[])
+
+        assert entity.extra_state_attributes["run_state_width_mismatch"] is None
+
+    def test_run_state_width_mismatch_reads_the_run_state_identity_not_the_control_one(self):
+        """CTL_WATER names a command and never appears in a status frame, so
+        reading the datapoint's own identity here would always answer None."""
+        entity, _, _ = _build_anchor_valve(fields=[_run_state_field(1, 1)])
+
+        assert entity.extra_state_attributes["identity"] == "CTL_WATER"
+        assert entity.extra_state_attributes["run_state_width_mismatch"] is not None
+
     def test_attributes_never_spread_the_sensor_info_record(self):
-        """Explicit allowlist: a key the cloud record carries must not leak in."""
+        """Explicit allowlist plus the shared sub-device keys; nothing is spread."""
         entity, _, sensor_info = _build_anchor_valve()
 
-        assert set(entity.extra_state_attributes) == {
+        attrs = entity.extra_state_attributes
+        assert {
             "catalog_derived",
             "identity",
             "dp_code",
             "dp_port",
             "command_port",
             "dp_data_type",
+            "run_state_width_mismatch",
             "catalog_snapshot",
-        }
-        assert "data" not in entity.extra_state_attributes
+        } <= set(attrs)
+        forbidden = {"data", "home_name", "hub_name", "device_name", "product_key"}
+        assert forbidden.isdisjoint(attrs)
         assert sensor_info.get("data") is not None
+        assert sensor_info.get("product_key") is not None
 
 
 # ---------------------------------------------------------------------------
