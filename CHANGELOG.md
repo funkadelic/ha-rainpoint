@@ -4,6 +4,15 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.22.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.21.2...v1.22.0) (2026-08-31)
 
+### What's new
+
+**If you use unverified generic device control**
+
+- When a device gains controls for the first time, **Settings → Repairs** now raises a notice naming the device and how many controls it gained. Turning the option on covers the devices on your account at that moment, so one that shows up later, or that only becomes controllable later, gets a notice instead of picking up controls quietly. They work straight away; dismiss the notice once you have had a look.
+- Every unverified sensor and control now carries its own origin in its attributes: the catalog entry it was built from, and the catalog snapshot that supplied it. Including those in a report saves a round trip.
+
+Renaming a hub or a sensor in the RainPoint app now reaches its Home Assistant device page on the next update, rather than after a restart. The card that clears out rows an older version left behind now also covers a device you have already taken off your RainPoint account.
+
 
 ### Added
 
