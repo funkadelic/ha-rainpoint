@@ -281,6 +281,16 @@ class TestLoadCatalogFailSoft:
 
         assert _load_catalog(corrupt_path) == {}
 
+    def test_bytes_that_are_not_utf8_return_empty_dict(self, tmp_path):
+        """One ValueError arm covers the decode too, since UnicodeDecodeError
+        subclasses it. Pinned because that rests on the subclass relationship
+        rather than on the exception being named."""
+        undecodable_path = tmp_path / "undecodable.json"
+        undecodable_path.write_bytes(b"\xff\xfe{}")
+
+        assert _load_catalog(undecodable_path) == {}
+        assert _parse_catalog(b"\xff\xfe{}") == {}
+
     def test_non_dict_json_returns_empty_dict(self, tmp_path):
         """A syntactically valid JSON array is rejected - the catalog must be an object."""
         non_dict_path = tmp_path / "list.json"

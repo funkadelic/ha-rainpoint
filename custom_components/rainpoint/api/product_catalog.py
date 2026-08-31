@@ -102,14 +102,15 @@ def _parse_catalog(raw: bytes | None) -> dict:
     failure mode (no bytes, invalid JSON, wrong top-level shape) returns an
     empty dict.
 
-    json.JSONDecodeError is a ValueError subclass, so the ValueError arm
-    below covers malformed JSON as well as a non-str/bytes payload.
+    One ValueError arm covers all three ways the parse can fail: bytes that
+    are not UTF-8 (UnicodeDecodeError), malformed JSON (json.JSONDecodeError)
+    and a non-str/bytes payload are all ValueError subclasses.
     """
     if raw is None:
         return {}
     try:
         data = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except ValueError as exc:
         _LOGGER.debug("product_catalog.json is invalid, degrading to empty catalog: %s", exc)
         return {}
 
