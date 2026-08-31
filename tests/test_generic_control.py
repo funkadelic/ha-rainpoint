@@ -15,6 +15,8 @@ from custom_components.rainpoint.api.product_catalog import UNCODED_VARIANT
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ACKED_KEYS,
     CONF_GENERIC_CONTROL_ENABLED,
+    CONF_GENERIC_ENTITIES_ENABLED,
+    CONF_PUSH_ENABLED,
     DOMAIN,
     GENERIC_CONTROL_ISSUE_ID_PREFIX,
     GENERIC_CONTROL_REFRESH_DELAY_SECONDS,
@@ -1477,18 +1479,61 @@ class TestNewControlsNoticeTimeline:
 
     @pytest.mark.asyncio
     async def test_turning_the_toggle_off_and_on_does_not_re_announce_the_fleet(self, monkeypatch):
-        """The registry cannot be the baseline: __init__ deletes every
-        control-namespace row for the entry while the toggle is off, so a
-        registry-only test reads the whole fleet as new on the way back."""
+        """Drives the whole off-and-on sequence through the real options flow,
+        because the two halves passing apart is what this has to rule out.
+
+        The registry cannot be the baseline: __init__ deletes every
+        control-namespace row for the entry while the toggle is off, which is
+        modelled here by the lookup going from resolved to unresolved between
+        the two setups (tests/test_init.py owns proving the sweep deletes
+        them). So the re-enable lands with an empty registry, and only the
+        stamp the flow wrote on the way back keeps the standing fleet quiet.
+        """
+        from custom_components.rainpoint.config_flow import RainPointOptionsFlow
         from custom_components.rainpoint.valve import async_setup_entry
 
-        _patch_control_registry(monkeypatch, entity_id=None)
+        registry = _patch_control_registry(monkeypatch, entity_id="valve.already_there")
         notify = MagicMock()
         monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
 
         sensor_key = "100_200_1"
         coordinator = _make_coordinator(sensor_key, _anchor_sensor_info())
         hass, entry = self._entry_with([sensor_key], coordinator)
+
+        await async_setup_entry(hass, entry, MagicMock())
+        notify.assert_not_called()
+
+        flow = RainPointOptionsFlow()
+        flow.config_entry = entry
+        flow.hass = hass
+        flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
+
+        # Off: the flow drops the stamp, and the sweep takes the control rows
+        # with it, so nothing durable about this fleet survives.
+        await flow.async_step_init(
+            {
+                CONF_PUSH_ENABLED: False,
+                CONF_GENERIC_ENTITIES_ENABLED: False,
+                CONF_GENERIC_CONTROL_ENABLED: False,
+            }
+        )
+        off_options = flow.async_create_entry.call_args.kwargs["data"]
+        assert CONF_GENERIC_CONTROL_ACKED_KEYS not in off_options
+        entry.options = off_options
+        registry.async_get_entity_id.return_value = None
+
+        # On again: this save is the fresh consent event, and it must cover the
+        # fleet that was already there.
+        await flow.async_step_init(
+            {
+                CONF_PUSH_ENABLED: False,
+                CONF_GENERIC_ENTITIES_ENABLED: False,
+                CONF_GENERIC_CONTROL_ENABLED: True,
+            }
+        )
+        on_options = flow.async_create_entry.call_args.kwargs["data"]
+        assert on_options[CONF_GENERIC_CONTROL_ACKED_KEYS] == [sensor_key]
+        entry.options = on_options
 
         await async_setup_entry(hass, entry, MagicMock())
 
