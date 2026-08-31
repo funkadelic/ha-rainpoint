@@ -24,6 +24,7 @@ portNumber is a per-model property in the RainPoint catalog, not a per-dp one, s
 it lives on the variant record rather than being repeated on every dp entry.
 """
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -118,7 +119,36 @@ def _load_catalog(path: Path) -> dict:
     return catalog
 
 
+def _fingerprint_catalog(path: Path) -> str | None:
+    """Return a short content hash of the catalog file, or None when it cannot be read.
+
+    Identifies which snapshot produced a reading, which the integration
+    version cannot: the catalog is refreshed by its own script and can change
+    in a PR that ships no code, and a hand-edited or partially-refreshed file
+    reads as the release it sits in. Hashes the raw bytes rather than the
+    parsed catalog, so a file this loader degraded to {} still fingerprints as
+    itself and a report against it can be told apart from a missing file.
+
+    Never raises, for the same reason _load_catalog does not: this runs at
+    import time, and an unreadable catalog already degrades to no catalog
+    rather than a failed component import.
+    """
+    try:
+        if path.stat().st_size > _CATALOG_MAX_BYTES:
+            return None
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    except OSError as exc:
+        _LOGGER.debug("Could not fingerprint product_catalog.json: %s", exc)
+        return None
+
+
 _CATALOG: dict = _load_catalog(_CATALOG_PATH)
+_CATALOG_FINGERPRINT: str | None = _fingerprint_catalog(_CATALOG_PATH)
+
+
+def get_catalog_fingerprint() -> str | None:
+    """Return the committed catalog snapshot's short content hash, or None."""
+    return _CATALOG_FINGERPRINT
 
 
 def _resolve_variant(model: str | None, model_code: int | str | None = None) -> dict | None:

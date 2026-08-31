@@ -76,6 +76,7 @@ from .const import (
     DOMAIN,
     HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
     LEFTOVER_ENTITIES_TRANSLATION_KEY,
+    NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX,
     ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
     PUSH_HUB_IDENTITY_ISSUE_ID,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
@@ -289,6 +290,73 @@ def async_sync_push_hub_identity_issue(hass: HomeAssistant, entry_id: str, *, un
             unresolved,
             issue_exc,
         )
+
+
+def new_generic_controls_issue_id(sensor_key: str, entry_id: str) -> str:
+    """Return the per-device new-controls issue id; the string is itself the dedup key.
+
+    Scoped by entry_id for the reason ``orphaned_entities_issue_id`` is: a
+    sensor key is not unique across two config entries resolving the same
+    home, and an unscoped id would let one entry's notice stand in for the
+    other's.
+    """
+    return f"{NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX}_{entry_id}_{sensor_key}"
+
+
+@callback
+def async_notify_new_generic_controls(
+    hass: HomeAssistant,
+    entry_id: str,
+    sensor_key: str,
+    *,
+    model: str | None,
+    count: int,
+    control_kind: str,
+) -> None:
+    """Raise the notice that a sub-device gained control entities it never had.
+
+    The opt-in toggle is consent for the devices in front of the user when
+    they flipped it. A device discovered later gains its controls from that
+    same consent without anyone seeing it happen, and the late adders make
+    that reachable without a restart. This names it.
+
+    Deliberately not fixable and deliberately not blocking. The entity works
+    from the moment it exists: a control that is registered but refuses every
+    command is the failure shape this integration already warns about
+    elsewhere, and it would be self-inflicted here. Dismissing the card is
+    the acknowledgement.
+
+    Not rebuilt from each poll, unlike the two non-fixable managers: those
+    describe a condition that can clear, while "this device is new to
+    control" is a one-shot event with nothing to re-evaluate. It stands until
+    the user dismisses it.
+
+    ``model`` is the only cloud-supplied placeholder and is sanitized on the
+    way in, since Home Assistant renders this card as Markdown. Never raises:
+    a Repairs failure must not abort platform setup.
+    """
+    try:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            new_generic_controls_issue_id(sensor_key, entry_id),
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX,
+            translation_placeholders={
+                "model": _sanitize_placeholder(model),
+                "count": str(count),
+                "control_kind": _sanitize_placeholder(control_kind),
+            },
+        )
+        _LOGGER.info(
+            "Generic control entities appeared for a sub-device that had none (model=%s, %s %s controls); raising notice",
+            model,
+            count,
+            control_kind,
+        )
+    except Exception as issue_exc:
+        _LOGGER.debug("Failed to create the new-generic-controls repair issue: %s", issue_exc)
 
 
 @dataclass(frozen=True)
@@ -780,16 +848,23 @@ def async_withdraw_entry_cards(hass: HomeAssistant, entry_id: str) -> None:
     sensor keys. That scoping is the same property orphaned_entities_issue_id
     was given the entry id for.
 
-    Only this integration's fixable cards are in range: the domain is matched as
-    well as the prefix, and the two non-fixable managers use prefixes of their
-    own. Their cards need no withdrawal here anyway, because they are rebuilt
-    from every poll and a removed entry simply stops polling.
+    Two prefixes are in range: the fixable leftover-entity cards, and the
+    new-generic-controls notice. The two poll-driven non-fixable managers keep
+    prefixes of their own and are deliberately not listed, because they are
+    rebuilt from every poll and a removed entry simply stops polling. The
+    new-controls notice has no such backstop: it is raised once, when a device
+    first gains controls, and nothing re-evaluates it, so a removed entry would
+    strand it. It publishes no ``entry_id`` of its own, which puts it on
+    _issue_belongs_to_entry's documented prefix fallback.
 
     Never raises. This runs on Home Assistant's removal path, where an exception
     would surface as a failed integration removal, and a card left standing is
     the lesser of the two outcomes.
     """
-    prefix = f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_{entry_id}_"
+    prefixes = (
+        f"{ORPHANED_ENTITIES_ISSUE_ID_PREFIX}_{entry_id}_",
+        f"{NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX}_{entry_id}_",
+    )
     try:
         registry = ir.async_get(hass)
         # sorted() is what materializes this, and it has to stay materialized:
@@ -799,7 +874,7 @@ def async_withdraw_entry_cards(hass: HomeAssistant, entry_id: str) -> None:
         issue_ids = sorted(
             issue_id
             for (domain, issue_id), issue in registry.issues.items()
-            if domain == DOMAIN and issue_id.startswith(prefix) and _issue_belongs_to_entry(issue, entry_id)
+            if domain == DOMAIN and issue_id.startswith(prefixes) and _issue_belongs_to_entry(issue, entry_id)
         )
     except Exception as exc:
         _LOGGER.debug("Could not read the issue registry while removing entry %s; leaving its cards: %s", entry_id, exc)

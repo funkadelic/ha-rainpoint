@@ -93,6 +93,12 @@ GENERIC_CONTROL_MARKER_ICON = "mdi:flask-outline"
 # zone, mirroring how coordinator._notify_unknown_model dedupes on its
 # notification id.
 GENERIC_CONTROL_ISSUE_ID_PREFIX = "generic_control_command_failed"
+# Both the translation key and the stem of the per-device issue id for the
+# notice raised when a sub-device gains generic control entities it has never
+# had before (see repairs.new_generic_controls_issue_id). Entry-scoped like
+# ORPHANED_ENTITIES_ISSUE_ID_PREFIX, because a sensor key is not unique across
+# two config entries resolving the same home.
+NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX = "new_generic_controls"
 # Both the repair issue's translation key and the stem of its per-device
 # issue id (see repairs.silent_device_issue_id). The issue id itself is the
 # dedup key: it is built as f"{SILENT_DEVICE_ISSUE_ID_PREFIX}_{hid}_{mid}_{addr}",

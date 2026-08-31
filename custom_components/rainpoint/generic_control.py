@@ -40,6 +40,7 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.valve import ValveEntity, ValveEntityFeature
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_call_later
@@ -48,6 +49,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .api import (
     RainPointApiError,
     get_catalog_entry,
+    get_catalog_fingerprint,
     get_catalog_port_number,
     is_ascii_declined,
     is_hand_written_model,
@@ -72,7 +74,7 @@ from .generic_entities import (
     _usable_port,
     has_declared_width,
 )
-from .repairs import _sanitize_placeholder
+from .repairs import _sanitize_placeholder, async_notify_new_generic_controls
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -492,11 +494,54 @@ def _build_generic_entities(
         return []
 
 
+def _notify_if_newly_controlled(coordinator, sensor_key: str, sensor_info: dict, entities: list, domain: str) -> None:
+    """Raise the new-controls notice when none of these entities is already registered.
+
+    "New" is answered by the entity registry rather than by any state this
+    integration keeps, because the registry is the one record that already
+    survives a restart and already knows what this install has offered
+    before. At the moment a builder runs, the rows it is about to add are not
+    registered yet, so a hit here can only come from an earlier session.
+
+    Matched on (domain, unique_id) rather than unique_id alone: registry
+    uniqueness is per (domain, platform, unique_id), so an id on its own is a
+    partial identifier.
+
+    Any registered row means this device has been controlled here before, so
+    the whole set is treated as known. That is deliberately coarse: a variant
+    gaining a second zone is not the consent gap this notice is about, and a
+    per-row notice would fire on a catalog refresh that merely renumbered
+    ports.
+
+    Never raises. A notice is not worth failing platform setup over, and this
+    runs inside the builders' own try in every call path but the late adders'.
+    """
+    if not entities:
+        return
+    try:
+        registry = er.async_get(coordinator.hass)
+        for entity in entities:
+            if registry.async_get_entity_id(domain, DOMAIN, entity.unique_id) is not None:
+                return
+        async_notify_new_generic_controls(
+            coordinator.hass,
+            coordinator._entry.entry_id,
+            sensor_key,
+            model=sensor_info.get("model"),
+            count=len(entities),
+            control_kind=domain,
+        )
+    except Exception as exc:
+        _LOGGER.debug("Could not check whether %s controls are new for sensor_key=%s: %s", domain, sensor_key, exc)
+
+
 def build_generic_valve_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
     """Return the generic valve entities (CTL_WATER) for one sub-device, or []."""
-    return _build_generic_entities(
+    entities = _build_generic_entities(
         coordinator, sensor_key, sensor_info, base_slug, VALVE_CONTROL_IDENTITIES, RainPointGenericValve
     )
+    _notify_if_newly_controlled(coordinator, sensor_key, sensor_info, entities, "valve")
+    return entities
 
 
 def build_generic_switch_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
@@ -506,9 +551,11 @@ def build_generic_switch_entities(coordinator, sensor_key: str, sensor_info: dic
     narrowing generic control to valves: a CTL_SOCK datapoint names a mains
     socket, not a valve, so it belongs on the switch platform.
     """
-    return _build_generic_entities(
+    entities = _build_generic_entities(
         coordinator, sensor_key, sensor_info, base_slug, SWITCH_CONTROL_IDENTITIES, RainPointGenericSwitch
     )
+    _notify_if_newly_controlled(coordinator, sensor_key, sensor_info, entities, "switch")
+    return entities
 
 
 def generic_run_state_open(coordinator, sensor_key: str, dp_port: int) -> bool | None:
@@ -629,6 +676,30 @@ class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
     @property
     def device_info(self) -> DeviceInfo:
         return build_sub_device_info(self._sensor_info)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Explicit provenance allowlist; never spreads the sensor info record.
+
+        The read-only generic sensor has carried these since it shipped and
+        the control entities carried none, which is backwards: this is the
+        path that writes to hardware, so a report of the wrong zone actuating
+        is the one that most needs the datapoint it was built from.
+
+        command_port is here as well as dp_port because the two differ on a
+        variant declaring port zero, and the command port is the value that
+        actually reached the hardware. A report that names only the catalog's
+        dp_port cannot tell those apart.
+        """
+        return {
+            "catalog_derived": True,
+            "identity": self._datapoint.identity,
+            "dp_code": self._datapoint.dp_code,
+            "dp_port": self._datapoint.dp_port,
+            "command_port": self._datapoint.command_port,
+            "dp_data_type": self._datapoint.dp_data_type,
+            "catalog_snapshot": get_catalog_fingerprint(),
+        }
 
     @property
     def _run_state_open(self) -> bool | None:
@@ -790,8 +861,16 @@ class RainPointGenericSwitch(RainPointGenericControlBase, SwitchEntity):
         Not a configuration knob -- there is no companion number entity for
         CTL_SOCK and no way to override the value below -- just a documented
         fact so a user is not surprised if the connected device auto-offs.
+
+        Merged onto the base's provenance allowlist rather than returned
+        alone, which is what this used to do: returning a bare dict here
+        shadowed every provenance key the base publishes, so the switch would
+        have been the one control entity carrying none of them.
         """
-        return {"on_command_duration_seconds": DEFAULT_CONTROL_DURATION_SECONDS}
+        return {
+            **super().extra_state_attributes,
+            "on_command_duration_seconds": DEFAULT_CONTROL_DURATION_SECONDS,
+        }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         # Same fixed duration valve.py's own DEFAULT_DURATION_SECONDS falls

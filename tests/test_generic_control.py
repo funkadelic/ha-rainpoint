@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.rainpoint import generic_control as generic_control_module
-from custom_components.rainpoint.api import RainPointApiError, get_catalog_variant_codes
+from custom_components.rainpoint.api import RainPointApiError, get_catalog_fingerprint, get_catalog_variant_codes
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
 from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.api.product_catalog import UNCODED_VARIANT
@@ -21,6 +21,7 @@ from custom_components.rainpoint.const import (
     GENERIC_UNIQUE_ID_MARKER,
     HAND_WRITTEN_MODELS,
     MODEL_VALVE_245,
+    UNIQUE_ID_PREFIX,
     VALVE_MODELS,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
@@ -1350,6 +1351,64 @@ class TestGenericValveConfiguredDuration:
 
 
 # ---------------------------------------------------------------------------
+# Timeline: a device discovered after setup (CONFIRM-01)
+# ---------------------------------------------------------------------------
+
+
+class TestNewControlsNoticeTimeline:
+    """Driven in the real order, because the notice is a question about *when*.
+
+    The consent gap this closes only exists across time: the user enabled
+    controls for the devices they had, and a later one inherits that consent
+    silently. Asserting against a snapshot that already contains both devices
+    would pass while the late-adder path was dead.
+    """
+
+    @pytest.mark.asyncio
+    async def test_only_the_device_that_arrives_after_setup_is_announced(self, monkeypatch):
+        from custom_components.rainpoint.entity import late_adders
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        first_key = "100_200_1"
+        first_info = _anchor_sensor_info()
+        later_key = "100_200_2"
+        later_info = copy.deepcopy(first_info)
+        later_info["addr"] = 2
+
+        # The first device was controlled in an earlier session, so its row is
+        # already registered; the later one has never been seen here.
+        already_registered = f"{UNIQUE_ID_PREFIX}{first_key}{GENERIC_CONTROL_UNIQUE_ID_MARKER}ctl_water_p1"
+
+        def registered(domain, platform, unique_id):
+            return "valve.first" if unique_id == already_registered else None
+
+        registry = _patch_control_registry(monkeypatch)
+        registry.async_get_entity_id.side_effect = registered
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        coordinator = _make_coordinator(first_key, first_info)
+        hass, entry = _make_hass_and_entry(coordinator, {CONF_GENERIC_CONTROL_ENABLED: True})
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        # Setup announces nothing: the only device present was already controlled here.
+        assert captured != []
+        notify.assert_not_called()
+
+        # Now the later device turns up, through the same late adder the
+        # coordinator listener drives. No reload, no second setup call.
+        adder = late_adders(hass.data[DOMAIN][entry.entry_id])[0]
+        coordinator.data["sensors"][later_key] = later_info
+        emitted = adder.collect(later_key, later_info)
+
+        assert emitted != []
+        assert notify.call_count == 1
+        assert notify.call_args.args[2] == later_key
+
+
+# ---------------------------------------------------------------------------
 # End-to-end: valve.async_setup_entry dispatch with the control toggle
 # ---------------------------------------------------------------------------
 
@@ -1452,7 +1511,152 @@ class TestRainPointGenericSwitchConstruction:
     def test_extra_state_attributes_exposes_the_fixed_on_duration(self):
         entity, _, _ = _build_anchor_switch()
 
-        assert entity.extra_state_attributes == {"on_command_duration_seconds": DEFAULT_CONTROL_DURATION_SECONDS}
+        assert entity.extra_state_attributes["on_command_duration_seconds"] == DEFAULT_CONTROL_DURATION_SECONDS
+
+    def test_extra_state_attributes_keeps_the_base_provenance_keys(self):
+        """The switch merges rather than shadows; returning a bare dict dropped all of these."""
+        entity, _, _ = _build_anchor_switch()
+
+        attrs = entity.extra_state_attributes
+        assert attrs["catalog_derived"] is True
+        assert attrs["identity"] == "CTL_SOCK"
+        assert attrs["on_command_duration_seconds"] == DEFAULT_CONTROL_DURATION_SECONDS
+
+
+# ---------------------------------------------------------------------------
+# Provenance attributes (PROV-01)
+# ---------------------------------------------------------------------------
+
+
+class TestControlProvenanceAttributes:
+    """The write path publishes the datapoint it was built from.
+
+    A report of the wrong zone actuating is the one that most needs this, and
+    until now the read-only sensor carried provenance while the control
+    entities carried none.
+    """
+
+    def test_valve_publishes_the_full_allowlist(self):
+        entity, _, _ = _build_anchor_valve()
+
+        attrs = entity.extra_state_attributes
+
+        assert attrs["catalog_derived"] is True
+        assert attrs["identity"] == "CTL_WATER"
+        assert attrs["dp_port"] == entity._datapoint.dp_port
+        assert attrs["command_port"] == entity._datapoint.command_port
+        assert attrs["dp_code"] == entity._datapoint.dp_code
+        assert attrs["dp_data_type"] == entity._datapoint.dp_data_type
+        assert attrs["catalog_snapshot"] == get_catalog_fingerprint()
+
+    def test_command_port_is_published_alongside_dp_port(self):
+        """The two differ on a port-zero variant, and the command port is what reached the hardware."""
+        entity, _, _ = _build_anchor_switch()
+
+        attrs = entity.extra_state_attributes
+
+        assert "dp_port" in attrs
+        assert "command_port" in attrs
+
+    def test_attributes_never_spread_the_sensor_info_record(self):
+        """Explicit allowlist: a key the cloud record carries must not leak in."""
+        entity, _, sensor_info = _build_anchor_valve()
+
+        assert set(entity.extra_state_attributes) == {
+            "catalog_derived",
+            "identity",
+            "dp_code",
+            "dp_port",
+            "command_port",
+            "dp_data_type",
+            "catalog_snapshot",
+        }
+        assert "data" not in entity.extra_state_attributes
+        assert sensor_info.get("data") is not None
+
+
+# ---------------------------------------------------------------------------
+# New-controls notice (CONFIRM-01)
+# ---------------------------------------------------------------------------
+
+
+def _patch_control_registry(monkeypatch, entity_id=None):
+    """Rebind generic_control's module-level entity_registry import.
+
+    The module binds ``er`` at import time, so patching sys.modules the way
+    _patch_duration_registry does would not reach it.
+    """
+    mock_registry = MagicMock()
+    mock_registry.async_get_entity_id.return_value = entity_id
+    mock_er_module = MagicMock()
+    mock_er_module.async_get.return_value = mock_registry
+    monkeypatch.setattr(generic_control_module, "er", mock_er_module)
+    return mock_registry
+
+
+class TestNewControlsNotice:
+    """A device that gains controls it has never had raises the notice once."""
+
+    def test_notice_raised_when_no_row_is_already_registered(self, monkeypatch):
+        _patch_control_registry(monkeypatch, entity_id=None)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        _build_anchor_valve()
+
+        assert notify.call_count == 1
+        assert notify.call_args.kwargs["count"] == 1
+        assert notify.call_args.kwargs["control_kind"] == "valve"
+
+    def test_no_notice_when_a_row_is_already_registered(self, monkeypatch):
+        """An existing row means this install has controlled the device before."""
+        _patch_control_registry(monkeypatch, entity_id="valve.already_here")
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        _build_anchor_valve()
+
+        notify.assert_not_called()
+
+    def test_registry_matched_on_domain_and_unique_id(self, monkeypatch):
+        """Never the unique_id alone: registry uniqueness is per (domain, platform, unique_id)."""
+        registry = _patch_control_registry(monkeypatch, entity_id=None)
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", MagicMock())
+
+        entity, _, _ = _build_anchor_valve()
+
+        registry.async_get_entity_id.assert_called_with("valve", DOMAIN, entity.unique_id)
+
+    def test_switch_reports_its_own_domain(self, monkeypatch):
+        _patch_control_registry(monkeypatch, entity_id=None)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        _build_anchor_switch()
+
+        assert notify.call_args.kwargs["control_kind"] == "switch"
+
+    def test_no_notice_when_the_gate_admitted_nothing(self, monkeypatch):
+        """No entities means no consent gap, so nothing to say."""
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        generic_control_module._notify_if_newly_controlled(MagicMock(), "1_2_3", {}, [], "valve")
+
+        notify.assert_not_called()
+
+    def test_registry_failure_is_swallowed(self, monkeypatch):
+        """A notice is never worth failing platform setup over."""
+        mock_er_module = MagicMock()
+        mock_er_module.async_get.side_effect = RuntimeError("registry gone")
+        monkeypatch.setattr(generic_control_module, "er", mock_er_module)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        entity, _, _ = _build_anchor_valve()
+
+        assert entity is not None
+        notify.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

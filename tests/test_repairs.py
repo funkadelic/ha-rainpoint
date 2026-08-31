@@ -15,6 +15,7 @@ from custom_components.rainpoint import repairs
 from custom_components.rainpoint.const import (
     DOMAIN,
     HUB_CONNECTIVITY_ISSUE_ID_PREFIX,
+    NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX,
     ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
     PUSH_HUB_IDENTITY_ISSUE_ID,
     PUSH_WATCHDOG_DEAD_AFTER_SECONDS,
@@ -38,7 +39,10 @@ from custom_components.rainpoint.repairs import (
     _sanitize_placeholder,
     _snapshot_offered_pairs,
     async_create_fix_flow,
+    async_notify_new_generic_controls,
+    async_withdraw_entry_cards,
     hub_connectivity_issue_id,
+    new_generic_controls_issue_id,
     orphaned_entities_issue_id,
     push_hub_identity_issue_id,
     silent_device_issue_id,
@@ -1308,6 +1312,90 @@ class TestPushHubIdentityIssueId:
         another entry's still-unresolved card, or strand a card with no code
         path left to clear it if the entry that raised it were removed."""
         assert push_hub_identity_issue_id("e1") != push_hub_identity_issue_id("e2")
+
+
+class TestNewGenericControlsNotice:
+    """Consent was given for the devices in front of the user; a later one gets named."""
+
+    def test_id_shape_is_entry_scoped(self):
+        """A sensor key is not unique across two entries resolving the same home."""
+        assert new_generic_controls_issue_id("100_200_1", "e1") == (f"{NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX}_e1_100_200_1")
+        assert new_generic_controls_issue_id("100_200_1", "e1") != new_generic_controls_issue_id("100_200_1", "e2")
+
+    def test_notice_is_non_fixable_and_carries_the_datapoint_count(self, issue_mocks):
+        create, _delete = issue_mocks
+
+        async_notify_new_generic_controls(MagicMock(), "e1", "100_200_1", model="HTV445FRF", count=4, control_kind="valve")
+
+        create.assert_called_once()
+        _hass, domain, issue_id = create.call_args.args
+        assert domain == DOMAIN
+        assert issue_id == new_generic_controls_issue_id("100_200_1", "e1")
+        kwargs = create.call_args.kwargs
+        assert kwargs["is_fixable"] is False
+        assert kwargs["translation_key"] == NEW_GENERIC_CONTROLS_ISSUE_ID_PREFIX
+        assert kwargs["translation_placeholders"]["count"] == "4"
+        assert kwargs["translation_placeholders"]["control_kind"] == "valve"
+
+    def test_model_placeholder_is_sanitized(self, issue_mocks):
+        """The card renders as Markdown, so a cloud-supplied model could plant a link."""
+        create, _delete = issue_mocks
+
+        async_notify_new_generic_controls(
+            MagicMock(), "e1", "100_200_1", model="[x](http://evil)", count=1, control_kind="switch"
+        )
+
+        assert "](" not in create.call_args.kwargs["translation_placeholders"]["model"]
+
+    def test_a_registry_failure_never_propagates(self, issue_mocks):
+        """A Repairs failure must not abort platform setup."""
+        create, _delete = issue_mocks
+        create.side_effect = RuntimeError("registry gone")
+
+        async_notify_new_generic_controls(MagicMock(), "e1", "100_200_1", model="HTV445FRF", count=1, control_kind="valve")
+
+
+class TestWithdrawEntryCardsCoversTheNewControlsNotice:
+    """The notice is raised once and nothing re-evaluates it, so entry removal must take it."""
+
+    def _registry_with(self, *issue_ids):
+        registry = MagicMock()
+        registry.issues = {(DOMAIN, issue_id): SimpleNamespace(data=None) for issue_id in issue_ids}
+        return registry
+
+    def test_both_prefixes_are_withdrawn(self, issue_mocks):
+        _create, delete = issue_mocks
+        orphan_id = orphaned_entities_issue_id("100_200_1", "e1")
+        notice_id = new_generic_controls_issue_id("100_200_1", "e1")
+        registry = self._registry_with(orphan_id, notice_id)
+
+        with patch.object(repairs.ir, "async_get", return_value=registry):
+            async_withdraw_entry_cards(MagicMock(), "e1")
+
+        withdrawn = {call.args[2] for call in delete.call_args_list}
+        assert withdrawn == {orphan_id, notice_id}
+
+    def test_another_entrys_notice_is_left_alone(self, issue_mocks):
+        _create, delete = issue_mocks
+        mine = new_generic_controls_issue_id("100_200_1", "e1")
+        theirs = new_generic_controls_issue_id("100_200_1", "e2")
+        registry = self._registry_with(mine, theirs)
+
+        with patch.object(repairs.ir, "async_get", return_value=registry):
+            async_withdraw_entry_cards(MagicMock(), "e1")
+
+        withdrawn = {call.args[2] for call in delete.call_args_list}
+        assert withdrawn == {mine}
+
+    def test_a_poll_driven_card_is_not_withdrawn(self, issue_mocks):
+        """Those are rebuilt from every poll; a removed entry simply stops polling."""
+        _create, delete = issue_mocks
+        registry = self._registry_with(silent_device_issue_id(100, 200, 1))
+
+        with patch.object(repairs.ir, "async_get", return_value=registry):
+            async_withdraw_entry_cards(MagicMock(), "e1")
+
+        delete.assert_not_called()
 
 
 class TestRainPointOrphanedEntityIssues:
