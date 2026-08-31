@@ -18,6 +18,7 @@ from custom_components.rainpoint.const import (
     CONF_AREA_CODE,
     CONF_COUNTRY,
     CONF_EMAIL,
+    CONF_GENERIC_CONTROL_ACKED_KEYS,
     CONF_GENERIC_CONTROL_ENABLED,
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_HIDS,
@@ -752,8 +753,143 @@ class TestOptionsFlowInitStep:
         }
         result = await flow.async_step_init(payload)
 
-        flow.async_create_entry.assert_called_once_with(title="", data=payload)
+        flow.async_create_entry.assert_called_once_with(title="", data={**payload, CONF_GENERIC_CONTROL_ACKED_KEYS: []})
         assert result == {"type": "create_entry"}
+
+
+def _control_eligible_sensors() -> dict:
+    """One sub-device the control gate admits, keyed the way the coordinator keys them."""
+    return {
+        "100_200_1": {
+            "model": "HTV103FRF",
+            "model_code": 31,
+            "data": {"type": "unknown", "model": "HTV103FRF"},
+        }
+    }
+
+
+def _control_ineligible_sensors() -> dict:
+    """Unsupported, but the control gate admits none of its datapoints."""
+    return {
+        "100_200_9": {
+            "model": "HCS003ARF-V1",
+            "model_code": None,
+            "data": {"type": "unknown", "model": "HCS003ARF-V1"},
+        }
+    }
+
+
+class TestOptionsFlowControlConsentStamp:
+    """Saving the control toggle on records which devices that save covered.
+
+    The entity registry cannot serve as this baseline: __init__ deletes every
+    control-namespace row for the entry while the toggle is off, so an
+    off-and-on-again would read as a fleet of brand-new devices.
+    """
+
+    @pytest.mark.asyncio
+    async def test_saving_control_on_stamps_the_eligible_keys(self):
+        """The save is the consent event, so it records the devices it covered."""
+        flow = _make_options_flow(sensors=_control_eligible_sensors())
+
+        await flow.async_step_init(
+            {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}
+        )
+
+        saved = flow.async_create_entry.call_args.kwargs["data"]
+        assert saved[CONF_GENERIC_CONTROL_ACKED_KEYS] == ["100_200_1"]
+
+    @pytest.mark.asyncio
+    async def test_a_device_the_control_gate_refuses_is_not_stamped(self):
+        """Stamping it would silently consent to controls it does not have yet,
+        so a later catalog refresh that admits it would appear unannounced."""
+        flow = _make_options_flow(sensors=_control_ineligible_sensors())
+
+        await flow.async_step_init(
+            {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}
+        )
+
+        assert flow.async_create_entry.call_args.kwargs["data"][CONF_GENERIC_CONTROL_ACKED_KEYS] == []
+
+    @pytest.mark.asyncio
+    async def test_saving_control_off_drops_the_stamp(self):
+        """So a later re-enable consents afresh rather than against a stale list."""
+        flow = _make_options_flow(current_control_enabled=True, sensors=_control_eligible_sensors())
+
+        await flow.async_step_init(
+            {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: False}
+        )
+
+        assert CONF_GENERIC_CONTROL_ACKED_KEYS not in flow.async_create_entry.call_args.kwargs["data"]
+
+    @pytest.mark.asyncio
+    async def test_an_unloaded_entry_carries_the_previous_stamp_forward(self):
+        """Opening Options while the entry retries against a cloud outage is
+        real. Writing an empty stamp there would announce every device the
+        user had just consented to, the moment the entry came back, and
+        async_create_entry replaces the whole options dict so doing nothing
+        would drop the stamp too."""
+        flow = _make_options_flow(entry_loaded=False)
+        flow.config_entry.options[CONF_GENERIC_CONTROL_ACKED_KEYS] = ["100_200_1"]
+
+        await flow.async_step_init(
+            {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}
+        )
+
+        assert flow.async_create_entry.call_args.kwargs["data"][CONF_GENERIC_CONTROL_ACKED_KEYS] == ["100_200_1"]
+
+    @pytest.mark.asyncio
+    async def test_an_unloaded_entry_with_no_previous_stamp_writes_none(self):
+        """Absent means "unknowable here", which falls back to the registry,
+        rather than an empty stamp that means "you consented to nothing"."""
+        flow = _make_options_flow(entry_loaded=False)
+
+        await flow.async_step_init(
+            {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}
+        )
+
+        assert CONF_GENERIC_CONTROL_ACKED_KEYS not in flow.async_create_entry.call_args.kwargs["data"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sensors", [{"100_200_1": "not-a-dict"}, {"100_200_1": None}])
+    async def test_a_malformed_sub_device_record_does_not_abort_the_save(self, sensors):
+        """This runs inline in async_create_entry, so anything raising here
+        fails the save with "Unknown error occurred" -- including a save that
+        was turning generic control off. valve.py and switch.py filter the
+        same shape for the same reason."""
+        flow = _make_options_flow(sensors=sensors)
+
+        await flow.async_step_init(
+            {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}
+        )
+
+        assert flow.async_create_entry.call_args.kwargs["data"][CONF_GENERIC_CONTROL_ACKED_KEYS] == []
+
+    @pytest.mark.asyncio
+    async def test_a_non_dict_sensors_container_is_unknowable_rather_than_empty(self):
+        """sensors.items() would raise; an empty stamp would be a false claim."""
+        flow = _make_options_flow(sensors=None)
+        flow.hass.data[DOMAIN][flow.config_entry.entry_id]["coordinator"].data = {"sensors": ["not-a-dict"]}
+        flow.config_entry.options[CONF_GENERIC_CONTROL_ACKED_KEYS] = ["kept"]
+
+        await flow.async_step_init(
+            {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}
+        )
+
+        assert flow.async_create_entry.call_args.kwargs["data"][CONF_GENERIC_CONTROL_ACKED_KEYS] == ["kept"]
+
+    @pytest.mark.asyncio
+    async def test_a_decoded_device_is_not_stamped(self):
+        """Only devices the trusted decoders could not read reach the generic path."""
+        sensors = _control_eligible_sensors()
+        sensors["100_200_1"]["data"] = {"type": "valve"}
+        flow = _make_options_flow(sensors=sensors)
+
+        await flow.async_step_init(
+            {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}
+        )
+
+        assert flow.async_create_entry.call_args.kwargs["data"][CONF_GENERIC_CONTROL_ACKED_KEYS] == []
 
 
 class TestOptionsFlowGenericEligibilityCopy:

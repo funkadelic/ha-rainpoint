@@ -40,6 +40,7 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.valve import ValveEntity, ValveEntityFeature
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_call_later
@@ -48,12 +49,14 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .api import (
     RainPointApiError,
     get_catalog_entry,
+    get_catalog_fingerprint,
     get_catalog_port_number,
     is_ascii_declined,
     is_hand_written_model,
 )
 from .api.product_catalog import UNCODED_VARIANT
 from .const import (
+    CONF_GENERIC_CONTROL_ACKED_KEYS,
     DOMAIN,
     GENERIC_CONTROL_DURATION_SUFFIX,
     GENERIC_CONTROL_ISSUE_ID_PREFIX,
@@ -65,6 +68,7 @@ from .const import (
 )
 from .coordinator import RainPointCoordinator
 from .device import build_sub_device_info
+from .entity import sub_device_attributes
 from .generic_entities import (
     _IDENTITY_SPECS,
     _matching_field,
@@ -72,7 +76,7 @@ from .generic_entities import (
     _usable_port,
     has_declared_width,
 )
-from .repairs import _sanitize_placeholder
+from .repairs import _sanitize_placeholder, async_notify_new_generic_controls
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -492,11 +496,76 @@ def _build_generic_entities(
         return []
 
 
+def _consented_keys(entry) -> frozenset[str] | None:
+    """Return the keys the user last consented to control, or None when unstamped.
+
+    None is not "nothing consented": it means the stamp predates this key, so
+    the caller falls back to the entity registry, which for an install that
+    already had control on is the right answer and announces nothing on
+    upgrade.
+    """
+    stamped = (getattr(entry, "options", None) or {}).get(CONF_GENERIC_CONTROL_ACKED_KEYS)
+    if not isinstance(stamped, (list, tuple, set, frozenset)):
+        return None
+    return frozenset(str(key) for key in stamped)
+
+
+def _notify_if_newly_controlled(coordinator, sensor_key: str, sensor_info: dict, entities: list, domain: str) -> None:
+    """Raise the new-controls notice when this device is not on the consent stamp.
+
+    The stamp is written by the options flow when the control toggle is saved
+    on, and it names the devices that save covered. A key absent from it
+    gained controls after the user last looked, whether it arrived on the
+    account since or only just became eligible, so the card says "for the
+    first time" rather than asserting which.
+
+    Falls back to the entity registry only when no stamp exists, which is an
+    install upgraded from a version before the stamp: its control rows are
+    already registered, so nothing is announced. The registry is not the
+    primary test because __init__._generic_control_row_removal_reason deletes
+    every control-namespace row while the toggle is off, which would make an
+    off-and-on-again look like a fleet of new devices.
+
+    Matched on (domain, unique_id) rather than unique_id alone: registry
+    uniqueness is per (domain, platform, unique_id), so an id on its own is a
+    partial identifier.
+
+    Never raises. A notice is not worth failing platform setup over, and this
+    runs outside the builder's own try.
+    """
+    if not entities:
+        return
+    try:
+        entry = coordinator.config_entry
+        consented = _consented_keys(entry)
+        if consented is not None:
+            if sensor_key in consented:
+                return
+        else:
+            registry = er.async_get(coordinator.hass)
+            for entity in entities:
+                if registry.async_get_entity_id(domain, DOMAIN, entity.unique_id) is not None:
+                    return
+        async_notify_new_generic_controls(
+            coordinator.hass,
+            entry.entry_id,
+            sensor_key,
+            model=sensor_info.get("model"),
+            addr=sensor_info.get("addr"),
+            count=len(entities),
+            control_kind=domain,
+        )
+    except Exception as exc:
+        _LOGGER.debug("Could not check whether %s controls are new for sensor_key=%s: %s", domain, sensor_key, exc)
+
+
 def build_generic_valve_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
     """Return the generic valve entities (CTL_WATER) for one sub-device, or []."""
-    return _build_generic_entities(
+    entities = _build_generic_entities(
         coordinator, sensor_key, sensor_info, base_slug, VALVE_CONTROL_IDENTITIES, RainPointGenericValve
     )
+    _notify_if_newly_controlled(coordinator, sensor_key, sensor_info, entities, "valve")
+    return entities
 
 
 def build_generic_switch_entities(coordinator, sensor_key: str, sensor_info: dict, base_slug: str) -> list:
@@ -506,9 +575,11 @@ def build_generic_switch_entities(coordinator, sensor_key: str, sensor_info: dic
     narrowing generic control to valves: a CTL_SOCK datapoint names a mains
     socket, not a valve, so it belongs on the switch platform.
     """
-    return _build_generic_entities(
+    entities = _build_generic_entities(
         coordinator, sensor_key, sensor_info, base_slug, SWITCH_CONTROL_IDENTITIES, RainPointGenericSwitch
     )
+    _notify_if_newly_controlled(coordinator, sensor_key, sensor_info, entities, "switch")
+    return entities
 
 
 def generic_run_state_open(coordinator, sensor_key: str, dp_port: int) -> bool | None:
@@ -629,6 +700,67 @@ class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
     @property
     def device_info(self) -> DeviceInfo:
         return build_sub_device_info(self._sensor_info)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Explicit provenance allowlist; never spreads the sensor info record.
+
+        The read-only generic sensor has carried these since it shipped and
+        the control entities carried none, which is backwards: this is the
+        path that writes to hardware, so a report of the wrong zone actuating
+        is the one that most needs the datapoint it was built from.
+
+        command_port is here as well as dp_port because the two differ on a
+        variant declaring port zero, and the command port is the value that
+        actually reached the hardware. A report that names only the catalog's
+        dp_port cannot tell those apart.
+
+        run_state_width_mismatch matters more here than the read-only
+        sensor's width_mismatch does: generic_run_state_open refuses a reading
+        at an unvalidated width, so a control stuck reporting no state is
+        explained by this key and by nothing else the user can see. It is
+        named for the identity it reads, since that is the run-state record
+        and not the control datapoint this entity is built from.
+
+        The shared sub-device attributes are layered in first so a provenance
+        key always wins a collision, matching the order number.py uses.
+        """
+        attrs = dict(sub_device_attributes(self.coordinator, self._sensor_key))
+        attrs.update(
+            {
+                "catalog_derived": True,
+                "identity": self._datapoint.identity,
+                "dp_code": self._datapoint.dp_code,
+                "dp_port": self._datapoint.dp_port,
+                "command_port": self._datapoint.command_port,
+                "dp_data_type": self._datapoint.dp_data_type,
+                "run_state_width_mismatch": self._run_state_width_mismatch,
+                "catalog_snapshot": get_catalog_fingerprint(),
+            }
+        )
+        return attrs
+
+    @property
+    def _run_state_width_mismatch(self) -> bool | None:
+        """Whether the poll carried the run-state record at an undeclared width.
+
+        Read against RUN_STATE_IDENTITY, not the control datapoint's own
+        identity: a control identity such as CTL_WATER names a command, never
+        appears in a status frame, and so would always answer None here. The
+        width that matters is the one generic_run_state_open validates before
+        it will report a port open or closed, which is what leaves a control
+        stuck at unknown with nothing else on screen to explain it.
+
+        None when the poll carries no run-state record for this port at all,
+        which is a different answer from False and is why it is not defaulted.
+        """
+        data = ((self.coordinator.data or {}).get("sensors") or {}).get(self._sensor_key) or {}
+        decoded = data.get("data") or {}
+        fields = (decoded.get("generic") or {}).get("fields") or []
+        field = _matching_field(fields, RUN_STATE_IDENTITY, self._datapoint.dp_port)
+        if field is None:
+            return None
+        return (field.get("catalog") or {}).get("width_mismatch")
 
     @property
     def _run_state_open(self) -> bool | None:
@@ -790,8 +922,15 @@ class RainPointGenericSwitch(RainPointGenericControlBase, SwitchEntity):
         Not a configuration knob -- there is no companion number entity for
         CTL_SOCK and no way to override the value below -- just a documented
         fact so a user is not surprised if the connected device auto-offs.
+
+        Merged onto the base's attributes rather than returned alone: a bare
+        dict here would shadow every provenance key the base publishes and
+        make the switch the one control entity carrying none of them.
         """
-        return {"on_command_duration_seconds": DEFAULT_CONTROL_DURATION_SECONDS}
+        return {
+            **super().extra_state_attributes,
+            "on_command_duration_seconds": DEFAULT_CONTROL_DURATION_SECONDS,
+        }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         # Same fixed duration valve.py's own DEFAULT_DURATION_SECONDS falls

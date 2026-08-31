@@ -13,7 +13,7 @@ import pytest
 
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
-from custom_components.rainpoint.api import get_catalog_variant_codes
+from custom_components.rainpoint.api import get_catalog_fingerprint, get_catalog_variant_codes
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
 from custom_components.rainpoint.api.decoders import (
     _decode_packed_timestamp,
@@ -1592,9 +1592,10 @@ class TestEventTimeRow:
 
 
 class TestRainPointGenericSensorAttributes:
-    """Tests for the six-key provenance attribute allowlist."""
+    """Tests for the seven-key provenance attribute allowlist."""
 
-    def test_exactly_six_provenance_keys_present(self):
+    def test_every_provenance_key_present(self):
+        """All seven keys are published together; a partial set cannot place a reading."""
         dp_entry = _dp("STA_RSSI", dp_port=0, dp_code=10, data_type="U8")
         fields = [_decoded_field("STA_RSSI", 42, 0, width_mismatch=False)]
         sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data(fields))
@@ -1607,6 +1608,17 @@ class TestRainPointGenericSensorAttributes:
         assert attrs["dp_port"] == 0
         assert attrs["dp_data_type"] == "U8"
         assert attrs["width_mismatch"] is False
+        assert attrs["catalog_snapshot"] == get_catalog_fingerprint()
+
+    def test_catalog_snapshot_names_which_snapshot_produced_the_mapping(self):
+        """The integration version cannot answer this: the catalog refreshes on its own."""
+        dp_entry = _dp("STA_RSSI", dp_port=0, dp_code=10, data_type="U8")
+        sensor = _make_generic_sensor(dp_entry, port_number=1, data=_unknown_data([]))
+
+        snapshot = sensor.extra_state_attributes["catalog_snapshot"]
+
+        assert snapshot is not None
+        assert snapshot == get_catalog_fingerprint()
 
     def test_width_mismatch_is_none_when_datapoint_absent_from_poll(self):
         dp_entry = _dp("STA_TEM", dp_port=0, dp_code=9)

@@ -20,6 +20,7 @@ from .const import (
     CONF_AREA_CODE,
     CONF_COUNTRY,
     CONF_EMAIL,
+    CONF_GENERIC_CONTROL_ACKED_KEYS,
     CONF_GENERIC_CONTROL_ENABLED,
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_HIDS,
@@ -310,7 +311,7 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Show/handle the single form carrying all three toggles."""
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            return self.async_create_entry(title="", data=self._with_control_consent(user_input))
 
         data_schema = vol.Schema(
             {
@@ -340,6 +341,79 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
                 "generic_control_unsupported": str(control_unsupported),
             },
         )
+
+    def _with_control_consent(self, user_input: dict[str, Any]) -> dict[str, Any]:
+        """Stamp the devices this save is consenting to control, or clear the stamp.
+
+        Saving the control toggle on is the consent event, and this records
+        what it covered so the new-controls notice has something durable to
+        measure a later device against. The entity registry cannot serve:
+        __init__._generic_control_row_removal_reason removes every
+        control-namespace row for the entry while the toggle is off, so an
+        off-and-on-again would read as a fleet of brand-new devices.
+
+        Re-stamped on every save with the toggle on, not only on the
+        transition, because a save is the user looking at the form: whatever
+        is eligible at that moment is what they are agreeing to. Turning the
+        toggle off drops the stamp, so a later re-enable consents afresh
+        rather than against a stale list.
+
+        When the devices cannot be enumerated at all, the stamp already in
+        options is carried forward rather than replaced with an empty one.
+        async_create_entry replaces the whole options dict, so doing nothing
+        would drop it, and an empty stamp is not "consented to nothing" here:
+        it would announce every device the user had just consented to the
+        moment the entry came back. That happens for real, when Options is
+        opened while the entry is retrying against a cloud outage.
+
+        Returns a new dict; the caller's user_input is never mutated.
+        """
+        options = dict(user_input)
+        if not options.get(CONF_GENERIC_CONTROL_ENABLED):
+            options.pop(CONF_GENERIC_CONTROL_ACKED_KEYS, None)
+            return options
+        keys = self._control_eligible_keys()
+        if keys is None:
+            previous = self.config_entry.options.get(CONF_GENERIC_CONTROL_ACKED_KEYS)
+            if previous is not None:
+                options[CONF_GENERIC_CONTROL_ACKED_KEYS] = previous
+            return options
+        options[CONF_GENERIC_CONTROL_ACKED_KEYS] = sorted(keys)
+        return options
+
+    def _control_eligible_keys(self) -> set[str] | None:
+        """Return the sub-device keys the control gate would admit, or None if unknowable.
+
+        None and the empty set are different answers and the caller treats
+        them differently. None means the devices could not be enumerated (the
+        entry is not loaded, no poll has landed, or the records are
+        unreadable), so the previous stamp stands. An empty set is a real
+        observation: devices were enumerated and none is eligible.
+
+        Records that are not dicts are skipped rather than allowed to raise,
+        matching valve.py and switch.py, which filter the same way so one
+        malformed sub-device cannot take out a whole builder loop. It matters
+        more here: this runs inline in async_create_entry, so anything raising
+        aborts the save with "Unknown error occurred", including a save that
+        was turning generic control off.
+        """
+        entry_store = (self.hass.data.get(DOMAIN) or {}).get(self.config_entry.entry_id) or {}
+        coordinator = entry_store.get("coordinator")
+        sensors = (getattr(coordinator, "data", None) or {}).get("sensors")
+        if not isinstance(sensors, dict):
+            return None
+
+        from .generic_control import evaluate_control_gate
+
+        keys = set()
+        for key, info in sensors.items():
+            if not isinstance(info, dict):
+                continue
+            if (info.get("data") or {}).get("type") != "unknown":
+                continue
+            if evaluate_control_gate(info.get("model"), info.get("model_code")).passed:
+                keys.add(key)
+        return keys
 
     def _generic_eligibility(self) -> tuple[int, int]:
         """Return (eligible, unsupported_total) for this entry's devices.

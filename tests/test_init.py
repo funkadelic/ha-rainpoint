@@ -1656,6 +1656,62 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
 
         assert set(removed) == {self.GENERIC_A.entity_id, self.GENERIC_B.entity_id}
 
+    def test_control_toggle_off_also_withdraws_the_new_controls_notices(self):
+        """Those cards are persistent and nothing re-evaluates them, so leaving
+        them strands cards naming rows this sweep just deleted, and the
+        notice's own registry dedupe would then suppress the fresh one a
+        re-enable owes every device."""
+        _removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: False}, self._sensors()
+        )
+        hass = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+            patch("custom_components.rainpoint.async_withdraw_new_controls_cards") as withdraw,
+        ):
+            _remove_stale_generic_entities(hass, entry, coordinator)
+
+        withdraw.assert_called_once_with(hass, entry.entry_id)
+
+    def test_control_toggle_on_withdraws_no_notices(self):
+        """The controls still exist, so the notices announcing them still stand."""
+        _removed, async_get, async_entries = self._make_fake_registry()
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True}, self._sensors()
+        )
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+            patch("custom_components.rainpoint.async_withdraw_new_controls_cards") as withdraw,
+        ):
+            _remove_stale_generic_entities(MagicMock(), entry, coordinator)
+
+        withdraw.assert_not_called()
+
+    def test_an_unreadable_entity_registry_still_withdraws_the_notices(self):
+        """The withdrawal touches only the issue registry, so an entity
+        registry that cannot be read must not take it down too. Skipped, the
+        cards would keep naming control rows and keep suppressing the fresh
+        notice a re-enable owes, until a later setup pass happened to succeed."""
+        _removed, async_get, async_entries = self._make_fake_registry(raise_on_lookup=True)
+        entry, coordinator = self._make_entry_and_coordinator(
+            {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: False}, self._sensors()
+        )
+        hass = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=async_entries),
+            patch("custom_components.rainpoint.async_withdraw_new_controls_cards") as withdraw,
+        ):
+            _remove_stale_generic_entities(hass, entry, coordinator)
+
+        withdraw.assert_called_once_with(hass, entry.entry_id)
+
     def test_toggle_true_no_graduated_model_removes_nothing(self):
         """Toggle on, and no model has gained a hand-written decoder: nothing is removed."""
         removed, async_get, async_entries = self._make_fake_registry()

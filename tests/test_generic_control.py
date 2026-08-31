@@ -8,12 +8,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.rainpoint import generic_control as generic_control_module
-from custom_components.rainpoint.api import RainPointApiError, get_catalog_variant_codes
+from custom_components.rainpoint.api import RainPointApiError, get_catalog_fingerprint, get_catalog_variant_codes
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
 from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.api.product_catalog import UNCODED_VARIANT
 from custom_components.rainpoint.const import (
+    CONF_GENERIC_CONTROL_ACKED_KEYS,
     CONF_GENERIC_CONTROL_ENABLED,
+    CONF_GENERIC_ENTITIES_ENABLED,
+    CONF_PUSH_ENABLED,
     DOMAIN,
     GENERIC_CONTROL_ISSUE_ID_PREFIX,
     GENERIC_CONTROL_REFRESH_DELAY_SECONDS,
@@ -1350,6 +1353,234 @@ class TestGenericValveConfiguredDuration:
 
 
 # ---------------------------------------------------------------------------
+# Timeline: a device discovered after setup (CONFIRM-01)
+# ---------------------------------------------------------------------------
+
+
+def _patch_issue_registry(monkeypatch):
+    """Patch repairs' issue registry with one that actually remembers.
+
+    A bare MagicMock returns a truthy MagicMock from async_get_issue, which
+    reads as "already raised" and silently short-circuits every notice, so a
+    test on this path has to hold real state.
+    """
+    from custom_components.rainpoint import repairs as repairs_module
+
+    raised: dict = {}
+    registry = MagicMock()
+    registry.async_get_issue.side_effect = lambda domain, issue_id: raised.get((domain, issue_id))
+    monkeypatch.setattr(repairs_module.ir, "async_get", lambda hass: registry)
+    monkeypatch.setattr(
+        repairs_module.ir,
+        "async_create_issue",
+        lambda hass, domain, issue_id, **kw: raised.setdefault((domain, issue_id), kw),
+    )
+    return raised
+
+
+class TestNewControlsNoticeTimeline:
+    """Driven in the real order, because the notice is a question about *when*.
+
+    The consent gap this closes only exists across time: the user consented to
+    the devices on the form, and a later one inherits that consent silently.
+    Asserting against a snapshot that already contains both devices would pass
+    while the whole path was dead.
+    """
+
+    @staticmethod
+    def _entry_with(consented, coordinator):
+        """An entry with generic control on and `consented` as its consent stamp."""
+        hass, entry = _make_hass_and_entry(
+            coordinator,
+            {CONF_GENERIC_CONTROL_ENABLED: True, CONF_GENERIC_CONTROL_ACKED_KEYS: consented},
+        )
+        coordinator.config_entry = entry
+        return hass, entry
+
+    @pytest.mark.asyncio
+    async def test_fresh_enable_announces_nothing(self, monkeypatch):
+        """The path every real user reaches first, and the one a registry-only
+        test cannot see: at first enable no control row exists for anyone, so
+        the registry reads the whole fleet as brand new."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        _patch_control_registry(monkeypatch, entity_id=None)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        sensor_key = "100_200_1"
+        coordinator = _make_coordinator(sensor_key, _anchor_sensor_info())
+        hass, entry = self._entry_with([sensor_key], coordinator)
+
+        captured = []
+        await async_setup_entry(hass, entry, MagicMock(side_effect=lambda ents, **kw: captured.extend(ents)))
+
+        assert captured != []
+        notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_only_the_device_absent_from_the_stamp_is_announced(self, monkeypatch):
+        """The stamped fleet stays quiet while a device arriving after it is announced."""
+        from custom_components.rainpoint.entity import late_adders
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        _patch_control_registry(monkeypatch, entity_id=None)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        first_key = "100_200_1"
+        first_info = _anchor_sensor_info()
+        coordinator = _make_coordinator(first_key, first_info)
+        hass, entry = self._entry_with([first_key], coordinator)
+
+        captured = []
+        await async_setup_entry(hass, entry, MagicMock(side_effect=lambda ents, **kw: captured.extend(ents)))
+        assert captured != []
+        notify.assert_not_called()
+
+        later_key = "100_200_2"
+        later_info = copy.deepcopy(first_info)
+        later_info["addr"] = 2
+        coordinator.data["sensors"][later_key] = later_info
+        adder = late_adders(hass.data[DOMAIN][entry.entry_id])[0]
+        emitted = adder.collect(later_key, later_info)
+
+        assert emitted != []
+        assert notify.call_count == 1
+        assert notify.call_args.args[2] == later_key
+
+    @pytest.mark.asyncio
+    async def test_the_same_key_is_not_re_announced_on_every_coordinator_update(self, monkeypatch):
+        """The valve late adder re-runs build() for every key on every update
+        and every push frame, so this is reached over and over for a device
+        that stays off the stamp. Raised once, and no repeated log line on the
+        push hot path."""
+        from custom_components.rainpoint.entity import late_adders
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        _patch_control_registry(monkeypatch, entity_id=None)
+        raised = _patch_issue_registry(monkeypatch)
+
+        first_key = "100_200_1"
+        coordinator = _make_coordinator(first_key, _anchor_sensor_info())
+        hass, entry = self._entry_with([first_key], coordinator)
+        await async_setup_entry(hass, entry, MagicMock())
+
+        later_key = "100_200_2"
+        later_info = copy.deepcopy(_anchor_sensor_info())
+        later_info["addr"] = 2
+        coordinator.data["sensors"][later_key] = later_info
+        adder = late_adders(hass.data[DOMAIN][entry.entry_id])[0]
+
+        adder.collect(later_key, later_info)
+        assert len(raised) == 1
+        adder.collect(later_key, later_info)
+        adder.collect(later_key, later_info)
+
+        assert len(raised) == 1
+
+    @pytest.mark.asyncio
+    async def test_turning_the_toggle_off_and_on_does_not_re_announce_the_fleet(self, monkeypatch):
+        """Drives the whole off-and-on sequence through the real options flow,
+        because the two halves passing apart is what this has to rule out.
+
+        The registry cannot be the baseline: __init__ deletes every
+        control-namespace row for the entry while the toggle is off, which is
+        modelled here by the lookup going from resolved to unresolved between
+        the two setups (tests/test_init.py owns proving the sweep deletes
+        them). So the re-enable lands with an empty registry, and only the
+        stamp the flow wrote on the way back keeps the standing fleet quiet.
+        """
+        from custom_components.rainpoint.config_flow import RainPointOptionsFlow
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        registry = _patch_control_registry(monkeypatch, entity_id="valve.already_there")
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        sensor_key = "100_200_1"
+        coordinator = _make_coordinator(sensor_key, _anchor_sensor_info())
+        hass, entry = self._entry_with([sensor_key], coordinator)
+
+        await async_setup_entry(hass, entry, MagicMock())
+        notify.assert_not_called()
+
+        flow = RainPointOptionsFlow()
+        flow.config_entry = entry
+        flow.hass = hass
+        flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
+
+        # Off: the flow drops the stamp, and the sweep takes the control rows
+        # with it, so nothing durable about this fleet survives.
+        await flow.async_step_init(
+            {
+                CONF_PUSH_ENABLED: False,
+                CONF_GENERIC_ENTITIES_ENABLED: False,
+                CONF_GENERIC_CONTROL_ENABLED: False,
+            }
+        )
+        off_options = flow.async_create_entry.call_args.kwargs["data"]
+        assert CONF_GENERIC_CONTROL_ACKED_KEYS not in off_options
+        entry.options = off_options
+        registry.async_get_entity_id.return_value = None
+
+        # On again: this save is the fresh consent event, and it must cover the
+        # fleet that was already there.
+        await flow.async_step_init(
+            {
+                CONF_PUSH_ENABLED: False,
+                CONF_GENERIC_ENTITIES_ENABLED: False,
+                CONF_GENERIC_CONTROL_ENABLED: True,
+            }
+        )
+        on_options = flow.async_create_entry.call_args.kwargs["data"]
+        assert on_options[CONF_GENERIC_CONTROL_ACKED_KEYS] == [sensor_key]
+        entry.options = on_options
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_an_install_upgraded_before_the_stamp_existed_falls_back_to_the_registry(self, monkeypatch):
+        """No stamp means "written by an older version", not "nothing consented".
+        Its control rows are already registered, so nothing is announced."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        _patch_control_registry(monkeypatch, entity_id="valve.already_here")
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        sensor_key = "100_200_1"
+        coordinator = _make_coordinator(sensor_key, _anchor_sensor_info())
+        hass, entry = _make_hass_and_entry(coordinator, {CONF_GENERIC_CONTROL_ENABLED: True})
+        coordinator.config_entry = entry
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        notify.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_notice_carries_a_real_entry_id(self, monkeypatch):
+        """The issue id's entry scoping is the whole point of
+        new_generic_controls_issue_id, and a MagicMock coordinator
+        auto-vivifies any attribute, so it has to be asserted against a real one."""
+        from custom_components.rainpoint.repairs import new_generic_controls_issue_id
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        _patch_control_registry(monkeypatch, entity_id=None)
+        raised = _patch_issue_registry(monkeypatch)
+
+        sensor_key = "100_200_1"
+        coordinator = _make_coordinator(sensor_key, _anchor_sensor_info())
+        hass, entry = self._entry_with([], coordinator)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert list(raised) == [(DOMAIN, new_generic_controls_issue_id(sensor_key, "test_entry", "valve"))]
+
+
+# ---------------------------------------------------------------------------
 # End-to-end: valve.async_setup_entry dispatch with the control toggle
 # ---------------------------------------------------------------------------
 
@@ -1450,9 +1681,183 @@ class TestRainPointGenericSwitchConstruction:
         assert entity._attr_icon == generic_control_module.GENERIC_CONTROL_MARKER_ICON
 
     def test_extra_state_attributes_exposes_the_fixed_on_duration(self):
+        """A switch has no duration control, so the value its on command sends is published instead."""
         entity, _, _ = _build_anchor_switch()
 
-        assert entity.extra_state_attributes == {"on_command_duration_seconds": DEFAULT_CONTROL_DURATION_SECONDS}
+        assert entity.extra_state_attributes["on_command_duration_seconds"] == DEFAULT_CONTROL_DURATION_SECONDS
+
+    def test_extra_state_attributes_keeps_the_base_provenance_keys(self):
+        """The switch merges rather than shadows; returning a bare dict dropped all of these."""
+        entity, _, _ = _build_anchor_switch()
+
+        attrs = entity.extra_state_attributes
+        assert attrs["catalog_derived"] is True
+        assert attrs["identity"] == "CTL_SOCK"
+        assert attrs["on_command_duration_seconds"] == DEFAULT_CONTROL_DURATION_SECONDS
+
+
+# ---------------------------------------------------------------------------
+# Provenance attributes (PROV-01)
+# ---------------------------------------------------------------------------
+
+
+class TestControlProvenanceAttributes:
+    """The write path publishes the datapoint it was built from.
+
+    A report of the wrong zone actuating is the one that most needs this, and
+    until now the read-only sensor carried provenance while the control
+    entities carried none.
+    """
+
+    def test_valve_publishes_the_full_allowlist(self):
+        """Every provenance key a report needs to place an actuating entity in the catalog."""
+        entity, _, _ = _build_anchor_valve()
+
+        attrs = entity.extra_state_attributes
+
+        assert attrs["catalog_derived"] is True
+        assert attrs["identity"] == "CTL_WATER"
+        assert attrs["dp_port"] == entity._datapoint.dp_port
+        assert attrs["command_port"] == entity._datapoint.command_port
+        assert attrs["dp_code"] == entity._datapoint.dp_code
+        assert attrs["dp_data_type"] == entity._datapoint.dp_data_type
+        assert attrs["catalog_snapshot"] == get_catalog_fingerprint()
+
+    def test_command_port_is_published_alongside_dp_port(self):
+        """The two differ on a port-zero variant, and the command port is what reached the hardware."""
+        entity, _, _ = _build_anchor_switch()
+
+        attrs = entity.extra_state_attributes
+
+        assert "dp_port" in attrs
+        assert "command_port" in attrs
+
+    def test_run_state_width_mismatch_is_false_at_a_declared_width(self):
+        """generic_run_state_open refuses a reading at an unvalidated width, and
+        nothing else the user can see explains a control stuck at unknown."""
+        entity, _, _ = _build_anchor_valve(fields=[_run_state_field(1, 1)])
+
+        assert entity.extra_state_attributes["run_state_width_mismatch"] is False
+
+    def test_run_state_width_mismatch_is_none_when_the_poll_carries_no_record(self):
+        """A different answer from False, which is why it is not defaulted."""
+        entity, _, _ = _build_anchor_valve(fields=[])
+
+        assert entity.extra_state_attributes["run_state_width_mismatch"] is None
+
+    def test_run_state_width_mismatch_reads_the_run_state_identity_not_the_control_one(self):
+        """CTL_WATER names a command and never appears in a status frame, so
+        reading the datapoint's own identity here would always answer None."""
+        entity, _, _ = _build_anchor_valve(fields=[_run_state_field(1, 1)])
+
+        assert entity.extra_state_attributes["identity"] == "CTL_WATER"
+        assert entity.extra_state_attributes["run_state_width_mismatch"] is not None
+
+    def test_attributes_never_spread_the_sensor_info_record(self):
+        """Explicit allowlist plus the shared sub-device keys; nothing is spread."""
+        entity, _, sensor_info = _build_anchor_valve()
+
+        attrs = entity.extra_state_attributes
+        assert {
+            "catalog_derived",
+            "identity",
+            "dp_code",
+            "dp_port",
+            "command_port",
+            "dp_data_type",
+            "run_state_width_mismatch",
+            "catalog_snapshot",
+        } <= set(attrs)
+        forbidden = {"data", "home_name", "hub_name", "device_name", "product_key"}
+        assert forbidden.isdisjoint(attrs)
+        assert sensor_info.get("data") is not None
+        assert sensor_info.get("product_key") is not None
+
+
+# ---------------------------------------------------------------------------
+# New-controls notice (CONFIRM-01)
+# ---------------------------------------------------------------------------
+
+
+def _patch_control_registry(monkeypatch, entity_id=None):
+    """Rebind generic_control's module-level entity_registry import.
+
+    The module binds ``er`` at import time, so patching sys.modules the way
+    _patch_duration_registry does would not reach it.
+    """
+    mock_registry = MagicMock()
+    mock_registry.async_get_entity_id.return_value = entity_id
+    mock_er_module = MagicMock()
+    mock_er_module.async_get.return_value = mock_registry
+    monkeypatch.setattr(generic_control_module, "er", mock_er_module)
+    return mock_registry
+
+
+class TestNewControlsNotice:
+    """A device that gains controls it has never had raises the notice once."""
+
+    def test_notice_raised_when_no_row_is_already_registered(self, monkeypatch):
+        """No stamp and no registered row is the unstamped install gaining its first controls."""
+        _patch_control_registry(monkeypatch, entity_id=None)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        _build_anchor_valve()
+
+        assert notify.call_count == 1
+        assert notify.call_args.kwargs["count"] == 1
+        assert notify.call_args.kwargs["control_kind"] == "valve"
+
+    def test_no_notice_when_a_row_is_already_registered(self, monkeypatch):
+        """An existing row means this install has controlled the device before."""
+        _patch_control_registry(monkeypatch, entity_id="valve.already_here")
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        _build_anchor_valve()
+
+        notify.assert_not_called()
+
+    def test_registry_matched_on_domain_and_unique_id(self, monkeypatch):
+        """Never the unique_id alone: registry uniqueness is per (domain, platform, unique_id)."""
+        registry = _patch_control_registry(monkeypatch, entity_id=None)
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", MagicMock())
+
+        entity, _, _ = _build_anchor_valve()
+
+        registry.async_get_entity_id.assert_called_with("valve", DOMAIN, entity.unique_id)
+
+    def test_switch_reports_its_own_domain(self, monkeypatch):
+        """The card names what appeared, so a switch must not be announced as a valve."""
+        _patch_control_registry(monkeypatch, entity_id=None)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        _build_anchor_switch()
+
+        assert notify.call_args.kwargs["control_kind"] == "switch"
+
+    def test_no_notice_when_the_gate_admitted_nothing(self, monkeypatch):
+        """No entities means no consent gap, so nothing to say."""
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        generic_control_module._notify_if_newly_controlled(MagicMock(), "1_2_3", {}, [], "valve")
+
+        notify.assert_not_called()
+
+    def test_registry_failure_is_swallowed(self, monkeypatch):
+        """A notice is never worth failing platform setup over."""
+        mock_er_module = MagicMock()
+        mock_er_module.async_get.side_effect = RuntimeError("registry gone")
+        monkeypatch.setattr(generic_control_module, "er", mock_er_module)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        entity, _, _ = _build_anchor_valve()
+
+        assert entity is not None
+        notify.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,7 @@ from .api import (
     _decode_packed_timestamp,
     _f10_to_c,
     get_catalog_entry,
+    get_catalog_fingerprint,
     get_catalog_port_number,
     get_catalog_variant_codes,
     is_hand_written_model,
@@ -978,11 +979,15 @@ class RainPointGenericSensor(RainPointSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Explicit six-key provenance allowlist; never spreads a source dict.
+        """Explicit seven-key provenance allowlist; never spreads a source dict.
 
         Neither the decoded payload nor the sensor info record is ever
         spread into attributes here - the sensor info record carries fields
         that must not reach an entity attribute or a bug-report surface.
+
+        catalog_snapshot names which committed catalog produced this row's
+        mapping. The integration version cannot answer that: the catalog has
+        its own refresh script and can change in a PR shipping no code.
         """
         attrs = dict(super().extra_state_attributes)
         data = self._sensor_data or {}
@@ -999,4 +1004,5 @@ class RainPointGenericSensor(RainPointSensorBase):
         attrs["dp_port"] = self._dp_port
         attrs["dp_data_type"] = self._dp_data_type
         attrs["width_mismatch"] = width_mismatch
+        attrs["catalog_snapshot"] = get_catalog_fingerprint()
         return attrs

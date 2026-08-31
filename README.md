@@ -228,6 +228,8 @@ For a device this integration has no tested decoder for, it can fall back to Rai
 
 Both are conservative about what they create. Generic sensors appear for a device only when every reading it reports has a definition the integration recognizes, so many devices produce none at all. A generic control never guesses: it shows only state it has read back from the device, never the state you just commanded.
 
+Saving the control option records which devices it covered. A device that is not on that list, because it joined your account since or because it only became controllable later, would otherwise get controls without anything asking you again, so **Settings → Repairs** raises a notice naming the device and how many controls it gained. They work straight away; the notice is only there so their arrival is not silent. Dismiss it once you have had a look.
+
 Some device firmwares report their status in a comma-and-semicolon text format rather than the hex format most report in. This is independent of the two toggles above: for a device on that format, the [Raw Payload diagnostic sensor's](#my-device-isnt-listed) decoded fields (and the pre-filled bug report it links to) surface only its signal strength, and unverified generic sensors and control never create working entities for it. The rest of that format is deliberately left unparsed, not missing by accident: it carries its readings by position with no label, each device family orders them differently, and RainPoint's own product data does not record that order, so parsing it would mean guessing, and a guessed reading that looks plausible and is wrong is worse than no reading at all. For the same reason, unverified generic device control will not report such a device as open or closed and will not confirm that a command took effect.
 
 ### Enabling or disabling generic entities
@@ -238,7 +240,7 @@ Some device firmwares report their status in a comma-and-semicolon text format r
 
 The form tells you how many devices on your account each option would currently affect, so you can see whether turning it on would produce anything at all before you commit to it. Unchecking an option on the same screen turns it back off, and the entities it created are removed rather than left behind unavailable, along with their recorded history.
 
-If a generic reading turns out to be right (or wrong) for your device, that is worth [reporting](#my-device-isnt-listed): it is what turns a catalog guess into a tested decoder.
+If a generic reading turns out to be right (or wrong) for your device, that is worth [reporting](#my-device-isnt-listed): it is what turns a catalog guess into a tested decoder. Every generic sensor and control carries its own origin in its attributes: which catalog datapoint it was built from, and which catalog snapshot supplied it. Including those in a report saves a round trip.
 
 ---
 
