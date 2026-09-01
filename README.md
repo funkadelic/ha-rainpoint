@@ -58,7 +58,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Valve hubs | HTV245FRF*, HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV445FRF*, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
 | Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
-| Rain detectors | HCS044FRF | Rain detected, battery, signal strength |
+| Rain detectors | HCS044FRF* | Rain detected, battery, signal strength |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
 | Pool sensors | HCS0528ARF*, HCS015ARF | Pool temperature, battery |
