@@ -492,9 +492,9 @@ class TestHubIdentityIsNotASensorKey:
         child = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, sensor_key)},
-            via_device=(DOMAIN, f"hub_{HID}_{MID_A}"),
             name="Child",
         )
+        device_registry.async_update_device(child.id, via_device_id=hub_row.id)
         assert device_registry.async_get(child.id).via_device_id == hub_row.id
 
         _reconcile_sub_device_parents(hass, entry, coordinator)

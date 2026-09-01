@@ -57,9 +57,9 @@ def _seed_old_shape_install(entry, entity_registry, device_registry):
     child = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
-        via_device=(DOMAIN, f"hub_{HID}"),
         name="Zone Valve",
     )
+    device_registry.async_update_device(child.id, via_device_id=hub.id)
 
     rows = {}
     for suffix, platform in (("rssi", "sensor"), ("mac", "sensor")):
@@ -168,12 +168,12 @@ class TestMidResolutionSources:
         hub = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
         )
-        device_registry.async_get_or_create(
+        child = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
-            via_device=(DOMAIN, f"hub_{HID}"),
             name="Child",
         )
+        device_registry.async_update_device(child.id, via_device_id=hub.id)
         for mid in (9, MID):
             entity_registry.async_get_or_create(
                 "binary_sensor",
@@ -1403,9 +1403,9 @@ class TestTheCompetingRowWindow:
         child = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
-            via_device=(DOMAIN, f"hub_{HID}"),
             name="Child",
         )
+        device_registry.async_update_device(child.id, via_device_id=old.id)
         row = entity_registry.async_get_or_create(
             "sensor", DOMAIN, f"{DOMAIN}_hub_{HID}_mac", config_entry=entry, suggested_object_id="hub_mac"
         )
@@ -1424,7 +1424,16 @@ class TestTheCompetingRowWindow:
         result, _built = await _setup_with_patched_forward(hass, entry, client, device_registry, monkeypatch)
         assert result is True
 
-        competing = device_registry.async_get_device(identifiers={(DOMAIN, f"hub_{HID}_{MID}")})
+        # Scanned rather than looked up through async_get_device, which HA 2026.9
+        # deprecates, or async_get_device_by_identifier, which the minimum pin lacks.
+        competing = next(
+            (
+                d
+                for d in dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+                if (DOMAIN, f"hub_{HID}_{MID}") in d.identifiers
+            ),
+            None,
+        )
         assert competing is not None, "the platform forward must have written the migrated identifier"
         assert competing.id != old.id
 
@@ -1591,12 +1600,12 @@ class TestMidResolutionOrdering:
         hub = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
         )
-        device_registry.async_get_or_create(
+        child = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
-            via_device=(DOMAIN, f"hub_{HID}"),
             name="Child",
         )
+        device_registry.async_update_device(child.id, via_device_id=hub.id)
 
         assert await async_migrate_entry(hass, entry) is True
         assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}

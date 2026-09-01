@@ -141,9 +141,9 @@ class TestCompetingRowIsPermanent:
         child = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, f"{HID}_{MID}_1")},
-            via_device=(DOMAIN, f"hub_{HID}"),
             name="Child",
         )
+        device_registry.async_update_device(child.id, via_device_id=old.id)
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, f"hub_{HID}_{MID}")},
