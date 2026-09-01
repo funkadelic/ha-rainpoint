@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.22.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.22.0...v1.22.1) (2026-09-01)
+
+
+### Other Changes
+
+* bump pytest-homeassistant-custom-component from 0.13.357 to 0.13.359 ([#233](https://github.com/funkadelic/ha-rainpoint/issues/233)) ([4104f9a](https://github.com/funkadelic/ha-rainpoint/commit/4104f9a9efd827a5b4fc38886bbac4a3e6714dd4))
+
 ## [1.22.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.21.2...v1.22.0) (2026-08-31)
 
 ### What's new
