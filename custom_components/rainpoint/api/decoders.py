@@ -14,6 +14,8 @@ from .utils import (
     STA_DURATION_FIELD,
     STA_LAST_DURATION_FIELD,
     STA_LASTUSAGE_FIELD,
+    STA_RAIN_FIELD,
+    STA_RSSI_FIELD,
     STA_TEM_FIELD,
     STA_TOTAL_TODAY_FIELD,
     STA_VFLOW_FIELD,
@@ -22,6 +24,7 @@ from .utils import (
     _extract_report_time,
     _f10_to_c,
     _find_field_int,
+    _find_field_value,
     _le16,
     _parse_entries,
     _parse_rainpoint_payload,
@@ -1535,6 +1538,63 @@ def decode_rain(raw: str) -> dict:
             "rain_last_24h_raw10": last_24h_raw10,
             "rain_last_7d_raw10": last_7d_raw10,
             "rain_total_raw10": total_raw10,
+            "battery_flag": battery_flag,
+            "battery_percent": _battery_flag_to_percent(battery_flag),
+        }
+    )
+    _attach_report_time(result, b)
+    return result
+
+
+# HCS044FRF STA_RAIN values. The record is compact form, so its single byte is
+# both the field index (high nibble) and the value (low nibble): 0x10 dry,
+# 0x11 wet. Any other value is left unread rather than guessed at.
+_HCS044_RAIN_DRY = 0x10
+_HCS044_RAIN_WET = 0x11
+
+
+def _extract_hcs044_rssi(b: bytes) -> int | None:
+    """Return the signed dBm from the frame's STA_RSSI record, or None.
+
+    Located structurally: this frame leads with STA_BAT, so _extract_rssi's
+    fixed b[1] would read the battery flag. A non-negative dBm is no reading.
+    """
+    value = _find_field_value(b, STA_RSSI_FIELD)
+    if not value or value[0] < 0x80:
+        return None
+    return value[0] - 256
+
+
+def _extract_hcs044_rain(b: bytes) -> bool | None:
+    """Return whether the detector is wet, or None when the byte is unproven."""
+    value = _find_field_value(b, STA_RAIN_FIELD)
+    if not value or value[0] not in (_HCS044_RAIN_DRY, _HCS044_RAIN_WET):
+        return None
+    return value[0] == _HCS044_RAIN_WET
+
+
+def decode_hcs044frf(raw: str) -> dict:
+    """Decode HCS044FRF (rain detector).
+
+    Detects rain, does not measure it: the frame carries no rainfall totals,
+    and RainPoint's product data declares none either.
+
+    Every field is read structurally. Captured frames carry STA_BAT, STA_RSSI,
+    STA_RAIN, STA_EVTIME, STA_ALARM and STA_REPTIME in that order.
+
+    Based on a reporter's payload: 10#DC01E1CB0010B7DC73021A20FF0F46013C1A
+
+    STA_EVTIME and STA_ALARM are deliberately not read. One reporter's event
+    stamp predates the sensor's installation, so what it marks is unsettled,
+    and no capture pairs a non-zero alarm with a known device state.
+    """
+    b = _validate_payload(raw, 12)
+    battery_flag = _extract_battery_flag(b)
+
+    result = _base_decoder_dict("rain_detector", _extract_hcs044_rssi(b), b)
+    result.update(
+        {
+            "rain_detected": _extract_hcs044_rain(b),
             "battery_flag": battery_flag,
             "battery_percent": _battery_flag_to_percent(battery_flag),
         }
