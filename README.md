@@ -58,6 +58,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Valve hubs | HTV245FRF*, HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV445FRF*, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
 | Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
+| Rain detectors | HCS044FRF | Rain detected, battery, signal strength |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
 | Pool sensors | HCS0528ARF*, HCS015ARF | Pool temperature, battery |
@@ -72,6 +73,8 @@ This integration supports RainPoint Smart+ device families, including:
 The **HTV210B** only reports to the cloud while paired through a hub. Used over Bluetooth alone, RainPoint still lists it under the hub, but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. No valve entity is created for it in that state either, so a control that provably cannot reach the hardware is never offered.
 
 The **HIC801W** irrigation controller can start and stop any of its eight stations, alongside everything it already reported. Both halves were confirmed against the hardware by an owner. The controller runs one station at a time and decides that for itself: starting a second station while one is watering sends the command and shows whatever the controller does with it. Run lengths are whole minutes on this model, which is what the controller accepts.
+
+The **HCS044FRF** detects rain rather than measuring it, so it reports a wet/dry sensor and no rainfall totals. RainPoint's own product data lists none for it either. Its alarm and event-time datapoints are left unread until a capture settles what they mean.
 
 The **HCS008FRF** flow meter reports in liters, matching the RainPoint app. Its lifetime total is the entity to point Home Assistant's water dashboard at, since the meter calibrates that figure itself rather than leaving a pulse count to be converted. The current-run pair reads zero between runs, which is the state the app shows as "--".
 

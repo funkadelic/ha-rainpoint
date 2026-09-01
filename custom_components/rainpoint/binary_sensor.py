@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, HIC801W_STATION_COUNT, MODEL_HIC801W
+from .const import DOMAIN, HIC801W_STATION_COUNT, MODEL_HCS044FRF, MODEL_HIC801W
 from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .entity import LateEntityAdder, RainPointSubDeviceEntity, hic801w_station_is_running, register_late_adder
 from .hub_entities import (
@@ -75,6 +75,49 @@ class RainPointHicStationWateringBinarySensor(RainPointSubDeviceEntity, BinarySe
         return hic801w_station_is_running(self._sensor_data, self._station_num)
 
 
+class RainPointRainDetectedBinarySensor(RainPointSubDeviceEntity, BinarySensorEntity):
+    """The HCS044FRF's wet/dry state.
+
+    None whenever the frame's STA_RAIN byte is not one of the two proven
+    values, so an unrecognised reading shows as unknown rather than as dry.
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.MOISTURE
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+    ) -> None:
+        """Bind to one HCS044FRF sensor key."""
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_rain_detected"
+        self._attr_name = "Rain Detected"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether the detector is currently wet."""
+        data = self._sensor_data
+        return data.get("rain_detected") if data else None
+
+
+def _build_rain_detector_entities(coordinator: RainPointCoordinator, key: str, info: dict) -> list:
+    """Return the wet/dry sensor for one HCS044FRF key.
+
+    Returns [] for any other model, and [] for a silent entry, for the same
+    reason the HIC801W factory below does.
+    """
+    if info.get("model") != MODEL_HCS044FRF:
+        return []
+    if (info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
+        return []
+
+    base_slug = f"{info.get('hid', '')}_{info.get('mid', '')}_{info.get('addr', '')}"
+    return [RainPointRainDetectedBinarySensor(coordinator, key, info, base_slug)]
+
+
 def _build_hic801w_station_entities(coordinator: RainPointCoordinator, key: str, info: dict) -> list:
     """Return the eight station-watering entities for one HIC801W sensor key.
 
@@ -118,9 +161,9 @@ async def async_setup_entry(
     push being enabled, so it is only added when mqtt_client is present in
     the entry's object graph.
 
-    A third population, the HIC801W's eight per-station watering sensors, is
-    added through a LateEntityAdder the same way valve.py and number.py
-    already do. Entity creation is otherwise one-shot from the single
+    Two further populations, the HIC801W's eight per-station watering sensors
+    and the HCS044FRF's wet/dry sensor, are added through a LateEntityAdder the
+    same way valve.py and number.py already do. Entity creation is otherwise one-shot from the single
     post-first-refresh snapshot, so a controller that is silent at setup
     would be unreachable rather than delayed without the adder also armed as
     a coordinator listener.
@@ -138,7 +181,10 @@ async def async_setup_entry(
         )
 
     def build(key: str, info: dict) -> list:
-        return _build_hic801w_station_entities(coordinator, key, info)
+        return [
+            *_build_hic801w_station_entities(coordinator, key, info),
+            *_build_rain_detector_entities(coordinator, key, info),
+        ]
 
     # The literal the PLATFORMS list and every entity_id prefix already use,
     # and what the removal sweep matches on alongside the unique ID, since

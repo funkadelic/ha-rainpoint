@@ -92,6 +92,21 @@ MOISTURE_FULL_ASCII_PAYLOAD = "1,-73,1;694,70,G=292478"
 # b[13:14]=0x074E=187.0mm last 7d; b[18:19]=0x074E=187.0mm total
 RAIN_HEX_PAYLOAD = "10#E10000FD040000FD054E07FD064E07DC01974E070000FF0F0410F718"
 
+# HCS044FRF rain detector. Records in wire order: STA_BAT, STA_RSSI, STA_RAIN,
+# STA_EVTIME, STA_ALARM, STA_REPTIME. STA_RAIN is compact form, so its byte is
+# both the field index and the value: 0x10 dry, 0x11 wet.
+#
+# The first is a reporter's capture (issue #230), taken while the RainPoint app
+# showed no rain. The remaining three are committed in
+# brettmeyerowitz/homeassistant-homgar at tests/fixtures/payloads/HCS044FRF.json,
+# captured live by an owner and checked against their app's event history; they
+# are the only wet captures either project holds. Their decoded signal strengths
+# (-60, -58, -59) match the values recorded alongside those fixtures.
+RAIN_DETECTOR_DRY_PAYLOAD = "10#DC01E1CB0010B7DC73021A20FF0F46013C1A"
+RAIN_DETECTOR_WET_PAYLOAD = "10#DC01E1C40011B737B51A1920FF0FDA251C19"
+RAIN_DETECTOR_DRY_SECOND_PAYLOAD = "10#DC01E1C60010B7E932051920FF0FA8B31A19"
+RAIN_DETECTOR_WET_SECOND_PAYLOAD = "10#DC01E1C50011B79F0C231920FF0FC4422319"
+
 # HCS026FRF (moisture_simple) hex payload from docstring.
 # E1 C6 00 DC 01 88 1A FF 0F 5E 21 F7 18
 # b[1]=0xC6=198-256=-58 RSSI; b[4]=0x01 STA_BAT; b[6]=0x1A=26% moisture
