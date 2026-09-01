@@ -1424,7 +1424,16 @@ class TestTheCompetingRowWindow:
         result, _built = await _setup_with_patched_forward(hass, entry, client, device_registry, monkeypatch)
         assert result is True
 
-        competing = device_registry.async_get_device(identifiers={(DOMAIN, f"hub_{HID}_{MID}")})
+        # Scanned rather than looked up through async_get_device, which HA 2026.9
+        # deprecates, or async_get_device_by_identifier, which the minimum pin lacks.
+        competing = next(
+            (
+                d
+                for d in dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+                if (DOMAIN, f"hub_{HID}_{MID}") in d.identifiers
+            ),
+            None,
+        )
         assert competing is not None, "the platform forward must have written the migrated identifier"
         assert competing.id != old.id
 
