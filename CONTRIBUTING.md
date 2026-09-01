@@ -75,7 +75,7 @@ Follow the pattern in `custom_components/rainpoint/api/decoders.py`:
 2. Add `MODEL_XXX` to `const.py`.
 3. Write `decode_xxx(raw: str) -> dict` in `api/decoders.py` and re-export from `api/__init__.py`.
 4. Register `MODEL_XXX: decode_xxx` in `DECODER_REGISTRY` in `coordinator.py`.
-5. Wire any model-specific entities in `sensor.py` / `valve.py` / `number.py`.
+5. Wire any model-specific entities in `sensor.py` / `binary_sensor.py` / `valve.py` / `number.py`.
 6. For valve models, also add `MODEL_XXX` to the `VALVE_MODELS` set in `const.py`. The `valve.py` and `number.py` platforms filter on that set, so a valve model absent from it gets no valve or duration entities. A variant that shares an existing decoder (e.g. `HTV345FRF` reusing `decode_htv213frf_valve`) only needs the registry mapping and `VALVE_MODELS` entry, not a new `decode_xxx`.
 
 Unknown models are handled gracefully by the coordinator, so partial support is fine.

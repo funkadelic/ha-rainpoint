@@ -8,13 +8,21 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
-from custom_components.rainpoint.api import decode_hic801w
+from custom_components.rainpoint.api import decode_hcs044frf, decode_hic801w
 from custom_components.rainpoint.binary_sensor import (
     RainPointHicStationWateringBinarySensor,
+    RainPointRainDetectedBinarySensor,
     _build_hic801w_station_entities,
+    _build_rain_detector_entities,
     async_setup_entry,
 )
-from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_HIC801W, PUSH_CONNECTED_UNIQUE_ID_SUFFIX
+from custom_components.rainpoint.const import (
+    CONF_HIDS,
+    DOMAIN,
+    MODEL_HCS044FRF,
+    MODEL_HIC801W,
+    PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
+)
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS, RainPointCoordinator
 from custom_components.rainpoint.entity import late_adders
 from custom_components.rainpoint.hub_entities import (
@@ -22,7 +30,12 @@ from custom_components.rainpoint.hub_entities import (
     RainPointPushConnectedBinarySensor,
 )
 from tests.helpers import make_coordinator_data, make_sensor_entry
-from tests.payload_samples import SAMPLE_HIC801W_IDLE_PAYLOAD, SAMPLE_HIC801W_STATION3_PAYLOAD
+from tests.payload_samples import (
+    RAIN_DETECTOR_DRY_PAYLOAD,
+    RAIN_DETECTOR_WET_PAYLOAD,
+    SAMPLE_HIC801W_IDLE_PAYLOAD,
+    SAMPLE_HIC801W_STATION3_PAYLOAD,
+)
 
 _UNSET = object()
 
@@ -319,6 +332,86 @@ class TestHicStationWateringEntities:
         stations = self._stations(mutated)
         assert all(e.is_on is None for e in stations)
         assert all(e.available is True for e in stations)
+
+
+def _rain_detector_entry(payload=RAIN_DETECTOR_DRY_PAYLOAD, hid=100, mid=200, addr=3):
+    """A coordinator sensors entry for a reporting HCS044FRF."""
+    return make_sensor_entry(hid=hid, mid=mid, addr=addr, model=MODEL_HCS044FRF, data=decode_hcs044frf(payload))
+
+
+class TestRainDetectedBinarySensor:
+    """The HCS044FRF wet/dry entity and the guards on its factory."""
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [(RAIN_DETECTOR_WET_PAYLOAD, True), (RAIN_DETECTOR_DRY_PAYLOAD, False)],
+    )
+    def test_is_on_follows_the_decoded_state(self, payload, expected):
+        """A wet capture reads on and a dry one reads off."""
+        sensor_key = "100_200_3"
+        entry = _rain_detector_entry(payload)
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+
+        (sensor,) = _build_rain_detector_entities(coordinator, sensor_key, entry)
+        assert isinstance(sensor, RainPointRainDetectedBinarySensor)
+        assert sensor._attr_device_class is BinarySensorDeviceClass.MOISTURE
+        assert sensor._attr_unique_id == "rainpoint_100_200_3_rain_detected"
+        assert sensor.is_on is expected
+
+    def test_unproven_rain_byte_reads_as_unknown(self):
+        """An unrecognised STA_RAIN value must not present as dry."""
+        sensor_key = "100_200_3"
+        entry = _rain_detector_entry(RAIN_DETECTOR_DRY_PAYLOAD.replace("0010B7", "0012B7"))
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+
+        (sensor,) = _build_rain_detector_entities(coordinator, sensor_key, entry)
+        assert sensor.is_on is None
+
+    def test_no_data_reads_as_unknown(self):
+        """An entry carrying no decoded payload yields no state."""
+        sensor_key = "100_200_3"
+        entry = _rain_detector_entry()
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: dict(entry, data=None)})
+
+        (sensor,) = _build_rain_detector_entities(coordinator, sensor_key, entry)
+        assert sensor.is_on is None
+
+    def test_returns_empty_for_a_silent_entry(self):
+        """A detector that has never reported gets no entity from this platform."""
+        sensor_key = "100_200_3"
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=3,
+            model=MODEL_HCS044FRF,
+            data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
+        )
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+        assert _build_rain_detector_entities(coordinator, sensor_key, entry) == []
+
+    def test_returns_empty_for_another_model(self):
+        """A sub-device of any other model produces zero rain entities."""
+        sensor_key = "100_200_3"
+        entry = make_sensor_entry(hid=100, mid=200, addr=3, model=MODEL_HIC801W, data={"type": "irrigation_controller"})
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+        assert _build_rain_detector_entities(coordinator, sensor_key, entry) == []
+
+    @pytest.mark.asyncio
+    async def test_setup_entry_adds_it(self):
+        """A reporting HCS044FRF in the first snapshot yields its entity at setup."""
+        hass, entry, coord = _make_hass(mqtt_client=None)
+        coord.data = make_coordinator_data(sensors={"100_200_3": _rain_detector_entry()})
+        add = MagicMock()
+
+        await async_setup_entry(hass, entry, add)
+
+        entities = add.call_args[0][0]
+        assert [type(e) for e in entities] == [RainPointRainDetectedBinarySensor]
 
 
 class TestBuildHic801wStationEntitiesGuards:

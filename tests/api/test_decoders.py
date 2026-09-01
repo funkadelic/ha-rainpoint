@@ -12,6 +12,7 @@ from custom_components.rainpoint.api import (
     decode_flowmeter,
     decode_generic,
     decode_hcs005frf,
+    decode_hcs044frf,
     decode_hic801w,
     decode_htv145frf,
     decode_htv210b,
@@ -46,6 +47,10 @@ from tests.payload_samples import (
     MOISTURE_SIMPLE_HEX_PAYLOAD,
     MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD,
     POOL_HCS0528ARF_HEX_PAYLOAD,
+    RAIN_DETECTOR_DRY_PAYLOAD,
+    RAIN_DETECTOR_DRY_SECOND_PAYLOAD,
+    RAIN_DETECTOR_WET_PAYLOAD,
+    RAIN_DETECTOR_WET_SECOND_PAYLOAD,
     RAIN_HEX_PAYLOAD,
     SAMPLE_HIC801W_ALL_FRAMES,
     SAMPLE_HIC801W_REPORTER_FRAMES,
@@ -780,6 +785,67 @@ class TestDecodeMoistureSimple:
         raw = MOISTURE_SIMPLE_HEX_PAYLOAD.replace("FF0F", "FF0A")
         result = decode_moisture_simple(raw)
         assert result["battery_percent"] == 100
+
+
+class TestDecodeHcs044frf:
+    """Tests for decode_hcs044frf (HCS044FRF rain detector)."""
+
+    def test_dry_capture(self):
+        """The reporter's capture, taken while the app showed no rain."""
+        result = decode_hcs044frf(RAIN_DETECTOR_DRY_PAYLOAD)
+        assert result["type"] == "rain_detector"
+        assert result["rain_detected"] is False
+        assert result["rssi_dbm"] == -53
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
+        assert result["report_time"] == "2026-08-30T00:05:06"
+
+    @pytest.mark.parametrize(
+        ("payload", "wet", "rssi"),
+        [
+            (RAIN_DETECTOR_WET_PAYLOAD, True, -60),
+            (RAIN_DETECTOR_WET_SECOND_PAYLOAD, True, -59),
+            (RAIN_DETECTOR_DRY_SECOND_PAYLOAD, False, -58),
+        ],
+    )
+    def test_wet_and_dry_captures(self, payload, wet, rssi):
+        """Both STA_RAIN values across the live captures, with their signal strengths."""
+        result = decode_hcs044frf(payload)
+        assert result["rain_detected"] is wet
+        assert result["rssi_dbm"] == rssi
+
+    def test_rssi_is_read_structurally(self):
+        """b[1] here is the STA_BAT flag, so a fixed-offset read would report +1."""
+        assert decode_hcs044frf(RAIN_DETECTOR_DRY_PAYLOAD)["rssi_dbm"] == -53
+
+    def test_unproven_rain_byte_reads_as_unknown(self):
+        """A STA_RAIN value no capture pins yields None, never a dry reading."""
+        raw = RAIN_DETECTOR_DRY_PAYLOAD.replace("0010B7", "0012B7")
+        assert decode_hcs044frf(raw)["rain_detected"] is None
+
+    def test_missing_rain_record_reads_as_unknown(self):
+        """A frame carrying no STA_RAIN record still decodes, with no rain state."""
+        raw = RAIN_DETECTOR_DRY_PAYLOAD.replace("0010B7", "00B7")
+        result = decode_hcs044frf(raw)
+        assert result["rain_detected"] is None
+        assert result["rssi_dbm"] == -53
+
+    def test_non_negative_rssi_is_no_reading(self):
+        """A signal strength that cannot be real is dropped rather than reported."""
+        raw = RAIN_DETECTOR_DRY_PAYLOAD.replace("E1CB00", "E14B00")
+        assert decode_hcs044frf(raw)["rssi_dbm"] is None
+
+    def test_unproven_datapoints_stay_unread(self):
+        """STA_EVTIME and STA_ALARM produce no key at all."""
+        result = decode_hcs044frf(RAIN_DETECTOR_DRY_PAYLOAD)
+        assert "event_time" not in result
+        assert "alarm" not in result
+
+    def test_rejects_a_foreign_prefix(self):
+        """An 11# frame is a different framing and is refused, not misread."""
+        raw = RAIN_DETECTOR_DRY_PAYLOAD.replace("10#", "11#")
+        with pytest.raises(ValueError):
+            decode_hcs044frf(raw)
 
 
 class TestBasicDecoders:

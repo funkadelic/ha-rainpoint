@@ -22,6 +22,7 @@ from custom_components.rainpoint.api.decoders import (
     decode_hcs005frf,
     decode_hcs015arf,
     decode_hcs024frf_v1,
+    decode_hcs044frf,
     decode_hcs0528arf,
     decode_hws019wrf_v2,
     decode_moisture_full,
@@ -97,6 +98,7 @@ _DECODERS_WITHOUT_RUN_STATE = frozenset(
         decode_hcs015arf,
         decode_hcs024frf_v1,
         decode_hcs0528arf,
+        decode_hcs044frf,
         decode_hws019wrf_v2,
     )
 )

@@ -12,8 +12,10 @@ _LOGGER = logging.getLogger(__name__)
 
 # Structural field indices, equal to the catalog's dpCode for the same
 # datapoint. Only the ones a hand-written decoder reads live here.
+STA_RAIN_FIELD = 1
 STA_TEM_FIELD = 9
 STA_BAT_FIELD = 31
+STA_RSSI_FIELD = 32
 STA_REPTIME_FIELD = 54
 
 # HCS008FRF flow meter. The two "current" fields are named for what the

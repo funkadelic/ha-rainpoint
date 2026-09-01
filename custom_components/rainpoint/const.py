@@ -271,6 +271,7 @@ PUSH_HUB_IDENTITY_ISSUE_ID = "push_hub_identity_unresolved"
 MODEL_HCS026FRF = "HCS026FRF"  # Moisture only
 MODEL_HCS021FRF = "HCS021FRF"  # Moisture + temp + lux
 MODEL_HCS012ARF = "HCS012ARF"  # Rain gauge
+MODEL_HCS044FRF = "HCS044FRF"  # Rain detector (wet/dry only, no rainfall totals)
 MODEL_HCS014ARF = "HCS014ARF"  # Temperature/Humidity
 MODEL_HCS008FRF = "HCS008FRF"  # Flowmeter
 MODEL_HCS0530THO = "HCS0530THO"  # CO2/Temp/Humidity
@@ -382,6 +383,7 @@ HAND_WRITTEN_MODELS: frozenset[str] = frozenset(
         MODEL_MOISTURE_SIMPLE,
         MODEL_MOISTURE_FULL,
         MODEL_RAIN,
+        MODEL_HCS044FRF,
         MODEL_TEMPHUM,
         MODEL_FLOWMETER,
         MODEL_CO2,
