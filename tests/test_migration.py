@@ -57,9 +57,9 @@ def _seed_old_shape_install(entry, entity_registry, device_registry):
     child = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
-        via_device=(DOMAIN, f"hub_{HID}"),
         name="Zone Valve",
     )
+    device_registry.async_update_device(child.id, via_device_id=hub.id)
 
     rows = {}
     for suffix, platform in (("rssi", "sensor"), ("mac", "sensor")):
@@ -168,12 +168,12 @@ class TestMidResolutionSources:
         hub = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
         )
-        device_registry.async_get_or_create(
+        child = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
-            via_device=(DOMAIN, f"hub_{HID}"),
             name="Child",
         )
+        device_registry.async_update_device(child.id, via_device_id=hub.id)
         for mid in (9, MID):
             entity_registry.async_get_or_create(
                 "binary_sensor",
@@ -1403,9 +1403,9 @@ class TestTheCompetingRowWindow:
         child = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
-            via_device=(DOMAIN, f"hub_{HID}"),
             name="Child",
         )
+        device_registry.async_update_device(child.id, via_device_id=old.id)
         row = entity_registry.async_get_or_create(
             "sensor", DOMAIN, f"{DOMAIN}_hub_{HID}_mac", config_entry=entry, suggested_object_id="hub_mac"
         )
@@ -1591,12 +1591,12 @@ class TestMidResolutionOrdering:
         hub = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
         )
-        device_registry.async_get_or_create(
+        child = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, f"{HID}_{MID}_{ADDR}")},
-            via_device=(DOMAIN, f"hub_{HID}"),
             name="Child",
         )
+        device_registry.async_update_device(child.id, via_device_id=hub.id)
 
         assert await async_migrate_entry(hass, entry) is True
         assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
