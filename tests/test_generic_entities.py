@@ -830,12 +830,19 @@ class TestEvaluateGenericGate:
         # Empirical baseline over the full committed catalog (including
         # hand-written models, whose variants still carry a dp list even
         # though the gate short-circuits before ever reaching the dpCode
-        # check for them): 18 of the catalog's 90 variants declare the same
-        # dpCode more than once anywhere in their dp list. This is the
-        # ordinary multi-zone encoding (the same identity repeated on the
-        # same dpCode across dpPort 1 and 2), not a rare quirk, so a future
-        # catalog refresh that changes either number should force a
-        # deliberate look rather than a silent pass.
+        # check for them): 19 of the catalog's 97 variants declare the same
+        # dpCode more than once anywhere in their dp list. A future catalog
+        # refresh that changes either number should force a deliberate look
+        # rather than a silent pass.
+        #
+        # 18 of those 19 are the ordinary multi-zone encoding, the same
+        # identity repeated on the same dpCode across dpPort 1 and 2, which
+        # is not a rare quirk. HTP159W/354 is the one that is not, found on
+        # the 2026-09-09 refresh that added the HTP family: it is a 1-port
+        # model whose dpCode 0 carries STA_CHG and CTL_CMD together. So this
+        # count also covers a status identity colliding with a control
+        # identity on one port, and the multi-zone reading no longer explains
+        # every variant it counts.
         total_variants = 0
         duplicate_dp_code_variants = 0
         for variants in product_catalog_module._CATALOG.values():
@@ -844,8 +851,8 @@ class TestEvaluateGenericGate:
                 codes = [entry.get("dpCode") for entry in record["dp"] if isinstance(entry, dict)]
                 if len(codes) != len(set(codes)):
                     duplicate_dp_code_variants += 1
-        assert total_variants == 90
-        assert duplicate_dp_code_variants == 18
+        assert total_variants == 97
+        assert duplicate_dp_code_variants == 19
 
 
 class TestDpCodeAmbiguityRule:

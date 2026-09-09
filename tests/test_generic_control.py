@@ -320,9 +320,12 @@ class TestEvaluateControlGateRealCatalog:
         assert result.passed is True
 
     def test_port_pairing_invariant_holds_across_the_full_committed_catalog(self):
-        """For every one of the 29 allowlist-touching variants, the set of ports on its
+        """For every one of the 36 allowlist-touching variants, the set of ports on its
         allowlisted control datapoints equals the set on its STA_WKSTATE datapoints --
         this is what makes port pairing exact rather than heuristic.
+
+        Was 29 before the 2026-09-09 catalog refresh; the seven HTP models it
+        added are all single-port CTL_WATER devices that pair cleanly.
         """
         checked = 0
         for variants in product_catalog_module._CATALOG.values():
@@ -336,7 +339,7 @@ class TestEvaluateControlGateRealCatalog:
                 checked += 1
                 wk_ports = {e.get("dpPort") for e in dp_list if isinstance(e, dict) and e.get("identity") == RUN_STATE_IDENTITY}
                 assert ctl_ports == wk_ports
-        assert checked == 29
+        assert checked == 36
 
     def test_bluetooth_backed_valves_are_never_admitted(self):
         """CTL_BT_WATER models must produce no control entity through this factory.
