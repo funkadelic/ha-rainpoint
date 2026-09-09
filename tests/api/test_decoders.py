@@ -34,7 +34,7 @@ from custom_components.rainpoint.api import (
     is_hand_written_model,
 )
 from custom_components.rainpoint.api.decoders import _hic801w_stations_from_mask
-from custom_components.rainpoint.api.utils import _parse_entries, _parse_rainpoint_payload
+from custom_components.rainpoint.api.utils import STA_DURATION_FIELD, _parse_entries, _parse_rainpoint_payload
 from tests.payload_samples import (
     BASIC_HEX_PAYLOAD,
     FLOWMETER_FLOWING_HEX,
@@ -54,6 +54,8 @@ from tests.payload_samples import (
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
+    SAMPLE_HTV157B_IDLE_PAYLOAD,
+    SAMPLE_HTV157B_IDLE_PAYLOAD_LOW_BATTERY_FLAG,
     SAMPLE_HTV210B_DP_CLOSE_STATE,
     SAMPLE_HTV210B_DP_OPEN_60S_STATE,
     SAMPLE_HTV210B_DP_OPEN_120S_STATE,
@@ -519,6 +521,60 @@ class TestDecodeHtv113frf:
         assert result["battery_flag"] == 3
         assert "battery_percent" not in result
         assert result["hub_online"] is True
+
+
+class TestDecodeHtv157b:
+    """HTV157B (issues #238 and #239) shares the single-outlet 10# framing, so it
+    is decoded by the same decode_htv145frf function."""
+
+    def test_idle_payload_zone_closed(self):
+        """Real idle payload: zone 1 closed, duration 0s, RSSI -66 dBm, battery normal."""
+        result = decode_htv145frf(SAMPLE_HTV157B_IDLE_PAYLOAD)
+
+        assert result["type"] == "valve_hub"
+        assert result["decoder"] == "htv145frf_hex"
+        assert result["rssi_dbm"] == -66
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
+        assert result["hub_online"] is True
+        assert result["report_time"] == "2026-09-07T20:55:03"
+
+        zones = result["zones"]
+        assert set(zones) == {1}
+        assert zones[1]["open"] is False
+        assert zones[1]["state_raw"] == 0x00
+        assert zones[1]["duration_seconds"] == 0
+
+    def test_four_byte_duration_record_is_read(self):
+        """This model writes STA_DURATION at 4 bytes where its siblings write 2.
+
+        The frame is walked structurally, so the width comes from the record's
+        own header. A fixed-width marker table keyed on the 2-byte header byte
+        finds no duration record here at all, and re-aligning past it drops
+        the rest of the frame, which is what leaves the zone uncreated.
+        """
+        b = _parse_rainpoint_payload(SAMPLE_HTV157B_IDLE_PAYLOAD)
+        records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
+
+        assert len(records[STA_DURATION_FIELD]) == 4
+        assert decode_htv145frf(SAMPLE_HTV157B_IDLE_PAYLOAD)["zones"][1]["duration_seconds"] == 0
+
+    def test_leading_record_does_not_displace_the_rssi_read(self):
+        """This frame leads with STA_EVTIME2, not the RSSI header.
+
+        Reading the RSSI from a fixed byte offset returns 0x0D from that
+        leading record, a positive value that is no dBm reading at all.
+        """
+        assert decode_htv145frf(SAMPLE_HTV157B_IDLE_PAYLOAD)["rssi_dbm"] == -66
+
+    def test_unmapped_battery_flag_reports_no_percentage(self):
+        """The second reporter's unit reads STA_BAT 0x02, which maps to no charge level."""
+        result = decode_htv145frf(SAMPLE_HTV157B_IDLE_PAYLOAD_LOW_BATTERY_FLAG)
+
+        assert result["battery_flag"] == 2
+        assert "battery_percent" not in result
+        assert result["rssi_dbm"] == -90
+        assert result["zones"][1]["open"] is False
 
 
 class TestLittleEndianTripwire:

@@ -59,19 +59,36 @@ SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD = (
     "11#17E1D90018DC0119D8001AD8211D201E2021B70000000022B77327C91925AD000026AD7C0B299F140100002A9F00000000FEFF0F331AC919"
 )
 
-# Real hex (10#) payloads from a reporter's HTV145FRF single-outlet WiFi water timer.
-# This model ships a compact [type_byte][value...] marker stream, not the HTV213FRF
-# dp_id/type/value layout. Markers: 0xE1 header (byte[1]=signed RSSI), 0xDC hub online,
-# 0xD8 zone state (0x21 open / 0x00 closed), 0xAD 2-byte LE duration seconds, 0xFF terminator.
-#   Closed sample: hub online, zone 1 closed, duration 0s, RSSI -68 dBm.
+# Real hex (10#) payloads from the single-outlet water timers, all decoded by
+# decode_htv145frf. The framing is the same self-describing record stream the
+# generic decoder walks, so each header byte carries its own field index and
+# value width: 0xE1 STA_RSSI (first value byte is the signed dBm), 0xDC
+# STA_BAT, 0xD8 STA_WKSTATE (bit 0 open, so 0x21 open / 0x00 closed), 0xAD or
+# 0xAF STA_DURATION seconds at 2 or 4 bytes, 0xB7 STA_EVTIME, 0x9F
+# STA_LASTUSAGE, 0xFF0F STA_REPTIME.
+#
+# HTV145FRF closed sample: zone 1 closed, duration 0s, RSSI -68 dBm, STA_BAT 1.
 SAMPLE_HTV145_CLOSED_PAYLOAD = "10#E1BC00DC01D80020B700000000AD00009F95110000FF0F5D81D019"
-#   Open sample: hub online, zone 1 open (0x21), duration 1200s (20 min), RSSI -62 dBm.
+# HTV145FRF open sample: zone 1 open (0x21), duration 1200s (20 min), RSSI -62 dBm.
+# Report time 19:58:46 plus that duration lands on the 20:18:46 event time,
+# which is what pins the event-time semantics on this family.
 SAMPLE_HTV145_OPEN_PAYLOAD = "10#E1C200DC01D82120B7AE44E319ADB0049FA8020000FF0FAE3EE319"
 
-# Real hex (10#) idle payload from a reporter's HTV113FRF single-outlet water timer
-# (issue #64). Same marker layout as the HTV145FRF above, so it reuses that decoder.
-#   Idle sample: zone 1 closed (0x00), duration 0s, RSSI -63 dBm, battery field 0xFF0F.
+# HTV113FRF idle sample (issue #64): zone 1 closed, duration 0s, RSSI -63 dBm,
+# STA_BAT 3 -- a flag no capture pairs with a charge level, so it yields no
+# battery percentage.
 SAMPLE_HTV113_IDLE_PAYLOAD = "10#E1C100DC03D80020B700000000AD00009F00000000FF0F9B40D319"
+
+# HTV157B idle samples from two reporters (issues #238 and #239). Same field
+# set as the two above plus a leading STA_EVTIME2 record, and a 4-byte
+# STA_DURATION (0xAF) where they write 2 (0xAD) -- the width that makes a
+# fixed-width marker table mis-frame this model. Every record's width matches
+# the catalog's dpLen for variant 343, and the walk consumes the frame with
+# nothing left over.
+#   #239: RSSI -66 dBm, STA_BAT 1, report time 2026-09-07T20:55:03.
+SAMPLE_HTV157B_IDLE_PAYLOAD = "10#FF0D00000000DC01E1BE01D80020B700000000AF000000009F00000000FF0FC34D4F1A"
+#   #238: RSSI -90 dBm, STA_BAT 2, an unmapped flag, so no battery percentage.
+SAMPLE_HTV157B_IDLE_PAYLOAD_LOW_BATTERY_FLAG = "10#FF0D00000000DC02E1A601D80020B700000000AF000000009F00000000FF0FB980461A"
 
 # --- Additional decoder payload constants ---
 
