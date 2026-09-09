@@ -55,6 +55,7 @@ from .const import (
     MODEL_HCS044FRF,
     MODEL_HCS0528ARF,
     MODEL_HIC801W,
+    MODEL_HTP160FRF,
     MODEL_HTV157B,
     MODEL_HTV210B,  # HTV210B support
     MODEL_MOISTURE_FULL,
@@ -248,6 +249,7 @@ DECODER_REGISTRY = {
     MODEL_VALVE_113: decode_htv145frf,  # HTV113FRF shares the HTV145FRF single-outlet 10# format
     MODEL_VALVE_145: decode_htv145frf,  # HTV145FRF single-outlet timer (10# compact format)
     MODEL_HTV157B: decode_htv145frf,  # HTV157B shares that frame, with a 4-byte duration
+    MODEL_HTP160FRF: decode_htv145frf,  # HTP160FRF shares it too, minus the STA_LASTUSAGE record
     MODEL_VALVE_213: decode_htv213frf_valve,  # HTV213FRF uses custom decoder
     MODEL_VALVE_245: decode_htv213frf_valve,  # HTV245FRF uses custom decoder
     MODEL_VALVE_345: decode_htv213frf_valve,  # HTV345FRF uses custom decoder

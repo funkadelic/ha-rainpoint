@@ -54,6 +54,7 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_HCS044FRF,
     MODEL_HCS0528ARF,
     MODEL_HIC801W,
+    MODEL_HTP160FRF,
     MODEL_HTV157B,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
@@ -86,6 +87,7 @@ from tests.payload_samples import (  # noqa: E402
     RAIN_DETECTOR_WET_SECOND_PAYLOAD,
     SAMPLE_HIC801W_ALL_FRAMES,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
+    SAMPLE_HTP160_IDLE_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
@@ -4911,6 +4913,19 @@ class TestDecoderRegistry:
         dispatched = _coord_module._decode_subdevice_payload(MODEL_HTV157B, SAMPLE_HTV157B_IDLE_PAYLOAD)
 
         assert dispatched == decode_htv145frf(SAMPLE_HTV157B_IDLE_PAYLOAD)
+        assert dispatched["decoder"] == "htv145frf_hex"
+        assert dispatched["zones"][1]["open"] is False
+
+    def test_valve_htp160frf_dispatches_through_registry_to_htv145_decoder(self):
+        """HTP160FRF reuses the HTV145FRF decoder. Asserted through the registry so a
+        broken or removed MODEL_HTP160FRF entry is caught, and on a zone rather than
+        just the decoder identity, because a frame this model's leading compact-form
+        record threw off the walk on would decode to no zone at all."""
+        assert DECODER_REGISTRY[MODEL_HTP160FRF] is decode_htv145frf
+
+        dispatched = _coord_module._decode_subdevice_payload(MODEL_HTP160FRF, SAMPLE_HTP160_IDLE_PAYLOAD)
+
+        assert dispatched == decode_htv145frf(SAMPLE_HTP160_IDLE_PAYLOAD)
         assert dispatched["decoder"] == "htv145frf_hex"
         assert dispatched["zones"][1]["open"] is False
 
