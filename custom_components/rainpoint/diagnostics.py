@@ -40,7 +40,7 @@ mean it.
 
 The entry dump's top-level `devices` map carries the same pair, Home
 Assistant's own `name` and `name_by_user` for every device row this config
-entry owns. That pair is what Home Assistant knows about a device, not what
+entry owns. That pair is what Home Assistant holds for a device, not what
 the cloud sent, which is why it sits in its own section rather than inside one
 of the allow-listed record dicts above; the sensor and hub sections describe
 what the cloud reported, and this one describes what the owner sees. The pair

@@ -1691,7 +1691,7 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
     """Publish the removal executor, sweep once, then sweep on every update.
 
     This listener is its own rather than a share of the parenting reconcile's.
-    That one arms on sensor keys *appearing*; this one cares about keys
+    That one arms on sensor keys *appearing*; this one on keys
     *disappearing*, so sharing would mean widening that gate and changing its
     exposure profile, on the one surface in this integration that can delete.
 

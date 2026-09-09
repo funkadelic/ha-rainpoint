@@ -35,7 +35,7 @@ def _validate_payload(raw: str, expected_length: int) -> bytes:
 
 
 def _validate_tag(b: bytes, offset: int, expected: int, device_name: str) -> None:
-    """Validate a tag byte at the specified offset."""
+    """Raise ValueError naming the device when b[offset] is not `expected`."""
     actual = b[offset]
     if actual != expected:
         raise ValueError(f"{device_name}: Expected tag 0x{expected:02X} at offset {offset}, got 0x{actual:02X}")

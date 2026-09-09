@@ -295,8 +295,8 @@ class RainPointHubConnectivityBinarySensor(CoordinatorEntity, BinarySensorEntity
     def extra_state_attributes(self) -> dict:
         """Return the cloud change timestamp and the raw, undecoded state value.
 
-        Both keys are always present, with None values when the underlying
-        fields are absent, so the attribute never simply vanishes.
+        Both keys are always present, with None values when the record omits
+        them, so the attribute never simply vanishes.
         """
         record = self._record
         return {

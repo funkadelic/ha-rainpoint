@@ -537,7 +537,7 @@ class RainPointClient:
         await self.ensure_logged_in()
         url = f"{self._base_url}/app/device/multipleDeviceStatus"
 
-        # Format devices array as expected by API
+        # The endpoint takes only the addressing triple, not a whole device record.
         device_list = []
         for device in devices:
             device_list.append(

@@ -1,7 +1,8 @@
 """
 RainPoint API module.
 
-This module provides a clean, organized interface to the RainPoint API functionality.
+Re-exports the client, the per-model decoders, the catalog lookups and the
+underscore-prefixed helpers, so callers import all of them from one place.
 """
 
 from .client import RainPointApiError, RainPointClient, RainPointThrottledError

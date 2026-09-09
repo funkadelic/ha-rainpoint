@@ -118,7 +118,7 @@ def _absent_status() -> _AbsentStatus:
     polluted every absent hub simultaneously and the symptom would have read
     as cross-hub contamination rather than as a mutation bug.
 
-    Note that a shallow copy would not have been enough to make sharing safe:
+    A shallow copy would not have been enough to make sharing safe:
     dict(marker) copies the mapping but leaves "subDeviceStatus" pointing at
     the same list, so the inner list is the part that actually needed to stop
     being shared. Each call gets its own dict and its own list.
