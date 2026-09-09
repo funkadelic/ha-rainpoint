@@ -4,6 +4,22 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.23.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.22.0...v1.23.0) (2026-09-09)
 
+### What's new
+
+**The HCS044FRF rain detector is supported**
+
+- It gets a Rain Detected sensor, plus battery, signal strength, firmware and last updated. It reports only wet or dry, so there are no rainfall totals for it.
+
+**The HTV157B water timer is supported**
+
+- It gets a valve you can open and close and a run duration to set beside it, the same as the HTV113FRF and HTV145FRF.
+
+The HTV113FRF and HTV145FRF also gained battery, signal strength and run duration readings. Their valve could show as unavailable in Home Assistant while the timer was working normally, depending on what battery status it reported. It stays available now.
+
+### Thanks
+
+Thanks to **@gkelldealerdash** for the HCS044FRF payload and for describing what the RainPoint app showed, and to **@marea52** and **@bergamo84** for the HTV157B payloads, which made this release's new device support possible.
+
 
 ### Added
 
