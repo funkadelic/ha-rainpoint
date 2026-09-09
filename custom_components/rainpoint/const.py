@@ -10,7 +10,6 @@ VERSION = "1.22.0"  # x-release-please-version
 ISSUE_URL = "https://github.com/funkadelic/ha-rainpoint/issues"
 
 
-# Helper function for debug messages with version
 def debug_with_version(message: str) -> str:
     """Format debug message with integration version."""
     return f"[RainPoint v{VERSION}] {message}"

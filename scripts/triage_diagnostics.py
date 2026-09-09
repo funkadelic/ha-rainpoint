@@ -97,7 +97,7 @@ def _payload_of(entry: dict) -> str | None:
 
 
 def _catalog_summary(model: str | None, model_code) -> list[str]:
-    """Describe what the committed catalog knows about this variant."""
+    """Describe what the committed catalog records for this variant."""
     from custom_components.rainpoint.api.product_catalog import (
         get_catalog_entry,
         get_catalog_port_number,

@@ -387,7 +387,7 @@ def _parse_hub_broadcast_flag(param: object) -> bool | None:
 
 
 def _splice_hub_broadcast_param(param: object, enabled: bool) -> str | None:
-    """Return `param` with only index 1 replaced by the requested flag, or
+    """Return `param` with only index 1 replaced by `enabled`, or
     None when the same gate that blocks the read blocks the write.
 
     Calls `_parse_hub_broadcast_flag` itself as the gate -- not a

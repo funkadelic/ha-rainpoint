@@ -734,7 +734,7 @@ class RainPointIlluminanceSensor(RainPointSensorBase):
 
 
 class RainPointRainSensor(RainPointSensorBase):
-    """Rain sensor (various windows)."""
+    """Rain total over one window: last hour, last 24 hours, last 7 days, or total."""
 
     _attr_device_class = SensorDeviceClass.PRECIPITATION
     _attr_native_unit_of_measurement = "mm"

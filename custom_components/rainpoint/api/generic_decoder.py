@@ -348,7 +348,8 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
         }
 
     On any parse failure it returns ``{"decoder": "generic-tlv", "error": ...}``
-    - it never raises, so the unknown-device path stays robust.
+    - it never raises, so a malformed payload surfaces as an error field rather
+    than an exception the caller has to catch.
 
     A payload using the comma-and-semicolon ASCII framing (``[flags],[rssi],
     [flags];...``) is read for its header only. The result carries both

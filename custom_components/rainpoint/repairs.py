@@ -871,7 +871,7 @@ def orphaned_entities_issue_id(sensor_key: str, entry_id: str) -> str:
 
 
 def _issue_belongs_to_entry(issue, entry_id: str) -> bool:
-    """Return True unless this card names a config entry other than the given one.
+    """Return True unless this card names a config entry other than `entry_id`.
 
     The second half of the withdrawal's scoping, and the half that does not
     rest on an assumption. The prefix test before it reads
