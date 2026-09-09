@@ -25,6 +25,7 @@ from .api import (
     decode_hcs005frf,
     decode_hcs015arf,
     decode_hcs024frf_v1,
+    decode_hcs044frf,
     decode_hcs0528arf,
     decode_hic801w,
     decode_htv145frf,
@@ -50,6 +51,7 @@ from .const import (
     MODEL_HCS005FRF,
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
+    MODEL_HCS044FRF,
     MODEL_HCS0528ARF,
     MODEL_HIC801W,
     MODEL_HTV210B,  # HTV210B support
@@ -231,6 +233,7 @@ DECODER_REGISTRY = {
     MODEL_HCS024FRF_V1: decode_hcs024frf_v1,
     MODEL_HCS015ARF: decode_hcs015arf,
     MODEL_HCS0528ARF: decode_hcs0528arf,
+    MODEL_HCS044FRF: decode_hcs044frf,  # Rain detector, wet/dry only
 }
 
 

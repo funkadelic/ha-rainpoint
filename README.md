@@ -58,6 +58,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Valve hubs | HTV245FRF*, HTV113FRF, HTV145FRF, HTV213FRF, HTV345FRF, HTV405FRF, HTV445FRF*, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
 | Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
+| Rain detectors | HCS044FRF* | Rain detected, battery, signal strength |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
 | Pool sensors | HCS0528ARF*, HCS015ARF | Pool temperature, battery |
@@ -72,6 +73,8 @@ This integration supports RainPoint Smart+ device families, including:
 The **HTV210B** only reports to the cloud while paired through a hub. Used over Bluetooth alone, RainPoint still lists it under the hub, but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. No valve entity is created for it in that state either, so a control that provably cannot reach the hardware is never offered.
 
 The **HIC801W** irrigation controller can start and stop any of its eight stations, alongside everything it already reported. Both halves were confirmed against the hardware by an owner. The controller runs one station at a time and decides that for itself: starting a second station while one is watering sends the command and shows whatever the controller does with it. Run lengths are whole minutes on this model, which is what the controller accepts.
+
+The **HCS044FRF** detects rain rather than measuring it, so it reports a wet/dry sensor and no rainfall totals. RainPoint's own product data lists none for it either. Its alarm and event-time datapoints are left unread until a capture settles what they mean.
 
 The **HCS008FRF** flow meter reports in liters, matching the RainPoint app. Its lifetime total is the entity to point Home Assistant's water dashboard at, since the meter calibrates that figure itself rather than leaving a pulse count to be converted. The current-run pair reads zero between runs, which is the state the app shows as "--".
 
@@ -156,6 +159,7 @@ For each device the coordinator discovers, the integration creates:
 
 - **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API. A device that returns no readings at all gets a single **Not Reporting** diagnostic entity instead, and no Raw Payload sensor, because there is no payload to show.
 - **Station watering sensors**: one per station on the HIC801W irrigation controller, showing whether that station is currently watering. See [Supported devices](#supported-devices) for the rest of what it reports.
+- **Rain Detected**: one binary sensor per HCS044FRF rain detector, on while the sensor is wet.
 - **Valve entities**: one per irrigation zone, for the valve models listed in the table above, including the HTV210B while it is hub-paired, and one per station on the HIC801W irrigation controller. A device the integration cannot currently reach gets no valve entity, as described under [Supported devices](#supported-devices).
 - **Number entities**: one per zone, or per station on the HIC801W, for configuring run duration (1 to 60 minutes), on those same models. The duration applies to the next run: changing it while that zone is already watering is refused with an explanation, and the value you typed is not saved, so set it again once the run ends. A refused change can leave the number box showing what you typed until you reload the page; the saved duration and the run in progress are both unaffected.
 - **Hub diagnostic sensors**: RSSI, battery, firmware version, last-data-change timestamp.

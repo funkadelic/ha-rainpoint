@@ -34,6 +34,7 @@ from .const import (
     MODEL_HCS005FRF,
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
+    MODEL_HCS044FRF,
     MODEL_HIC801W,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
@@ -375,6 +376,9 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     MODEL_POOL_PLUS: _make_pool_plus_entities,
     MODEL_HCS005FRF: _make_hcs_moisture_only_entities,
     MODEL_HCS024FRF_V1: _make_hcs_multisensor_entities,
+    # Diagnostics only: the wet/dry reading is a binary sensor, and the frame's
+    # other two datapoints are unproven and go unread.
+    MODEL_HCS044FRF: _make_diagnostic_entities,
     MODEL_VALVE_213: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_245: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_345: _make_htv_valve_diagnostic_entities,
