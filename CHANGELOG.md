@@ -2,6 +2,23 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.23.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.22.0...v1.23.0) (2026-09-09)
+
+
+### Added
+
+* support HCS044FRF rain detector ([#234](https://github.com/funkadelic/ha-rainpoint/issues/234)) ([93ddbf0](https://github.com/funkadelic/ha-rainpoint/commit/93ddbf0970b390cbfda4961fe2d79b4a99428e4c))
+* support the HTV157B single-outlet water timer ([#243](https://github.com/funkadelic/ha-rainpoint/issues/243)) ([ed413c7](https://github.com/funkadelic/ha-rainpoint/commit/ed413c7074222c32c737254458e7c546f8e10494))
+
+
+### Other Changes
+
+* bump pytest-homeassistant-custom-component ([#241](https://github.com/funkadelic/ha-rainpoint/issues/241)) ([46e2e21](https://github.com/funkadelic/ha-rainpoint/commit/46e2e211c9740a95dd1402e07ed26e9002a243f1))
+* bump pytest-homeassistant-custom-component from 0.13.357 to 0.13.359 ([#233](https://github.com/funkadelic/ha-rainpoint/issues/233)) ([4104f9a](https://github.com/funkadelic/ha-rainpoint/commit/4104f9a9efd827a5b4fc38886bbac4a3e6714dd4))
+* pre-commit autoupdate ([#240](https://github.com/funkadelic/ha-rainpoint/issues/240)) ([fc769ae](https://github.com/funkadelic/ha-rainpoint/commit/fc769ae6149c247b5331d341ba37069e75a2d43d))
+* raise the coverage gates to 100% ([#236](https://github.com/funkadelic/ha-rainpoint/issues/236)) ([0239ea1](https://github.com/funkadelic/ha-rainpoint/commit/0239ea15fc62d7fe45b1adb7694d7ad33bd04914))
+* replace vague comments and docstrings with the actual behaviour ([#242](https://github.com/funkadelic/ha-rainpoint/issues/242)) ([5d4e89c](https://github.com/funkadelic/ha-rainpoint/commit/5d4e89c7929660a7ce915b3c9769972f26824257))
+
 ## [1.22.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.21.2...v1.22.0) (2026-08-31)
 
 ### What's new
