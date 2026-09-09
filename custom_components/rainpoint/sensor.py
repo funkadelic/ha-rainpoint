@@ -36,6 +36,7 @@ from .const import (
     MODEL_HCS024FRF_V1,
     MODEL_HCS044FRF,
     MODEL_HIC801W,
+    MODEL_HTV157B,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
@@ -43,6 +44,8 @@ from .const import (
     MODEL_POOL_PLUS,
     MODEL_RAIN,
     MODEL_TEMPHUM,
+    MODEL_VALVE_113,
+    MODEL_VALVE_145,
     MODEL_VALVE_213,
     MODEL_VALVE_245,
     MODEL_VALVE_345,
@@ -254,6 +257,33 @@ def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
     return entities
 
 
+def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
+    """Battery, signal and the outlet's run duration for the single-outlet timers.
+
+    The HTV113FRF, HTV145FRF and HTV157B share one decoder and one outlet, so
+    they share this factory. Battery reads unknown on a unit whose STA_BAT
+    flag no capture pairs with a charge level rather than showing an invented
+    percentage, which is the same trade the HTV213 factory documents.
+
+    No water-usage entity, unlike that factory: these frames do carry
+    STA_LASTUSAGE, but no capture pairs it against a total the app displays,
+    so its unit is unknown between litres, gallons and raw pulses. An entity
+    would have to publish a number in some unit to publish it at all.
+
+    The zone comes from the decoded payload rather than the model name, the
+    same as every other valve factory here, so a frame that reported no
+    outlet grows no run-duration entity.
+    """
+    entities = [
+        RainPointBatterySensor(coordinator, key, info, base_slug),
+        RainPointRSSISensor(coordinator, key, info, base_slug),
+    ]
+    zones = (info.get("data") or {}).get("zones")
+    if isinstance(zones, dict):
+        entities.extend(RainPointZoneRunDurationSensor(coordinator, key, info, base_slug, zone_num) for zone_num in sorted(zones))
+    return entities
+
+
 def _make_htv210b_entities(coordinator, key, info, base_slug):
     """Battery, signal, and per-zone state for the HTV210B Bluetooth valve.
 
@@ -379,6 +409,9 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     # Diagnostics only: the wet/dry reading is a binary sensor, and the frame's
     # other two datapoints are unproven and go unread.
     MODEL_HCS044FRF: _make_diagnostic_entities,
+    MODEL_VALVE_113: _make_single_outlet_timer_entities,
+    MODEL_VALVE_145: _make_single_outlet_timer_entities,
+    MODEL_HTV157B: _make_single_outlet_timer_entities,
     MODEL_VALVE_213: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_245: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_345: _make_htv_valve_diagnostic_entities,
@@ -1664,11 +1697,13 @@ class RainPointZoneRunDurationSensor(RainPointZoneSensorBase):
     rounded. Minutes is only the suggested display and any user can
     override it per entity.
 
-    This is not a memory of the previous run. Every captured frame from both
-    the HTV245FRF and HTV345FRF/HTV405FRF reporters decodes the same way: an
-    open zone carries a non-zero duration_seconds and a closed zone carries
-    0, so the value returns to 0 the moment the zone closes rather than
-    holding the last run's length. A user wanting "how long did this zone
+    This is not a memory of the previous run. Every captured frame from the
+    HTV245FRF and HTV345FRF/HTV405FRF reporters decodes the same way, and the
+    single-outlet HTV145FRF pair agrees independently (1200 s open against 0
+    closed, with that frame's own report time plus 1200 s landing exactly on
+    its event time): an open zone carries a non-zero duration_seconds and a
+    closed zone carries 0, so the value returns to 0 the moment the zone
+    closes rather than holding the last run's length. A user wanting "how long did this zone
     last run" answers it from this entity's own recorder history, not from
     its live state.
 

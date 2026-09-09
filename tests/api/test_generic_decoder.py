@@ -25,7 +25,7 @@ from tests.payload_samples import (
 # hand-written decoder additions (most recently decode_hcs044frf) move this
 # hash forward on purpose; the guard exists to catch decode_generic and its
 # helpers reaching back into this file, not to freeze it.
-_DECODERS_PY_PRE_PHASE_SHA256 = "02ed279545dd8e199d2b913da17ec53aab5690865e0a6701a9338203ceb4134f"
+_DECODERS_PY_SHA256 = "9f7b3ebd3be9ac48a7c4fba3ebcad599be73f43a457bc9cd0631b9de1a266a04"
 
 
 class TestDecodeGenericTLV:
@@ -635,16 +635,18 @@ class TestDecodeGenericAscii:
 class TestAsciiFramingNonRegression:
     """Source-level pins: the trusted decoders and the no-ordering-table rule."""
 
-    def test_decoders_py_is_byte_identical_to_the_phase_base(self):
-        """api/decoders.py is read for reference and never edited.
+    def test_decoders_py_digest_is_pinned(self):
+        """api/decoders.py is read for reference by decode_generic, never edited by it.
 
         Pinned by whole-file digest rather than relying on `git diff` alone,
-        so a regression is caught by the test suite itself.
+        so a regression is caught by the test suite itself. Editing the
+        trusted decoders is expected and moves this hash forward; see the
+        constant's own note.
         """
         source = Path(generic_decoder_module.__file__).parent / "decoders.py"
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
 
-        assert digest == _DECODERS_PY_PRE_PHASE_SHA256
+        assert digest == _DECODERS_PY_SHA256
 
     def test_no_per_family_body_position_table_exists(self):
         """No ordering machinery ships, not even a declared-empty table.

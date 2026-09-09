@@ -112,6 +112,16 @@ jobs:
             echo "drift=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Exit 3 is the server's rate limiter refusing every login attempt,
+          # after the script has already waited out the cooldown and retried.
+          # It says nothing about the snapshot, so it must not be reported as
+          # drift and must not reach the regenerate step. Left red rather than
+          # silently green, so a week with no check is visible, but named so
+          # nobody has to read the log to find out why.
+          if [ "$status" -eq 3 ]; then
+            echo "::error::RainPoint rate-limited every login attempt; the catalog was not checked. Re-run this workflow later."
+            exit 1
+          fi
           # --check also exits 1 when the live pull comes back empty, which is a
           # fetch failure rather than drift. It reports that on stderr, leaving
           # stdout empty, so an empty summary here is the failure case and has to

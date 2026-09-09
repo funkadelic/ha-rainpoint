@@ -28,6 +28,7 @@ from .const import (
     DOMAIN,
     HIC801W_STATION_COUNT,
     MODEL_HIC801W,
+    MODEL_HTV157B,
     MODEL_VALVE_113,
     MODEL_VALVE_145,
     MODEL_VALVE_213,
@@ -360,7 +361,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
         if not raw_state:
             return
         model = self._sensor_info.get("model", "")
-        if model in (MODEL_VALVE_113, MODEL_VALVE_145):
+        if model in (MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B):
             decoded = decode_htv145frf(raw_state)
         elif model in (
             MODEL_VALVE_213,

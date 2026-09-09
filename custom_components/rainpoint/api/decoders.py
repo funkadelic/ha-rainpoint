@@ -10,8 +10,10 @@ import re
 from datetime import datetime
 
 from .utils import (
+    STA_BAT_FIELD,
     STA_CUR_FLOW_FIELD,
     STA_DURATION_FIELD,
+    STA_EVTIME_FIELD,
     STA_LAST_DURATION_FIELD,
     STA_LASTUSAGE_FIELD,
     STA_RAIN_FIELD,
@@ -20,6 +22,7 @@ from .utils import (
     STA_TOTAL_TODAY_FIELD,
     STA_VFLOW_FIELD,
     STA_WATER_TOTAL_FIELD,
+    STA_WKSTATE_FIELD,
     _base_decoder_dict,
     _extract_report_time,
     _f10_to_c,
@@ -81,13 +84,6 @@ _USAGE_GALLONS_PER_COUNT = 1 / 500
 
 # Year offset for the packed timestamps carried by the 4-byte 0xB7 records.
 _TIMESTAMP_YEAR_BASE = 2020
-
-# Type byte → value byte count for the HTV145FRF single-outlet timer.
-# Unlike HTV213FRF (11# dp_id/type/value stream), this model ships a 10#-prefixed
-# marker/value stream where each record is [type_byte][value...]. The 0x20 record
-# is a 5-byte compound (a 0xB7 sub-marker plus a 4-byte schedule/timestamp field),
-# and a 0xFF byte terminates the decodable stream (a trailing device timestamp follows).
-_HTV145_TYPE_WIDTHS = {0xE1: 2, 0xDC: 1, 0xD8: 1, 0x20: 5, 0xB7: 4, 0xAD: 2, 0x9F: 4}
 
 
 def decode_htv213frf_valve(raw: str) -> dict:
@@ -233,8 +229,9 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
 def _extract_htv213_rssi(b: bytes) -> int | None:
     """Find the signed-dBm RSSI in an HTV213/245 hex (11#) frame, or None.
 
-    The 10# frames put the 0xE1 header at offset 0, so _extract_rssi reads its
-    RSSI from b[1]. The 11# frame prefixes every record with a dp_id, so the
+    Most 10# frames put the 0xE1 header at offset 0, so _extract_rssi reads its
+    RSSI from b[1] (not all: the HTV157B leads with STA_EVTIME2, which is why
+    decode_htv145frf reads its RSSI record structurally instead). The 11# frame prefixes every record with a dp_id, so the
     header appears as [dp_id 0x17][type 0xE1][signed dBm][phy] somewhere in the
     stream, not at a fixed offset (dp records can be reordered). Locate that
     record and return the signed dBm byte. Reading b[1] here would instead
@@ -511,37 +508,58 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         raise
 
 
-# Structural field indices for the HTV210B stream, equal to the catalog's
-# dpCode for the same datapoint (STA_BAT 31 and STA_REPTIME 54 already live in
-# utils.py). The auto-detected list in the pre-filled bug report reads the same
-# frame with the same indices, which is the cross-check that these are right.
-_HTV210B_FIELD_WKSTATE = 30
-_HTV210B_FIELD_DURATION = 19
-_HTV210B_FIELD_EVTIME = 21
-_HTV210B_FIELD_RSSI = 32
+# The HTV210B's own dp_id for the RSSI record. The structural field indices
+# these decoders read by are shared and live in utils.py.
 _HTV210B_DP_RSSI = 0x17
 
 # The two duration record widths any capture has shown: 4 bytes on the HTV210B
-# frames, 2 on the HTV213 family sharing the field. Any other width is a
-# truncated or foreign record, not a third firmware choice.
-_HTV210B_DURATION_WIDTHS = (2, 4)
+# and HTV157B, 2 on the HTV113/145 and HTV213 families sharing the field. Any
+# other width is a truncated or foreign record, not a third firmware choice.
+_DURATION_WIDTHS = (2, 4)
 
 
-def _extract_htv210b_rssi(records: dict[tuple[int, int], bytes]) -> int | None:
-    """Return the signed dBm from the frame's RSSI record, or None.
+def _rssi_dbm_from_record(value: bytes | None) -> int | None:
+    """Return the signed dBm from an RSSI record's value bytes, or None.
 
-    Read structurally from the record map rather than through
-    _extract_htv213_rssi's byte-pattern scan: that scan documents its own
-    false-positive surface and PHY-byte bound, both needed only because the
-    scan has no record boundaries to trust. The walk has already isolated the
-    record here (value bytes [signed dBm][PHY]), so the only check left is
-    the sign - a non-negative dBm is no reading - and the PHY byte needs no
-    bound at all.
+    Read structurally rather than through _extract_htv213_rssi's byte-pattern
+    scan: that scan documents its own false-positive surface and PHY-byte
+    bound, both needed only because the scan has no record boundaries to
+    trust. The walk has already isolated the record here (value bytes
+    [signed dBm][PHY]), so the only check left is the sign - a non-negative
+    dBm is no reading - and the PHY byte needs no bound at all.
     """
-    value = records.get((_HTV210B_DP_RSSI, _HTV210B_FIELD_RSSI))
     if value is None or len(value) < 1 or value[0] < 0x80:
         return None
     return value[0] - 256
+
+
+def _single_zone_from_records(records: dict[int, bytes]) -> dict | None:
+    """Build one zone dict from a dp_id-less record map, or None with no work state.
+
+    The single-outlet 10# frames and the HTV210B command response each
+    describe exactly one zone, so their records key on the structural field
+    index alone. Semantics are the ones _extract_htv210b_zones documents.
+    """
+    state_bytes = records.get(STA_WKSTATE_FIELD)
+    if state_bytes is None or len(state_bytes) != 1:
+        return None
+
+    duration_seconds = 0
+    dur_bytes = records.get(STA_DURATION_FIELD)
+    if dur_bytes is not None and len(dur_bytes) in _DURATION_WIDTHS:
+        duration_seconds = int.from_bytes(dur_bytes, "little")
+
+    event_time = None
+    ev_bytes = records.get(STA_EVTIME_FIELD)
+    if ev_bytes is not None and len(ev_bytes) == 4:
+        event_time = _decode_packed_timestamp(int.from_bytes(ev_bytes, "little"))
+
+    return {
+        "open": bool(state_bytes[0] & 0x01),
+        "duration_seconds": duration_seconds,
+        "state_raw": state_bytes[0],
+        "event_time": event_time,
+    }
 
 
 def _map_htv210b_records(b: bytes) -> dict[tuple[int, int], bytes]:
@@ -575,18 +593,18 @@ def _extract_htv210b_zones(records: dict[tuple[int, int], bytes]) -> dict[int, d
     """
     zones: dict[int, dict] = {}
     for zone_num in range(1, 9):
-        state_bytes = records.get((_HTV213_DP_BASE_STATE + zone_num, _HTV210B_FIELD_WKSTATE))
+        state_bytes = records.get((_HTV213_DP_BASE_STATE + zone_num, STA_WKSTATE_FIELD))
         if state_bytes is None or len(state_bytes) != 1:
             continue
         state_val = state_bytes[0]
 
         duration_seconds = 0
-        dur_bytes = records.get((_HTV213_DP_BASE_DURATION + zone_num, _HTV210B_FIELD_DURATION))
-        if dur_bytes is not None and len(dur_bytes) in _HTV210B_DURATION_WIDTHS:
+        dur_bytes = records.get((_HTV213_DP_BASE_DURATION + zone_num, STA_DURATION_FIELD))
+        if dur_bytes is not None and len(dur_bytes) in _DURATION_WIDTHS:
             duration_seconds = int.from_bytes(dur_bytes, "little")
 
         event_time = None
-        ev_bytes = records.get((_HTV213_DP_BASE_EVENT_TIME + zone_num, _HTV210B_FIELD_EVTIME))
+        ev_bytes = records.get((_HTV213_DP_BASE_EVENT_TIME + zone_num, STA_EVTIME_FIELD))
         if ev_bytes is not None and len(ev_bytes) == 4:
             event_time = _decode_packed_timestamp(int.from_bytes(ev_bytes, "little"))
 
@@ -635,7 +653,7 @@ def decode_htv210b(raw: str) -> dict:
         battery_flag, battery_percent = _extract_htv213_battery(b)
         result = {
             "type": "valve_hub",
-            "rssi_dbm": _extract_htv210b_rssi(records),
+            "rssi_dbm": _rssi_dbm_from_record(records.get((_HTV210B_DP_RSSI, STA_RSSI_FIELD))),
             "raw_bytes": b,
             "zones": zones,
             "tlv_raw": {},
@@ -693,27 +711,10 @@ def decode_htv210b_dp_state(raw: str) -> dict | None:
         b = bytes.fromhex(hex_body)
         records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
 
-        state_bytes = records.get(_HTV210B_FIELD_WKSTATE)
-        if state_bytes is None or len(state_bytes) != 1:
+        zone = _single_zone_from_records(records)
+        if zone is None:
             raise ValueError("DP state blob has no work-state record")
-        state_val = state_bytes[0]
-
-        duration_seconds = 0
-        dur_bytes = records.get(_HTV210B_FIELD_DURATION)
-        if dur_bytes is not None and len(dur_bytes) in _HTV210B_DURATION_WIDTHS:
-            duration_seconds = int.from_bytes(dur_bytes, "little")
-
-        event_time = None
-        ev_bytes = records.get(_HTV210B_FIELD_EVTIME)
-        if ev_bytes is not None and len(ev_bytes) == 4:
-            event_time = _decode_packed_timestamp(int.from_bytes(ev_bytes, "little"))
-
-        return {
-            "open": bool(state_val & 0x01),
-            "duration_seconds": duration_seconds,
-            "state_raw": state_val,
-            "event_time": event_time,
-        }
+        return zone
     except Exception:
         _LOGGER.exception("HTV210B DP state decoder error for a %d-character blob", len(raw) if raw else 0)
         return None
@@ -903,111 +904,71 @@ def decode_hic801w(raw: str) -> dict:
         return _hic801w_error_envelope(str(e))
 
 
-def _scan_htv145_markers(b: bytes) -> dict[int, int]:
-    """Scan the HTV145FRF [type_byte][value...] stream into {type_byte: value_int}.
-
-    Value width comes from _HTV145_TYPE_WIDTHS; every multi-byte value is
-    little-endian, as in the other framings. Parsing stops at the first 0xFF byte
-    (stream terminator followed by a trailing device timestamp). Unknown type
-    bytes advance 1 byte to attempt re-alignment. Duplicate type bytes are
-    last-write-wins; the single-outlet payload carries one of each.
-    """
-    markers: dict[int, int] = {}
-    i = 0
-    while i < len(b):
-        type_byte = b[i]
-        if type_byte == 0xFF:
-            break
-        width = _HTV145_TYPE_WIDTHS.get(type_byte)
-        if width is None:
-            _LOGGER.debug(
-                "HTV145FRF: unknown type byte 0x%02X at offset %d; advancing 1 byte for re-alignment",
-                type_byte,
-                i,
-            )
-            i += 1
-            continue
-        if i + 1 + width > len(b):
-            _LOGGER.debug(
-                "HTV145FRF: truncated record for type 0x%02X at offset %d; stopping",
-                type_byte,
-                i,
-            )
-            break
-        val_bytes = b[i + 1 : i + 1 + width]
-        markers[type_byte] = int.from_bytes(val_bytes, "little")
-        i += 1 + width
-    return markers
-
-
 def decode_htv145frf(raw: str) -> dict:
-    """
-    Decode HTV145FRF single-outlet WiFi water timer payload (10# prefix).
+    """Decode a single-outlet water timer status frame (10# prefix).
 
-    The payload is a flat [type_byte][value...] marker stream (not the HTV213FRF
-    dp_id/type/value layout), so it needs its own scan. Known markers:
-      0xDC (1 byte)  → hub online state (bit 0 set = online; HTV145 reports 0x01,
-                       HTV113 reports 0x03, both online)
-      0xD8 (1 byte)  → zone open state  (bit 0 set = open; device uses 0x21/0x20)
-      0xAD (2 bytes) → zone run duration in seconds (little-endian)
-      0x20 (5 bytes) → schedule/timestamp compound (captured but not interpreted)
-      0x9F (4 bytes) → schedule/counter field (captured but not interpreted)
-      0xE1 (2 bytes) → header field; byte[1] doubles as the signed-dBm RSSI
+    Covers the HTV113FRF, HTV145FRF and HTV157B: one outlet, one record of
+    each datapoint, and no per-record dp_id, so records key on the structural
+    field index alone. Read through _parse_entries rather than a fixed-width
+    marker table, because the HTV157B writes a 4-byte duration where the other
+    two write 2 and a width table mis-frames it.
 
-    This is a single-outlet timer, so the one 0xD8 marker maps to zone 1. Output
-    shape matches the other valve decoders (type "valve_hub" with a zones dict) so
-    valve.py and number.py consume it unchanged.
+    hub_online comes from zone presence, the same evidence decode_htv210b and
+    the HTV213 fallback use. The 0xDC record these frames carry is the STA_BAT
+    flag, not an online state; reading it as one hid the battery flag and
+    gated valve availability on a charge reading.
+
+    Output shape matches the other valve decoders (type "valve_hub" with a
+    zones dict) so valve.py and number.py consume it unchanged.
     """
     try:
-        # This decoder only understands the flat 10# marker stream. A 11# TLV
-        # payload would still parse, and its value bytes could coincide with
-        # 0xDC/0xD8 markers, fabricating false hub-online or valve state -- so
-        # reject anything that is not 10# before scanning.
+        # 11# is the dp_id-prefixed framing. Walking it without the prefix
+        # reads every dp_id as a header byte and fabricates records.
         if not raw.startswith("10#"):
-            raise ValueError("HTV145FRF payload must use the 10# format")
+            raise ValueError("single-outlet timer payload must use the 10# format")
         b = _parse_rainpoint_payload(raw)
-        markers = _scan_htv145_markers(b)
+        records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
 
-        hub_state_raw = markers.get(0xDC)
-        # Bit 0 is the online flag. HTV145 reports 0x01 and HTV113 reports 0x03;
-        # both are online, so an exact 0x01 match would wrongly mark the HTV113
-        # valve entity unavailable (valve.py gates availability on hub_online).
-        hub_online = hub_state_raw is not None and bool(hub_state_raw & 0x01)
+        zone = _single_zone_from_records(records)
+        zones = {1: zone} if zone is not None else {}
+        bat_bytes = records.get(STA_BAT_FIELD)
+        battery_flag = bat_bytes[0] if bat_bytes else None
 
-        zones: dict[int, dict] = {}
-        if 0xD8 in markers:
-            state_val = markers[0xD8]
-            zones[1] = {
-                "open": bool(state_val & 0x01),
-                "duration_seconds": markers.get(0xAD, 0),
-                "state_raw": state_val,
-            }
-            _LOGGER.info(
-                "HTV145FRF Zone 1: open=%s duration=%ds state_raw=0x%02X",
-                zones[1]["open"],
-                zones[1]["duration_seconds"],
-                state_val,
-            )
-
-        return {
+        result = {
             "type": "valve_hub",
-            "rssi_dbm": _extract_rssi(b) if len(b) > 1 else 0,
+            "rssi_dbm": _rssi_dbm_from_record(records.get(STA_RSSI_FIELD)),
             "raw_bytes": b,
             "zones": zones,
             "tlv_raw": {},
-            "hub_online": hub_online,
-            "hub_state_raw": hub_state_raw,
+            "hub_online": bool(zones),
+            "battery_flag": battery_flag,
             "decoder": "htv145frf_hex",
         }
+        battery_percent = _battery_flag_to_percent(battery_flag)
+        if battery_percent is not None:
+            result["battery_percent"] = battery_percent
+        _attach_report_time(result, b)
+        if zone is not None:
+            _LOGGER.info(
+                "Single-outlet timer zone 1: open=%s duration=%ds state_raw=0x%02X",
+                zone["open"],
+                zone["duration_seconds"],
+                zone["state_raw"],
+            )
+        return result
 
     except Exception as e:
-        _LOGGER.exception("HTV145FRF decoder error for payload %r", raw)
+        _LOGGER.exception("Single-outlet timer decoder error for payload %r", raw)
         return {
             "type": "valve_hub",
-            "rssi_dbm": 0,
+            # None, not 0: the RSSI sensor renders this value verbatim, and a
+            # 0 here would read as a perfect signal instead of no reading.
+            "rssi_dbm": None,
             "raw_bytes": [],
             "zones": {},
             "tlv_raw": {},
+            "hub_online": False,
+            "battery_flag": None,
             "decoder": "htv145frf_error",
             "error": str(e),
         }

@@ -53,6 +53,7 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_FLOWMETER,
     MODEL_HCS0528ARF,
     MODEL_HIC801W,
+    MODEL_HTV157B,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
@@ -79,6 +80,7 @@ from tests.payload_samples import (  # noqa: E402
     SAMPLE_HIC801W_ALL_FRAMES,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
+    SAMPLE_HTV157B_IDLE_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
@@ -4884,6 +4886,19 @@ class TestDecoderRegistry:
         assert dispatched == decode_htv145frf(SAMPLE_HTV113_IDLE_PAYLOAD)
         assert dispatched["decoder"] == "htv145frf_hex"
         assert dispatched["hub_online"] is True
+
+    def test_valve_157b_dispatches_through_registry_to_htv145_decoder(self):
+        """HTV157B reuses the HTV145FRF decoder. Asserted through the registry so a
+        broken or removed MODEL_HTV157B entry is caught, and on a zone rather than
+        just the decoder identity, because the frame's 4-byte duration is the width
+        that used to leave this model with no zone at all."""
+        assert DECODER_REGISTRY[MODEL_HTV157B] is decode_htv145frf
+
+        dispatched = _coord_module._decode_subdevice_payload(MODEL_HTV157B, SAMPLE_HTV157B_IDLE_PAYLOAD)
+
+        assert dispatched == decode_htv145frf(SAMPLE_HTV157B_IDLE_PAYLOAD)
+        assert dispatched["decoder"] == "htv145frf_hex"
+        assert dispatched["zones"][1]["open"] is False
 
     def test_registry_contains_moisture_simple(self):
         """Registry contains moisture simple."""

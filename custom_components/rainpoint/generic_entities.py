@@ -703,10 +703,10 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
     stopping at the first.
     """
     # Load-bearing, not defence in depth: the sensor model-factory map in
-    # sensor.py is a strict subset of the hand-written set, because every
-    # hand-written valve model gets its entities from the valve and number
-    # platforms and therefore has no entry in that map. Without this check a
-    # hand-written valve model would reach this factory.
+    # sensor.py is a strict subset of the hand-written set, because a valve
+    # model that takes all its entities from the valve and number platforms
+    # has no entry in that map at all (HTV0540FRF is the one left). Without
+    # this check such a model would reach this factory.
     if is_hand_written_model(model):
         return GenericGateResult(
             datapoints=[],
