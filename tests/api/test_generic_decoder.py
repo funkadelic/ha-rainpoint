@@ -22,10 +22,10 @@ from tests.payload_samples import (
 # custom_components/rainpoint/api/decoders.py is the trusted reference the
 # generic ASCII-framing decoder reads and must never edit. Pinned by
 # whole-file digest rather than a per-function comparison. Legitimate
-# hand-written decoder additions (most recently decode_hic801w) move this
+# hand-written decoder additions (most recently decode_hcs044frf) move this
 # hash forward on purpose; the guard exists to catch decode_generic and its
 # helpers reaching back into this file, not to freeze it.
-_DECODERS_PY_SHA256 = "aba649b84c4c0f15394d8dfd5048647dd1cc9abe76fabecf5f25a983d44be021"
+_DECODERS_PY_SHA256 = "9f7b3ebd3be9ac48a7c4fba3ebcad599be73f43a457bc9cd0631b9de1a266a04"
 
 
 class TestDecodeGenericTLV:
