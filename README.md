@@ -56,7 +56,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Family | Examples | Entities Created |
 | ------ | -------- | ---------------- |
 | Valve hubs | HTV245FRF*, HTV213FRF, HTV345FRF, HTV405FRF, HTV445FRF*, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
-| Single-outlet timers | HTV113FRF, HTV145FRF, HTV157B | Valve, duration number |
+| Single-outlet timers | HTV113FRF, HTV145FRF, HTV157B | Valve, duration number, run duration sensor, battery, signal strength |
 | Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |

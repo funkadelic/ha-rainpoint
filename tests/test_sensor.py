@@ -25,10 +25,13 @@ from custom_components.rainpoint.const import (
     MODEL_HCS024FRF_V1,
     MODEL_HCS0528ARF,
     MODEL_HIC801W,
+    MODEL_HTV157B,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
     MODEL_RAIN,
+    MODEL_VALVE_113,
+    MODEL_VALVE_145,
     MODEL_VALVE_213,
     MODEL_VALVE_245,
     MODEL_VALVE_345,
@@ -1598,6 +1601,105 @@ class TestHtvValveDiagnosticDispatch:
         assert len(rssi) == 1
         assert rssi[0].native_value == -37
         # 1 battery + 1 RSSI + 1 raw payload sensor, nothing else from this platform.
+        assert len(captured) == 3
+
+
+class TestSingleOutletTimerDispatch:
+    """The single-outlet timers get battery, signal and a run-duration sensor."""
+
+    @staticmethod
+    def _timer_entry(model, data):
+        return make_sensor_entry(hid=100, mid=200, addr=1, model=model, sub_name="Timer", data=data)
+
+    @staticmethod
+    async def _setup(sensor_info):
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"100_200_1": sensor_info}))
+        hass, entry = _make_hass(coordinator)
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+        return captured
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B])
+    async def test_creates_battery_rssi_and_run_duration(self, model):
+        """All three models yield the same four entities off one reported outlet."""
+        captured = await self._setup(
+            self._timer_entry(
+                model,
+                {
+                    "type": "valve_hub",
+                    "zones": {1: {"open": True, "duration_seconds": 1200}},
+                    "rssi_dbm": -62,
+                    "battery_percent": 100,
+                },
+            )
+        )
+
+        battery = [e for e in captured if isinstance(e, RainPointBatterySensor)]
+        rssi = [e for e in captured if isinstance(e, RainPointRSSISensor)]
+        duration = [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)]
+        assert battery[0].native_value == 100
+        assert rssi[0].native_value == -62
+        assert duration[0].native_value == 1200
+        # 1 battery + 1 RSSI + 1 run duration + 1 raw payload, nothing else.
+        assert len(captured) == 4
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B])
+    async def test_no_water_usage_entity(self, model):
+        """STA_LASTUSAGE is in the frame but its unit is unknown, so no entity for it.
+
+        Asserted per model rather than once, because the water-usage entity
+        would arrive from sharing the HTV213 factory, which is a per-model
+        registration.
+        """
+        captured = await self._setup(
+            self._timer_entry(
+                model,
+                {
+                    "type": "valve_hub",
+                    "zones": {1: {"open": False, "duration_seconds": 0}},
+                    "rssi_dbm": -62,
+                    "battery_percent": 100,
+                },
+            )
+        )
+
+        assert [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)] == []
+
+    @pytest.mark.asyncio
+    async def test_unmapped_battery_flag_reads_unknown(self):
+        """A unit whose STA_BAT flag maps to no percentage gets the entity, reading unknown.
+
+        The decoder omits battery_percent rather than inventing one, and the
+        entity states that as no reading instead of a false full charge.
+        """
+        captured = await self._setup(
+            self._timer_entry(
+                MODEL_HTV157B,
+                {"type": "valve_hub", "zones": {1: {"open": False, "duration_seconds": 0}}, "rssi_dbm": -90, "battery_flag": 2},
+            )
+        )
+
+        battery = [e for e in captured if isinstance(e, RainPointBatterySensor)]
+        assert len(battery) == 1
+        assert battery[0].native_value is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("zones", [{}, None], ids=["empty", "absent"])
+    async def test_frame_with_no_outlet_grows_no_duration_entity(self, zones):
+        """A frame that reported no zone gets battery and signal but no run duration.
+
+        Both shapes the decoder can hand over: an empty mapping from a frame
+        with no work-state record, and no mapping at all from a decode that
+        errored before building one.
+        """
+        captured = await self._setup(
+            self._timer_entry(MODEL_VALVE_145, {"type": "valve_hub", "zones": zones, "rssi_dbm": -62, "battery_percent": 100})
+        )
+
+        assert [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)] == []
         assert len(captured) == 3
 
 
