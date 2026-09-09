@@ -2009,6 +2009,43 @@ class TestTrimCatalog:
         assert refresh_product_catalog.UNCODED_VARIANT == product_catalog.UNCODED_VARIANT
 
 
+class TestDroppedModelPrefixes:
+    """Tests for scripts/refresh_product_catalog.py::dropped_model_prefixes."""
+
+    def test_counts_what_the_prefix_filter_refused(self):
+        """The tally is what makes a missing family visible in a run's own output.
+
+        An HTP160FRF owner was told the model "is not in the product catalog"
+        when the snapshot generator's prefix list was what dropped it. This
+        report is so the next such family shows up in the log rather than only
+        in that owner's issue.
+        """
+        raw = [
+            {"model": "HTV245FRF"},
+            {"model": "HTP160FRF"},
+            {"model": "HRS900X"},
+            {"model": "HRS901X"},
+            {"model": "SOMEOTHERBRAND"},
+        ]
+
+        assert refresh_product_catalog.dropped_model_prefixes(raw) == {"HRS": 2, "SOM": 1}
+
+    def test_htp_is_kept_rather_than_counted(self):
+        """HTP is in the prefix list now, so an HTP model is not a dropped entry."""
+        assert refresh_product_catalog.dropped_model_prefixes([{"model": "HTP160FRF"}]) == {}
+        assert "HTP160FRF" in trim_catalog([{"model": "HTP160FRF", "modelCode": 361, "dp": []}])
+
+    def test_a_nameless_entry_is_counted_under_its_own_label(self):
+        """An entry with no usable model name is tallied, never silently omitted."""
+        assert refresh_product_catalog.dropped_model_prefixes([{"model": ""}, {}]) == {"<no model>": 2}
+
+    def test_every_kept_prefix_reports_nothing_dropped(self):
+        """Cross-checked against _MODEL_PREFIXES itself, so adding one cannot go untested."""
+        raw = [{"model": f"{prefix}999X"} for prefix in refresh_product_catalog._MODEL_PREFIXES]
+
+        assert refresh_product_catalog.dropped_model_prefixes(raw) == {}
+
+
 class TestRefreshScriptDrift:
     """Tests for the --check drift report.
 
@@ -2184,7 +2221,7 @@ class TestRefreshScriptMain:
         assert captured["timeout_seconds"] == 5.0
 
     def test_timeout_bounds_the_whole_fetch_not_each_request(self, monkeypatch, capsys):
-        """--timeout is an end-to-end deadline, not a per-request one.
+        """--timeout bounds one attempt's login plus fetch, not each request in it.
 
         get_product_catalog logs in and then fetches, so the session's
         per-request cap would let a slow login and a slow fetch together run
@@ -2207,6 +2244,111 @@ class TestRefreshScriptMain:
         with pytest.raises(TimeoutError):
             asyncio.run(fetch)
         assert "Timed out after 0.05s" in capsys.readouterr().err
+
+    @staticmethod
+    def _stub_throttling_client(monkeypatch, failures: int, retry_after: float = 120.0):
+        """Make the first `failures` catalog pulls raise the server's throttle error.
+
+        Constructed per attempt, mirroring the real code: the client arms its
+        own cooldown clock on a throttle, so a retry that reused the instance
+        would fast-fail against that clock instead of reaching the server.
+        """
+        import custom_components.rainpoint.api.client as client_module
+
+        state = {"attempts": 0}
+
+        class _ThrottlingClient:
+            def __init__(self, area_code, email, password, session):
+                pass
+
+            async def get_product_catalog(self):
+                state["attempts"] += 1
+                if state["attempts"] <= failures:
+                    raise RainPointThrottledError("Login rate-limited (code 9993)", retry_after)
+                return [{"model": "HTV245FRF", "modelCode": 303, "dp": []}]
+
+        monkeypatch.setattr(client_module, "RainPointClient", _ThrottlingClient)
+        return state
+
+    @staticmethod
+    def _capture_sleeps(monkeypatch):
+        """Replace asyncio.sleep with a recorder, so a retry test does not wait."""
+        slept: list[float] = []
+
+        async def _fake_sleep(seconds):
+            slept.append(seconds)
+
+        monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+        return slept
+
+    def test_throttled_login_is_retried_and_then_succeeds(self, monkeypatch, capsys):
+        """A transient rate limit costs a wait, not the run.
+
+        This is the failure that lost the 2026-09-07 weekly check: the server
+        refused the login with its "operate too frequently" code and the run
+        ended there, so the snapshot went unchecked for a week over something
+        that clears in two minutes.
+        """
+        state = self._stub_throttling_client(monkeypatch, failures=1)
+        slept = self._capture_sleeps(monkeypatch)
+
+        trimmed = asyncio.run(refresh_product_catalog._fetch_trimmed_catalog("user@example.com", "secret", "1", 5.0))
+
+        assert state["attempts"] == 2
+        assert trimmed == {"HTV245FRF": {"303": {"portNumber": None, "dp": []}}}
+        # The cooldown the error reported, plus the margin that keeps the retry
+        # off the boundary the client's own cooldown clock is measured against.
+        assert slept == [120.0 + refresh_product_catalog._LOGIN_RETRY_MARGIN_SECONDS]
+        assert "rate-limiting logins" in capsys.readouterr().err
+
+    def test_persistent_throttling_raises_its_own_error(self, monkeypatch):
+        """Every attempt refused is a distinct failure, not a timeout or a bad password."""
+        state = self._stub_throttling_client(monkeypatch, failures=99)
+        self._capture_sleeps(monkeypatch)
+
+        with pytest.raises(refresh_product_catalog.CatalogFetchThrottled):
+            asyncio.run(refresh_product_catalog._fetch_trimmed_catalog("user@example.com", "secret", "1", 5.0))
+
+        assert state["attempts"] == refresh_product_catalog._LOGIN_ATTEMPTS
+
+    def test_persistent_throttling_exits_3_and_writes_nothing(self, monkeypatch, capsys):
+        """Exit 3 says "not checked", where 1 would say "the snapshot needs attention".
+
+        A caller cannot tell those apart from a traceback, which is all this
+        used to produce, and the CI step reads the code to decide what to
+        report.
+        """
+        self._stub_credentials(monkeypatch)
+        self._forbid_write(monkeypatch)
+        self._stub_throttling_client(monkeypatch, failures=99)
+        self._capture_sleeps(monkeypatch)
+
+        assert refresh_product_catalog.main([]) == 3
+        assert "rate limiter" in capsys.readouterr().err
+
+    def test_dropped_prefixes_are_reported_on_stderr(self, monkeypatch, capsys):
+        """The filter's refusals reach the run's output, not just the tally function.
+
+        On stderr with the other progress lines, so --check stdout stays the
+        drift summary the CI step captures on its own.
+        """
+        import custom_components.rainpoint.api.client as client_module
+
+        class _MixedClient:
+            def __init__(self, area_code, email, password, session):
+                pass
+
+            async def get_product_catalog(self):
+                return [{"model": "HTV245FRF", "modelCode": 303, "dp": []}, {"model": "HRS900X"}]
+
+        monkeypatch.setattr(client_module, "RainPointClient", _MixedClient)
+
+        asyncio.run(refresh_product_catalog._fetch_trimmed_catalog("user@example.com", "secret", "1", 5.0))
+        captured = capsys.readouterr()
+
+        assert "Dropped 1 entry outside the kept model prefixes" in captured.err
+        assert "HRS x1" in captured.err
+        assert captured.out == ""
 
     def test_check_reports_drift_on_a_non_empty_pull(self, monkeypatch):
         """A non-empty pull still routes through the normal drift report."""
