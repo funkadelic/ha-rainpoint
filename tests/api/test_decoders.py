@@ -384,16 +384,17 @@ class TestDecodeHtv213frfValve:
 
 
 class TestDecodeHtv145frf:
-    """Tests for decode_htv145frf (single-outlet WiFi water timer, 10# compact format)."""
+    """Tests for decode_htv145frf (single-outlet water timer, 10# structural format)."""
 
     def test_closed_payload_zone_idle(self):
-        """Real closed-state payload: hub online, zone 1 closed, duration 0s."""
+        """Real closed-state payload: zone 1 closed, duration 0s, battery normal."""
         result = decode_htv145frf(SAMPLE_HTV145_CLOSED_PAYLOAD)
 
         assert result["type"] == "valve_hub"
         assert result["decoder"] == "htv145frf_hex"
         assert result["hub_online"] is True
-        assert result["hub_state_raw"] == 0x01
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
 
         zones = result["zones"]
         assert set(zones) == {1}
@@ -413,39 +414,54 @@ class TestDecodeHtv145frf:
         assert zone["state_raw"] == 0x21
         assert zone["duration_seconds"] == 1200
 
+    def test_open_payload_event_time_is_report_time_plus_duration(self):
+        """The frame proves its own event-time semantics: report + duration = event.
+
+        19:58:46 plus the 1200s the same frame reports lands exactly on the
+        20:18:46 event time, so this family writes the moment the run ends at
+        the moment it starts, matching the HTV245 and HTV210B captures.
+        """
+        result = decode_htv145frf(SAMPLE_HTV145_OPEN_PAYLOAD)
+
+        assert result["report_time"] == "2026-07-17T19:58:46"
+        assert result["zones"][1]["event_time"] == "2026-07-17T20:18:46"
+
     def test_rssi_is_signed_dbm(self):
-        """byte[1] of the payload is the signed-dBm RSSI."""
+        """The RSSI record's first value byte is the signed dBm."""
         assert decode_htv145frf(SAMPLE_HTV145_CLOSED_PAYLOAD)["rssi_dbm"] == -68
         assert decode_htv145frf(SAMPLE_HTV145_OPEN_PAYLOAD)["rssi_dbm"] == -62
 
-    def test_ff_terminator_stops_before_trailing_timestamp(self):
-        """Parsing stops at 0xFF, so the trailing device timestamp is not misread."""
-        # A bogus type byte after the 0xFF terminator must not create a zone.
+    def test_trailing_report_time_value_is_not_read_as_a_zone(self):
+        """The report-time record consumes its own value bytes.
+
+        A 0xD8 inside that trailing value would read as a second work-state
+        record under a scanner with no record boundaries; the structural walk
+        never looks at it.
+        """
         raw = "10#E1BC00DC01D80020B700000000AD00009F95110000FF0FD8FFFFFF"
         result = decode_htv145frf(raw)
         assert set(result["zones"]) == {1}
         assert result["zones"][1]["state_raw"] == 0x00
 
-    def test_unknown_type_byte_realigns(self):
-        """An unrecognized type byte advances 1 byte so parsing re-aligns."""
-        # AA is unknown (+1), then DC01 hub online, D800 zone closed, FF terminator.
-        result = decode_htv145frf("10#AADC01D800FF")
-        assert result["hub_online"] is True
-        assert result["zones"][1]["open"] is False
-
-    def test_truncated_record_stops(self):
-        """A record whose value runs past the payload end stops the scan."""
-        # DC01 hub online, then 9F (needs 4 value bytes) with only 2 remaining.
+    def test_truncated_record_is_dropped(self):
+        """A record whose value runs past the payload end yields no zone."""
+        # DC01 battery flag, then 9F (needs 4 value bytes) with only 2 remaining.
         result = decode_htv145frf("10#DC019F9511")
-        assert result["hub_online"] is True
+        assert result["battery_flag"] == 1
         assert result["zones"] == {}
+        assert result["hub_online"] is False
 
-    def test_no_zone_marker_yields_empty_zones(self):
-        """A payload with no 0xD8 marker reports no zones but still reads hub state."""
-        # DC01 hub online only, stream ends without a 0xFF terminator.
+    def test_no_work_state_record_yields_empty_zones(self):
+        """A frame with no work-state record reports no zones, so no hub link.
+
+        hub_online is zone presence: a frame that describes no outlet is no
+        evidence the outlet is reachable, and the valve entity must not read
+        available on it.
+        """
         result = decode_htv145frf("10#DC01")
-        assert result["hub_online"] is True
+        assert result["battery_flag"] == 1
         assert result["zones"] == {}
+        assert result["hub_online"] is False
 
     def test_malformed_payload_returns_error_dict(self):
         """A non-hex payload is caught and returned as a safe error dict."""
@@ -472,7 +488,7 @@ class TestDecodeHtv145frf:
 
 
 class TestDecodeHtv113frf:
-    """HTV113FRF (issue #64) shares the HTV145FRF single-outlet 10# marker format,
+    """HTV113FRF (issue #64) shares the HTV145FRF single-outlet 10# framing,
     so it is decoded by the same decode_htv145frf function."""
 
     def test_idle_payload_zone_closed(self):
@@ -489,12 +505,19 @@ class TestDecodeHtv113frf:
         assert zones[1]["state_raw"] == 0x00
         assert zones[1]["duration_seconds"] == 0
 
-    def test_hub_online_from_0x03_status(self):
-        """HTV113 reports 0xDC status 0x03. Bit 0 is the online flag, so the valve
-        entity must stay available (valve.py gates availability on hub_online)."""
+    def test_unmapped_battery_flag_reports_no_percentage(self):
+        """This unit reports STA_BAT 0x03, which no capture pairs with a charge level.
+
+        The flag is surfaced and the percentage is withheld, and the valve
+        entity stays available either way: hub_online is zone presence, not
+        this byte. Reading 0x03 as an online flag is what this decoder used to
+        do, which both hid the flag and put valve availability on a charge
+        reading.
+        """
         result = decode_htv145frf(SAMPLE_HTV113_IDLE_PAYLOAD)
 
-        assert result["hub_state_raw"] == 0x03
+        assert result["battery_flag"] == 3
+        assert "battery_percent" not in result
         assert result["hub_online"] is True
 
 

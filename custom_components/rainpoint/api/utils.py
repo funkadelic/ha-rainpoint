@@ -15,6 +15,9 @@ _LOGGER = logging.getLogger(__name__)
 STA_TEM_FIELD = 9
 STA_BAT_FIELD = 31
 STA_REPTIME_FIELD = 54
+STA_WKSTATE_FIELD = 30
+STA_EVTIME_FIELD = 21
+STA_RSSI_FIELD = 32
 
 # HCS008FRF flow meter. The two "current" fields are named for what the
 # catalog calls them, which is the reverse of what the names suggest:
