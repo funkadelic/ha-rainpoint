@@ -2306,8 +2306,9 @@ class TestRefreshScriptMain:
         state = self._stub_throttling_client(monkeypatch, failures=99)
         self._capture_sleeps(monkeypatch)
 
+        fetch = refresh_product_catalog._fetch_trimmed_catalog("user@example.com", "secret", "1", 5.0)
         with pytest.raises(refresh_product_catalog.CatalogFetchThrottled):
-            asyncio.run(refresh_product_catalog._fetch_trimmed_catalog("user@example.com", "secret", "1", 5.0))
+            asyncio.run(fetch)
 
         assert state["attempts"] == refresh_product_catalog._LOGIN_ATTEMPTS
 
