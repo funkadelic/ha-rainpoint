@@ -146,11 +146,18 @@ class RainPointRSSISensor(RainPointDiagnosticSensorBase):
 
 
 class RainPointBatterySensor(RainPointDiagnosticSensorBase):
-    """Battery diagnostic sensor."""
+    """Battery diagnostic sensor.
+
+    No state class, deliberately. The cloud sends no charge level, so the 100
+    this reports for a normal STA_BAT flag is a stand-in rather than a
+    measurement, and long-term statistics would record it as one forever.
+    Same rule generic_entities.py applies to every unverified reading. The
+    Battery Low binary sensor carries the signal this entity stands in for.
+    """
 
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = None
     _attr_icon = "mdi:battery"
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):

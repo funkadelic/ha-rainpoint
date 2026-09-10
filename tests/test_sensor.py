@@ -2733,6 +2733,31 @@ class TestHicRunTimingSensors:
         assert RainPointHicProgramStationsCompletedSensor._attr_state_class is None
 
 
+class TestBatteryEntitiesStayOutOfStatistics:
+    """Every battery entity reports a stand-in rather than a measurement.
+
+    The cloud sends no charge level, so the 100 these show for a normal
+    STA_BAT flag is not a reading. A state class would write it into
+    long-term statistics permanently, which is the outcome
+    generic_entities.py sets state_class to None to avoid. Pinned at class
+    level because nothing else fails if MEASUREMENT comes back.
+    """
+
+    @pytest.mark.parametrize(
+        "cls",
+        [
+            RainPointBatterySensor,
+            RainPointFlowBatterySensor,
+            RainPointCO2BatterySensor,
+            RainPointPoolBatterySensor,
+        ],
+    )
+    def test_no_state_class(self, cls):
+        """A battery percentage never enters long-term statistics."""
+        assert cls._attr_device_class is SensorDeviceClass.BATTERY
+        assert cls._attr_state_class is None
+
+
 class TestRenderStationList:
     """The three-way distinction _render_station_list guarantees, pinned in
     one place: None in, None out; [] in, "none" out; a populated list joins
