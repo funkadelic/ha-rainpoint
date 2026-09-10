@@ -133,18 +133,21 @@ class TestBatteryFlagToPercent:
 class TestBatteryFlagIsLow:
     """Tests for _battery_flag_is_low."""
 
-    @pytest.mark.parametrize("flag", [0, 1])
-    def test_normal_flags_read_as_not_low(self, flag):
-        """The corroborated readings both mean a healthy cell."""
-        assert _battery_flag_is_low(flag) is False
+    def test_flag_one_reads_as_not_low(self):
+        """1 is the only value ever paired with a healthy cell."""
+        assert _battery_flag_is_low(1) is False
 
     def test_flag_two_reads_as_low(self):
         """Every low-battery event the cloud raised landed on a poll reading 2."""
         assert _battery_flag_is_low(2) is True
 
-    @pytest.mark.parametrize("flag", [3, 4, 255])
+    @pytest.mark.parametrize("flag", [0, 3, 4, 255])
     def test_unproven_flags_read_as_unknown(self, flag):
-        """Nothing places these on the scale, so they must not present as either state."""
+        """Nothing places these on the scale, 0 included, so neither state is asserted.
+
+        The percentage mapping does treat 0 as full, but no capture has shown
+        a 0 and this entity is what battery alerts subscribe to.
+        """
         assert _battery_flag_is_low(flag) is None
 
     def test_missing_flag_reads_as_unknown(self):

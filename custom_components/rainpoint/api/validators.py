@@ -71,8 +71,15 @@ _BATTERY_FLAG_NORMAL = {0, 1}
 # live HTV245FRF, all 17 of the cloud's own low-battery events (event/list
 # code 143) landed on a poll reading 2 and none on a poll reading 1. Both
 # come from the same device report, so this labels the flag rather than
-# corroborating it twice. Every other value stays unmapped, 3 included: one
-# HTV113FRF frame reports it and nothing says where it sits on the scale.
+# corroborating it twice.
+#
+# 1 is the only value proven to mean a healthy cell, so it is the only one
+# this reads as normal. The percentage above also treats 0 as full, but no
+# capture has ever shown a 0 and an unobserved value must not become an
+# affirmative "not low" on an entity people build battery alerts against.
+# 3 stays unmapped for the same reason: one HTV113FRF frame reports it and
+# nothing says where it sits on the scale.
+_BATTERY_FLAG_NOT_LOW = 1
 _BATTERY_FLAG_LOW = 2
 
 
@@ -85,6 +92,6 @@ def _battery_flag_to_percent(flag: int | None) -> int | None:
 
 def _battery_flag_is_low(flag: int | None) -> bool | None:
     """Map a raw STA_BAT flag to low/normal, or None when unproven."""
-    if flag in _BATTERY_FLAG_NORMAL:
+    if flag == _BATTERY_FLAG_NOT_LOW:
         return False
     return True if flag == _BATTERY_FLAG_LOW else None

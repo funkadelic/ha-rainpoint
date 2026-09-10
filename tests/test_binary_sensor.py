@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+from homeassistant.const import EntityCategory
 
 from custom_components.rainpoint.api import decode_hcs044frf, decode_hic801w
 from custom_components.rainpoint.binary_sensor import (
@@ -344,7 +345,7 @@ def _battery_entry(flag, hid=100, mid=200, addr=1):
 class TestBatteryLowBinarySensor:
     """The low-battery entity and the guards on its factory."""
 
-    @pytest.mark.parametrize(("flag", "expected"), [(1, False), (2, True), (3, None)])
+    @pytest.mark.parametrize(("flag", "expected"), [(1, False), (2, True), (0, None), (3, None)])
     def test_is_on_follows_the_flag(self, flag, expected):
         """Flag 2 reads low, 1 reads normal, and an unmapped value reads unknown."""
         sensor_key = "100_200_1"
@@ -355,6 +356,7 @@ class TestBatteryLowBinarySensor:
         (sensor,) = _build_battery_low_entities(coordinator, sensor_key, entry)
         assert isinstance(sensor, RainPointBatteryLowBinarySensor)
         assert sensor._attr_device_class is BinarySensorDeviceClass.BATTERY
+        assert sensor._attr_entity_category is EntityCategory.DIAGNOSTIC
         assert sensor._attr_unique_id == "rainpoint_100_200_1_battery_low"
         assert sensor.is_on is expected
 

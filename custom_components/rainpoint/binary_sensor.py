@@ -4,6 +4,7 @@ import logging
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -114,6 +115,8 @@ class RainPointBatteryLowBinarySensor(RainPointSubDeviceEntity, BinarySensorEnti
     """
 
     _attr_device_class = BinarySensorDeviceClass.BATTERY
+    # Diagnostic, matching the battery percentage entity it sits beside.
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self,

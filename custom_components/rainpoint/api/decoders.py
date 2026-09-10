@@ -1879,7 +1879,9 @@ def decode_pool(raw: str) -> dict:
             temp_f10 = _find_field_int(b, STA_TEM_FIELD, signed=True)
             if temp_f10 is not None:
                 result["tempcurrent"] = _f10_to_c(temp_f10)
-            result["battery_percent"] = _battery_flag_to_percent(_extract_battery_flag(b))
+            battery_flag = _extract_battery_flag(b)
+            result["battery_flag"] = battery_flag
+            result["battery_percent"] = _battery_flag_to_percent(battery_flag)
             _attach_report_time(result, b)
 
     except Exception:
