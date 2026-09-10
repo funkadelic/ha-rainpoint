@@ -308,6 +308,17 @@ class TestRainPointHubRSSISensor:
         sensor = self._make_with_state(236547, "0,-52")
         assert sensor.native_value == -52
 
+    @pytest.mark.parametrize("state_value", ["0,0", "0,3"])
+    def test_a_non_negative_field_is_not_a_signal_reading(self, state_value):
+        """A hub with nothing to report sends `0,0`, and 0 dBm is not a reading.
+
+        This sensor carries a MEASUREMENT state class, unlike its sub-device
+        sibling, so a zero published here would sit in long-term statistics
+        permanently rather than merely reading wrong on the device page.
+        """
+        sensor = self._make_with_state(236547, state_value)
+        assert sensor.native_value is None
+
     def test_native_value_none_for_malformed_state(self):
         """A `state` value without a parseable RSSI field yields None."""
         sensor = self._make_with_state(236547, "0,notanumber")

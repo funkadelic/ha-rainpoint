@@ -21,7 +21,7 @@ from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import _parse_hub_broadcast_flag, _splice_hub_broadcast_param
+from .api import _parse_hub_broadcast_flag, _splice_hub_broadcast_param, _valid_rssi_dbm
 from .const import (
     HUB_UNIQUE_ID_PREFIX,
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
@@ -315,7 +315,11 @@ def _parse_hub_rssi(state_value) -> int | None:
 
     The hub reports `state` as a comma-separated string like `0,-52` whose second
     field is the signed WiFi RSSI (distinct from the per-valve RF link RSSI in the
-    device payload). Returns None when the value is absent or unparseable.
+    device payload). Returns None when the value is absent, unparseable, or not
+    negative: a hub with nothing to report sends `0,0`, the same shape the
+    sub-device side sends as an empty STA_RSSI record, and this entity carries a
+    MEASUREMENT state class, so a zero published here would sit in long-term
+    statistics for good.
     """
     if not isinstance(state_value, str):
         return None
@@ -323,7 +327,7 @@ def _parse_hub_rssi(state_value) -> int | None:
     if len(parts) < 2:
         return None
     try:
-        return int(parts[1])
+        return _valid_rssi_dbm(int(parts[1]))
     except ValueError:
         return None
 

@@ -15,6 +15,7 @@ from custom_components.rainpoint.api import (
     _parse_tlv_payload,
     _splice_hub_broadcast_param,
     _splice_sub_power_mode,
+    _valid_rssi_dbm,
 )
 from custom_components.rainpoint.api.utils import (
     _find_field_int,
@@ -226,6 +227,40 @@ class TestF10ToC:
         assert abs(_f10_to_c(720) - 22.22) < 0.1
 
 
+class TestValidRssiDbm:
+    """A signal reading off these radios is negative, or it is not a reading.
+
+    The guard sits where rssi_dbm is written rather than where it is read, so
+    the entity, the state attributes and the diagnostics dump all inherit it.
+    """
+
+    @pytest.mark.parametrize("value", [-1, -37, -84, -120])
+    def test_a_negative_reading_passes_through_unchanged(self, value):
+        """The ordinary case, and the only one that yields a number."""
+        assert _valid_rssi_dbm(value) == value
+
+    @pytest.mark.parametrize("value", [0, 1, 2, 74, 100])
+    def test_a_non_negative_value_is_not_a_reading(self, value):
+        """0 is the placeholder a failed decode used to publish, and 1, 2 and 74
+        are what a fixed-offset read returns off a frame that does not lead
+        with the signal header."""
+        assert _valid_rssi_dbm(value) is None
+
+    def test_absent_stays_absent(self):
+        """A decoder with no reading to offer is not handed one."""
+        assert _valid_rssi_dbm(None) is None
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_bool_is_never_a_reading(self, value):
+        """bool is an int in Python, and True would otherwise pass the sign
+        test as 1 rather than being rejected as the wrong type entirely."""
+        assert _valid_rssi_dbm(value) is None
+
+    def test_a_non_numeric_value_is_rejected_rather_than_compared(self):
+        """A string reaching here is a decoder bug, and comparing it would raise."""
+        assert _valid_rssi_dbm("-84") is None
+
+
 class TestBaseDecoderDict:
     """Tests for _base_decoder_dict."""
 
@@ -237,6 +272,12 @@ class TestBaseDecoderDict:
             "rssi_dbm": -84,
             "raw_bytes": b"\xaa\xbb",
         }
+
+    @pytest.mark.parametrize("rssi", [0, 74, None])
+    def test_a_value_that_is_not_a_reading_lands_as_none(self, rssi):
+        """Every decoder sharing this builder inherits the guard, which is why
+        it lives here rather than at each of their call sites."""
+        assert _base_decoder_dict("rain", rssi, b"")["rssi_dbm"] is None
 
     def test_returns_independent_dicts(self):
         """Each call returns a fresh dict so callers can mutate safely."""

@@ -807,6 +807,18 @@ class TestDecodeValveHub:
         # 0x012C little-endian = 300
         assert zone1["duration_seconds"] == 300
 
+    def test_a_frame_with_no_signal_record_reports_no_signal(self):
+        """This frame carries no STA_RSSI record, so the answer is unknown.
+
+        It leads with the STA_BAT record (18 dc 01), and the fixed-offset read
+        this decoder used to do returned b[1], the 0xDC header byte, as -36
+        dBm. That number is negative and entirely plausible, so no sign check
+        would ever have caught it; only locating the record does. There is no
+        0xE1 byte anywhere in the frame to find.
+        """
+        assert "e1" not in VALVE_HUB_TLV_PAYLOAD.split("#", 1)[1].lower()
+        assert decode_valve_hub(VALVE_HUB_TLV_PAYLOAD)["rssi_dbm"] is None
+
 
 class TestDecodeRain:
     """Tests for decode_rain (HCS012ARF rain gauge)."""
@@ -819,6 +831,24 @@ class TestDecodeRain:
         assert result["rain_last_24h_mm"] == 187.0
         assert result["rain_last_7d_mm"] == 187.0
         assert result["rain_total_mm"] == 187.0
+
+    def test_an_empty_signal_record_reads_unknown_rather_than_zero_dbm(self):
+        """This capture's STA_RSSI record is the vendor's empty E1 00 00."""
+        assert RAIN_HEX_PAYLOAD.split("#", 1)[1].lower().startswith("e10000")
+        assert decode_rain(RAIN_HEX_PAYLOAD)["rssi_dbm"] is None
+
+    def test_a_populated_signal_record_is_read_rather_than_assumed_absent(self):
+        """The gauge does carry a signal record, so a real reading must arrive.
+
+        The decoder used to pass a hardcoded 0 here, on a comment claiming the
+        gauge has no RSSI in the standard position. Guarding that 0 into None
+        would have looked identical on the capture above while still reporting
+        nothing for a gauge that does send a reading, so the frame is read.
+        """
+        body = RAIN_HEX_PAYLOAD.split("#", 1)[1]
+        populated = "10#" + "e1cb00" + body[6:]
+
+        assert decode_rain(populated)["rssi_dbm"] == -53
 
     def test_battery_and_report_time(self):
         """Battery reads the STA_BAT record and the frame's own clock is decoded.
@@ -1239,6 +1269,9 @@ class TestValveHubErrorPath:
         assert result["decoder"] == "valve_hub_error"
         assert result["zones"] == {}
         assert result["raw_bytes"] == []
+        # A frame that did not decode carries no reading of any kind. This was
+        # 0, which the signal entity rendered as a confident "0 dBm".
+        assert result["rssi_dbm"] is None
         assert "missing" in result["error"].lower() or "unknown" in result["error"].lower()
 
     def test_low_battery_flag_leaves_zones_online(self):
