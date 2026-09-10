@@ -317,40 +317,6 @@ def _scan_htv213_dp_map(b: bytes) -> dict[int, tuple[int, int]]:
     return dp_map
 
 
-def _extract_htv213_hub_state(dp_map: dict[int, tuple[int, int]], raw: str) -> tuple[bool, int | None]:
-    """Pull (hub_online, hub_state_raw) from the dp_map.
-
-    Hub online DP is 0x18 with type 0xDC enforced; value 0x01 means online.
-    Some HTV345FRF payloads omit that DP but include zone 1 state at 0x19; in
-    that case, the payload itself is evidence that the hub is online.
-    """
-    zone_1_present = 0x19 in dp_map
-    if 0x18 not in dp_map:
-        if zone_1_present:
-            _LOGGER.debug(
-                "HTV213FRF: hub online DP (0x18) absent from payload %r; using zone 1 DP (0x19) presence as online",
-                raw,
-            )
-            return True, None
-        _LOGGER.debug("HTV213FRF: hub online DP (0x18) and zone 1 DP (0x19) absent from payload %r", raw)
-        return False, None
-
-    hub_type, hub_state_raw = dp_map[0x18]
-    if hub_type != 0xDC:
-        if zone_1_present:
-            _LOGGER.warning(
-                "HTV213FRF: hub DP 0x18 has unexpected type 0x%02X (expected 0xDC); using zone 1 DP (0x19) presence as online",
-                hub_type,
-            )
-            return True, hub_state_raw
-        _LOGGER.warning(
-            "HTV213FRF: hub DP 0x18 has unexpected type 0x%02X (expected 0xDC); zone 1 DP (0x19) absent",
-            hub_type,
-        )
-        return False, hub_state_raw
-    return hub_state_raw == 0x01, hub_state_raw
-
-
 def _decode_packed_timestamp(value: int) -> str | None:
     """Decode a packed wall-clock stamp into an ISO string, or None if unusable.
 
@@ -459,14 +425,20 @@ def _decode_htv213frf_hex(raw: str) -> dict:
 
     The payload is a flat sequence of [dp_id][type_byte][value_bytes...] records.
     The type byte determines value length:
-      0xDC, 0xD8 → 1 byte   (hub state, zone open/close state)
+      0xDC, 0xD8 → 1 byte   (battery flag, zone open/close state)
       0x20, 0xAD → 2 bytes  (timer config, zone duration in seconds)
       0xB7, 0x9F → 4 bytes  (schedule/timer extended fields)
 
     Known DP IDs:
-      0x18              → hub online state (type 0xDC enforced, value 0x01=online)
+      0x18              → STA_BAT flag (type 0xDC)
       0x18+N (1≤N≤8)   → zone N open state (type 0xD8, value 0x01=open, 0x00=closed)
       0x24+N (1≤N≤8)   → zone N duration in seconds (type 0xAD, 2-byte little-endian)
+
+    hub_online comes from zone presence, matching decode_htv210b and
+    decode_htv145frf. The catalog declares no online datapoint for this
+    family, and dp 0x18 carries the STA_BAT flag. Reading that byte as a
+    link state made both zones unavailable when a live HTV245FRF reported
+    STA_BAT 2 at -42 dBm.
     """
     from ..const import debug_with_version
 
@@ -475,7 +447,6 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         _LOGGER.debug(debug_with_version("HTV213FRF hex raw bytes: %s"), b)
 
         dp_map = _scan_htv213_dp_map(b)
-        hub_online, hub_state_raw = _extract_htv213_hub_state(dp_map, raw)
         zones = _extract_htv213_zones(dp_map)
 
         battery_flag, battery_percent = _extract_htv213_battery(b)
@@ -483,7 +454,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         _LOGGER.debug(
             debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s, battery=%s (flag %s)"),
             len(zones),
-            hub_online,
+            bool(zones),
             battery_percent,
             battery_flag,
         )
@@ -493,8 +464,8 @@ def _decode_htv213frf_hex(raw: str) -> dict:
             "raw_bytes": b,
             "zones": zones,
             "tlv_raw": {},
-            "hub_online": hub_online,
-            "hub_state_raw": hub_state_raw,
+            "hub_online": bool(zones),
+            "hub_state_raw": None,
             "battery_flag": battery_flag,
             "decoder": "htv213frf_hex",
         }

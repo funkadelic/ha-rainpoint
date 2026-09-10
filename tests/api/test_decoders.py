@@ -1051,7 +1051,7 @@ class TestHtv213frfAsciiErrorBranches:
 
 class TestHtv213frfHexErrorBranches:
     """Cover hex-format error/guard branches inside _decode_htv213frf_hex
-    and the _extract_htv213_hub_state / zone helpers.
+    and the zone helpers.
     """
 
     def test_hex_invalid_hex_returns_error_dict(self):
@@ -1060,16 +1060,15 @@ class TestHtv213frfHexErrorBranches:
         assert result["decoder"] == "htv213frf_error"
         assert "non-hex" in result["error"].lower() or "hexadecimal" in result["error"].lower()
 
-    def test_hex_missing_hub_state_and_zone_1_dp_is_offline(self):
-        """Hex payload without DP 0x18 or 0x19 yields hub_online=False."""
-        # Empty payload: parses to empty bytes, no DPs -> 0x18 absent.
+    def test_hex_no_zone_dp_is_offline(self):
+        """Hex payload carrying no zone DP yields hub_online=False."""
         result = decode_htv213frf_valve("11#")
         assert result["decoder"] == "htv213frf_hex"
         assert result["hub_online"] is False
         assert result["hub_state_raw"] is None
 
-    def test_hex_missing_hub_state_dp_with_zone_1_dp_is_online(self):
-        """DP 0x19 presence is enough to mark the hub online when DP 0x18 is absent."""
+    def test_hex_zone_dp_alone_is_online(self):
+        """A zone DP is the only online evidence these frames carry."""
         payload = bytes([0x19, 0xD8, 0x01]).hex()
         result = decode_htv213frf_valve("11#" + payload)
         assert result["decoder"] == "htv213frf_hex"
@@ -1077,33 +1076,31 @@ class TestHtv213frfHexErrorBranches:
         assert result["hub_state_raw"] is None
         assert result["zones"][1]["open"] is True
 
-    def test_hex_hub_state_dp_with_wrong_type_is_ignored(self):
-        """DP 0x18 with a type other than 0xDC and no 0x19 yields hub_online=False."""
-        # DP 0x18, type 0xD8 (zone-state type, not hub-state type), value 0x01.
-        payload = bytes([0x18, 0xD8, 0x01]).hex()
-        result = decode_htv213frf_valve("11#" + payload)
-        assert result["decoder"] == "htv213frf_hex"
-        assert result["hub_online"] is False
-        # The raw value is still passed back for diagnostic visibility.
-        assert result["hub_state_raw"] == 0x01
+    def test_hex_low_battery_flag_leaves_zones_online(self):
+        """STA_BAT 2 is a charge reading, not a link state.
 
-    def test_hex_wrong_hub_state_type_with_zone_1_dp_is_online(self):
-        """DP 0x19 presence marks the hub online even when DP 0x18 has the wrong type."""
-        payload = bytes([0x18, 0xD8, 0x01, 0x19, 0xD8, 0x01]).hex()
+        Captured from my HTV245FRF on 2026-09-09 at -42 dBm, the first 11#
+        frame recorded with dp 0x18 not 1. Reading that byte as hub state
+        made both zones unavailable on a healthy link.
+        """
+        payload = bytes([0x18, 0xDC, 0x02, 0x19, 0xD8, 0x00, 0x1A, 0xD8, 0x00]).hex()
         result = decode_htv213frf_valve("11#" + payload)
 
-        assert result["decoder"] == "htv213frf_hex"
+        assert result["battery_flag"] == 2
+        assert "battery_percent" not in result
         assert result["hub_online"] is True
-        assert result["hub_state_raw"] == 0x01
-        assert result["zones"][1]["open"] is True
+        assert result["hub_state_raw"] is None
+        assert result["zones"][1]["open"] is False
+        assert result["zones"][2]["open"] is False
 
     def test_hex_zone_dp_with_wrong_type_is_skipped(self):
         """DP 0x19 (zone-1 state) with type other than 0xD8 is skipped, not misread."""
-        # Hub online + zone-1 DP with type 0xDC (hub-state type) instead of 0xD8.
+        # Battery record plus a zone-1 DP carrying type 0xDC instead of 0xD8.
         payload = bytes([0x18, 0xDC, 0x01, 0x19, 0xDC, 0x01]).hex()
         result = decode_htv213frf_valve("11#" + payload)
-        assert result["hub_online"] is True
         assert result["zones"] == {}
+        # No zone decoded, so nothing reports the link.
+        assert result["hub_online"] is False
 
 
 class TestDecodeMoistureFullErrorBranches:
