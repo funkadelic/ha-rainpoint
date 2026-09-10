@@ -162,10 +162,10 @@ def _make_flowmeter_entities(coordinator, key, info, base_slug):
     been carrying them since before they had values keeps its history and any
     automation referencing them. Only the flow-rate entity is new.
 
-    No battery entity: the meter's Flow Battery reported the STA_BAT flag as a
-    percentage, which the cloud does not send. The Battery Low binary sensor
-    carries that signal instead, and the leftover Flow Battery row is surfaced
-    by the orphaned-entity repair flow.
+    No battery entity: the meter's Flow Battery rendered the STA_BAT byte as a
+    percentage, and no capture from this model pairs that byte with a charge
+    level. The Battery Low binary sensor carries the signal instead, and the
+    leftover Flow Battery row is surfaced by the orphaned-entity repair flow.
     """
     return [
         RainPointFlowRateSensor(coordinator, key, info, base_slug),
@@ -229,9 +229,10 @@ def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
     surfaces the RSSI these hubs carry in their status frame, plus one
     water-usage entity and one run-duration entity per zone the frame actually
     reports. The decoder leaves rssi_dbm absent when the frame lacks it, so the
-    entity reads unknown rather than a false value. The battery status word is
-    a low/normal flag rather than a level, so it is the Battery Low binary
-    sensor rather than a reading here.
+    entity reads unknown rather than a false value. The battery status word
+    reads as a low/normal condition on every capture from this family rather
+    than as a level, so it is the Battery Low binary sensor rather than a
+    reading here.
 
     Zones come from the decoded payload rather than the model name, mirroring
     valve.py and number.py, so a hub that reports fewer zones than its model
@@ -256,8 +257,8 @@ def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
 
     The HTV113FRF, HTV145FRF and HTV157B share one decoder and one outlet, so
     they share this factory. No battery reading, for the reason the HTV213
-    factory documents: STA_BAT is a low/normal flag, and the Battery Low binary
-    sensor is what carries it.
+    factory documents: STA_BAT reads as a low/normal condition on every capture
+    from these models, and the Battery Low binary sensor is what carries it.
 
     No water-usage entity, unlike that factory: these frames do carry
     STA_LASTUSAGE, but no capture pairs it against a total the app displays,
