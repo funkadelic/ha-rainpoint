@@ -1100,12 +1100,13 @@ class RainPointFlowBatterySensor(RainPointSensorBase):
     """The meter's battery, kept under its shipped name rather than replaced.
 
     Reads the same STA_BAT flag the shared RainPointBatterySensor does, so it
-    is 100 or unknown and never an invented intermediate level.
+    is 100 or unknown and never an invented intermediate level, and it carries
+    no state class for the reason that class documents.
     """
 
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = None
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
@@ -1201,9 +1202,10 @@ class RainPointCO2HumiditySensor(RainPointSensorBase):
 
 
 class RainPointCO2BatterySensor(RainPointSensorBase):
+    # No state class, for the reason RainPointBatterySensor documents.
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = "%"
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = None
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -1234,9 +1236,10 @@ class RainPointPoolCurrentTempSensor(RainPointSensorBase):
 
 
 class RainPointPoolBatterySensor(RainPointSensorBase):
+    # No state class, for the reason RainPointBatterySensor documents.
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = "%"
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = None
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
