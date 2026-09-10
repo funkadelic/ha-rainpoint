@@ -7,11 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+from homeassistant.const import EntityCategory
 
 from custom_components.rainpoint.api import decode_hcs044frf, decode_hic801w
 from custom_components.rainpoint.binary_sensor import (
+    RainPointBatteryLowBinarySensor,
     RainPointHicStationWateringBinarySensor,
     RainPointRainDetectedBinarySensor,
+    _build_battery_low_entities,
     _build_hic801w_station_entities,
     _build_rain_detector_entities,
     async_setup_entry,
@@ -334,6 +337,62 @@ class TestHicStationWateringEntities:
         assert all(e.available is True for e in stations)
 
 
+def _battery_entry(flag, hid=100, mid=200, addr=1):
+    """A coordinator sensors entry for a sub-device reporting a STA_BAT flag."""
+    return make_sensor_entry(hid=hid, mid=mid, addr=addr, model=MODEL_HCS044FRF, data={"type": "valve_hub", "battery_flag": flag})
+
+
+class TestBatteryLowBinarySensor:
+    """The low-battery entity and the guards on its factory."""
+
+    @pytest.mark.parametrize(("flag", "expected"), [(1, False), (2, True), (0, None), (3, None)])
+    def test_is_on_follows_the_flag(self, flag, expected):
+        """Flag 2 reads low, 1 reads normal, and an unmapped value reads unknown."""
+        sensor_key = "100_200_1"
+        entry = _battery_entry(flag)
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+
+        (sensor,) = _build_battery_low_entities(coordinator, sensor_key, entry)
+        assert isinstance(sensor, RainPointBatteryLowBinarySensor)
+        assert sensor._attr_device_class is BinarySensorDeviceClass.BATTERY
+        assert sensor._attr_entity_category is EntityCategory.DIAGNOSTIC
+        assert sensor._attr_unique_id == "rainpoint_100_200_1_battery_low"
+        assert sensor.is_on is expected
+
+    def test_no_data_reads_as_unknown(self):
+        """An entry carrying no decoded payload yields no state."""
+        sensor_key = "100_200_1"
+        entry = _battery_entry(2)
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: dict(entry, data=None)})
+
+        (sensor,) = _build_battery_low_entities(coordinator, sensor_key, entry)
+        assert sensor.is_on is None
+
+    def test_returns_empty_without_a_battery_field(self):
+        """A mains-powered device omits STA_BAT and gets no entity."""
+        sensor_key = "100_200_1"
+        entry = make_sensor_entry(hid=100, mid=200, addr=1, model=MODEL_HIC801W, data={"type": "irrigation_controller"})
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+        assert _build_battery_low_entities(coordinator, sensor_key, entry) == []
+
+    def test_returns_empty_for_a_silent_entry(self):
+        """A device that has never reported gets no entity from this platform."""
+        sensor_key = "100_200_1"
+        entry = make_sensor_entry(
+            hid=100,
+            mid=200,
+            addr=1,
+            model=MODEL_HCS044FRF,
+            data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported", "battery_flag": 2},
+        )
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+        assert _build_battery_low_entities(coordinator, sensor_key, entry) == []
+
+
 def _rain_detector_entry(payload=RAIN_DETECTOR_DRY_PAYLOAD, hid=100, mid=200, addr=3):
     """A coordinator sensors entry for a reporting HCS044FRF."""
     return make_sensor_entry(hid=hid, mid=mid, addr=addr, model=MODEL_HCS044FRF, data=decode_hcs044frf(payload))
@@ -403,7 +462,11 @@ class TestRainDetectedBinarySensor:
 
     @pytest.mark.asyncio
     async def test_setup_entry_adds_it(self):
-        """A reporting HCS044FRF in the first snapshot yields its entity at setup."""
+        """A reporting HCS044FRF in the first snapshot yields its entity at setup.
+
+        Its frame also carries STA_BAT, so the low-battery entity is built
+        from the same key alongside it.
+        """
         hass, entry, coord = _make_hass(mqtt_client=None)
         coord.data = make_coordinator_data(sensors={"100_200_3": _rain_detector_entry()})
         add = MagicMock()
@@ -411,7 +474,7 @@ class TestRainDetectedBinarySensor:
         await async_setup_entry(hass, entry, add)
 
         entities = add.call_args[0][0]
-        assert [type(e) for e in entities] == [RainPointRainDetectedBinarySensor]
+        assert [type(e) for e in entities] == [RainPointRainDetectedBinarySensor, RainPointBatteryLowBinarySensor]
 
 
 class TestBuildHic801wStationEntitiesGuards:

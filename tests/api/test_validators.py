@@ -3,6 +3,7 @@
 import pytest
 
 from custom_components.rainpoint.api import (
+    _battery_flag_is_low,
     _battery_flag_to_percent,
     _extract_battery_flag,
     _extract_rssi,
@@ -127,6 +128,31 @@ class TestBatteryFlagToPercent:
     def test_missing_flag_maps_to_none(self):
         """A frame with no STA_BAT record yields no percentage."""
         assert _battery_flag_to_percent(None) is None
+
+
+class TestBatteryFlagIsLow:
+    """Tests for _battery_flag_is_low."""
+
+    def test_flag_one_reads_as_not_low(self):
+        """1 is the only value ever paired with a healthy cell."""
+        assert _battery_flag_is_low(1) is False
+
+    def test_flag_two_reads_as_low(self):
+        """Every low-battery event the cloud raised landed on a poll reading 2."""
+        assert _battery_flag_is_low(2) is True
+
+    @pytest.mark.parametrize("flag", [0, 3, 4, 255])
+    def test_unproven_flags_read_as_unknown(self, flag):
+        """Nothing places these on the scale, 0 included, so neither state is asserted.
+
+        The percentage mapping does treat 0 as full, but no capture has shown
+        a 0 and this entity is what battery alerts subscribe to.
+        """
+        assert _battery_flag_is_low(flag) is None
+
+    def test_missing_flag_reads_as_unknown(self):
+        """A frame with no STA_BAT record yields no low-battery state."""
+        assert _battery_flag_is_low(None) is None
 
 
 class TestValidateTag:

@@ -63,12 +63,25 @@ def _extract_battery_flag(b: bytes, *, dp_id_prefixed: bool = False) -> int | No
     return value_bytes[0] & 0xFF
 
 
-# Only the "normal" reading is corroborated: STA_BAT is 1 in every capture we
-# hold and in every upstream fixture, with a single HTV113FRF frame reporting
-# 3. No capture pairs a non-1 flag with a known charge level, so anything past
-# "normal" stays unmapped rather than being assigned an invented percentage -
+# No capture pairs a flag with a charge level, so no flag earns a percentage:
 # a wrong number here is indistinguishable from a real one downstream.
 _BATTERY_FLAG_NORMAL = {0, 1}
+
+# STA_BAT 2 is the low-battery condition, established by replacing the cells
+# rather than by correlation alone. A live HTV245FRF held 2 for 4h44m and
+# read 1 on its first report after fresh batteries went in, 2026-09-09 22:37
+# PDT, with nothing else about the device changed. Before that, all 17 of the
+# cloud's own low-battery events (event/list code 143) had landed on a poll
+# reading 2 and none on a poll reading 1.
+#
+# 1 is the only value proven to mean a healthy cell, so it is the only one
+# this reads as normal. The percentage above also treats 0 as full, but no
+# capture has ever shown a 0 and an unobserved value must not become an
+# affirmative "not low" on an entity people build battery alerts against.
+# 3 stays unmapped for the same reason: one HTV113FRF frame reports it and
+# nothing says where it sits on the scale.
+_BATTERY_FLAG_NOT_LOW = 1
+_BATTERY_FLAG_LOW = 2
 
 
 def _battery_flag_to_percent(flag: int | None) -> int | None:
@@ -76,3 +89,10 @@ def _battery_flag_to_percent(flag: int | None) -> int | None:
     if flag is None:
         return None
     return 100 if flag in _BATTERY_FLAG_NORMAL else None
+
+
+def _battery_flag_is_low(flag: int | None) -> bool | None:
+    """Map a raw STA_BAT flag to low/normal, or None when unproven."""
+    if flag == _BATTERY_FLAG_NOT_LOW:
+        return False
+    return True if flag == _BATTERY_FLAG_LOW else None
