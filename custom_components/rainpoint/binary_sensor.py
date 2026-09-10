@@ -111,11 +111,14 @@ class RainPointBatteryLowBinarySensor(RainPointSubDeviceEntity, BinarySensorEnti
     Reads the STA_BAT flag, the only battery signal the cloud sends. There is
     no charge level anywhere on this API, so this answers low or not rather
     than how much is left, and it is unknown on any flag value that has never
-    been paired with a known battery state.
+    been paired with a known battery state. The battery percentage entities
+    that used to sit beside this one reported that flag as 100 or nothing, and
+    were removed for saying more than the wire does.
     """
 
     _attr_device_class = BinarySensorDeviceClass.BATTERY
-    # Diagnostic, matching the battery percentage entity it sits beside.
+    # Diagnostic: it reports on the hardware rather than on the garden, and it
+    # is now the only battery signal on a hand-written model.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(

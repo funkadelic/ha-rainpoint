@@ -1882,19 +1882,19 @@ class TestBatteryTransform:
             return None
         return round(value, self.SPEC.precision)
 
-    @pytest.mark.parametrize("raw", [0, 1])
-    def test_a_normal_flag_reads_one_hundred_percent(self, raw):
-        """Both flag values the captures corroborate report the same level."""
-        assert self._displayed(raw) == 100
+    def test_the_proven_healthy_flag_reads_one_hundred_percent(self):
+        """1 is the only flag value a capture pairs with a healthy cell."""
+        assert self._displayed(1) == 100
 
-    def test_an_unmapped_flag_reports_nothing_rather_than_a_level(self):
-        """A single HTV113FRF frame reports 3, which no capture pairs with a charge level."""
-        assert self.SPEC.transform(3) is None
-        assert self._displayed(3) is None
+    @pytest.mark.parametrize("raw", [0, 3])
+    def test_an_unmapped_flag_reports_nothing_rather_than_a_level(self, raw):
+        """A single HTV113FRF frame reports 3, and nothing has ever reported 0."""
+        assert self.SPEC.transform(raw) is None
+        assert self._displayed(raw) is None
 
     def test_a_two_byte_reading_uses_the_low_byte(self):
         """The hand-written extraction reads the first value byte, which is the low byte here."""
-        assert self._displayed(0x0001) == 100
+        assert self._displayed(0x0101) == 100
         assert self._displayed(0xFF01) == 100
 
     def test_the_row_agrees_with_the_hand_written_mapping_across_every_byte(self):

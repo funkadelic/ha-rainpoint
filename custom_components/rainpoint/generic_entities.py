@@ -244,6 +244,14 @@ def _wkstate_open(raw: int) -> float | None:
 # battery and humidity notes in the module docstring above both replaced
 # earlier claims that had gone stale against the decoders they described.
 _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
+    # Kept after the hand-written battery percentage entities were removed for
+    # reporting a low/normal flag as a charge level, and the asymmetry is
+    # deliberate rather than an oversight. Those models have the Battery Low
+    # binary sensor instead, which reads the decoded battery_flag; the generic
+    # decoder emits no such field and binary_sensor.py has no generic path, so
+    # dropping this row would leave an untrusted model with no battery signal
+    # at all. Removing STA_BAT from this table would also block every variant
+    # declaring it from the fully-mapped gate outright.
     "STA_BAT": GenericSensorSpec(
         label="Battery",
         device_class=SensorDeviceClass.BATTERY,

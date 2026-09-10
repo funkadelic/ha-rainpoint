@@ -377,7 +377,7 @@ class TestEveryEntityClassResolvesHasEntityName:
             "custom_components.rainpoint.number.RainPointZoneDurationNumber",
             "custom_components.rainpoint.select.RainPointSubDevicePowerSelect",
             "custom_components.rainpoint.sensor.RainPointNotReportingSensor",
-            "custom_components.rainpoint.diagnostic_sensors.RainPointBatterySensor",
+            "custom_components.rainpoint.diagnostic_sensors.RainPointRSSISensor",
             "custom_components.rainpoint.generic_entities.RainPointGenericSensor",
             "custom_components.rainpoint.generic_control.RainPointGenericSwitch",
             "custom_components.rainpoint.hub_entities.RainPointHubRSSISensor",
