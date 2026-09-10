@@ -1315,18 +1315,6 @@ def _format_valve_hub_tlv_log(tlv: dict) -> dict:
     }
 
 
-def _extract_valve_hub_state(tlv: dict) -> bool:
-    """Return hub online flag derived from DP 0x18; logs at INFO when present."""
-    from ..const import debug_with_version
-
-    if _VALVE_HUB_DP_HUB_STATE not in tlv:
-        return False
-    _, hub_state_raw, _ = tlv[_VALVE_HUB_DP_HUB_STATE]
-    hub_online = hub_state_raw == 0x01
-    _LOGGER.info(debug_with_version("Valve hub state: %s (raw: 0x%02X)"), hub_online, hub_state_raw)
-    return hub_online
-
-
 def _extract_valve_hub_zone(zone_num: int, tlv: dict) -> dict | None:
     """Build a single zone dict from TLV, or None when no state DP is present."""
     state_dp = _VALVE_HUB_DP_HUB_STATE + zone_num
@@ -1380,6 +1368,11 @@ def decode_valve_hub(raw: str) -> dict:
     Confirmed DP map (derived from live payload capture):
     - Zone N state DP   = _VALVE_HUB_DP_HUB_STATE + N  (0x19 = zone 1, 0x1A = zone 2, ...)
     - Zone N duration DP = _VALVE_HUB_DP_BASE_DURATION + N (0x25 = zone 1, 0x26 = zone 2, ...)
+
+    DP 0x18 itself is the STA_BAT flag, not a link state, so hub_online comes
+    from zone presence the way every sibling valve decoder derives it. Reading
+    that byte as an online state took every zone unavailable on a hub whose
+    batteries had gone low.
     """
     from ..const import debug_with_version
 
@@ -1393,8 +1386,8 @@ def decode_valve_hub(raw: str) -> dict:
             _format_valve_hub_tlv_log(tlv),
         )
 
-        hub_online = _extract_valve_hub_state(tlv)
         zones = _extract_valve_hub_zones(tlv)
+        battery_flag = _extract_battery_flag(b, dp_id_prefixed=True)
 
         result = {
             "type": "valve_hub",
@@ -1402,12 +1395,16 @@ def decode_valve_hub(raw: str) -> dict:
             "raw_bytes": b,
             "zones": zones,
             "tlv_raw": tlv,
-            "hub_online": hub_online,
-            "hub_state_raw": tlv.get(_VALVE_HUB_DP_HUB_STATE, (None, None, None))[1],
+            "hub_online": bool(zones),
+            "hub_state_raw": None,
+            "battery_flag": battery_flag,
             "decoder": "valve_hub_tlv",
         }
+        battery_percent = _battery_flag_to_percent(battery_flag)
+        if battery_percent is not None:
+            result["battery_percent"] = battery_percent
 
-        _LOGGER.info(debug_with_version("Valve hub decoded: %d zones, hub_online=%s"), len(zones), hub_online)
+        _LOGGER.info(debug_with_version("Valve hub decoded: %d zones, hub_online=%s"), len(zones), bool(zones))
         return result
 
     except Exception as e:
