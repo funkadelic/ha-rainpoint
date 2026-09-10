@@ -1241,11 +1241,35 @@ class TestValveHubErrorPath:
         assert result["raw_bytes"] == []
         assert "missing" in result["error"].lower() or "unknown" in result["error"].lower()
 
-    def test_extract_valve_hub_state_no_dp_returns_false(self):
-        """An empty TLV map yields hub_online=False without raising."""
-        from custom_components.rainpoint.api.decoders import _extract_valve_hub_state
+    def test_low_battery_flag_leaves_zones_online(self):
+        """STA_BAT 2 is a charge reading, not a link state.
 
-        assert _extract_valve_hub_state({}) is False
+        The same defect the HTV213/245 decoder carried: DP 0x18 is the battery
+        flag, and reading it as an online state took every zone unavailable on
+        a hub whose batteries had gone low.
+        """
+        result = decode_valve_hub("11#" + bytes([0x18, 0xDC, 0x02, 0x19, 0xD8, 0x00, 0x1A, 0xD8, 0x00]).hex())
+
+        assert result["battery_flag"] == 2
+        assert "battery_percent" not in result
+        assert result["hub_online"] is True
+        assert result["hub_state_raw"] is None
+        assert sorted(result["zones"]) == [1, 2]
+
+    def test_normal_battery_flag_reports_a_percentage(self):
+        """A normal flag still yields the stand-in percentage the family shares."""
+        result = decode_valve_hub("11#" + bytes([0x18, 0xDC, 0x01, 0x19, 0xD8, 0x00]).hex())
+
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
+        assert result["hub_online"] is True
+
+    def test_no_zone_dp_is_offline(self):
+        """Nothing decodes a zone, so nothing evidences the link."""
+        result = decode_valve_hub("11#" + bytes([0x18, 0xDC, 0x02]).hex())
+
+        assert result["zones"] == {}
+        assert result["hub_online"] is False
 
 
 class TestHws019PartialBranches:
