@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 
 from custom_components.rainpoint.const import DOMAIN
 from custom_components.rainpoint.diagnostic_sensors import (
-    RainPointBatterySensor,
     RainPointDeviceIDSensor,
     RainPointFirmwareVersionSensor,
     RainPointLastUpdatedSensor,
@@ -95,46 +94,6 @@ class TestRainPointRSSISensor:
         assert info["via_device"] == (DOMAIN, "hub_100_200")
 
 
-class TestRainPointBatterySensor:
-    """Tests for RainPointBatterySensor."""
-
-    def _make(self, battery=75, data_is_none=False):
-        """Make helper."""
-        if data_is_none:
-            coord = _make_coordinator(sensor_data=None)
-        else:
-            coord = _make_coordinator(sensor_data={"battery_percent": battery})
-        sensor_info = _make_sensor_info()
-        sensor = RainPointBatterySensor.__new__(RainPointBatterySensor)
-        RainPointBatterySensor.__init__(sensor, coord, "100_200_1", sensor_info, "100_200_1")
-        return sensor
-
-    def test_native_value_returns_battery(self):
-        """native_value should return battery_percent from decoded data."""
-        sensor = self._make(battery=75)
-        assert sensor.native_value == 75
-
-    def test_native_value_returns_none_when_no_data(self):
-        """native_value should be None when data is absent."""
-        sensor = self._make(data_is_none=True)
-        assert sensor.native_value is None
-
-    def test_unique_id_ends_with_battery(self):
-        """unique_id should end with '_battery'."""
-        sensor = self._make()
-        assert sensor._attr_unique_id.endswith("_battery")
-
-    def test_available_when_data_present(self):
-        """available should be True when data exists."""
-        sensor = self._make(battery=50)
-        assert sensor.available is True
-
-    def test_unavailable_when_no_data(self):
-        """available should be False when data is None."""
-        sensor = self._make(data_is_none=True)
-        assert sensor.available is False
-
-
 class TestDiagnosticSensorsAgainstASilentEntry:
     """D-11/D-12: a diagnostic sensor bound to a key that turns silent must
     return None from native_value and read as unavailable, not raise."""
@@ -149,12 +108,6 @@ class TestDiagnosticSensorsAgainstASilentEntry:
     def test_rssi_sensor_reads_none_and_unavailable(self):
         """A silent entry has no signal reading to report."""
         sensor = self._make(RainPointRSSISensor)
-        assert sensor.native_value is None
-        assert sensor.available is False
-
-    def test_battery_sensor_reads_none_and_unavailable(self):
-        """A silent entry has no battery reading to report."""
-        sensor = self._make(RainPointBatterySensor)
         assert sensor.native_value is None
         assert sensor.available is False
 
@@ -358,8 +311,8 @@ class TestDiagnosticBaseNoInfo:
         coord = MagicMock()
         coord.data = {"sensors": {}}
         sensor_info = _make_sensor_info()
-        sensor = RainPointBatterySensor.__new__(RainPointBatterySensor)
-        RainPointBatterySensor.__init__(sensor, coord, "missing_key", sensor_info, "100_200_1")
+        sensor = RainPointRSSISensor.__new__(RainPointRSSISensor)
+        RainPointRSSISensor.__init__(sensor, coord, "missing_key", sensor_info, "100_200_1")
         assert sensor._sensor_data is None
         assert sensor.available is False
 
@@ -406,23 +359,23 @@ class TestDiagnosticSensorsToleranceOfHubConnectivity:
     only the shared hub_connected attribute on the base class changes.
     """
 
-    def _battery_sensor(self, hub_connectivity=None):
-        """Build a battery sensor, optionally with a hub_connectivity record set."""
-        coordinator = _make_coordinator(sensor_data={"battery_percent": 42})
-        sensor = RainPointBatterySensor(coordinator, "100_200_1", _make_sensor_info(), "100_200_1")
+    def _signal_sensor(self, hub_connectivity=None):
+        """Build a signal sensor, optionally with a hub_connectivity record set."""
+        coordinator = _make_coordinator(sensor_data={"rssi_dbm": 42})
+        sensor = RainPointRSSISensor(coordinator, "100_200_1", _make_sensor_info(), "100_200_1")
         if hub_connectivity is not None:
             sensor.coordinator.data["hub_connectivity"] = hub_connectivity
         return sensor
 
     def test_reading_and_availability_unaffected_by_a_disconnected_hub(self):
         """A stale-but-present reading keeps reporting exactly as before an outage."""
-        sensor = self._battery_sensor(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
+        sensor = self._signal_sensor(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
         assert sensor.native_value == 42
         assert sensor.available is True
 
     def test_reading_unaffected_by_a_coordinator_snapshot_with_no_hub_connectivity_key(self):
         """No hub_connectivity key at all is what every pre-existing fake in this suite supplies."""
-        sensor = self._battery_sensor(hub_connectivity=None)
+        sensor = self._signal_sensor(hub_connectivity=None)
         assert "hub_connectivity" not in sensor.coordinator.data
         assert sensor.native_value == 42
         assert sensor.available is True

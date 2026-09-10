@@ -55,18 +55,18 @@ This integration supports RainPoint Smart+ device families, including:
 
 | Family | Examples | Entities Created |
 | ------ | -------- | ---------------- |
-| Valve hubs | HTV245FRF*, HTV213FRF, HTV345FRF, HTV405FRF, HTV445FRF*, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
-| Single-outlet timers | HTV113FRF, HTV145FRF, HTV157B | Valve, duration number, run duration sensor, battery, signal strength |
-| Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
+| Valve hubs | HTV245FRF*, HTV213FRF, HTV345FRF, HTV405FRF, HTV445FRF*, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone, battery low, signal strength |
+| Single-outlet timers | HTV113FRF, HTV145FRF, HTV157B | Valve, duration number, run duration sensor, battery low, signal strength |
+| Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance, battery low, signal strength |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
-| Rain detectors | HCS044FRF* | Rain detected, battery, signal strength |
+| Rain detectors | HCS044FRF* | Rain detected, battery low, signal strength |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
-| Pool sensors | HCS0528ARF*, HCS015ARF | Pool temperature, battery |
+| Pool sensors | HCS0528ARF*, HCS015ARF | Pool temperature, battery low |
 | Pool + ambient sensors | HCS015ARF+ | Pool temperature, ambient temperature, humidity |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
-| Flow meters | HCS008FRF* | Live flow rate, water used and run length for the current and last run, water used today and in total, battery, signal strength |
-| Bluetooth valves | HTV210B* (hub-paired) | Battery, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
+| Flow meters | HCS008FRF* | Live flow rate, water used and run length for the current and last run, water used today and in total, battery low, signal strength |
+| Bluetooth valves | HTV210B* (hub-paired) | Battery low, signal strength, per-zone open/closed state, per-zone open/close control and run duration, transmission power |
 | Irrigation controllers | HIC801W* | Valve per station, duration number per station, current watering station, a watering sensor per station, current run length and end time, program stations and stations completed |
 
 \* A model marked with an asterisk has been validated against the hardware itself, by one of three routes: on the maintainer's own devices, by an owner who ran the release and confirmed the readings and controls matched what the device was doing, or by an owner whose diagnostics file let a decoded reading be checked against the value the RainPoint app showed for the same device. Every other model is supported from captured payloads alone, which is enough to decode a reading but not to confirm it against the hardware.
@@ -173,9 +173,10 @@ For each device the coordinator discovers, the integration creates:
 - **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API. A device that returns no readings at all gets a single **Not Reporting** diagnostic entity instead, and no Raw Payload sensor, because there is no payload to show.
 - **Station watering sensors**: one per station on the HIC801W irrigation controller, showing whether that station is currently watering. See [Supported devices](#supported-devices) for the rest of what it reports.
 - **Rain Detected**: one binary sensor per HCS044FRF rain detector, on while the sensor is wet.
+- **Battery Low**: one binary sensor for each device that reports a battery condition, on while RainPoint says that device's cells are low. It answers low or not rather than how much is left, because the reading behind it is a condition rather than a charge level on every device this integration has seen a payload from. Not every battery device sends it: the temperature and humidity sensor and the CO2 sensor report no battery condition at all, so they get no entity here. This replaces the battery percentage entities earlier versions built, which could only ever read 100% or nothing at all, and a repair card offers to remove the ones left in your registry. It is a new entity with its own ID rather than a rename of the old one, so an automation, script or dashboard that refers to a battery percentage entity needs pointing at Battery Low instead. One watching the old entity for a low reading could never have fired anyway. The opt-in entities for unsupported devices are the exception and still carry a battery percentage, since a low-battery reading is not available on that path yet.
 - **Valve entities**: one per irrigation zone, for the valve models listed in the table above, including the HTV210B while it is hub-paired, and one per station on the HIC801W irrigation controller. A device the integration cannot currently reach gets no valve entity, as described under [Supported devices](#supported-devices).
 - **Number entities**: one per zone, or per station on the HIC801W, for configuring run duration (1 to 60 minutes), on those same models. The duration applies to the next run: changing it while that zone is already watering is refused with an explanation, and the value you typed is not saved, so set it again once the run ends. A refused change can leave the number box showing what you typed until you reload the page; the saved duration and the run in progress are both unaffected.
-- **Hub diagnostic sensors**: RSSI, battery, firmware version, last-data-change timestamp.
+- **Hub diagnostic sensors**: RSSI, firmware version, last-data-change timestamp.
   **Last Data Change** is the same value the RainPoint app calls "last acquisition time", and it means what the app says it means: it moves only when the device's readings change or the device restarts. A sensor reporting a steady value produces no change and so no new timestamp, sometimes for many hours, while being perfectly healthy. An unchanged timestamp does not mean the device is offline, and this entity should not be used to decide whether one is. The entity was called **Last Updated** before version 1.21.0; the name changed because it read as "last heard from", which is not what it is. Display only, no entity ID changed and no history was affected.
 - **Firmware Update**: one per hub and one per sub-device, showing the firmware it is running and whether RainPoint is offering a newer one. The check runs when Home Assistant starts and every six hours after that. Installing is done in the RainPoint app rather than here: the cloud accepts an upgrade request, but it gives no way to choose which version you get and no way to tell a failure from a success, and a firmware update that goes wrong leaves a device that no longer works. RainPoint's changelog is not shown either, because it comes back in Chinese whatever language is asked for. The app offers this check on hubs and on the HTV210B only, while the cloud answers for every sub-device, so a model RainPoint has never published new firmware for will simply always read as up to date.
 - **Hub Cloud Connection**: one binary sensor per hub, on when RainPoint's cloud currently reports that hub as reachable. It exists whether or not [push](#real-time-push-updates) is enabled.
@@ -187,7 +188,7 @@ All entities are grouped under their parent hub device in the Home Assistant dev
 
 ### Display names on the device page
 
-Entity display names carry only the entity's own label ("Zone 1", "Battery", "Moisture Percent"), and Home Assistant composes the device name in front of it wherever the device is not already obvious. On a device page that means the device name is dropped, so a name no longer truncates in the narrow Controls column. In the entity list, in automations and to voice assistants the full "device plus entity" name still reads as before.
+Entity display names carry only the entity's own label ("Zone 1", "Battery Low", "Moisture Percent"), and Home Assistant composes the device name in front of it wherever the device is not already obvious. On a device page that means the device name is dropped, so a name no longer truncates in the narrow Controls column. In the entity list, in automations and to voice assistants the full "device plus entity" name still reads as before.
 
 Two upgrade notes, both display only. No entity ID changes and no automation, script or dashboard that refers to an entity by its ID is affected.
 

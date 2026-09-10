@@ -29,7 +29,7 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.rainpoint.const import DOMAIN, HUB_IDENTIFIER_PREFIX
-from custom_components.rainpoint.diagnostic_sensors import RainPointBatterySensor
+from custom_components.rainpoint.diagnostic_sensors import RainPointRSSISensor
 from custom_components.rainpoint.generic_control import RUN_STATE_IDENTITY, build_generic_switch_entities
 from custom_components.rainpoint.hub_entities import (
     RainPointHubBroadcastButton,
@@ -314,8 +314,8 @@ class TestRenamedDeviceComposesShortNameForTheSensorTree:
         assert _compose(hass, sensor, device) == "HCS026FRF Moisture Sensor Moisture Percent"
 
     @pytest.mark.asyncio
-    async def test_battery_composes_against_renamed_device(self, hass, device_registry):
-        """Compose the battery sensor's short name against the same renamed
+    async def test_signal_composes_against_renamed_device(self, hass, device_registry):
+        """Compose the signal sensor's short name against the same renamed
         device row, the second of two sensor-tree platforms proving the
         shared base's composition rather than trusting the moisture case to
         stand in for it."""
@@ -324,9 +324,9 @@ class TestRenamedDeviceComposesShortNameForTheSensorTree:
             hass, device_registry, entry, sub_name="HCS026FRF", display_name="HCS026FRF Moisture Sensor"
         )
         sensor_info = _sensor_info("HCS026FRF")
-        sensor = RainPointBatterySensor(_mock_coordinator(), "100_200_1", sensor_info, "100_200_1")
+        sensor = RainPointRSSISensor(_mock_coordinator(), "100_200_1", sensor_info, "100_200_1")
 
-        assert _compose(hass, sensor, device) == "HCS026FRF Moisture Sensor Battery"
+        assert _compose(hass, sensor, device) == "HCS026FRF Moisture Sensor Signal Strength"
 
 
 class TestRenamedDeviceComposesShortNameForGenericAndSelect:
@@ -513,14 +513,14 @@ class TestEveryConvertedPlatformSetsHasEntityName:
         sensor_info = _sensor_info("HCS026FRF")
         coordinator = _mock_coordinator()
         moisture = RainPointMoisturePercentSensor(coordinator, "100_200_1", sensor_info, "100_200_1", simple=True)
-        battery = RainPointBatterySensor(coordinator, "100_200_1", sensor_info, "100_200_1")
+        signal = RainPointRSSISensor(coordinator, "100_200_1", sensor_info, "100_200_1")
         zone_state = RainPointZoneStateSensor(coordinator, "100_200_1", sensor_info, "100_200_1", 1)
 
         assert moisture.has_entity_name is True
-        assert battery.has_entity_name is True
+        assert signal.has_entity_name is True
         assert zone_state.has_entity_name is True
         assert "_attr_has_entity_name" not in RainPointMoisturePercentSensor.__dict__
-        assert "_attr_has_entity_name" not in RainPointBatterySensor.__dict__
+        assert "_attr_has_entity_name" not in RainPointRSSISensor.__dict__
         assert "_attr_has_entity_name" not in RainPointZoneStateSensor.__dict__
 
 

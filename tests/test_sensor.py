@@ -42,14 +42,11 @@ from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, RainPointC
 from custom_components.rainpoint.entity import late_adders, register_late_adder
 from custom_components.rainpoint.sensor import (
     DisplayHubReadingSensor,
-    RainPointBatterySensor,
-    RainPointCO2BatterySensor,
     RainPointCO2HighSensor,
     RainPointCO2HumiditySensor,
     RainPointCO2LowSensor,
     RainPointCO2Sensor,
     RainPointCO2TempSensor,
-    RainPointFlowBatterySensor,
     RainPointFlowCurrentDurationSensor,
     RainPointFlowCurrentUsedSensor,
     RainPointFlowLastUsedDurationSensor,
@@ -65,7 +62,6 @@ from custom_components.rainpoint.sensor import (
     RainPointIlluminanceSensor,
     RainPointMoisturePercentSensor,
     RainPointNotReportingSensor,
-    RainPointPoolBatterySensor,
     RainPointPoolCurrentTempSensor,
     RainPointPoolPlusAmbientCurrentTempSensor,
     RainPointPoolPlusAmbientHighTempSensor,
@@ -190,13 +186,13 @@ class TestAsyncSetupEntryDispatch:
 
         await async_setup_entry(hass, entry, async_add_entities)
 
-        # 1 moisture + 4 diagnostics (RSSI, battery, firmware, last_updated) + 1 raw payload = 6
+        # 1 moisture + 3 diagnostics (RSSI, firmware, last_updated) + 1 raw payload = 5
         assert async_add_entities.called
-        assert len(captured) == 6
+        assert len(captured) == 5
 
     @pytest.mark.asyncio
     async def test_setup_entry_moisture_full_creates_correct_entities(self):
-        """MODEL_MOISTURE_FULL -> 3 reading sensors + 4 diagnostic + 1 raw payload = 8."""
+        """MODEL_MOISTURE_FULL -> 3 reading sensors + 3 diagnostic + 1 raw payload = 7."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
@@ -224,8 +220,8 @@ class TestAsyncSetupEntryDispatch:
 
         await async_setup_entry(hass, entry, async_add_entities)
 
-        # 3 reading (moisture, temp, lux) + 4 diagnostics + 1 raw payload = 8
-        assert len(captured) == 8
+        # 3 reading (moisture, temp, lux) + 3 diagnostics + 1 raw payload = 7
+        assert len(captured) == 7
 
     @pytest.mark.asyncio
     async def test_setup_entry_rain_creates_4_rain_sensors(self):
@@ -449,8 +445,8 @@ class TestAsyncSetupEntryDispatch:
 
         await async_setup_entry(hass, entry, async_add_entities)
 
-        # sensor 1: 6 entities; sensor 2: 5 entities = 11 total
-        assert len(captured) == 11
+        # sensor 1: 5 entities; sensor 2: 5 entities = 10 total
+        assert len(captured) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -931,17 +927,14 @@ _NATIVE_VALUE_CASES = [
     (RainPointFlowLastUsedDurationSensor, "flowlastusedduration", "flow_last_used_duration", 600),
     (RainPointFlowTotalTodaySensor, "flowtotaltoday", "flow_total_today", 42.0),
     (RainPointFlowTotalSensor, "flowtotal", "flow_total", 999.0),
-    (RainPointFlowBatterySensor, "flowbatt", "flow_battery", 75),
     # CO2
     (RainPointCO2Sensor, "co2", "co2", 450),
     (RainPointCO2LowSensor, "co2low", "co2_low", 400),
     (RainPointCO2HighSensor, "co2high", "co2_high", 500),
     (RainPointCO2TempSensor, "co2temp", "co2_temp", 22.5),
     (RainPointCO2HumiditySensor, "co2humidity", "co2_humidity", 45),
-    (RainPointCO2BatterySensor, "co2batt", "co2_battery", 90),
     # Pool
     (RainPointPoolCurrentTempSensor, "tempcurrent", "pool_current_temp", 24.0),
-    (RainPointPoolBatterySensor, "battery_percent", "pool_battery", 70),
     # Pool Plus
     (RainPointPoolPlusPoolCurrentTempSensor, "pool_tempcurrent", "pool_plus_pool_current_temp", 25.5),
     (RainPointPoolPlusPoolHighTempSensor, "pool_temphigh", "pool_plus_pool_high_temp", 30.0),
@@ -1459,16 +1452,16 @@ class TestHCSSensorDispatch:
         captured = []
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
-        # 2 pool entities + 1 raw payload sensor. No high/low pair: the device
-        # reports a single STA_TEM reading.
-        assert len(captured) == 3
+        # 1 pool entity + 1 raw payload sensor. No high/low pair: the device
+        # reports a single STA_TEM reading, and its battery is a low/normal flag.
+        assert len(captured) == 2
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("model", "count"),
         [
-            ("HCS010WRF", 11),  # MODEL_FLOWMETER -> 8 flow + 3 shared diagnostics + 1 raw
-            ("HCS0530THO", 6),  # MODEL_CO2 -> 6 + 1 raw
+            ("HCS010WRF", 10),  # MODEL_FLOWMETER -> 7 flow + 3 shared diagnostics + 1 raw
+            ("HCS0530THO", 5),  # MODEL_CO2 -> 5 + 1 raw
             ("HCS014ARF", 6),  # MODEL_TEMPHUM -> 6 + 1 raw
         ],
     )
@@ -1551,8 +1544,8 @@ class TestHCSSensorDispatch:
         assert len(captured) == 10
 
     @pytest.mark.asyncio
-    async def test_pool_creates_2_entities(self):
-        """MODEL_POOL creates 2 reading sensors + 1 raw payload."""
+    async def test_pool_creates_its_one_reading_entity(self):
+        """MODEL_POOL creates 1 reading sensor + 1 raw payload."""
         from custom_components.rainpoint.const import MODEL_POOL
 
         sensor_key = "100_200_1"
@@ -1569,16 +1562,20 @@ class TestHCSSensorDispatch:
         captured = []
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
-        assert len(captured) == 3
+        assert len(captured) == 2
 
 
 class TestHtvValveDiagnosticDispatch:
-    """The HTV213/245 valve family gets battery + signal sensors from the sensor platform."""
+    """The HTV213/245 valve family gets a signal sensor from the sensor platform.
+
+    No battery reading here: STA_BAT is a low/normal flag, so the battery
+    signal is the Battery Low binary sensor on the binary_sensor platform.
+    """
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("model", [MODEL_VALVE_213, MODEL_VALVE_245, MODEL_VALVE_345, MODEL_VALVE_405, MODEL_VALVE_445])
-    async def test_valve_family_creates_battery_and_rssi_sensors(self, model):
-        """A valve entry yields a battery + RSSI sensor plus the raw payload sensor."""
+    async def test_valve_family_creates_the_rssi_sensor_and_no_battery_reading(self, model):
+        """A valve entry yields an RSSI sensor plus the raw payload sensor, and no battery."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
@@ -1594,18 +1591,16 @@ class TestHtvValveDiagnosticDispatch:
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
 
-        battery = [e for e in captured if isinstance(e, RainPointBatterySensor)]
         rssi = [e for e in captured if isinstance(e, RainPointRSSISensor)]
-        assert len(battery) == 1
-        assert battery[0].native_value == 100
         assert len(rssi) == 1
         assert rssi[0].native_value == -37
-        # 1 battery + 1 RSSI + 1 raw payload sensor, nothing else from this platform.
-        assert len(captured) == 3
+        assert not any(getattr(e, "_attr_unique_id", "").endswith("_battery") for e in captured)
+        # 1 RSSI + 1 raw payload sensor, nothing else from this platform.
+        assert len(captured) == 2
 
 
 class TestSingleOutletTimerDispatch:
-    """The single-outlet timers get battery, signal and a run-duration sensor."""
+    """The single-outlet timers get a signal and a run-duration sensor."""
 
     @staticmethod
     def _timer_entry(model, data):
@@ -1622,8 +1617,8 @@ class TestSingleOutletTimerDispatch:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B])
-    async def test_creates_battery_rssi_and_run_duration(self, model):
-        """All three models yield the same four entities off one reported outlet."""
+    async def test_creates_rssi_and_run_duration(self, model):
+        """All three models yield the same three entities off one reported outlet."""
         captured = await self._setup(
             self._timer_entry(
                 model,
@@ -1636,14 +1631,12 @@ class TestSingleOutletTimerDispatch:
             )
         )
 
-        battery = [e for e in captured if isinstance(e, RainPointBatterySensor)]
         rssi = [e for e in captured if isinstance(e, RainPointRSSISensor)]
         duration = [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)]
-        assert battery[0].native_value == 100
         assert rssi[0].native_value == -62
         assert duration[0].native_value == 1200
-        # 1 battery + 1 RSSI + 1 run duration + 1 raw payload, nothing else.
-        assert len(captured) == 4
+        # 1 RSSI + 1 run duration + 1 raw payload, nothing else.
+        assert len(captured) == 3
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B])
@@ -1669,11 +1662,12 @@ class TestSingleOutletTimerDispatch:
         assert [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)] == []
 
     @pytest.mark.asyncio
-    async def test_unmapped_battery_flag_reads_unknown(self):
-        """A unit whose STA_BAT flag maps to no percentage gets the entity, reading unknown.
+    async def test_a_battery_flag_grows_no_sensor_entity(self):
+        """A frame carrying STA_BAT builds nothing on this platform.
 
-        The decoder omits battery_percent rather than inventing one, and the
-        entity states that as no reading instead of a false full charge.
+        The flag is a low/normal condition, so it belongs to the Battery Low
+        binary sensor. A percentage entity here would report 100 or nothing and
+        never the number its unit promises.
         """
         captured = await self._setup(
             self._timer_entry(
@@ -1682,14 +1676,12 @@ class TestSingleOutletTimerDispatch:
             )
         )
 
-        battery = [e for e in captured if isinstance(e, RainPointBatterySensor)]
-        assert len(battery) == 1
-        assert battery[0].native_value is None
+        assert not any(getattr(e, "_attr_unique_id", "").endswith("_battery") for e in captured)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("zones", [{}, None], ids=["empty", "absent"])
     async def test_frame_with_no_outlet_grows_no_duration_entity(self, zones):
-        """A frame that reported no zone gets battery and signal but no run duration.
+        """A frame that reported no zone gets the signal sensor but no run duration.
 
         Both shapes the decoder can hand over: an empty mapping from a frame
         with no work-state record, and no mapping at all from a decode that
@@ -1700,7 +1692,7 @@ class TestSingleOutletTimerDispatch:
         )
 
         assert [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)] == []
-        assert len(captured) == 3
+        assert len(captured) == 2
 
 
 class TestZoneWaterUsageSensor:
@@ -1752,7 +1744,7 @@ class TestZoneWaterUsageSensor:
 
     @pytest.mark.asyncio
     async def test_no_usage_entities_when_zones_are_malformed(self):
-        """A decode that yields no usable zones dict still produces the battery and signal pair."""
+        """A decode that yields no usable zones dict still produces the signal sensor."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
@@ -1769,7 +1761,7 @@ class TestZoneWaterUsageSensor:
         await async_setup_entry(hass, entry, async_add_entities)
 
         assert [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)] == []
-        assert len(captured) == 3
+        assert len(captured) == 2
 
     @pytest.mark.asyncio
     async def test_stays_out_of_long_term_statistics(self):
@@ -1903,7 +1895,7 @@ class TestZoneRunDurationSensor:
 
     @pytest.mark.asyncio
     async def test_no_duration_entities_when_zones_are_malformed(self):
-        """A decode without a usable zones dict still produces battery and signal, no duration entities."""
+        """A decode without a usable zones dict still produces signal, no duration entities."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
@@ -1920,7 +1912,7 @@ class TestZoneRunDurationSensor:
         await async_setup_entry(hass, entry, async_add_entities)
 
         assert [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)] == []
-        assert len(captured) == 3
+        assert len(captured) == 2
 
     @pytest.mark.asyncio
     async def test_declarations(self):
@@ -2349,7 +2341,6 @@ class TestRunDurationUniqueIdDisjointness:
         # (in particular the number-platform duration and the sensor-platform
         # water-used id) fails this assertion rather than silently passing.
         expected = {
-            "rainpoint_100_200_1_battery",
             "rainpoint_100_200_1_rssi",
             "rainpoint_100_200_1_raw_payload",
             "rainpoint_100_200_1_zone1_water_used",
@@ -2426,7 +2417,7 @@ class TestZoneRunDurationLateArrival:
 
 
 class TestHtv210bDispatch:
-    """The HTV210B gets battery + signal + per-zone state sensors, no usage entities."""
+    """The HTV210B gets signal + per-zone state sensors, no usage entities."""
 
     @staticmethod
     def _entry(zones):
@@ -2452,20 +2443,19 @@ class TestHtv210bDispatch:
 
     @pytest.mark.asyncio
     async def test_creates_diagnostics_and_one_state_sensor_per_zone(self):
-        """Two zones yield battery, signal, two state sensors, and the raw payload sensor."""
+        """Two zones yield signal, two state sensors, and the raw payload sensor."""
         zones = {
             1: {"open": False, "duration_seconds": 0, "state_raw": 0x00, "event_time": None},
             2: {"open": False, "duration_seconds": 0, "state_raw": 0x00, "event_time": None},
         }
         captured = await self._setup(zones)
-        assert len([e for e in captured if isinstance(e, RainPointBatterySensor)]) == 1
         assert len([e for e in captured if isinstance(e, RainPointRSSISensor)]) == 1
         states = [e for e in captured if isinstance(e, RainPointZoneStateSensor)]
         assert len(states) == 2
         assert states[0]._attr_unique_id == "rainpoint_100_200_3_zone1_state"
         assert states[0]._attr_name == "Zone 1 State"
-        # battery + RSSI + 2 zone states + raw payload sensor, nothing else.
-        assert len(captured) == 5
+        # RSSI + 2 zone states + raw payload sensor, nothing else.
+        assert len(captured) == 4
 
     @pytest.mark.asyncio
     async def test_no_usage_entities_for_this_model(self):
@@ -2476,7 +2466,7 @@ class TestHtv210bDispatch:
 
     @pytest.mark.asyncio
     async def test_malformed_zones_still_yield_diagnostics(self):
-        """A decode without a usable zones dict still produces battery and signal."""
+        """A decode without a usable zones dict still produces the signal sensor."""
         sensor_key = "100_200_3"
         sensor_info = make_sensor_entry(
             hid=100,
@@ -2492,14 +2482,14 @@ class TestHtv210bDispatch:
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
         assert [e for e in captured if isinstance(e, RainPointZoneStateSensor)] == []
-        assert len(captured) == 3
+        assert len(captured) == 2
 
 
 class TestHic801wDispatch:
     """The HIC801W gets exactly the five sensor.py entities the factory names
     (Current Station, Run Duration, Run Ends At, Program Stations, Program
-    Stations Completed), no battery or RSSI diagnostics (the platform
-    has no reading for either), and no generic or unsupported fallback."""
+    Stations Completed), no RSSI diagnostic (the platform has no reading for
+    it), and no generic or unsupported fallback."""
 
     @staticmethod
     def _entry(current_station=3):
@@ -2574,11 +2564,10 @@ class TestHic801wDispatch:
         ]
 
     @pytest.mark.asyncio
-    async def test_no_battery_rssi_unknown_or_zone_state_entities(self):
+    async def test_no_rssi_unknown_or_zone_state_entities(self):
         """No diagnostic pair and no fallback entity: this model has a real
         factory, so RainPointUnknownSensor must never appear for it either."""
         captured = await self._setup()
-        assert [e for e in captured if isinstance(e, RainPointBatterySensor)] == []
         assert [e for e in captured if isinstance(e, RainPointRSSISensor)] == []
         assert [e for e in captured if isinstance(e, RainPointUnknownSensor)] == []
         assert [e for e in captured if isinstance(e, RainPointZoneStateSensor)] == []
@@ -2733,31 +2722,6 @@ class TestHicRunTimingSensors:
         assert RainPointHicProgramStationsCompletedSensor._attr_state_class is None
 
 
-class TestBatteryEntitiesStayOutOfStatistics:
-    """Every battery entity reports a stand-in rather than a measurement.
-
-    The cloud sends no charge level, so the 100 these show for a normal
-    STA_BAT flag is not a reading. A state class would write it into
-    long-term statistics permanently, which is the outcome
-    generic_entities.py sets state_class to None to avoid. Pinned at class
-    level because nothing else fails if MEASUREMENT comes back.
-    """
-
-    @pytest.mark.parametrize(
-        "cls",
-        [
-            RainPointBatterySensor,
-            RainPointFlowBatterySensor,
-            RainPointCO2BatterySensor,
-            RainPointPoolBatterySensor,
-        ],
-    )
-    def test_no_state_class(self, cls):
-        """A battery percentage never enters long-term statistics."""
-        assert cls._attr_device_class is SensorDeviceClass.BATTERY
-        assert cls._attr_state_class is None
-
-
 class TestRenderStationList:
     """The three-way distinction _render_station_list guarantees, pinned in
     one place: None in, None out; [] in, "none" out; a populated list joins
@@ -2889,7 +2853,6 @@ class TestSilentSensorDispatch:
 
         assert len(captured) == 1
         assert isinstance(captured[0], RainPointNotReportingSensor)
-        assert not any(isinstance(e, RainPointBatterySensor) for e in captured)
         assert not any(isinstance(e, RainPointRSSISensor) for e in captured)
         assert not any(isinstance(e, RainPointRawPayloadSensor) for e in captured)
 
@@ -3371,7 +3334,6 @@ class TestLateSensorEntityAdder:
 
         assert len(captured) == 1
         assert isinstance(captured[0], RainPointNotReportingSensor)
-        assert not any(isinstance(e, RainPointBatterySensor) for e in captured)
         assert not any(isinstance(e, RainPointRSSISensor) for e in captured)
         assert not any(isinstance(e, RainPointRawPayloadSensor) for e in captured)
         assert not any(isinstance(e, generic_entities_module.RainPointGenericSensor) for e in captured)
@@ -3674,8 +3636,10 @@ class TestFlowMeterEndToEnd:
         assert by_name["Flow Last Used"] == 0.2
         assert by_name["Flow Last Used Duration"] == 17
         assert by_name["Flow Rate"] == 0.0
-        assert by_name["Flow Battery"] == 100
         assert by_name["Signal Strength"] == -79
+        # No Flow Battery: STA_BAT is a low/normal flag, and the Battery Low
+        # binary sensor reports it.
+        assert "Flow Battery" not in by_name
 
     @pytest.mark.asyncio
     async def test_no_flow_entity_reads_unknown_on_a_complete_frame(self):

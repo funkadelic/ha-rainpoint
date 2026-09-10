@@ -33,7 +33,6 @@ from custom_components.rainpoint import coordinator as coordinator_module
 from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_HIC801W
 from custom_components.rainpoint.coordinator import RainPointCoordinator
 from custom_components.rainpoint.diagnostic_sensors import (
-    RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
     RainPointLastUpdatedSensor,
     RainPointRSSISensor,
@@ -290,19 +289,17 @@ class TestHic801wWholeEntitySet:
                 assert term not in suffix, f"{unique_id!r} unexpectedly carries {term!r}"
 
     @pytest.mark.asyncio
-    async def test_no_battery_rssi_firmware_last_updated_or_unknown_fallback_entity_exists(self):
-        """No per-sub-device battery, RSSI, firmware or last-updated
-        diagnostic, and no generic-fallback Unsupported sensor, exists
-        anywhere in the union. HIC801W is registered in HAND_WRITTEN_MODELS
-        which locks it out of the generic and Unsupported-fallback
-        paths entirely, and variant 279 declares neither STA_BAT nor
-        STA_RSSI, so a diagnostic entity here would read available with no
-        value while the real readings already exist on the 278 hub
+    async def test_no_rssi_firmware_last_updated_or_unknown_fallback_entity_exists(self):
+        """No per-sub-device RSSI, firmware or last-updated diagnostic, and no
+        generic-fallback Unsupported sensor, exists anywhere in the union.
+        HIC801W is registered in HAND_WRITTEN_MODELS which locks it out of the
+        generic and Unsupported-fallback paths entirely, and variant 279
+        declares no STA_RSSI, so a diagnostic entity here would read available
+        with no value while the real readings already exist on the 278 hub
         record."""
         _coordinator, _client, sensor_captured, binary_captured = await self._build()
         union = list(sensor_captured) + list(binary_captured)
         for cls in (
-            RainPointBatterySensor,
             RainPointRSSISensor,
             RainPointFirmwareVersionSensor,
             RainPointLastUpdatedSensor,

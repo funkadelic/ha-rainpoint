@@ -115,14 +115,18 @@ class TestExtractBatteryFlag:
 class TestBatteryFlagToPercent:
     """Tests for _battery_flag_to_percent."""
 
-    @pytest.mark.parametrize("flag", [0, 1])
-    def test_normal_flags_map_to_full(self, flag):
-        """The corroborated readings both mean a healthy cell."""
-        assert _battery_flag_to_percent(flag) == 100
+    def test_the_proven_healthy_flag_maps_to_full(self):
+        """1 is the only reading ever paired with a healthy cell."""
+        assert _battery_flag_to_percent(1) == 100
 
-    @pytest.mark.parametrize("flag", [2, 3, 4, 255])
+    @pytest.mark.parametrize("flag", [0, 2, 3, 4, 255])
     def test_unproven_flags_map_to_none(self, flag):
-        """No capture pairs these with a charge level, so none is invented."""
+        """No capture pairs these with a charge level, so none is invented.
+
+        0 is in here rather than with the healthy flag above, and it is the
+        pair with _battery_flag_is_low that makes it belong there: the two
+        functions read one byte and may not disagree about an unobserved value.
+        """
         assert _battery_flag_to_percent(flag) is None
 
     def test_missing_flag_maps_to_none(self):
@@ -145,8 +149,8 @@ class TestBatteryFlagIsLow:
     def test_unproven_flags_read_as_unknown(self, flag):
         """Nothing places these on the scale, 0 included, so neither state is asserted.
 
-        The percentage mapping does treat 0 as full, but no capture has shown
-        a 0 and this entity is what battery alerts subscribe to.
+        _battery_flag_to_percent gives 0 no percentage either: the two read one
+        byte and may not disagree about an unobserved value.
         """
         assert _battery_flag_is_low(flag) is None
 

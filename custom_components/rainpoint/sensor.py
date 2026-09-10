@@ -13,7 +13,6 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    PERCENTAGE,
     EntityCategory,
     UnitOfTime,
     UnitOfVolume,
@@ -60,7 +59,6 @@ from .coordinator import (
     is_hub_record,
 )
 from .diagnostic_sensors import (
-    RainPointBatterySensor,
     RainPointFirmwareVersionSensor,
     RainPointLastUpdatedSensor,
     RainPointRSSISensor,
@@ -111,10 +109,9 @@ def _make_display_hub_entities(coordinator, key, info, base_slug):
 
 
 def _make_diagnostic_entities(coordinator, key, info, base_slug):
-    """Generic RSSI / battery / firmware / last-updated diagnostic set."""
+    """Generic RSSI / firmware / last-updated diagnostic set."""
     return [
         RainPointRSSISensor(coordinator, key, info, base_slug),
-        RainPointBatterySensor(coordinator, key, info, base_slug),
         RainPointFirmwareVersionSensor(coordinator, key, info, base_slug),
         RainPointLastUpdatedSensor(coordinator, key, info, base_slug),
     ]
@@ -165,10 +162,10 @@ def _make_flowmeter_entities(coordinator, key, info, base_slug):
     been carrying them since before they had values keeps its history and any
     automation referencing them. Only the flow-rate entity is new.
 
-    Battery is the existing Flow Battery entity rather than the shared
-    RainPointBatterySensor the other factories add, so the meter gains no
-    second battery entity alongside the one already in users' registries. The
-    remaining shared diagnostics have no such counterpart and are added.
+    No battery entity: the meter's Flow Battery rendered the STA_BAT byte as a
+    percentage, and no capture from this model pairs that byte with a charge
+    level. The Battery Low binary sensor carries the signal instead, and the
+    leftover Flow Battery row is surfaced by the orphaned-entity repair flow.
     """
     return [
         RainPointFlowRateSensor(coordinator, key, info, base_slug),
@@ -178,7 +175,6 @@ def _make_flowmeter_entities(coordinator, key, info, base_slug):
         RainPointFlowLastUsedDurationSensor(coordinator, key, info, base_slug),
         RainPointFlowTotalTodaySensor(coordinator, key, info, base_slug),
         RainPointFlowTotalSensor(coordinator, key, info, base_slug),
-        RainPointFlowBatterySensor(coordinator, key, info, base_slug),
         RainPointRSSISensor(coordinator, key, info, base_slug),
         RainPointFirmwareVersionSensor(coordinator, key, info, base_slug),
         RainPointLastUpdatedSensor(coordinator, key, info, base_slug),
@@ -192,7 +188,6 @@ def _make_co2_entities(coordinator, key, info, base_slug):
         RainPointCO2HighSensor(coordinator, key, info, base_slug),
         RainPointCO2TempSensor(coordinator, key, info, base_slug),
         RainPointCO2HumiditySensor(coordinator, key, info, base_slug),
-        RainPointCO2BatterySensor(coordinator, key, info, base_slug),
     ]
 
 
@@ -207,7 +202,6 @@ def _make_pool_entities(coordinator, key, info, base_slug):
     """
     return [
         RainPointPoolCurrentTempSensor(coordinator, key, info, base_slug),
-        RainPointPoolBatterySensor(coordinator, key, info, base_slug),
     ]
 
 
@@ -226,17 +220,19 @@ def _make_pool_plus_entities(coordinator, key, info, base_slug):
 
 
 def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
-    """Battery, signal, and per-zone water usage and run duration for the HTV213/245/345/405 valve family.
+    """Signal, and per-zone water usage and run duration, for the HTV213/245/345/405 valve family.
 
     All four models share decode_htv213frf_valve and declare the same catalog
     identities, differing only in port count, so they share this factory too.
 
     Zone control lives on the valve/number platforms; the sensor platform
-    surfaces the battery status word and RSSI these hubs carry in their status
-    frame, plus one water-usage entity and one run-duration entity per zone
-    the frame actually reports. The decoder leaves battery_percent/rssi_dbm
-    absent when the frame lacks them, so the entities read unknown rather
-    than a false value.
+    surfaces the RSSI these hubs carry in their status frame, plus one
+    water-usage entity and one run-duration entity per zone the frame actually
+    reports. The decoder leaves rssi_dbm absent when the frame lacks it, so the
+    entity reads unknown rather than a false value. The battery status word
+    reads as a low/normal condition on every capture from this family rather
+    than as a level, so it is the Battery Low binary sensor rather than a
+    reading here.
 
     Zones come from the decoded payload rather than the model name, mirroring
     valve.py and number.py, so a hub that reports fewer zones than its model
@@ -247,7 +243,6 @@ def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
     like the zone itself was not reported.
     """
     entities = [
-        RainPointBatterySensor(coordinator, key, info, base_slug),
         RainPointRSSISensor(coordinator, key, info, base_slug),
     ]
     zones = (info.get("data") or {}).get("zones")
@@ -258,12 +253,12 @@ def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
 
 
 def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
-    """Battery, signal and the outlet's run duration for the single-outlet timers.
+    """Signal and the outlet's run duration for the single-outlet timers.
 
     The HTV113FRF, HTV145FRF and HTV157B share one decoder and one outlet, so
-    they share this factory. Battery reads unknown on a unit whose STA_BAT
-    flag no capture pairs with a charge level rather than showing an invented
-    percentage, which is the same trade the HTV213 factory documents.
+    they share this factory. No battery reading, for the reason the HTV213
+    factory documents: STA_BAT reads as a low/normal condition on every capture
+    from these models, and the Battery Low binary sensor is what carries it.
 
     No water-usage entity, unlike that factory: these frames do carry
     STA_LASTUSAGE, but no capture pairs it against a total the app displays,
@@ -275,7 +270,6 @@ def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
     outlet grows no run-duration entity.
     """
     entities = [
-        RainPointBatterySensor(coordinator, key, info, base_slug),
         RainPointRSSISensor(coordinator, key, info, base_slug),
     ]
     zones = (info.get("data") or {}).get("zones")
@@ -285,7 +279,7 @@ def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
 
 
 def _make_htv210b_entities(coordinator, key, info, base_slug):
-    """Battery, signal, and per-zone state for the HTV210B Bluetooth valve.
+    """Signal and per-zone state for the HTV210B Bluetooth valve.
 
     Hub-paired, this valve reports the same status-frame family as the HTV213
     group, and now also gets valve and duration entities, commanded over the
@@ -303,7 +297,6 @@ def _make_htv210b_entities(coordinator, key, info, base_slug):
     the HTV213 factory, so only zones the frame reports grow entities.
     """
     entities = [
-        RainPointBatterySensor(coordinator, key, info, base_slug),
         RainPointRSSISensor(coordinator, key, info, base_slug),
     ]
     zones = (info.get("data") or {}).get("zones")
@@ -470,7 +463,7 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
         # Must run before the factory lookup: a silent entry has no payload of
         # any kind, but MODEL_HTV210B -- the device this guard was written for --
         # HAS a factory (_make_htv210b_entities), and reaching it here would
-        # emit a battery/RSSI pair that reads available with a native_value of
+        # emit a signal sensor that reads available with a native_value of
         # None, exactly the "looks wired up while reading nothing" outcome this
         # guard exists to prevent. No generic entities and no Raw Payload
         # sensor either: there
@@ -1096,30 +1089,6 @@ class RainPointFlowTotalSensor(RainPointSensorBase):
         return data.get("flowtotal") if data else None
 
 
-class RainPointFlowBatterySensor(RainPointSensorBase):
-    """The meter's battery, kept under its shipped name rather than replaced.
-
-    Reads the same STA_BAT flag the shared RainPointBatterySensor does, so it
-    is 100 or unknown and never an invented intermediate level, and it carries
-    no state class for the reason that class documents.
-    """
-
-    _attr_device_class = SensorDeviceClass.BATTERY
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = None
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
-        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        self._attr_unique_id = f"rainpoint_{base_slug}_flow_battery"
-        self._attr_name = "Flow Battery"
-
-    @property
-    def native_value(self):
-        data = self._sensor_data
-        return data.get("flowbatt") if data else None
-
-
 # HCS0530THO (CO2/Temp/Humidity)
 class RainPointCO2Sensor(RainPointSensorBase):
     _attr_device_class = SensorDeviceClass.CO2
@@ -1201,23 +1170,6 @@ class RainPointCO2HumiditySensor(RainPointSensorBase):
         return data.get("co2humidity") if data else None
 
 
-class RainPointCO2BatterySensor(RainPointSensorBase):
-    # No state class, for the reason RainPointBatterySensor documents.
-    _attr_device_class = SensorDeviceClass.BATTERY
-    _attr_native_unit_of_measurement = "%"
-    _attr_state_class = None
-
-    def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
-        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        self._attr_unique_id = f"rainpoint_{base_slug}_co2_battery"
-        self._attr_name = "CO2 Battery"
-
-    @property
-    def native_value(self):
-        data = self._sensor_data
-        return data.get("co2batt") if data else None
-
-
 # HCS0528ARF (Pool/Temperature)
 class RainPointPoolCurrentTempSensor(RainPointSensorBase):
     _attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -1233,23 +1185,6 @@ class RainPointPoolCurrentTempSensor(RainPointSensorBase):
     def native_value(self):
         data = self._sensor_data
         return data.get("tempcurrent") if data else None
-
-
-class RainPointPoolBatterySensor(RainPointSensorBase):
-    # No state class, for the reason RainPointBatterySensor documents.
-    _attr_device_class = SensorDeviceClass.BATTERY
-    _attr_native_unit_of_measurement = "%"
-    _attr_state_class = None
-
-    def __init__(self, coordinator, sensor_key, sensor_info, base_slug):
-        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        self._attr_unique_id = f"rainpoint_{base_slug}_pool_battery"
-        self._attr_name = "Pool Battery"
-
-    @property
-    def native_value(self):
-        data = self._sensor_data
-        return data.get("battery_percent") if data else None
 
 
 # HCS015ARF+ (Pool + Ambient temp/humidity)
