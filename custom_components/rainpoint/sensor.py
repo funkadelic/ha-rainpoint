@@ -220,7 +220,7 @@ def _make_pool_plus_entities(coordinator, key, info, base_slug):
 
 
 def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
-    """Battery, signal, and per-zone water usage and run duration for the HTV213/245/345/405 valve family.
+    """Signal, and per-zone water usage and run duration, for the HTV213/245/345/405 valve family.
 
     All four models share decode_htv213frf_valve and declare the same catalog
     identities, differing only in port count, so they share this factory too.
@@ -253,7 +253,7 @@ def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
 
 
 def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
-    """Battery, signal and the outlet's run duration for the single-outlet timers.
+    """Signal and the outlet's run duration for the single-outlet timers.
 
     The HTV113FRF, HTV145FRF and HTV157B share one decoder and one outlet, so
     they share this factory. No battery reading, for the reason the HTV213
@@ -279,7 +279,7 @@ def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
 
 
 def _make_htv210b_entities(coordinator, key, info, base_slug):
-    """Battery, signal, and per-zone state for the HTV210B Bluetooth valve.
+    """Signal and per-zone state for the HTV210B Bluetooth valve.
 
     Hub-paired, this valve reports the same status-frame family as the HTV213
     group, and now also gets valve and duration entities, commanded over the
@@ -463,7 +463,7 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
         # Must run before the factory lookup: a silent entry has no payload of
         # any kind, but MODEL_HTV210B -- the device this guard was written for --
         # HAS a factory (_make_htv210b_entities), and reaching it here would
-        # emit a battery/RSSI pair that reads available with a native_value of
+        # emit a signal sensor that reads available with a native_value of
         # None, exactly the "looks wired up while reading nothing" outcome this
         # guard exists to prevent. No generic entities and no Raw Payload
         # sensor either: there

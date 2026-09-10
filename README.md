@@ -55,9 +55,9 @@ This integration supports RainPoint Smart+ device families, including:
 
 | Family | Examples | Entities Created |
 | ------ | -------- | ---------------- |
-| Valve hubs | HTV245FRF*, HTV213FRF, HTV345FRF, HTV405FRF, HTV445FRF*, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone |
+| Valve hubs | HTV245FRF*, HTV213FRF, HTV345FRF, HTV405FRF, HTV445FRF*, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone, battery low, signal strength |
 | Single-outlet timers | HTV113FRF, HTV145FRF, HTV157B | Valve, duration number, run duration sensor, battery low, signal strength |
-| Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance |
+| Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance, battery low, signal strength |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
 | Rain detectors | HCS044FRF* | Rain detected, battery low, signal strength |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
@@ -173,7 +173,7 @@ For each device the coordinator discovers, the integration creates:
 - **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API. A device that returns no readings at all gets a single **Not Reporting** diagnostic entity instead, and no Raw Payload sensor, because there is no payload to show.
 - **Station watering sensors**: one per station on the HIC801W irrigation controller, showing whether that station is currently watering. See [Supported devices](#supported-devices) for the rest of what it reports.
 - **Rain Detected**: one binary sensor per HCS044FRF rain detector, on while the sensor is wet.
-- **Battery Low**: one binary sensor per battery-powered device, on while RainPoint reports that device's cells as low. It answers low or not rather than how much is left, because the reading behind it is a condition rather than a charge level on every device this integration has seen a payload from. This replaces the battery percentage entities earlier versions built, which could only ever read 100% or nothing at all; a repair card offers to remove the ones left in your registry.
+- **Battery Low**: one binary sensor for each device that reports a battery condition, on while RainPoint says that device's cells are low. It answers low or not rather than how much is left, because the reading behind it is a condition rather than a charge level on every device this integration has seen a payload from. Not every battery device sends it: the temperature and humidity sensor and the CO2 sensor report no battery condition at all, so they get no entity here. This replaces the battery percentage entities earlier versions built, which could only ever read 100% or nothing at all, and a repair card offers to remove the ones left in your registry. The opt-in entities for unsupported devices are the exception and still carry a battery percentage, since a low-battery reading is not available on that path yet.
 - **Valve entities**: one per irrigation zone, for the valve models listed in the table above, including the HTV210B while it is hub-paired, and one per station on the HIC801W irrigation controller. A device the integration cannot currently reach gets no valve entity, as described under [Supported devices](#supported-devices).
 - **Number entities**: one per zone, or per station on the HIC801W, for configuring run duration (1 to 60 minutes), on those same models. The duration applies to the next run: changing it while that zone is already watering is refused with an explanation, and the value you typed is not saved, so set it again once the run ends. A refused change can leave the number box showing what you typed until you reload the page; the saved duration and the run in progress are both unaffected.
 - **Hub diagnostic sensors**: RSSI, firmware version, last-data-change timestamp.
