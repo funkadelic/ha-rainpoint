@@ -63,6 +63,7 @@ from .utils import (
     _splice_hub_broadcast_param,
     _splice_sub_power_mode,
     _summarize_record,
+    _valid_rssi_dbm,
 )
 from .validators import (
     _battery_flag_is_low,
@@ -103,6 +104,7 @@ __all__ = [
     "_splice_hub_broadcast_param",
     "_splice_sub_power_mode",
     "_summarize_record",
+    "_valid_rssi_dbm",
     "_validate_payload",
     "_validate_tag",
     # Decoders

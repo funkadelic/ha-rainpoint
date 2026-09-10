@@ -670,10 +670,29 @@ def _f10_to_c(temp_raw_f10: int) -> float:
     return (temp_raw_f10 / 10.0 - 32.0) * 5.0 / 9.0
 
 
-def _base_decoder_dict(device_type: str, rssi: int, raw_bytes: bytes) -> dict:
+def _valid_rssi_dbm(value) -> int | None:
+    """Return a signal reading only when it is one, else None.
+
+    A dBm reading off these radios is negative. Zero or a positive number
+    means the frame carried no signal record and something upstream supplied a
+    placeholder or read the wrong byte, and publishing it puts a number in
+    front of the user where unknown is the honest answer. Applied where the
+    reading is written rather than where it is read, so the attributes and the
+    diagnostics dump inherit the same guarantee the entity does.
+
+    Note the shape this cannot catch: a negative number read out of the wrong
+    byte is still negative. Only a structural read fixes that, which is why the
+    dp_id-prefixed decoders locate their record rather than trusting an offset.
+    """
+    if not isinstance(value, int) or isinstance(value, bool) or value >= 0:
+        return None
+    return value
+
+
+def _base_decoder_dict(device_type: str, rssi: int | None, raw_bytes: bytes) -> dict:
     """Create base decoder dictionary with common fields."""
     return {
         "type": device_type,
-        "rssi_dbm": rssi,
+        "rssi_dbm": _valid_rssi_dbm(rssi),
         "raw_bytes": raw_bytes,
     }

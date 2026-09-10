@@ -807,6 +807,18 @@ class TestDecodeValveHub:
         # 0x012C little-endian = 300
         assert zone1["duration_seconds"] == 300
 
+    def test_a_frame_with_no_signal_record_reports_no_signal(self):
+        """This frame carries no STA_RSSI record, so the answer is unknown.
+
+        It leads with the STA_BAT record (18 dc 01), and the fixed-offset read
+        this decoder used to do returned b[1], the 0xDC header byte, as -36
+        dBm. That number is negative and entirely plausible, so no sign check
+        would ever have caught it; only locating the record does. There is no
+        0xE1 byte anywhere in the frame to find.
+        """
+        assert "e1" not in VALVE_HUB_TLV_PAYLOAD.split("#", 1)[1].lower()
+        assert decode_valve_hub(VALVE_HUB_TLV_PAYLOAD)["rssi_dbm"] is None
+
 
 class TestDecodeRain:
     """Tests for decode_rain (HCS012ARF rain gauge)."""
@@ -819,6 +831,17 @@ class TestDecodeRain:
         assert result["rain_last_24h_mm"] == 187.0
         assert result["rain_last_7d_mm"] == 187.0
         assert result["rain_total_mm"] == 187.0
+
+    def test_the_gauge_reports_no_signal_rather_than_zero_dbm(self):
+        """The rain gauge sends no signal reading, and its frame says so twice.
+
+        Its STA_RSSI record is the literal E1 00 00 that the vendor sends when
+        there is nothing to report, and this decoder passed a hardcoded 0 into
+        the shared builder besides. Either way 0 dBm is a number where unknown
+        is the answer.
+        """
+        assert RAIN_HEX_PAYLOAD.split("#", 1)[1].lower().startswith("e10000")
+        assert decode_rain(RAIN_HEX_PAYLOAD)["rssi_dbm"] is None
 
     def test_battery_and_report_time(self):
         """Battery reads the STA_BAT record and the frame's own clock is decoded.
@@ -1239,6 +1262,9 @@ class TestValveHubErrorPath:
         assert result["decoder"] == "valve_hub_error"
         assert result["zones"] == {}
         assert result["raw_bytes"] == []
+        # A frame that did not decode carries no reading of any kind. This was
+        # 0, which the signal entity rendered as a confident "0 dBm".
+        assert result["rssi_dbm"] is None
         assert "missing" in result["error"].lower() or "unknown" in result["error"].lower()
 
     def test_low_battery_flag_leaves_zones_online(self):

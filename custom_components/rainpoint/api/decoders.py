@@ -32,6 +32,7 @@ from .utils import (
     _parse_entries,
     _parse_rainpoint_payload,
     _parse_tlv_payload,
+    _valid_rssi_dbm,
 )
 from .validators import (
     _battery_flag_to_percent,
@@ -108,7 +109,7 @@ def decode_htv213frf_valve(raw: str) -> dict:
         _LOGGER.exception("HTV213FRF router error for payload %r", raw)
         return {
             "type": "valve_hub",
-            "rssi_dbm": 0,
+            "rssi_dbm": None,
             "raw_bytes": [],
             "zones": {},
             "tlv_raw": {},
@@ -964,7 +965,7 @@ def decode_moisture_full(raw: str) -> dict:
 
     except Exception as e:
         _LOGGER.exception("HCS021FRF decoder error")
-        return {"type": "moisture_full", "rssi_dbm": 0, "raw_bytes": [], "decoder": "hcs021frf_error", "error": str(e)}
+        return {"type": "moisture_full", "rssi_dbm": None, "raw_bytes": [], "decoder": "hcs021frf_error", "error": str(e)}
 
 
 def _decode_moisture_full_ascii(raw: str) -> dict:
@@ -1352,7 +1353,7 @@ def _valve_hub_error_result(error: str) -> dict:
     """Shape the error fallback dict returned when decoding fails."""
     return {
         "type": "valve_hub",
-        "rssi_dbm": 0,
+        "rssi_dbm": None,
         "raw_bytes": [],
         "zones": {},
         "tlv_raw": {},
@@ -1391,7 +1392,7 @@ def decode_valve_hub(raw: str) -> dict:
 
         result = {
             "type": "valve_hub",
-            "rssi_dbm": _extract_rssi(b) if len(b) > 1 else 0,
+            "rssi_dbm": _rssi_dbm_from_record(_find_field_value(b, STA_RSSI_FIELD, dp_id_prefixed=True)),
             "raw_bytes": b,
             "zones": zones,
             "tlv_raw": tlv,
@@ -1666,7 +1667,7 @@ def decode_pool_plus(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _extract_rssi(b)
+            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
 
         # Basic CO2 parsing - can be enhanced with exact RainPoint logic later
         _LOGGER.debug(debug_with_version("HCS0530THO basic parsing completed"))
@@ -1692,7 +1693,7 @@ def decode_soil(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _extract_rssi(b)
+            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1716,7 +1717,7 @@ def decode_temp_hum(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _extract_rssi(b)
+            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1740,7 +1741,7 @@ def decode_temp_hum_full(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _extract_rssi(b)
+            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1764,7 +1765,7 @@ def decode_co2(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _extract_rssi(b)
+            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1788,7 +1789,7 @@ def decode_display(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _extract_rssi(b)
+            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1812,7 +1813,7 @@ def decode_unknown(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _extract_rssi(b)
+            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1837,7 +1838,7 @@ def decode_temphum(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _extract_rssi(b)
+            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
