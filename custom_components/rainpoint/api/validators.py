@@ -82,8 +82,8 @@ _BATTERY_FLAG_LOW = 2
 def _battery_flag_to_percent(flag: int | None) -> int | None:
     """Map a raw STA_BAT flag to a percentage, or None when unproven.
 
-    No capture pairs a flag with a charge level, so no flag earns a percentage:
-    a wrong number here would be indistinguishable from a real one downstream.
+    No capture pairs a flag with a charge level, so no flag earns a measured
+    percentage: a wrong number would be indistinguishable from a real one.
     Only the proven-healthy flag reads as full, which is the same value
     _battery_flag_is_low answers not-low on: the two read one byte and may not
     disagree about it.

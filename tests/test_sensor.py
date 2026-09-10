@@ -1895,7 +1895,7 @@ class TestZoneRunDurationSensor:
 
     @pytest.mark.asyncio
     async def test_no_duration_entities_when_zones_are_malformed(self):
-        """A decode without a usable zones dict still produces battery and signal, no duration entities."""
+        """A decode without a usable zones dict still produces signal, no duration entities."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
@@ -2417,7 +2417,7 @@ class TestZoneRunDurationLateArrival:
 
 
 class TestHtv210bDispatch:
-    """The HTV210B gets battery + signal + per-zone state sensors, no usage entities."""
+    """The HTV210B gets signal + per-zone state sensors, no usage entities."""
 
     @staticmethod
     def _entry(zones):
@@ -2564,7 +2564,7 @@ class TestHic801wDispatch:
         ]
 
     @pytest.mark.asyncio
-    async def test_no_battery_rssi_unknown_or_zone_state_entities(self):
+    async def test_no_rssi_unknown_or_zone_state_entities(self):
         """No diagnostic pair and no fallback entity: this model has a real
         factory, so RainPointUnknownSensor must never appear for it either."""
         captured = await self._setup()

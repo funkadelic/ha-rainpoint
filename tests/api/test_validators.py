@@ -149,8 +149,8 @@ class TestBatteryFlagIsLow:
     def test_unproven_flags_read_as_unknown(self, flag):
         """Nothing places these on the scale, 0 included, so neither state is asserted.
 
-        The percentage mapping does treat 0 as full, but no capture has shown
-        a 0 and this entity is what battery alerts subscribe to.
+        _battery_flag_to_percent gives 0 no percentage either: the two read one
+        byte and may not disagree about an unobserved value.
         """
         assert _battery_flag_is_low(flag) is None
 
