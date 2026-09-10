@@ -306,7 +306,7 @@ def _seed_adder() -> LateEntityAdder:
     session, so every scan test needs one ledger entry that is not the row
     under test.
     """
-    return _adder_with("sensor", [f"rainpoint_{SENSOR_KEY}_battery"])
+    return _adder_with("sensor", [f"rainpoint_{SENSOR_KEY}_rssi"])
 
 
 def _derive(harness: _Harness, *, adders=None, live_keys=frozenset({SENSOR_KEY})) -> dict:
@@ -541,6 +541,29 @@ class TestWhatTheScanMayNotReach:
 
         assert _derive(harness) == {SENSOR_KEY: frozenset({("sensor", unique_id)})}
 
+    @pytest.mark.parametrize(
+        "unique_id",
+        [
+            f"rainpoint_{SENSOR_KEY}_battery",
+            f"rainpoint_{SENSOR_KEY}_flow_battery",
+            f"rainpoint_{SENSOR_KEY}_co2_battery",
+            f"rainpoint_{SENSOR_KEY}_pool_battery",
+        ],
+    )
+    def test_a_retired_battery_percentage_row_is_a_candidate(self, unique_id):
+        """The four battery percentage ids reach this card and nothing else does the job.
+
+        Those entity classes were deleted from the code, so no ledger can name
+        their rows and the departed-key shape never sees them: the device is
+        still listed and still reporting. This scan is the only derivation that
+        can reach a row an entity class left behind, which is what makes the
+        removal an offer the user confirms rather than rows stranded forever.
+        """
+        harness = _Harness()
+        harness.add_leftover_row(entity_id=f"sensor.{unique_id}", unique_id=unique_id)
+
+        assert _derive(harness) == {SENSOR_KEY: frozenset({("sensor", unique_id)})}
+
     def test_a_row_carrying_no_string_unique_id_is_never_a_candidate(self):
         """A row shape the scan cannot name a pair for cannot be removed by one."""
         harness = _Harness()
@@ -560,7 +583,7 @@ class TestWhatTheScanMayNotReach:
         """That row belongs to the departed-key shape, whose scope is the
         ledger. Two shapes claiming one row is how a live row gets deleted."""
         harness = _Harness()
-        recorded = f"rainpoint_{SENSOR_KEY}_battery"
+        recorded = f"rainpoint_{SENSOR_KEY}_rssi"
         harness.add_leftover_row(entity_id=f"sensor.{recorded}", unique_id=recorded)
 
         assert _derive(harness) == {}
@@ -570,7 +593,7 @@ class TestWhatTheScanMayNotReach:
         partial identifier. The recorded pair is spared and the unrecorded one
         in the other domain is offered, from one and the same id."""
         harness = _Harness()
-        recorded = f"rainpoint_{SENSOR_KEY}_battery"
+        recorded = f"rainpoint_{SENSOR_KEY}_rssi"
         harness.add_leftover_row(entity_id=f"sensor.{recorded}", unique_id=recorded)
         harness.add_leftover_row(entity_id=f"binary_sensor.{recorded}", unique_id=recorded)
 
@@ -1343,7 +1366,7 @@ class TestTheScanDegradesRatherThanRaising:
         rows would read as unrecorded and become candidates."""
         broken = SimpleNamespace()
         harness = _Harness()
-        recorded = f"rainpoint_{SENSOR_KEY}_battery"
+        recorded = f"rainpoint_{SENSOR_KEY}_rssi"
         harness.add_leftover_row(entity_id=f"sensor.{recorded}", unique_id=recorded)
         harness.add_leftover_row()
 
@@ -1353,7 +1376,7 @@ class TestTheScanDegradesRatherThanRaising:
         """The index in isolation, which is what the claim above rests on."""
         pairs = _ledger_pairs_by_key([SimpleNamespace(), _seed_adder()])
 
-        assert pairs == {SENSOR_KEY: {("sensor", f"rainpoint_{SENSOR_KEY}_battery")}}
+        assert pairs == {SENSOR_KEY: {("sensor", f"rainpoint_{SENSOR_KEY}_rssi")}}
 
 
 class TestTheOrderRowsArriveInDoesNotMatter:
@@ -1366,7 +1389,7 @@ class TestTheOrderRowsArriveInDoesNotMatter:
         for index in range(4):
             unique_id = f"rainpoint_{SENSOR_KEY}_dead{index}"
             forward.add_leftover_row(entity_id=f"sensor.{unique_id}", unique_id=unique_id)
-        forward.add_row(f"sensor.rainpoint_{SENSOR_KEY}_battery", f"rainpoint_{SENSOR_KEY}_battery", state=_live_state())
+        forward.add_row(f"sensor.rainpoint_{SENSOR_KEY}_rssi", f"rainpoint_{SENSOR_KEY}_rssi", state=_live_state())
 
         reverse = _Harness()
         reverse.entity_rows = list(reversed(forward.entity_rows))
@@ -1439,14 +1462,14 @@ class TestWhatTheConfirmMayTake:
         its device row would take a live device's page."""
         harness = _Harness()
         harness.add_leftover_row()
-        harness.add_row(f"sensor.rainpoint_{SENSOR_KEY}_battery", f"rainpoint_{SENSOR_KEY}_battery", state=_live_state())
+        harness.add_row(f"sensor.rainpoint_{SENSOR_KEY}_rssi", f"rainpoint_{SENSOR_KEY}_rssi", state=_live_state())
 
         count, adder = self._confirm(harness, frozenset({("sensor", LEFTOVER_UNIQUE_ID)}))
 
         assert count == 1
         assert harness.removed == [LEFTOVER_ENTITY_ID]
         assert harness.released == []
-        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_battery"})
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_rssi"})
 
     def test_only_the_exactly_matching_pair_goes_when_two_domains_share_one_id(self):
         """The adjacency case as a removal rather than as a derivation: naming
@@ -1486,7 +1509,7 @@ class TestWhatTheConfirmMayTake:
         assert harness.removed == []
         assert harness.released == []
         # The ledger is untouched: this shape never resolves through it.
-        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_battery"})
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_rssi"})
         breadcrumbs = [r.getMessage() for r in caplog.records if "No leftover rows were in scope" in r.getMessage()]
         assert len(breadcrumbs) == 1
         assert SENSOR_KEY in breadcrumbs[0]
@@ -1509,7 +1532,7 @@ class TestWhatTheConfirmMayTake:
 
         assert count == 1
         assert harness.removed == [f"sensor.{second}"]
-        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_battery"})
+        assert adder.ledger.unique_ids_for(SENSOR_KEY) == frozenset({f"rainpoint_{SENSOR_KEY}_rssi"})
 
 
 class TestTheCardSaysWhatTheConfirmWillTake:
