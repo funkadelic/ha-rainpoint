@@ -490,7 +490,7 @@ _HTV210B_DP_RSSI = 0x17
 _DURATION_WIDTHS = (2, 4)
 
 
-def _rssi_dbm_from_record(value: bytes | None) -> int | None:
+def _rssi_dbm_from_record(value: bytes | list[int] | None) -> int | None:
     """Return the signed dBm from an RSSI record's value bytes, or None.
 
     Read structurally rather than through _extract_htv213_rssi's byte-pattern
@@ -1457,7 +1457,11 @@ def decode_rain(raw: str) -> dict:
 
     battery_flag = _extract_battery_flag(b)
 
-    result = _base_decoder_dict("rain", 0, b)  # Rain gauge doesn't have RSSI in standard position
+    # Read structurally rather than assumed absent: this frame does carry a
+    # STA_RSSI record, and the captured gauge's happens to hold the vendor's
+    # empty value. A hardcoded placeholder would report nothing on a gauge that
+    # does send a reading.
+    result = _base_decoder_dict("rain", _rssi_dbm_from_record(_find_field_value(b, STA_RSSI_FIELD)), b)
     result.update(
         {
             "rain_last_hour_mm": last_hour_raw10 / 10.0,
