@@ -119,6 +119,18 @@ To do it by hand instead:
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & Services → Add Integration** and search for **RainPoint Cloud**.
 
+### Installing a beta build
+
+Support for a new device, or a fix, sometimes ships as a beta first, so whoever reported it can confirm it works before it reaches everyone.
+
+1. In Home Assistant, open **HACS** from the sidebar and open **RainPoint Cloud**.
+2. Choose **Redownload** from the three-dot menu, then expand **Need a different version?**.
+3. In the **Release** dropdown, pick the version tagged **pre-release**, click **Download**, and restart Home Assistant.
+
+HACS leaves betas out of its update checks, so it will not tell you one is available. If you want it to offer them, turn on **Show disabled entities** under **Settings → Devices & Services → Entities**, then find the pre-release switch HACS created for RainPoint Cloud and enable it.
+
+A beta is deleted once its changes reach a normal release, so reinstall the current stable version the same way if one disappears.
+
 ---
 
 ## Configuration
