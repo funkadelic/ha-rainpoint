@@ -67,11 +67,12 @@ def _extract_battery_flag(b: bytes, *, dp_id_prefixed: bool = False) -> int | No
 # a wrong number here is indistinguishable from a real one downstream.
 _BATTERY_FLAG_NORMAL = {0, 1}
 
-# STA_BAT 2 is the low-battery condition. Over 2026-09-06 to 2026-09-09 on a
-# live HTV245FRF, all 17 of the cloud's own low-battery events (event/list
-# code 143) landed on a poll reading 2 and none on a poll reading 1. Both
-# come from the same device report, so this labels the flag rather than
-# corroborating it twice.
+# STA_BAT 2 is the low-battery condition, established by replacing the cells
+# rather than by correlation alone. A live HTV245FRF held 2 for 4h44m and
+# read 1 on its first report after fresh batteries went in, 2026-09-09 22:37
+# PDT, with nothing else about the device changed. Before that, all 17 of the
+# cloud's own low-battery events (event/list code 143) had landed on a poll
+# reading 2 and none on a poll reading 1.
 #
 # 1 is the only value proven to mean a healthy cell, so it is the only one
 # this reads as normal. The percentage above also treats 0 as full, but no
