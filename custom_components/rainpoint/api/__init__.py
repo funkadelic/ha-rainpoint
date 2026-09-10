@@ -65,6 +65,7 @@ from .utils import (
     _summarize_record,
 )
 from .validators import (
+    _battery_flag_is_low,
     _battery_flag_to_percent,
     _extract_battery_flag,
     _extract_rssi,
@@ -82,6 +83,7 @@ __all__ = [
     "_RecordSummary",
     # Utils and decoder helpers
     "_base_decoder_dict",
+    "_battery_flag_is_low",
     "_battery_flag_to_percent",
     "_decode_packed_report_time",
     "_decode_packed_timestamp",

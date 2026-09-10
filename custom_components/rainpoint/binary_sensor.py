@@ -7,6 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .api import _battery_flag_is_low
 from .const import DOMAIN, HIC801W_STATION_COUNT, MODEL_HCS044FRF, MODEL_HIC801W
 from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .entity import LateEntityAdder, RainPointSubDeviceEntity, hic801w_station_is_running, register_late_adder
@@ -103,6 +104,53 @@ class RainPointRainDetectedBinarySensor(RainPointSubDeviceEntity, BinarySensorEn
         return data.get("rain_detected") if data else None
 
 
+class RainPointBatteryLowBinarySensor(RainPointSubDeviceEntity, BinarySensorEntity):
+    """Whether a sub-device is reporting a low battery.
+
+    Reads the STA_BAT flag, the only battery signal the cloud sends. There is
+    no charge level anywhere on this API, so this answers low or not rather
+    than how much is left, and it is unknown on any flag value that has never
+    been paired with a known battery state.
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.BATTERY
+
+    def __init__(
+        self,
+        coordinator: RainPointCoordinator,
+        sensor_key: str,
+        sensor_info: dict,
+        base_slug: str,
+    ) -> None:
+        """Bind to one sub-device key."""
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_battery_low"
+        self._attr_name = "Battery Low"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True when the flag reads low, None when it is unmapped."""
+        data = self._sensor_data
+        return _battery_flag_is_low(data.get("battery_flag")) if data else None
+
+
+def _build_battery_low_entities(coordinator: RainPointCoordinator, key: str, info: dict) -> list:
+    """Return the low-battery sensor for any key whose frame carries STA_BAT.
+
+    Keyed on the decoded flag rather than a model list, because STA_BAT is a
+    catalog-level datapoint that ten decoders already read the same way. A
+    mains-powered device omits the field and gets no entity.
+    """
+    data = info.get("data") or {}
+    if data.get("type") == SILENT_DATA_TYPE:
+        return []
+    if data.get("battery_flag") is None:
+        return []
+
+    base_slug = f"{info.get('hid', '')}_{info.get('mid', '')}_{info.get('addr', '')}"
+    return [RainPointBatteryLowBinarySensor(coordinator, key, info, base_slug)]
+
+
 def _build_rain_detector_entities(coordinator: RainPointCoordinator, key: str, info: dict) -> list:
     """Return the wet/dry sensor for one HCS044FRF key.
 
@@ -161,8 +209,9 @@ async def async_setup_entry(
     push being enabled, so it is only added when mqtt_client is present in
     the entry's object graph.
 
-    Two further populations, the HIC801W's eight per-station watering sensors
-    and the HCS044FRF's wet/dry sensor, are added through a LateEntityAdder the
+    Three further populations, the HIC801W's eight per-station watering
+    sensors, the HCS044FRF's wet/dry sensor and a low-battery sensor for every
+    sub-device whose frame carries STA_BAT, are added through a LateEntityAdder the
     same way valve.py and number.py already do. Entity creation is otherwise one-shot from the single
     post-first-refresh snapshot, so a controller that is silent at setup
     would be unreachable rather than delayed without the adder also armed as
@@ -184,6 +233,7 @@ async def async_setup_entry(
         return [
             *_build_hic801w_station_entities(coordinator, key, info),
             *_build_rain_detector_entities(coordinator, key, info),
+            *_build_battery_low_entities(coordinator, key, info),
         ]
 
     # The literal the PLATFORMS list and every entity_id prefix already use,
