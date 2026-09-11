@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from typing import ClassVar
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import UnitOfTime
+from homeassistant.helpers.entity import EntityCategory
 
+import custom_components.rainpoint.coordinator as _coord_module
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import RainPointApiError, decode_hic801w, decode_htv213frf_valve
@@ -37,11 +40,15 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_345,
     MODEL_VALVE_405,
     MODEL_VALVE_445,
+    MODEL_VALVE_HUB,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from custom_components.rainpoint.entity import late_adders, register_late_adder
 from custom_components.rainpoint.sensor import (
+    _MODEL_FACTORIES,
+    _SENSOR_MODEL_ALIASES,
     DisplayHubReadingSensor,
+    RainPointCatalogReadingsSensor,
     RainPointCO2HighSensor,
     RainPointCO2HumiditySensor,
     RainPointCO2LowSensor,
@@ -86,7 +93,9 @@ from custom_components.rainpoint.sensor import (
     RainPointZoneRunDurationSensor,
     RainPointZoneStateSensor,
     RainPointZoneWaterUsageSensor,
+    _create_sensor_entities,
     _LateSensorEntityAdder,
+    _make_unknown_entities,
     _render_station_list,
     _slugify,
     async_setup_entry,
@@ -186,9 +195,9 @@ class TestAsyncSetupEntryDispatch:
 
         await async_setup_entry(hass, entry, async_add_entities)
 
-        # 1 moisture + 3 diagnostics (RSSI, firmware, last_updated) + 1 raw payload = 5
+        # 1 moisture + 3 diagnostics (RSSI, firmware, last_updated) + 1 raw payload + 1 catalog coverage = 6
         assert async_add_entities.called
-        assert len(captured) == 5
+        assert len(captured) == 6
 
     @pytest.mark.asyncio
     async def test_setup_entry_moisture_full_creates_correct_entities(self):
@@ -220,12 +229,12 @@ class TestAsyncSetupEntryDispatch:
 
         await async_setup_entry(hass, entry, async_add_entities)
 
-        # 3 reading (moisture, temp, lux) + 3 diagnostics + 1 raw payload = 7
-        assert len(captured) == 7
+        # 3 reading (moisture, temp, lux) + 3 diagnostics + 1 raw payload + 1 catalog coverage = 8
+        assert len(captured) == 8
 
     @pytest.mark.asyncio
     async def test_setup_entry_rain_creates_4_rain_sensors(self):
-        """MODEL_RAIN -> 4 rain sensors + 1 raw payload = 5."""
+        """MODEL_RAIN -> 4 rain sensors + 1 raw payload + 1 catalog coverage = 6."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
@@ -252,8 +261,8 @@ class TestAsyncSetupEntryDispatch:
 
         await async_setup_entry(hass, entry, async_add_entities)
 
-        # 4 rain sensors + 1 raw payload = 5
-        assert len(captured) == 5
+        # 4 rain sensors + 1 raw payload + 1 catalog coverage = 6
+        assert len(captured) == 6
         rain_sensors = [e for e in captured if isinstance(e, RainPointRainSensor)]
         assert len(rain_sensors) == 4
 
@@ -283,8 +292,8 @@ class TestAsyncSetupEntryDispatch:
 
         await async_setup_entry(hass, entry, async_add_entities)
 
-        # 3 reading sensors + 1 raw payload = 4
-        assert len(captured) == 4
+        # 3 reading sensors + 1 raw payload + 1 catalog coverage = 5
+        assert len(captured) == 5
         display_sensors = [e for e in captured if isinstance(e, DisplayHubReadingSensor)]
         assert len(display_sensors) == 3
 
@@ -445,8 +454,8 @@ class TestAsyncSetupEntryDispatch:
 
         await async_setup_entry(hass, entry, async_add_entities)
 
-        # sensor 1: 5 entities; sensor 2: 5 entities = 10 total
-        assert len(captured) == 10
+        # sensor 1: 6 entities; sensor 2: 6 entities = 12 total
+        assert len(captured) == 12
 
 
 # ---------------------------------------------------------------------------
@@ -1426,8 +1435,8 @@ class TestHCSSensorDispatch:
         captured = []
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
-        # expected_moisture_like reading entities + 1 raw payload sensor
-        assert len(captured) == expected_moisture_like + 1
+        # expected_moisture_like reading entities + 1 raw payload + 1 catalog coverage
+        assert len(captured) == expected_moisture_like + 2
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1454,7 +1463,7 @@ class TestHCSSensorDispatch:
         await async_setup_entry(hass, entry, async_add_entities)
         # 1 pool entity + 1 raw payload sensor. No high/low pair: the device
         # reports a single STA_TEM reading, and its battery is a low/normal flag.
-        assert len(captured) == 2
+        assert len(captured) == 3
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1489,7 +1498,7 @@ class TestHCSSensorDispatch:
         captured = []
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
-        assert len(captured) == count + 1
+        assert len(captured) == count + 2
 
     @pytest.mark.asyncio
     async def test_unknown_model_with_unknown_type_creates_unknown_sensor(self):
@@ -1541,7 +1550,7 @@ class TestHCSSensorDispatch:
         captured = []
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
-        assert len(captured) == 10
+        assert len(captured) == 11
 
     @pytest.mark.asyncio
     async def test_pool_creates_its_one_reading_entity(self):
@@ -1562,7 +1571,7 @@ class TestHCSSensorDispatch:
         captured = []
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
-        assert len(captured) == 2
+        assert len(captured) == 3
 
 
 class TestHtvValveDiagnosticDispatch:
@@ -1595,8 +1604,8 @@ class TestHtvValveDiagnosticDispatch:
         assert len(rssi) == 1
         assert rssi[0].native_value == -37
         assert not any(getattr(e, "_attr_unique_id", "").endswith("_battery") for e in captured)
-        # 1 RSSI + 1 raw payload sensor, nothing else from this platform.
-        assert len(captured) == 2
+        # 1 RSSI + 1 raw payload + 1 catalog coverage, nothing else from this platform.
+        assert len(captured) == 3
 
 
 class TestSingleOutletTimerDispatch:
@@ -1635,8 +1644,8 @@ class TestSingleOutletTimerDispatch:
         duration = [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)]
         assert rssi[0].native_value == -62
         assert duration[0].native_value == 1200
-        # 1 RSSI + 1 run duration + 1 raw payload, nothing else.
-        assert len(captured) == 3
+        # 1 RSSI + 1 run duration + 1 raw payload + 1 catalog coverage, nothing else.
+        assert len(captured) == 4
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B])
@@ -1692,7 +1701,7 @@ class TestSingleOutletTimerDispatch:
         )
 
         assert [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)] == []
-        assert len(captured) == 2
+        assert len(captured) == 3
 
 
 class TestZoneWaterUsageSensor:
@@ -1761,7 +1770,7 @@ class TestZoneWaterUsageSensor:
         await async_setup_entry(hass, entry, async_add_entities)
 
         assert [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)] == []
-        assert len(captured) == 2
+        assert len(captured) == 3
 
     @pytest.mark.asyncio
     async def test_stays_out_of_long_term_statistics(self):
@@ -1912,7 +1921,7 @@ class TestZoneRunDurationSensor:
         await async_setup_entry(hass, entry, async_add_entities)
 
         assert [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)] == []
-        assert len(captured) == 2
+        assert len(captured) == 3
 
     @pytest.mark.asyncio
     async def test_declarations(self):
@@ -2343,6 +2352,7 @@ class TestRunDurationUniqueIdDisjointness:
         expected = {
             "rainpoint_100_200_1_rssi",
             "rainpoint_100_200_1_raw_payload",
+            "rainpoint_100_200_1_catalog_readings",
             "rainpoint_100_200_1_zone1_water_used",
             "rainpoint_100_200_1_zone1_run_duration",
             "rainpoint_100_200_1_zone1_duration",
@@ -2454,8 +2464,8 @@ class TestHtv210bDispatch:
         assert len(states) == 2
         assert states[0]._attr_unique_id == "rainpoint_100_200_3_zone1_state"
         assert states[0]._attr_name == "Zone 1 State"
-        # RSSI + 2 zone states + raw payload sensor, nothing else.
-        assert len(captured) == 4
+        # RSSI + 2 zone states + raw payload + catalog coverage, nothing else.
+        assert len(captured) == 5
 
     @pytest.mark.asyncio
     async def test_no_usage_entities_for_this_model(self):
@@ -2482,7 +2492,7 @@ class TestHtv210bDispatch:
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
         assert [e for e in captured if isinstance(e, RainPointZoneStateSensor)] == []
-        assert len(captured) == 2
+        assert len(captured) == 3
 
 
 class TestHic801wDispatch:
@@ -2538,7 +2548,7 @@ class TestHic801wDispatch:
         assert len([e for e in captured if isinstance(e, RainPointHicProgramStationsSensor)]) == 1
         assert len([e for e in captured if isinstance(e, RainPointHicProgramStationsCompletedSensor)]) == 1
         assert len([e for e in captured if isinstance(e, RainPointRawPayloadSensor)]) == 1
-        assert len(captured) == 6
+        assert len(captured) == 7
 
     @pytest.mark.asyncio
     async def test_make_hic801w_entities_emits_its_suffixes_in_declared_order(self):
@@ -3668,3 +3678,172 @@ class TestFlowMeterEndToEnd:
             entity._attr_name for entity in captured if str(entity._attr_name).startswith("Flow") and entity.native_value is None
         ]
         assert unknown == []
+
+
+class TestEveryDecodableModelIsServed:
+    """A model this integration can decode must build reading entities for it.
+
+    The unknown-model fallback returns [] unless the decode flagged the model
+    unknown, so a model that decodes cleanly and has no factory builds none. That
+    is how the HTV0540FRF shipped with no reading entities.
+    """
+
+    # Decodable but deliberately unserved, each with the reason it is here.
+    # Empty is the goal; an entry is a known gap, not a licence to add more.
+    KNOWN_UNSERVED: ClassVar[frozenset] = frozenset(
+        {
+            # Decodes, but builds only the unconditional diagnostics. Not a
+            # one-line fix, and no HTV0540FRF on the account to check against.
+            MODEL_VALVE_HUB,
+        }
+    )
+
+    @staticmethod
+    def _decodable_models() -> set:
+        """Every model reaching a hand-written decode.
+
+        MODEL_DISPLAY_HUB is joined in because `_decode_subdevice_payload`
+        dispatches it as a named special case rather than through the registry.
+        """
+        return set(_coord_module.DECODER_REGISTRY) | {MODEL_DISPLAY_HUB}
+
+    @staticmethod
+    def _has_factory(model: str) -> bool:
+        """Resolve aliases the way the platform does before looking the model up."""
+        return _SENSOR_MODEL_ALIASES.get(model, model) in _MODEL_FACTORIES
+
+    def test_no_decodable_model_silently_builds_nothing(self):
+        """Necessary but not sufficient: a factory can still return []."""
+        unserved = {model for model in self._decodable_models() if not self._has_factory(model)}
+
+        assert unserved - self.KNOWN_UNSERVED == set(), (
+            f"{sorted(unserved - self.KNOWN_UNSERVED)} decode but have no reading entities. "
+            "Add a factory to _MODEL_FACTORIES, or an alias, or list the model in "
+            "KNOWN_UNSERVED with the reason."
+        )
+
+    def test_the_known_gap_list_carries_nothing_already_fixed(self):
+        """A stale exemption hides the next regression behind a name nobody rechecks."""
+        unserved = {model for model in self._decodable_models() if not self._has_factory(model)}
+
+        assert self.KNOWN_UNSERVED - unserved == set(), (
+            f"{sorted(self.KNOWN_UNSERVED - unserved)} now build entities; drop them from KNOWN_UNSERVED."
+        )
+
+    def test_an_unserved_model_really_does_build_no_readings(self):
+        """Pins what the platform produces, which the map check cannot see."""
+        info = {"data": {"type": "valve_hub", "zones": {}}, "model": MODEL_VALVE_HUB, "model_code": None}
+
+        built = _create_sensor_entities(MagicMock(), "100_200_1", info, generic_enabled=False)
+
+        assert [type(entity).__name__ for entity in built] == ["RainPointRawPayloadSensor"]
+        assert _make_unknown_entities(MagicMock(), "100_200_1", info, "slug") == []
+
+
+class TestCatalogReadingsSensor:
+    """The state counts declared readings only. Counting decoded keys was tried
+    and reverted: the number rose when a decode failed."""
+
+    @staticmethod
+    def _sensor(model="HTV245FRF", model_code="303", data=None):
+        info = {
+            "model": model,
+            "model_code": model_code,
+            "data": data if data is not None else {"type": "valve", "rssi_dbm": -45, "battery_flag": 1},
+        }
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {"100_200_1": info}}
+        return RainPointCatalogReadingsSensor(coordinator, "100_200_1", info, "100_200_1")
+
+    def test_the_state_counts_what_the_catalog_declares(self):
+        """Against the committed catalog, not a stub."""
+        sensor = self._sensor()
+        attrs = sensor.extra_state_attributes
+
+        assert "STA_BAT" in attrs["catalog_identities"]
+        assert sensor.native_value == len(attrs["catalog_identities"])
+
+    def test_control_datapoints_are_not_counted_as_readings(self):
+        """HTV245FRF declares CTL_WATER and CTL_SET_DELAY; a command is not a reading."""
+        attrs = self._sensor().extra_state_attributes
+
+        assert not [identity for identity in attrs["catalog_identities"] if not identity.startswith("STA_")]
+
+    def test_a_rejected_frame_does_not_change_the_count(self):
+        """The defect this design replaced: counting keys reported more on a
+        failed frame than a good one."""
+        good = self._sensor(data={"type": "hic801w", "current_station": 3, "rssi_dbm": -45})
+        rejected = self._sensor(
+            data={"type": "hic801w", "current_station": None, "rssi_dbm": None, "error": "bad frame", "decoder": "x"}
+        )
+
+        assert good.native_value == rejected.native_value
+
+    def test_decoded_keys_are_listed_without_claiming_a_count(self):
+        """No exclusion list stands behind this, so nothing here can drift."""
+        attrs = self._sensor(data={"type": "valve", "raw_bytes": b"\x01", "battery_flag": 1}).extra_state_attributes
+
+        assert attrs["decoded_keys"] == ["battery_flag", "raw_bytes", "type"]
+
+    def test_a_model_the_catalog_does_not_carry_says_so_rather_than_zero(self):
+        attrs = self._sensor(model="ZZZ-NOT-A-MODEL", model_code=None).extra_state_attributes
+
+        assert attrs["catalog_status"] == "model_not_in_catalog"
+        assert self._sensor(model="ZZZ-NOT-A-MODEL", model_code=None).native_value is None
+
+    def test_a_model_whose_variant_the_device_did_not_identify_says_so(self):
+        """HIC801W has two modelCodes declaring different identities, so without
+        one the catalog cannot answer. Reporting 0 would read as "declares nothing"."""
+        sensor = self._sensor(model="HIC801W", model_code=None)
+
+        assert sensor.extra_state_attributes["catalog_status"] == "variant_not_identified"
+        assert sensor.native_value is None
+
+    def test_a_variant_that_genuinely_declares_nothing_reports_zero(self):
+        """The third zero case, and the only one that is a real count."""
+        sensor = self._sensor(model="HWS019WRF-V2", model_code="78")
+
+        assert sensor.extra_state_attributes["catalog_status"] == "resolved"
+        assert sensor.native_value == 0
+
+    def test_the_model_is_read_live_rather_than_from_the_construction_snapshot(self):
+        """Creation is one-shot and a key can be re-keyed to a different model."""
+        sensor = self._sensor(model="HTV245FRF", model_code="303")
+        sensor.coordinator.data = {"sensors": {"100_200_1": {"model": "HWS019WRF-V2", "model_code": "78", "data": {}}}}
+
+        assert sensor.native_value == 0
+
+    def test_no_addressing_identifier_reaches_an_attribute(self):
+        """The model exemption does not extend to productKey."""
+        info = {
+            "model": "HTV245FRF",
+            "model_code": "303",
+            "product_key": "SECRET_PK",
+            "device_name": "MAC-A84674BB91F0",
+            "data": {"type": "valve", "battery_flag": 1},
+        }
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {"100_200_1": info}}
+        sensor = RainPointCatalogReadingsSensor(coordinator, "100_200_1", info, "100_200_1")
+
+        rendered = repr(sensor.extra_state_attributes)
+
+        assert "SECRET_PK" not in rendered
+        assert "MAC-A84674BB91F0" not in rendered
+
+    def test_the_catalog_is_resolved_once_per_entity(self):
+        """extra_state_attributes is read on every state write."""
+        sensor = self._sensor()
+
+        with patch("custom_components.rainpoint.sensor.get_catalog_entry") as get_entry:
+            assert sensor.extra_state_attributes is not None
+            assert sensor.extra_state_attributes is not None
+
+            assert get_entry.call_count == 1
+
+    def test_it_is_a_disabled_diagnostic_so_nobody_gets_it_unasked(self):
+        sensor = self._sensor()
+
+        assert sensor._attr_entity_registry_enabled_default is False
+        assert sensor._attr_entity_category == EntityCategory.DIAGNOSTIC
+        assert sensor._attr_unique_id == "rainpoint_100_200_1_catalog_readings"

@@ -23,6 +23,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .api import _USAGE_GALLONS_PER_COUNT
+from .api.product_catalog import get_catalog_entry, get_catalog_variant_codes
 from .const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
@@ -440,8 +441,9 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
     A model with a hand-written factory always wins by lookup order; a model
     with none falls back to the always-on Unsupported diagnostic and, only
     when generic_enabled is true, is additionally offered to the opt-in
-    generic sensor factory. Always appends a per-device raw-payload
-    diagnostic entity at the end.
+    generic sensor factory. A model with a factory also gets Catalog Readings,
+    which the Unsupported diagnostic already covers for models without one.
+    Always appends a per-device raw-payload diagnostic entity at the end.
     """
     raw_model = info.get("model")
     model = _SENSOR_MODEL_ALIASES.get(raw_model, raw_model)
@@ -473,6 +475,9 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
     factory = _MODEL_FACTORIES.get(model)
     if factory is not None:
         entities = list(factory(coordinator, key, info, base_slug))
+        # Only on the served path: RainPointUnknownSensor already carries the
+        # catalog gate for a model with no decoder.
+        entities.append(RainPointCatalogReadingsSensor(coordinator, key, info, base_slug))
     else:
         entities = list(_make_unknown_entities(coordinator, key, info, base_slug))
         if generic_enabled:
@@ -1499,6 +1504,71 @@ class RainPointNotReportingSensor(RainPointSensorBase):
             "This device is listed by RainPoint but returns no readings. Opening report_url files a "
             "pre-filled support request that already states the device reports no status."
         )
+        return attrs
+
+
+class RainPointCatalogReadingsSensor(RainPointSensorBase):
+    """What the catalog says this model reports, beside the keys that decoded.
+
+    The state counts declared readings, never decoded ones: a rejected frame
+    returns every key with a None value, so counting keys rose when a decode
+    failed. No count is claimed for `decoded_keys`.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:clipboard-list-outline"
+    _attr_entity_registry_enabled_default = False
+
+    # Resolved once: depends only on this entity's model and modelCode.
+    _catalog: tuple[str, tuple[str, ...]] | None = None
+
+    def __init__(self, coordinator, sensor_key, sensor_info, base_slug) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_catalog_readings"
+        self._attr_name = "Catalog Readings"
+
+    @property
+    def _live_info(self) -> dict:
+        """Read the model live, so a re-keyed addr is not compared against the
+        model it used to carry."""
+        return (self.coordinator.data or {}).get("sensors", {}).get(self._sensor_key) or self._sensor_info
+
+    def _resolve_catalog(self) -> tuple[str, tuple[str, ...]]:
+        """Return (status, declared status identities).
+
+        The three zero cases stay apart: absent model, unidentified variant, and a
+        variant that declares nothing. Control datapoints are not readings.
+        """
+        if self._catalog is None:
+            info = self._live_info
+            model, model_code = info.get("model"), info.get("model_code")
+            entries = get_catalog_entry(model, model_code)
+            if entries is None:
+                status = "variant_not_identified" if get_catalog_variant_codes(model) else "model_not_in_catalog"
+                self._catalog = (status, ())
+            else:
+                identities = {
+                    entry["identity"]
+                    for entry in entries
+                    if isinstance(entry, dict) and str(entry.get("identity", "")).startswith("STA_")
+                }
+                self._catalog = ("resolved", tuple(sorted(identities)))
+        return self._catalog
+
+    @property
+    def native_value(self) -> int | None:
+        """Return how many readings the catalog declares, or None if it cannot say."""
+        status, identities = self._resolve_catalog()
+        return len(identities) if status == "resolved" else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Carry both sides of the comparison, as identity and key names only."""
+        attrs = super().extra_state_attributes
+        status, identities = self._resolve_catalog()
+        attrs["catalog_status"] = status
+        attrs["catalog_identities"] = list(identities)
+        attrs["decoded_keys"] = sorted(self._sensor_data or {})
         return attrs
 
 
