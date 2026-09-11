@@ -109,6 +109,7 @@ from tests.payload_samples import (
     SAMPLE_HIC801W_SECOND_UNIT_FRAMES,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
+    SAMPLE_HTV245_FULL_IDLE_PAYLOAD,
     SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV345_TLV_PAYLOAD,
@@ -3746,12 +3747,14 @@ class TestCatalogReadingsSensor:
     and reverted: the number rose when a decode failed."""
 
     @staticmethod
-    def _sensor(model="HTV245FRF", model_code="303", data=None):
+    def _sensor(model="HTV245FRF", model_code="303", data=None, raw=None):
         info = {
             "model": model,
             "model_code": model_code,
             "data": data if data is not None else {"type": "valve", "rssi_dbm": -45, "battery_flag": 1},
         }
+        if raw is not None:
+            info["raw_status"] = {"value": raw}
         coordinator = MagicMock()
         coordinator.data = {"sensors": {"100_200_1": info}}
         return RainPointCatalogReadingsSensor(coordinator, "100_200_1", info, "100_200_1")
@@ -3841,6 +3844,43 @@ class TestCatalogReadingsSensor:
             assert sensor.extra_state_attributes is not None
 
             assert get_entry.call_count == 1
+
+    def test_the_frame_says_which_declared_readings_the_hardware_sends(self):
+        """A real capture, since an invented frame would only prove the walk runs.
+
+        The maintainer's HTV245FRF sends STA_ALARM and nothing reads it, and
+        never sends STA_RSRP or STA_EVTIME2 at all. Those are different findings
+        and only the frame tells them apart.
+        """
+        attrs = self._sensor(raw=SAMPLE_HTV245_FULL_IDLE_PAYLOAD).extra_state_attributes
+
+        assert "STA_ALARM" in attrs["received_identities"]
+        assert attrs["declared_not_received"] == ["STA_EVTIME2", "STA_RSRP"]
+        assert set(attrs["received_identities"]) <= set(attrs["catalog_identities"])
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            None,
+            SAMPLE_HTV245_ASCII_PAYLOAD,
+            "11#",
+        ],
+        ids=["no payload", "ascii framing", "empty body"],
+    )
+    def test_a_frame_that_cannot_be_walked_claims_nothing_either_way(self, raw):
+        """Reporting an empty received set would read as the device sending
+        nothing, which is a finding this has not earned."""
+        attrs = self._sensor(raw=raw).extra_state_attributes
+
+        assert "received_identities" not in attrs
+        assert "declared_not_received" not in attrs
+        assert attrs["catalog_identities"]
+
+    def test_a_model_the_catalog_does_not_carry_claims_nothing_about_its_frame(self):
+        """No declared side means no comparison, however good the payload is."""
+        attrs = self._sensor(model="ZZZ-NOT-A-MODEL", model_code=None, raw=SAMPLE_HTV245_FULL_IDLE_PAYLOAD).extra_state_attributes
+
+        assert "received_identities" not in attrs
 
     def test_it_is_a_disabled_diagnostic_so_nobody_gets_it_unasked(self):
         sensor = self._sensor()

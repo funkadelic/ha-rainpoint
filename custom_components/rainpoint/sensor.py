@@ -22,7 +22,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .api import _USAGE_GALLONS_PER_COUNT
+from .api import _USAGE_GALLONS_PER_COUNT, _parse_entries, _split_prefix
 from .api.product_catalog import get_catalog_entry, get_catalog_variant_codes
 from .const import (
     CONF_GENERIC_ENTITIES_ENABLED,
@@ -1511,7 +1511,7 @@ class RainPointNotReportingSensor(RainPointSensorBase):
 
 
 class RainPointCatalogReadingsSensor(RainPointSensorBase):
-    """What the catalog says this model reports, beside the keys that decoded.
+    """What the catalog says this model reports, beside what the frame carries.
 
     The state counts declared readings, never decoded ones: a rejected frame
     returns every key with a None value, so counting keys rose when a decode
@@ -1523,7 +1523,7 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
     _attr_entity_registry_enabled_default = False
 
     # Resolved once: depends only on this entity's model and modelCode.
-    _catalog: tuple[str, tuple[str, ...]] | None = None
+    _catalog: tuple[str, tuple[str, ...], dict[int, str]] | None = None
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug) -> None:
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -1536,11 +1536,13 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
         model it used to carry."""
         return (self.coordinator.data or {}).get("sensors", {}).get(self._sensor_key) or self._sensor_info
 
-    def _resolve_catalog(self) -> tuple[str, tuple[str, ...]]:
-        """Return (status, declared status identities).
+    def _resolve_catalog(self) -> tuple[str, tuple[str, ...], dict[int, str]]:
+        """Return (status, declared status identities, {dpCode: identity}).
 
         The three zero cases stay apart: absent model, unidentified variant, and a
-        variant that declares nothing. Control datapoints are not readings.
+        variant that declares nothing. Control datapoints are not readings. The
+        count comes from the identities and never from the dpCode map, so a
+        variant the vendor ships without a dpCode cannot quietly lower it.
         """
         if self._catalog is None:
             info = self._live_info
@@ -1548,29 +1550,63 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
             entries = get_catalog_entry(model, model_code)
             if entries is None:
                 status = "variant_not_identified" if get_catalog_variant_codes(model) else "model_not_in_catalog"
-                self._catalog = (status, ())
+                self._catalog = (status, (), {})
             else:
-                identities = {
-                    entry["identity"]
+                declared = [
+                    (entry.get("dpCode"), entry["identity"])
                     for entry in entries
                     if isinstance(entry, dict) and str(entry.get("identity", "")).startswith("STA_")
-                }
-                self._catalog = ("resolved", tuple(sorted(identities)))
+                ]
+                self._catalog = (
+                    "resolved",
+                    tuple(sorted({identity for _, identity in declared})),
+                    dict(declared),
+                )
         return self._catalog
+
+    def _received_identities(self, by_code: dict[int, str]) -> list[str] | None:
+        """Return the declared identities this frame carries, or None if it cannot say.
+
+        A record's structural index is the catalog's dpCode on both the flat and
+        the dp_id-prefixed framing, so the frame itself answers which declared
+        readings the hardware sends. Ports are not resolved: this is the set that
+        arrived, not how many of each. A reading declared and never received is
+        the catalog overstating the product line, which is a different finding
+        from one received and left unread, and worth telling apart before anyone
+        goes hunting for a decoder that was never owed.
+        """
+        raw = (self._live_info.get("raw_status") or {}).get("value")
+        if not by_code or not isinstance(raw, str):
+            return None
+        body, dp_id_prefixed = _split_prefix(raw)
+        try:
+            data = list(bytes.fromhex(body))
+        except ValueError:
+            return None
+        if not data:
+            return None
+        return sorted({by_code[e["field"]] for e in _parse_entries(data, dp_id_prefixed) if e["field"] in by_code})
 
     @property
     def native_value(self) -> int | None:
         """Return how many readings the catalog declares, or None if it cannot say."""
-        status, identities = self._resolve_catalog()
+        status, identities, _ = self._resolve_catalog()
         return len(identities) if status == "resolved" else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Carry both sides of the comparison, as identity and key names only."""
         attrs = super().extra_state_attributes
-        status, identities = self._resolve_catalog()
+        status, identities, by_code = self._resolve_catalog()
+        declared = list(identities)
         attrs["catalog_status"] = status
-        attrs["catalog_identities"] = list(identities)
+        attrs["catalog_identities"] = declared
+        received = self._received_identities(by_code)
+        if received is not None:
+            # Both omitted when the frame cannot be walked: an empty received set
+            # would render every declared reading as missing from the hardware.
+            attrs["received_identities"] = received
+            attrs["declared_not_received"] = [name for name in declared if name not in received]
         attrs["decoded_keys"] = sorted(self._sensor_data or {})
         return attrs
 
