@@ -2,6 +2,63 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.24.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.23.0...v1.24.0) (2026-09-11)
+
+### What's new
+
+**The battery percentage is gone, replaced by Battery Low**
+
+- RainPoint's cloud never sent a charge level, only a low or normal condition, so the old percentage read 100% while the cells were healthy and went blank once they were not. Every device that reports the condition now gets a **Battery Low** sensor, on while RainPoint says its cells are low.
+- It is a new entity with its own ID, so an automation, script or dashboard pointing at a battery percentage needs pointing at Battery Low. One watching the old percentage for a low reading could never have fired anyway.
+- The old entities stay in your registry until you remove them. A repair card offers to clear them, one device at a time, and removing them also deletes their recorded history.
+- The temperature and humidity sensor and the CO2 sensor report no battery condition, so they get no battery entity at all. The opt-in entities for unsupported devices keep their percentage for now.
+
+**Valves no longer drop out when their batteries run low**
+
+Zones on the HTV213FRF, HTV245FRF, HTV345FRF, HTV405FRF and HTV0540FRF went unavailable once the batteries went low, and could not be opened or closed, with the valve still connected and reporting normally. They stay available now until the connection drops. The HTV0540FRF also reports its battery condition for the first time.
+
+**The HTP160FRF water timer is supported**
+
+It gets a valve you can open and close and a run duration to set beside it, plus battery, signal strength and run duration readings, the same set the HTV113FRF, HTV145FRF and HTV157B have. The payload came from an idle timer, so a running one still needs checking on hardware.
+
+**Signal strength**
+
+- A signal strength of 0 dBm now reads unknown, since the device sent nothing at all. On a hub those zeroes went into your long-term statistics and stayed there.
+- The HTV0540FRF valve hub sends no signal and no longer reports one. The rain gauge does send one, and it is now read.
+
+**Working out what a device reports**
+
+- A diagnostics download now carries the last few different readings from each device, not only the current one, so one file usually covers what used to take several. The readings go back as far as the last Home Assistant restart.
+- Supported devices gain a **Catalog Readings** sensor, disabled by default, listing every reading RainPoint's own product data says that model can send beside the ones this integration actually read from yours.
+
+### Thanks
+
+Thanks to **@Patrice91150** for the HTP160FRF payload behind this release's new device support.
+
+
+
+### Added
+
+* carry earlier device readings in the diagnostics download ([#254](https://github.com/funkadelic/ha-rainpoint/issues/254)) ([f72dc3f](https://github.com/funkadelic/ha-rainpoint/commit/f72dc3fb148a1251306a32762db1a1204cc3d03b))
+* replace the battery percentage with a low battery reading ([#252](https://github.com/funkadelic/ha-rainpoint/issues/252)) ([70d7d99](https://github.com/funkadelic/ha-rainpoint/commit/70d7d99e635da1fed024ff9e4b3e1327ba25c0bd))
+* show when a device's batteries are running low ([#249](https://github.com/funkadelic/ha-rainpoint/issues/249)) ([5ce5fa3](https://github.com/funkadelic/ha-rainpoint/commit/5ce5fa3f7445a5c798728152e33a80e027101a01))
+* show which readings a device sends that this integration does not read ([#255](https://github.com/funkadelic/ha-rainpoint/issues/255)) ([ed83717](https://github.com/funkadelic/ha-rainpoint/commit/ed83717c5045688af29a568028f6942430bab107))
+* support the HTP160FRF single-outlet water timer ([#246](https://github.com/funkadelic/ha-rainpoint/issues/246)) ([181e296](https://github.com/funkadelic/ha-rainpoint/commit/181e296332aed8f61c418030754dafa832335175))
+
+
+### Fixed
+
+* keep HTV0540FRF zones available when the battery runs low ([#251](https://github.com/funkadelic/ha-rainpoint/issues/251)) ([a26774f](https://github.com/funkadelic/ha-rainpoint/commit/a26774f1c58c3cc7d86b029a90f410b3c2bc9177))
+* keep the battery percentage out of long-term statistics ([#250](https://github.com/funkadelic/ha-rainpoint/issues/250)) ([6eb6383](https://github.com/funkadelic/ha-rainpoint/commit/6eb6383a62e525511d57698b252628cb9e7ee692))
+* keep valve zones available when the battery runs low ([#248](https://github.com/funkadelic/ha-rainpoint/issues/248)) ([be1a7bc](https://github.com/funkadelic/ha-rainpoint/commit/be1a7bc6fee8da4412df97387378062032750cb2))
+* stop showing a signal strength the device never sent ([#253](https://github.com/funkadelic/ha-rainpoint/issues/253)) ([dafd1e8](https://github.com/funkadelic/ha-rainpoint/commit/dafd1e896cdda43b86629bdf6673a4184e1e9ee8))
+
+
+### Other Changes
+
+* **catalog:** refresh the product catalog snapshot ([#244](https://github.com/funkadelic/ha-rainpoint/issues/244)) ([fbbc7e3](https://github.com/funkadelic/ha-rainpoint/commit/fbbc7e3a7be7e72cb25714997d16113605b2acbf))
+* explain how to install a beta build from HACS ([#247](https://github.com/funkadelic/ha-rainpoint/issues/247)) ([b666fe7](https://github.com/funkadelic/ha-rainpoint/commit/b666fe70e69e4851e2f1aba96ecbfc63064f1872))
+
 ## [1.23.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.22.0...v1.23.0) (2026-09-09)
 
 ### What's new
