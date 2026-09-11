@@ -3668,3 +3668,79 @@ class TestFlowMeterEndToEnd:
             entity._attr_name for entity in captured if str(entity._attr_name).startswith("Flow") and entity.native_value is None
         ]
         assert unknown == []
+
+
+from typing import ClassVar  # noqa: E402
+
+import custom_components.rainpoint.coordinator as _coord_module  # noqa: E402
+from custom_components.rainpoint.const import MODEL_VALVE_HUB  # noqa: E402
+from custom_components.rainpoint.sensor import (  # noqa: E402
+    _MODEL_FACTORIES,
+    _SENSOR_MODEL_ALIASES,
+    _make_unknown_entities,
+)
+
+
+class TestEveryDecodableModelIsServed:
+    """A model this integration can decode must build entities for it.
+
+    `_MODEL_FACTORIES.get(model)` falling through lands on `_make_unknown_entities`,
+    which returns [] unless the decode flagged the model unknown. A model that
+    decodes cleanly and has no factory therefore builds nothing at all, and the
+    fallback meant to catch unsupported devices declines it by design. That is how
+    the HTV0540FRF shipped with zero sensor entities, found while writing an
+    unrelated PR rather than by anything in the suite.
+    """
+
+    # Decodable but deliberately unserved, each with the reason it is here.
+    # Empty is the goal; an entry is a known gap, not a licence to add more.
+    KNOWN_UNSERVED: ClassVar[frozenset] = frozenset(
+        {
+            # Decodes through decode_valve_hub, builds no sensor entities. Its
+            # zone valves, duration numbers and per-zone state all work, so this
+            # is a missing row in one map rather than a broken model. Not a
+            # one-line fix: _make_htv_valve_diagnostic_entities also builds
+            # per-zone usage and run-duration sensors, and nothing confirms the
+            # TLV output carries those fields. No HTV0540FRF on the account to
+            # check an entity set against.
+            MODEL_VALVE_HUB,
+        }
+    )
+
+    @staticmethod
+    def _decodable_models() -> set:
+        """Every model reaching a hand-written decode.
+
+        MODEL_DISPLAY_HUB is joined in because `_decode_subdevice_payload`
+        dispatches it as a named special case rather than through the registry.
+        """
+        return set(_coord_module.DECODER_REGISTRY) | {MODEL_DISPLAY_HUB}
+
+    @staticmethod
+    def _has_factory(model: str) -> bool:
+        """Resolve aliases the way the platform does before looking the model up."""
+        return _SENSOR_MODEL_ALIASES.get(model, model) in _MODEL_FACTORIES
+
+    def test_no_decodable_model_silently_builds_nothing(self):
+        unserved = {model for model in self._decodable_models() if not self._has_factory(model)}
+
+        assert unserved - self.KNOWN_UNSERVED == set(), (
+            f"{sorted(unserved - self.KNOWN_UNSERVED)} decode but build no sensor entities. "
+            "Add a factory to _MODEL_FACTORIES, or an alias, or list the model in "
+            "KNOWN_UNSERVED with the reason."
+        )
+
+    def test_the_known_gap_list_carries_nothing_already_fixed(self):
+        """A stale exemption hides the next regression behind a name nobody rechecks."""
+        unserved = {model for model in self._decodable_models() if not self._has_factory(model)}
+
+        assert self.KNOWN_UNSERVED - unserved == set(), (
+            f"{sorted(self.KNOWN_UNSERVED - unserved)} now build entities; drop them from KNOWN_UNSERVED."
+        )
+
+    def test_an_unserved_model_really_does_build_nothing(self):
+        """Pins the mechanism rather than the map, so the test still means something
+        if the fallback changes."""
+        info = {"data": {"type": "valve_hub", "zones": {}}, "model": MODEL_VALVE_HUB}
+
+        assert _make_unknown_entities(MagicMock(), "100_200_1", info, "slug") == []
