@@ -2,6 +2,31 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.24.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.23.0...v1.24.0) (2026-09-11)
+
+
+### Added
+
+* carry earlier device readings in the diagnostics download ([#254](https://github.com/funkadelic/ha-rainpoint/issues/254)) ([f72dc3f](https://github.com/funkadelic/ha-rainpoint/commit/f72dc3fb148a1251306a32762db1a1204cc3d03b))
+* replace the battery percentage with a low battery reading ([#252](https://github.com/funkadelic/ha-rainpoint/issues/252)) ([70d7d99](https://github.com/funkadelic/ha-rainpoint/commit/70d7d99e635da1fed024ff9e4b3e1327ba25c0bd))
+* show when a device's batteries are running low ([#249](https://github.com/funkadelic/ha-rainpoint/issues/249)) ([5ce5fa3](https://github.com/funkadelic/ha-rainpoint/commit/5ce5fa3f7445a5c798728152e33a80e027101a01))
+* show which readings a device sends that this integration does not read ([#255](https://github.com/funkadelic/ha-rainpoint/issues/255)) ([ed83717](https://github.com/funkadelic/ha-rainpoint/commit/ed83717c5045688af29a568028f6942430bab107))
+* support the HTP160FRF single-outlet water timer ([#246](https://github.com/funkadelic/ha-rainpoint/issues/246)) ([181e296](https://github.com/funkadelic/ha-rainpoint/commit/181e296332aed8f61c418030754dafa832335175))
+
+
+### Fixed
+
+* keep HTV0540FRF zones available when the battery runs low ([#251](https://github.com/funkadelic/ha-rainpoint/issues/251)) ([a26774f](https://github.com/funkadelic/ha-rainpoint/commit/a26774f1c58c3cc7d86b029a90f410b3c2bc9177))
+* keep the battery percentage out of long-term statistics ([#250](https://github.com/funkadelic/ha-rainpoint/issues/250)) ([6eb6383](https://github.com/funkadelic/ha-rainpoint/commit/6eb6383a62e525511d57698b252628cb9e7ee692))
+* keep valve zones available when the battery runs low ([#248](https://github.com/funkadelic/ha-rainpoint/issues/248)) ([be1a7bc](https://github.com/funkadelic/ha-rainpoint/commit/be1a7bc6fee8da4412df97387378062032750cb2))
+* stop showing a signal strength the device never sent ([#253](https://github.com/funkadelic/ha-rainpoint/issues/253)) ([dafd1e8](https://github.com/funkadelic/ha-rainpoint/commit/dafd1e896cdda43b86629bdf6673a4184e1e9ee8))
+
+
+### Other Changes
+
+* **catalog:** refresh the product catalog snapshot ([#244](https://github.com/funkadelic/ha-rainpoint/issues/244)) ([fbbc7e3](https://github.com/funkadelic/ha-rainpoint/commit/fbbc7e3a7be7e72cb25714997d16113605b2acbf))
+* explain how to install a beta build from HACS ([#247](https://github.com/funkadelic/ha-rainpoint/issues/247)) ([b666fe7](https://github.com/funkadelic/ha-rainpoint/commit/b666fe70e69e4851e2f1aba96ecbfc63064f1872))
+
 ## [1.23.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.22.0...v1.23.0) (2026-09-09)
 
 ### What's new
