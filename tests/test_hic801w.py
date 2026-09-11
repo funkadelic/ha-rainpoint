@@ -355,13 +355,9 @@ class TestHic801wWholeEntitySet:
             if n != 3:
                 assert stations_by_num[n].is_on is False
 
-        # Step 2: a b3-mutated refresh clears the thirteen reading entities
-        # to no state at once, on the same objects, while every one stays
-        # available. Raw Payload and Catalog Readings are deliberately
-        # excluded: they are the platform's unconditional diagnostics rather
-        # than readings of this device, and both are at their most useful
-        # when a decode has failed, one holding the last hex received and the
-        # other what the catalog says the model should report.
+        # Step 2: a b3-mutated refresh clears the thirteen reading entities at
+        # once, on the same objects. Raw Payload and Catalog Readings are
+        # excluded: both are platform diagnostics, not readings of this device.
         catalog_readings_before = by_suffix["catalog_readings"].native_value
         assert catalog_readings_before is not None, "the comparison below would be None == None"
         client.get_multiple_device_status.return_value = _status(_B3_MUTATED_PAYLOAD)
@@ -373,10 +369,8 @@ class TestHic801wWholeEntitySet:
         for entity in thirteen_sensors:
             assert entity.native_value is None, f"{entity._attr_unique_id!r} retained a value"
             assert entity.available is True, f"{entity._attr_unique_id!r} unexpectedly unavailable"
-        # The one thing Catalog Readings must not do on a rejected frame: report
-        # more than it did on a good one. Counting decoded keys did exactly that,
-        # because the error envelope carries every key with a None value plus an
-        # error key of its own.
+        # Must not report more on a rejected frame than a good one, which is
+        # exactly what counting decoded keys did.
         assert by_suffix["catalog_readings"].native_value == catalog_readings_before
 
         for entity in hic_binaries:

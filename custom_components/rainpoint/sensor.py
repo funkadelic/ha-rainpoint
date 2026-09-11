@@ -441,10 +441,9 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
     A model with a hand-written factory always wins by lookup order; a model
     with none falls back to the always-on Unsupported diagnostic and, only
     when generic_enabled is true, is additionally offered to the opt-in
-    generic sensor factory. A model with a factory also gets the Catalog
-    Readings diagnostic, which the Unsupported diagnostic already covers for
-    models without one. Always appends a per-device raw-payload diagnostic
-    entity at the end.
+    generic sensor factory. A model with a factory also gets Catalog Readings,
+    which the Unsupported diagnostic already covers for models without one.
+    Always appends a per-device raw-payload diagnostic entity at the end.
     """
     raw_model = info.get("model")
     model = _SENSOR_MODEL_ALIASES.get(raw_model, raw_model)
@@ -1509,20 +1508,11 @@ class RainPointNotReportingSensor(RainPointSensorBase):
 
 
 class RainPointCatalogReadingsSensor(RainPointSensorBase):
-    """What RainPoint's product data says this model reports, beside what decoded.
+    """What the catalog says this model reports, beside the keys that decoded.
 
-    The complement of RainPointUnknownSensor, which carries the catalog's view
-    for models with no decoder. A model on the hand-written path is kept off the
-    catalog-driven path by is_hand_written_model, so nothing otherwise reports
-    what a supported device declares and this integration does not read.
-
-    The state counts declared readings, not decoded ones. A decode's keys mix
-    readings with bookkeeping, raw duplicates of a key already present, nested
-    containers holding many values under one name, and, on a rejected frame, the
-    full key set with every value None. Counting them produced a number that
-    rose when a decode failed. Nothing in this repo declares which decoded key
-    is a reading, so `decoded_keys` is published as a list for a person to read
-    against `catalog_identities` and no count is claimed for it.
+    The state counts declared readings, never decoded ones: a rejected frame
+    returns every key with a None value, so counting keys rose when a decode
+    failed. No count is claimed for `decoded_keys`.
     """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -1539,19 +1529,15 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
 
     @property
     def _live_info(self) -> dict:
-        """Read the model through the coordinator rather than the snapshot taken
-        at construction, so a re-keyed addr is not compared against the model it
-        used to carry."""
+        """Read the model live, so a re-keyed addr is not compared against the
+        model it used to carry."""
         return (self.coordinator.data or {}).get("sensors", {}).get(self._sensor_key) or self._sensor_info
 
     def _resolve_catalog(self) -> tuple[str, tuple[str, ...]]:
         """Return (status, declared status identities).
 
-        The three zero cases are kept apart, because they are different problems:
-        a model the catalog does not carry, a model carried under more than one
-        variant that the device did not identify, and a variant that genuinely
-        declares nothing. Control datapoints are dropped, since a command is not
-        something the device reports.
+        The three zero cases stay apart: absent model, unidentified variant, and a
+        variant that declares nothing. Control datapoints are not readings.
         """
         if self._catalog is None:
             info = self._live_info
@@ -1577,11 +1563,7 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Carry both sides of the comparison.
-
-        Identity and key names only. No productKey, deviceName or any other
-        addressing identifier reaches an attribute here.
-        """
+        """Carry both sides of the comparison, as identity and key names only."""
         attrs = super().extra_state_attributes
         status, identities = self._resolve_catalog()
         attrs["catalog_status"] = status

@@ -3681,28 +3681,19 @@ class TestFlowMeterEndToEnd:
 
 
 class TestEveryDecodableModelIsServed:
-    """A model this integration can decode must build entities for it.
+    """A model this integration can decode must build reading entities for it.
 
-    `_MODEL_FACTORIES.get(model)` falling through lands on `_make_unknown_entities`,
-    which returns [] unless the decode flagged the model unknown. A model that
-    decodes cleanly and has no factory therefore builds nothing at all, and the
-    fallback meant to catch unsupported devices declines it by design. That is how
-    the HTV0540FRF shipped with zero sensor entities, found while writing an
-    unrelated PR rather than by anything in the suite.
+    The unknown-model fallback returns [] unless the decode flagged the model
+    unknown, so a model that decodes cleanly and has no factory builds none. That
+    is how the HTV0540FRF shipped with no reading entities.
     """
 
     # Decodable but deliberately unserved, each with the reason it is here.
     # Empty is the goal; an entry is a known gap, not a licence to add more.
     KNOWN_UNSERVED: ClassVar[frozenset] = frozenset(
         {
-            # Decodes through decode_valve_hub and builds no reading entities,
-            # only the two unconditional diagnostics. Its
-            # zone valves, duration numbers and per-zone state all work, so this
-            # is a missing row in one map rather than a broken model. Not a
-            # one-line fix: _make_htv_valve_diagnostic_entities also builds
-            # per-zone usage and run-duration sensors, and nothing confirms the
-            # TLV output carries those fields. No HTV0540FRF on the account to
-            # check an entity set against.
+            # Decodes, but builds only the unconditional diagnostics. Not a
+            # one-line fix, and no HTV0540FRF on the account to check against.
             MODEL_VALVE_HUB,
         }
     )
@@ -3722,8 +3713,7 @@ class TestEveryDecodableModelIsServed:
         return _SENSOR_MODEL_ALIASES.get(model, model) in _MODEL_FACTORIES
 
     def test_no_decodable_model_silently_builds_nothing(self):
-        """Map membership, which is necessary but not sufficient: a factory can
-        still return [] for a device whose payload carries no readings."""
+        """Necessary but not sufficient: a factory can still return []."""
         unserved = {model for model in self._decodable_models() if not self._has_factory(model)}
 
         assert unserved - self.KNOWN_UNSERVED == set(), (
@@ -3741,9 +3731,7 @@ class TestEveryDecodableModelIsServed:
         )
 
     def test_an_unserved_model_really_does_build_no_readings(self):
-        """Pins what the platform produces, not a sub-step of it. An unserved model
-        gets the unconditional diagnostics and nothing that reads the device, which
-        is the shape the map check above cannot see."""
+        """Pins what the platform produces, which the map check cannot see."""
         info = {"data": {"type": "valve_hub", "zones": {}}, "model": MODEL_VALVE_HUB, "model_code": None}
 
         built = _create_sensor_entities(MagicMock(), "100_200_1", info, generic_enabled=False)
@@ -3753,12 +3741,8 @@ class TestEveryDecodableModelIsServed:
 
 
 class TestCatalogReadingsSensor:
-    """What the catalog declares, beside what this install decoded.
-
-    The state counts declared readings only. Counting decoded keys was tried and
-    reverted: a rejected frame returns the full key set with every value None
-    plus an error key, so the number rose when the decode failed.
-    """
+    """The state counts declared readings only. Counting decoded keys was tried
+    and reverted: the number rose when a decode failed."""
 
     @staticmethod
     def _sensor(model="HTV245FRF", model_code="303", data=None):
@@ -3772,8 +3756,7 @@ class TestCatalogReadingsSensor:
         return RainPointCatalogReadingsSensor(coordinator, "100_200_1", info, "100_200_1")
 
     def test_the_state_counts_what_the_catalog_declares(self):
-        """Against the committed catalog, not a stub, so a refresh that changes a
-        variant shows up here."""
+        """Against the committed catalog, not a stub."""
         sensor = self._sensor()
         attrs = sensor.extra_state_attributes
 
@@ -3781,16 +3764,14 @@ class TestCatalogReadingsSensor:
         assert sensor.native_value == len(attrs["catalog_identities"])
 
     def test_control_datapoints_are_not_counted_as_readings(self):
-        """The HTV245FRF variant declares CTL_WATER and CTL_SET_DELAY. A command
-        is not something the device reports."""
+        """HTV245FRF declares CTL_WATER and CTL_SET_DELAY; a command is not a reading."""
         attrs = self._sensor().extra_state_attributes
 
         assert not [identity for identity in attrs["catalog_identities"] if not identity.startswith("STA_")]
 
     def test_a_rejected_frame_does_not_change_the_count(self):
-        """The defect this design replaced. A rejected decode returns every key
-        with a None value plus an error key, so a count of decoded keys reported
-        more coverage on a failed frame than on a good one."""
+        """The defect this design replaced: counting keys reported more on a
+        failed frame than a good one."""
         good = self._sensor(data={"type": "hic801w", "current_station": 3, "rssi_dbm": -45})
         rejected = self._sensor(
             data={"type": "hic801w", "current_station": None, "rssi_dbm": None, "error": "bad frame", "decoder": "x"}
@@ -3799,8 +3780,7 @@ class TestCatalogReadingsSensor:
         assert good.native_value == rejected.native_value
 
     def test_decoded_keys_are_listed_without_claiming_a_count(self):
-        """No exclusion list stands behind this, so nothing here can be wrong in
-        the way two hand-maintained sets were."""
+        """No exclusion list stands behind this, so nothing here can drift."""
         attrs = self._sensor(data={"type": "valve", "raw_bytes": b"\x01", "battery_flag": 1}).extra_state_attributes
 
         assert attrs["decoded_keys"] == ["battery_flag", "raw_bytes", "type"]
@@ -3812,9 +3792,8 @@ class TestCatalogReadingsSensor:
         assert self._sensor(model="ZZZ-NOT-A-MODEL", model_code=None).native_value is None
 
     def test_a_model_whose_variant_the_device_did_not_identify_says_so(self):
-        """HIC801W is carried under two modelCodes that declare different
-        identities, so without one the catalog cannot answer for this device.
-        Reporting 0 would read as "declares nothing"."""
+        """HIC801W has two modelCodes declaring different identities, so without
+        one the catalog cannot answer. Reporting 0 would read as "declares nothing"."""
         sensor = self._sensor(model="HIC801W", model_code=None)
 
         assert sensor.extra_state_attributes["catalog_status"] == "variant_not_identified"
@@ -3828,17 +3807,14 @@ class TestCatalogReadingsSensor:
         assert sensor.native_value == 0
 
     def test_the_model_is_read_live_rather_than_from_the_construction_snapshot(self):
-        """Entity creation is one-shot and a sensor key can be re-keyed to a
-        different model, which would otherwise compare model B's decode against
-        model A's catalog until a reload."""
+        """Creation is one-shot and a key can be re-keyed to a different model."""
         sensor = self._sensor(model="HTV245FRF", model_code="303")
         sensor.coordinator.data = {"sensors": {"100_200_1": {"model": "HWS019WRF-V2", "model_code": "78", "data": {}}}}
 
         assert sensor.native_value == 0
 
     def test_no_addressing_identifier_reaches_an_attribute(self):
-        """The log rule's narrow model exemption does not extend to productKey,
-        which was removed from these paths on the same day it was written."""
+        """The model exemption does not extend to productKey."""
         info = {
             "model": "HTV245FRF",
             "model_code": "303",
