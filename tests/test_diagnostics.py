@@ -135,8 +135,8 @@ def _make_hass(coordinator=None, mqtt_client=None, entry_id="entry-1"):
 def _make_coordinator(hubs=None, sensors=None, connectivity=None, history=None):
     """Return a coordinator stand-in holding one poll's data.
 
-    `payload_history` is stubbed rather than left to MagicMock's auto-attribute,
-    which would hand the dump a mock object that reads as a populated history.
+    `payload_history` is stubbed because MagicMock's auto-attribute would hand
+    the dump a mock that reads as a populated history.
     """
     coordinator = MagicMock()
     coordinator.payload_history.return_value = history if history is not None else {}
@@ -1054,12 +1054,7 @@ class TestSensorEntryAllowListParity:
 
 
 class TestPayloadHistory:
-    """Earlier payloads ride alongside the current one in all three dumps.
-
-    A decoder is written from the same device in two states, so a dump that
-    carries only the state at download time is what forces a reporter into one
-    download per state and a triage round trip per mistake.
-    """
+    """Earlier payloads ride alongside the current one in all three dumps."""
 
     HISTORY: ClassVar[list[dict]] = [
         {"value": "11#0100...", "time": 1785420002247},
@@ -1068,8 +1063,7 @@ class TestPayloadHistory:
 
     @pytest.mark.asyncio
     async def test_the_key_is_absent_rather_than_empty_when_nothing_was_retained(self):
-        """An empty list would read as "this device reported nothing", which is
-        a different claim from "this session saw one state"."""
+        """An empty list would read as "this device reported nothing"."""
         hass, entry = _make_hass(coordinator=_make_coordinator(history={}))
 
         result = await async_get_config_entry_diagnostics(hass, entry)
@@ -1089,8 +1083,8 @@ class TestPayloadHistory:
 
     @pytest.mark.asyncio
     async def test_a_sub_device_page_download_carries_them(self):
-        """The issue template sends reporters to the device page's three-dot
-        menu, so this is the download that actually has to carry them."""
+        """The template sends reporters to the device page, so this is the
+        download that has to carry them."""
         history = {"182509_236547_1": self.HISTORY}
         hass, entry = _make_hass(coordinator=_make_coordinator(history=history))
 
@@ -1109,8 +1103,7 @@ class TestPayloadHistory:
 
     @pytest.mark.asyncio
     async def test_a_coordinator_that_cannot_answer_yields_a_dump_without_them(self):
-        """A dump taken before setup finished must still render, which is the
-        same reason every other coordinator read in this module is defensive."""
+        """A dump taken before setup finished must still render."""
         coordinator = _make_coordinator()
         del coordinator.payload_history
         hass, entry = _make_hass(coordinator=coordinator)

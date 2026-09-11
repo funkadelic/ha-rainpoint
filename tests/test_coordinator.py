@@ -7312,13 +7312,8 @@ class TestHicStalenessGuard:
 
 
 class TestPayloadHistoryRealTimeline:
-    """Payload history is built by driving the real coordinator through
-    consecutive refreshes, never by injecting a finished buffer.
-
-    The feature is entirely about what happens across polls, so an injected
-    end state would assert the deque works rather than that the coordinator
-    fills it.
-    """
+    """Driven across consecutive refreshes: an injected buffer would assert the
+    deque works rather than that the coordinator fills it."""
 
     MID = 200
 
@@ -7326,9 +7321,8 @@ class TestPayloadHistoryRealTimeline:
     def _vary(suffix: str) -> str:
         """Return a payload differing from the fixture in two hex digits.
 
-        Length and prefix are preserved so the payload stays the shape the
-        parser accepts; whether it decodes is beside the point, because the
-        recorder reads the status entry and never the decode.
+        Whether it decodes is beside the point: the recorder reads the status
+        entry, never the decode.
         """
         return _MOISTURE_SIMPLE_PAYLOAD.replace("E1C6", f"E1{suffix}")
 
@@ -7358,12 +7352,7 @@ class TestPayloadHistoryRealTimeline:
 
     @pytest.mark.asyncio
     async def test_a_repeated_payload_costs_one_slot_and_a_changed_one_appends(self):
-        """The buffer holds states, not polls.
-
-        A device reporting the same reading every poll is one state, so five
-        identical polls must leave one entry; the poll that reports something
-        different is the one that adds a second.
-        """
+        """The buffer holds states, not polls: five identical polls leave one entry."""
         coordinator, client = self._build()
         with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
             await coordinator.async_config_entry_first_refresh()
@@ -7379,12 +7368,8 @@ class TestPayloadHistoryRealTimeline:
 
     @pytest.mark.asyncio
     async def test_a_state_returning_after_another_is_not_recorded_twice(self):
-        """A scheduled valve alternates between two payloads for hours.
-
-        Deduplicating against only the previous entry would fill every slot
-        with copies of those two and lose the buffer's whole purpose, so the
-        check is against everything retained.
-        """
+        """Deduplicating against only the previous entry would fill every slot with
+        copies of the two states a scheduled valve alternates between."""
         coordinator, client = self._build()
         closed, opened = _MOISTURE_SIMPLE_PAYLOAD, self._vary("D7")
 
@@ -7417,11 +7402,8 @@ class TestPayloadHistoryRealTimeline:
 
     @pytest.mark.asyncio
     async def test_a_reading_that_never_arrived_records_nothing(self):
-        """A silent device has no payload, and an empty string is not a state.
-
-        Recording it would spend a slot saying the device said nothing, which
-        the not-reporting surfaces already say.
-        """
+        """An empty string is not a state, and the not-reporting surfaces already
+        say the device said nothing."""
         coordinator, client = self._build()
         with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
             self._report(client, "")
@@ -7431,9 +7413,8 @@ class TestPayloadHistoryRealTimeline:
 
     @pytest.mark.asyncio
     async def test_a_pushed_frame_is_recorded_alongside_the_polled_ones(self):
-        """Both paths run through _decode_one_subdevice, and the pushed frame
-        is often the only record of the state change worth capturing: a valve
-        opened and closed between two 120s polls is invisible to the poll."""
+        """A valve opened and closed between two 120s polls is invisible to the
+        poll, so the pushed frame is the only record of it."""
         coordinator, _client = self._build()
         with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
             await coordinator.async_config_entry_first_refresh()
@@ -7444,8 +7425,7 @@ class TestPayloadHistoryRealTimeline:
 
     @pytest.mark.asyncio
     async def test_the_published_history_is_plain_lists_the_caller_cannot_reach_into(self):
-        """The dump serialises what this returns, so it must not hand out the
-        live deques."""
+        """The dump serialises this, so it must not hand out the live deques."""
         coordinator, _client = self._build()
         with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
             await coordinator.async_config_entry_first_refresh()

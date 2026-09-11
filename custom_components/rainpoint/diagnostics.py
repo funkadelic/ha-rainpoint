@@ -287,11 +287,7 @@ def _hub_dump(hub: Any) -> dict:
 
 
 def _payload_history(coordinator: Any) -> dict:
-    """Return the coordinator's retained payloads, or {} if it cannot answer.
-
-    Read through the same defensive getattr the rest of this module uses on the
-    coordinator: a dump taken while setup is incomplete must still render.
-    """
+    """Return the coordinator's retained payloads, or {} when setup is incomplete."""
     reader = getattr(coordinator, "payload_history", None)
     return reader() if callable(reader) else {}
 
@@ -299,10 +295,8 @@ def _payload_history(coordinator: Any) -> dict:
 def _sensor_dump(entry: Any, history: list | None = None) -> dict:
     """Return one coordinator sensor entry.
 
-    `history` is the earlier payloads this session retained for the same key.
-    It carries no field `raw_status` does not already carry, which is what keeps
-    it outside the allow-list pass below: the values are the same cloud status
-    entry's `value` and `time`, held by this integration rather than read fresh.
+    `history` skips the allow-list pass because it holds the same status entry
+    `value` and `time` that pass already covers.
 
     The undecoded payload and this integration's reading of it are both here,
     and they are the reason the dump is worth downloading: a bug report about a
