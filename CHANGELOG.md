@@ -4,6 +4,38 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.24.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.23.0...v1.24.0) (2026-09-11)
 
+### What's new
+
+**The battery percentage is gone, replaced by Battery Low**
+
+- RainPoint's cloud never sent a charge level, only a low or normal condition, so the old percentage read 100% while the cells were healthy and went blank once they were not. Every device that reports the condition now gets a **Battery Low** sensor, on while RainPoint says its cells are low.
+- It is a new entity with its own ID, so an automation, script or dashboard pointing at a battery percentage needs pointing at Battery Low. One watching the old percentage for a low reading could never have fired anyway.
+- The old entities stay in your registry until you remove them. A repair card offers to clear them, one device at a time, and removing them also deletes their recorded history.
+- The temperature and humidity sensor and the CO2 sensor report no battery condition, so they get no battery entity at all. The opt-in entities for unsupported devices keep their percentage for now.
+
+**Valves no longer drop out when their batteries run low**
+
+Zones on the HTV213FRF, HTV245FRF, HTV345FRF, HTV405FRF and HTV0540FRF went unavailable once the batteries went low, and could not be opened or closed, with the valve still connected and reporting normally. They stay available now until the connection drops. The HTV0540FRF also reports its battery condition for the first time.
+
+**The HTP160FRF water timer is supported**
+
+It gets a valve you can open and close and a run duration to set beside it, plus battery, signal strength and run duration readings, the same set the HTV113FRF, HTV145FRF and HTV157B have. The payload came from an idle timer, so a running one still needs checking on hardware.
+
+**Signal strength**
+
+- A signal strength of 0 dBm now reads unknown, since the device sent nothing at all. On a hub those zeroes went into your long-term statistics and stayed there.
+- The HTV0540FRF valve hub sends no signal and no longer reports one. The rain gauge does send one, and it is now read.
+
+**Working out what a device reports**
+
+- A diagnostics download now carries the last few different readings from each device, not only the current one, so one file usually covers what used to take several. The readings go back as far as the last Home Assistant restart.
+- Supported devices gain a **Catalog Readings** sensor, disabled by default, listing every reading RainPoint's own product data says that model can send beside the ones this integration actually read from yours.
+
+### Thanks
+
+Thanks to **@Patrice91150** for the HTP160FRF payload behind this release's new device support.
+
+
 
 ### Added
 
