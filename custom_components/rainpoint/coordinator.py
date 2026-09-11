@@ -206,6 +206,26 @@ ORPHANED_KEY_DEBOUNCE_POLLS = 30
 # purpose: a dump that grows without bound is one nobody opens.
 PAYLOAD_HISTORY_MAX = 10
 
+# Decoded keys that move on every report regardless of device state. Comparing
+# raw payloads instead retains every report, because RSSI and the report clock
+# differ between two captures of one state (RAIN_DETECTOR_DRY_PAYLOAD against
+# its _SECOND sibling). A key missing from this set only makes the buffer
+# chattier, never wrong, so it fails safe where a redaction list would not.
+_VOLATILE_STATE_KEYS = frozenset(
+    {
+        "device_timestamp",
+        "event_time",
+        "last_seen",
+        "raw_bytes",
+        "raw_value",
+        "report_time",
+        "report_time_raw",
+        "rssi",
+        "rssi_dbm",
+        "timestamp_source",
+    }
+)
+
 # Hub-level cloud connectivity tri-state. Absent is never coerced to
 # disconnected: HUB_CONNECTIVITY_UNKNOWN covers three distinct causes -- older
 # firmware that omits the "connected" id, the Bluetooth wrapper record, and a
@@ -794,6 +814,17 @@ def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int
         "raw_value": raw_value,
         "generic": decode_generic(raw_value, model=model, model_code=model_code),
     }
+
+
+def _state_signature(decoded: dict | None, raw_value: str) -> str:
+    """Return a key identifying this report's state, ignoring fields that always move.
+
+    Falls back to the payload when nothing decoded.
+    """
+    if not isinstance(decoded, dict) or decoded.get("type") == "unknown":
+        return raw_value
+    # Values are repr'd before sorting, so an unorderable one cannot raise here.
+    return repr(sorted((key, repr(value)) for key, value in decoded.items() if key not in _VOLATILE_STATE_KEYS))
 
 
 def _attach_device_timestamp(decoded: dict | None, status_entry: dict) -> None:
@@ -1757,7 +1788,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         _attach_device_timestamp(decoded, status_entry)
 
         sensor_key = _sensor_key(hub["hid"], mid, addr)
-        RainPointCoordinator._record_payload_history(self, sensor_key, status_entry)
+        RainPointCoordinator._record_payload_history(self, sensor_key, status_entry, decoded)
         decoded = self._preserve_recent_valve_command_state(
             sensor_key,
             model,
@@ -1774,24 +1805,29 @@ class RainPointCoordinator(DataUpdateCoordinator):
             _LOGGER.debug(debug_with_version("Sensor entity key=%s info=%s"), sensor_key, _summarize_record(sensor_entry))
         return sensor_key, sensor_entry
 
-    def _record_payload_history(self, sensor_key: str, status_entry: dict) -> None:
-        """Keep this payload unless one equal to it is already retained for the key.
+    def _record_payload_history(self, sensor_key: str, status_entry: dict, decoded: dict | None) -> None:
+        """Keep this payload unless a report in the same state is already retained.
 
-        Deduplicated against the whole buffer, not just the last entry: a valve on
-        a schedule would otherwise fill it with copies of two states. `time` is
-        when a state was first seen.
+        Sameness is judged on the decode with _VOLATILE_STATE_KEYS dropped, so two
+        reports of one state collapse even though their RSSI and report clock
+        differ. An undecodable payload has no state to compare and falls back to
+        its own bytes, which is also the case where every frame is worth keeping.
         """
         raw_value = status_entry.get("value")
         if not raw_value:
             return
+        signature = _state_signature(decoded, raw_value)
         history = self._payload_history.setdefault(sensor_key, deque(maxlen=PAYLOAD_HISTORY_MAX))
-        if any(retained["value"] == raw_value for retained in history):
+        if any(retained["signature"] == signature for retained in history):
             return
-        history.append({"value": raw_value, "time": status_entry.get("time")})
+        history.append({"value": raw_value, "time": status_entry.get("time"), "signature": signature})
 
     def payload_history(self) -> dict[str, list[dict]]:
         """Return the retained payloads per sensor key, as plain serialisable lists."""
-        return {key: list(history) for key, history in self._payload_history.items()}
+        return {
+            key: [{"value": item["value"], "time": item["time"]} for item in history]
+            for key, history in self._payload_history.items()
+        }
 
     def _preserve_recent_valve_command_state(
         self,
@@ -2196,6 +2232,11 @@ class RainPointCoordinator(DataUpdateCoordinator):
         protected_keys = _sensor_keys_for_hub_keys(self._silent_poll_counts, missing_hub_keys)
         self._silent_poll_counts = {
             key: count for key, count in self._silent_poll_counts.items() if key in live_keys or key in protected_keys
+        }
+        # Retained payloads for a departed key can never reach a dump, since both
+        # dump paths walk coordinator.data["sensors"].
+        self._payload_history = {
+            key: history for key, history in self._payload_history.items() if key in live_keys or key in protected_keys
         }
 
     def _track_orphaned_keys(
