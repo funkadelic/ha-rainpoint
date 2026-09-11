@@ -56,7 +56,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Family | Examples | Entities Created |
 | ------ | -------- | ---------------- |
 | Valve hubs | HTV245FRF*, HTV213FRF, HTV345FRF, HTV405FRF, HTV445FRF*, HTV0540FRF | Valve per zone, duration number per zone, run duration sensor per zone, water used sensor per zone, battery low, signal strength |
-| Single-outlet timers | HTV113FRF, HTV145FRF, HTV157B | Valve, duration number, run duration sensor, battery low, signal strength |
+| Single-outlet timers | HTV113FRF, HTV145FRF, HTV157B, HTP160FRF | Valve, duration number, run duration sensor, battery low, signal strength |
 | Soil sensors | HCS021FRF, HCS026FRF*, HCS005FRF, HCS024FRF-V1 | Moisture, temperature, illuminance, battery low, signal strength |
 | Rain sensors | HCS012ARF | Hourly / daily / weekly / total rainfall |
 | Rain detectors | HCS044FRF* | Rain detected, battery low, signal strength |
@@ -79,7 +79,7 @@ The **HCS044FRF** detects rain rather than measuring it, so it reports a wet/dry
 
 The **HCS008FRF** flow meter reports in liters, matching the RainPoint app. Its lifetime total is the entity to point Home Assistant's water dashboard at, since the meter calibrates that figure itself rather than leaving a pulse count to be converted. The current-run pair reads zero between runs, which is the state the app shows as "--".
 
-Every model listed above has a decoder written against a real payload, and each capability is listed only once it has been confirmed to do what it claims. Support is not claimed optimistically: a control that has not been shown to reach the hardware is not shipped, even where RainPoint's own product data says the device should accept one. If a controller or valve you own is missing here, or is listed without the control you want, contributed payloads are what move it forward. See [My device isn't listed](#my-device-isnt-listed).
+If a controller or valve you own is missing here, or is listed without the control you want, see [My device isn't listed](#my-device-isnt-listed).
 
 A model that is absent is not necessarily unusable: the [opt-in generic entities](#unverified-generic-entities-opt-in) can often surface readings for it from the product catalog, clearly labeled unverified.
 

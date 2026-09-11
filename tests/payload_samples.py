@@ -90,6 +90,14 @@ SAMPLE_HTV157B_IDLE_PAYLOAD = "10#FF0D00000000DC01E1BE01D80020B700000000AF000000
 #   #238: RSSI -90 dBm, STA_BAT 2, an unmapped flag, so no battery percentage.
 SAMPLE_HTV157B_IDLE_PAYLOAD_LOW_BATTERY_FLAG = "10#FF0D00000000DC02E1A601D80020B700000000AF000000009F00000000FF0FB980461A"
 
+# HTP160FRF idle sample from a reporter (issue #237). The same field set again,
+# minus STA_LASTUSAGE, which this model's catalog variant 361 does not declare,
+# and led by a compact-form STA_CHG record the other three frames do not carry.
+# Every record's width matches that variant's dpLen and the walk consumes the
+# frame with nothing left over.
+#   RSSI -69 dBm, STA_BAT 1, report time 2026-07-14T08:21:12.
+SAMPLE_HTP160_IDLE_PAYLOAD = "10#00E1BB00DC01D800B700000000AD000020FF0F4C85DC19"
+
 # --- Additional decoder payload constants ---
 
 # HCS021FRF (moisture_full) hex payload from docstring.

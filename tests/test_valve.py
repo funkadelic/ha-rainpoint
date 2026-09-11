@@ -12,6 +12,7 @@ from custom_components.rainpoint.const import (
     DOMAIN,
     HIC801W_STATION_COUNT,
     MODEL_HIC801W,
+    MODEL_HTP160FRF,
     MODEL_HTV157B,
     MODEL_HTV210B,
     MODEL_VALVE_145,
@@ -48,6 +49,7 @@ from tests.payload_samples import (
     SAMPLE_HIC801W_COMMAND_RESPONSE_STOP,
     SAMPLE_HIC801W_IDLE_PAYLOAD,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
+    SAMPLE_HTP160_IDLE_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
     SAMPLE_HTV157B_IDLE_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
@@ -388,6 +390,23 @@ class TestValveControl:
         valve.coordinator.async_set_updated_data = MagicMock()
 
         valve._apply_response_state(SAMPLE_HTV157B_IDLE_PAYLOAD)
+
+        valve.coordinator.async_set_updated_data.assert_called_once()
+        updated = valve.coordinator.async_set_updated_data.call_args.args[0]
+        zones = updated["sensors"]["100_200_1"]["data"]["zones"]
+        assert zones[1]["open"] is False
+
+    def test_apply_response_state_routes_htp160frf(self):
+        """HTP160FRF control responses decode via the same single-outlet decoder.
+
+        Routed on the model, so without the MODEL_HTP160FRF arm the response
+        would fall through to decode_valve_hub and inject an empty zones dict
+        over the zone the poll had just read.
+        """
+        valve = _make_valve(model=MODEL_HTP160FRF)
+        valve.coordinator.async_set_updated_data = MagicMock()
+
+        valve._apply_response_state(SAMPLE_HTP160_IDLE_PAYLOAD)
 
         valve.coordinator.async_set_updated_data.assert_called_once()
         updated = valve.coordinator.async_set_updated_data.call_args.args[0]

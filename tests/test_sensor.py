@@ -28,6 +28,7 @@ from custom_components.rainpoint.const import (
     MODEL_HCS024FRF_V1,
     MODEL_HCS0528ARF,
     MODEL_HIC801W,
+    MODEL_HTP160FRF,
     MODEL_HTV157B,
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
@@ -1625,9 +1626,9 @@ class TestSingleOutletTimerDispatch:
         return captured
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B])
+    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B, MODEL_HTP160FRF])
     async def test_creates_rssi_and_run_duration(self, model):
-        """All three models yield the same three entities off one reported outlet."""
+        """All four models yield the same three entities off one reported outlet."""
         captured = await self._setup(
             self._timer_entry(
                 model,
@@ -1648,7 +1649,7 @@ class TestSingleOutletTimerDispatch:
         assert len(captured) == 4
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B])
+    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B, MODEL_HTP160FRF])
     async def test_no_water_usage_entity(self, model):
         """STA_LASTUSAGE is in the frame but its unit is unknown, so no entity for it.
 

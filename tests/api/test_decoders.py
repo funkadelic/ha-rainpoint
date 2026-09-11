@@ -35,7 +35,12 @@ from custom_components.rainpoint.api import (
     is_hand_written_model,
 )
 from custom_components.rainpoint.api.decoders import _hic801w_stations_from_mask
-from custom_components.rainpoint.api.utils import STA_DURATION_FIELD, _parse_entries, _parse_rainpoint_payload
+from custom_components.rainpoint.api.utils import (
+    STA_DURATION_FIELD,
+    STA_LASTUSAGE_FIELD,
+    _parse_entries,
+    _parse_rainpoint_payload,
+)
 from tests.payload_samples import (
     BASIC_HEX_PAYLOAD,
     FLOWMETER_FLOWING_HEX,
@@ -56,6 +61,7 @@ from tests.payload_samples import (
     SAMPLE_HIC801W_REPORTER_FRAMES,
     SAMPLE_HIC801W_SECOND_UNIT_FRAMES,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
+    SAMPLE_HTP160_IDLE_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
@@ -580,6 +586,50 @@ class TestDecodeHtv157b:
         assert "battery_percent" not in result
         assert result["rssi_dbm"] == -90
         assert result["zones"][1]["open"] is False
+
+
+class TestDecodeHtp160frf:
+    """HTP160FRF (issue #237) shares the single-outlet 10# framing, so it is
+    decoded by the same decode_htv145frf function."""
+
+    def test_idle_payload_zone_closed(self):
+        """Real idle payload: zone 1 closed, duration 0s, RSSI -69 dBm, battery normal."""
+        result = decode_htv145frf(SAMPLE_HTP160_IDLE_PAYLOAD)
+
+        assert result["type"] == "valve_hub"
+        assert result["decoder"] == "htv145frf_hex"
+        assert result["rssi_dbm"] == -69
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
+        assert result["hub_online"] is True
+        assert result["report_time"] == "2026-07-14T08:21:12"
+
+        zones = result["zones"]
+        assert set(zones) == {1}
+        assert zones[1]["open"] is False
+        assert zones[1]["state_raw"] == 0x00
+        assert zones[1]["duration_seconds"] == 0
+
+    def test_leading_compact_record_does_not_displace_the_rssi_read(self):
+        """This frame leads with a compact-form STA_CHG byte, not the RSSI header.
+
+        Reading the RSSI from a fixed byte offset returns 0xE1 from the header
+        that follows it, a positive value that is no dBm reading at all.
+        """
+        assert SAMPLE_HTP160_IDLE_PAYLOAD.startswith("10#00E1")
+        assert decode_htv145frf(SAMPLE_HTP160_IDLE_PAYLOAD)["rssi_dbm"] == -69
+
+    def test_absent_usage_record_still_yields_a_zone(self):
+        """Variant 361 declares no STA_LASTUSAGE, so the frame carries none.
+
+        Nothing in the decoded result depends on it, but a walk that treated
+        the missing record as a framing error would lose the zone with it.
+        """
+        b = _parse_rainpoint_payload(SAMPLE_HTP160_IDLE_PAYLOAD)
+        records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
+
+        assert STA_LASTUSAGE_FIELD not in records
+        assert decode_htv145frf(SAMPLE_HTP160_IDLE_PAYLOAD)["zones"][1]["duration_seconds"] == 0
 
 
 class TestLittleEndianTripwire:
