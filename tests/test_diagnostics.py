@@ -17,6 +17,7 @@ test.
 
 from __future__ import annotations
 
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -131,9 +132,14 @@ def _make_hass(coordinator=None, mqtt_client=None, entry_id="entry-1"):
     return hass, entry
 
 
-def _make_coordinator(hubs=None, sensors=None, connectivity=None):
-    """Return a coordinator stand-in holding one poll's data."""
+def _make_coordinator(hubs=None, sensors=None, connectivity=None, history=None):
+    """Return a coordinator stand-in holding one poll's data.
+
+    `payload_history` is stubbed because MagicMock's auto-attribute would hand
+    the dump a mock that reads as a populated history.
+    """
     coordinator = MagicMock()
+    coordinator.payload_history.return_value = history if history is not None else {}
     coordinator.data = {
         "hubs": hubs if hubs is not None else [_hub_record()],
         "sensors": sensors if sensors is not None else {"182509_236547_1": _sensor_entry()},
@@ -1045,3 +1051,63 @@ class TestSensorEntryAllowListParity:
         )
 
         assert set(entry) <= _SENSOR_ENTRY_FIELDS, sorted(set(entry) - _SENSOR_ENTRY_FIELDS)
+
+
+class TestPayloadHistory:
+    """Earlier payloads ride alongside the current one in all three dumps."""
+
+    HISTORY: ClassVar[list[dict]] = [
+        {"value": "11#0100...", "time": 1785420002247},
+        {"value": "11#0200...", "time": 1785420602247},
+    ]
+
+    @pytest.mark.asyncio
+    async def test_the_key_is_absent_rather_than_empty_when_nothing_was_retained(self):
+        """An empty list would read as "this device reported nothing"."""
+        hass, entry = _make_hass(coordinator=_make_coordinator(history={}))
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert "payload_history" not in result["sensors"]["182509_236547_1"]
+
+    @pytest.mark.asyncio
+    async def test_the_entry_dump_carries_the_retained_payloads_for_its_own_key(self):
+        history = {"182509_236547_1": self.HISTORY, "182509_236547_3": [{"value": "11#0300...", "time": 1}]}
+        sensors = {"182509_236547_1": _sensor_entry(addr=1), "182509_236547_3": _sensor_entry(addr=3)}
+        hass, entry = _make_hass(coordinator=_make_coordinator(sensors=sensors, history=history))
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["sensors"]["182509_236547_1"]["payload_history"] == self.HISTORY
+        assert result["sensors"]["182509_236547_3"]["payload_history"] == [{"value": "11#0300...", "time": 1}]
+
+    @pytest.mark.asyncio
+    async def test_a_sub_device_page_download_carries_them(self):
+        """The template sends reporters to the device page, so this is the
+        download that has to carry them."""
+        history = {"182509_236547_1": self.HISTORY}
+        hass, entry = _make_hass(coordinator=_make_coordinator(history=history))
+
+        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))
+
+        assert result["sensors"]["182509_236547_1"]["payload_history"] == self.HISTORY
+
+    @pytest.mark.asyncio
+    async def test_a_hub_page_download_carries_them_for_each_child(self):
+        history = {"182509_236547_1": self.HISTORY}
+        hass, entry = _make_hass(coordinator=_make_coordinator(history=history))
+
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_182509_236547"))
+
+        assert result["sensors"]["182509_236547_1"]["payload_history"] == self.HISTORY
+
+    @pytest.mark.asyncio
+    async def test_a_coordinator_that_cannot_answer_yields_a_dump_without_them(self):
+        """A dump taken before setup finished must still render."""
+        coordinator = _make_coordinator()
+        del coordinator.payload_history
+        hass, entry = _make_hass(coordinator=coordinator)
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert "payload_history" not in result["sensors"]["182509_236547_1"]

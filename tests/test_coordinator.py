@@ -51,6 +51,7 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_CO2,
     MODEL_DISPLAY_HUB,
     MODEL_FLOWMETER,
+    MODEL_HCS044FRF,
     MODEL_HCS0528ARF,
     MODEL_HIC801W,
     MODEL_HTV157B,
@@ -60,6 +61,7 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_RAIN,
     MODEL_TEMPHUM,
     MODEL_VALVE_113,
+    MODEL_VALVE_145,
     MODEL_VALVE_213,
     MODEL_VALVE_245,
     MODEL_VALVE_345,
@@ -76,10 +78,17 @@ from custom_components.rainpoint.repairs import (  # noqa: E402
 from tests.payload_samples import (  # noqa: E402
     CATALOG_ANCHOR_MODEL,
     HWS019WRF_V2_PAYLOAD,
+    MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD,
     POOL_HCS0528ARF_HEX_PAYLOAD,
+    RAIN_DETECTOR_DRY_PAYLOAD,
+    RAIN_DETECTOR_DRY_SECOND_PAYLOAD,
+    RAIN_DETECTOR_WET_PAYLOAD,
+    RAIN_DETECTOR_WET_SECOND_PAYLOAD,
     SAMPLE_HIC801W_ALL_FRAMES,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
+    SAMPLE_HTV145_CLOSED_PAYLOAD,
+    SAMPLE_HTV145_OPEN_PAYLOAD,
     SAMPLE_HTV157B_IDLE_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
@@ -97,6 +106,10 @@ from tests.payload_samples import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 _MOISTURE_SIMPLE_PAYLOAD = "10#E1C600DC01881AFF0F5E21F718"
+_RAIN_DRY = RAIN_DETECTOR_DRY_PAYLOAD
+_RAIN_DRY_SECOND = RAIN_DETECTOR_DRY_SECOND_PAYLOAD
+_RAIN_WET = RAIN_DETECTOR_WET_PAYLOAD
+_RAIN_WET_SECOND = RAIN_DETECTOR_WET_SECOND_PAYLOAD
 _DISPLAY_HUB_PAYLOAD = "1,0,1;707(707/694/1),42(42/39/1),P=9709(9709/9701/1),"
 
 
@@ -158,6 +171,7 @@ def _make_coord(hids=None):
         _client=mock_client,
         _hids=hids if hids is not None else [100],
         _notified_unknown_models=set(),
+        _payload_history={},
         _last_valve_command_at={},
         _silent_poll_counts={},
         _silent_issues=MagicMock(),
@@ -7308,3 +7322,187 @@ class TestHicStalenessGuard:
         )
 
         assert result is fresh
+
+
+class TestPayloadHistoryRealTimeline:
+    """Driven across consecutive refreshes: an injected buffer would assert the
+    deque works rather than that the coordinator fills it."""
+
+    MID = 200
+    KEY = "100_200_1"
+
+    def _build(self, model=MODEL_HCS044FRF, value=_RAIN_DRY):
+        """Return (coordinator, client) wired the way __init__.py wires it."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [_make_hub(mid=self.MID, model=model)]
+        client.get_multiple_device_status.return_value = _make_status(mid=self.MID, value=value)
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+
+        hass = MagicMock()
+        hass.data = {}
+        return _coord_module.RainPointCoordinator(hass, client, entry, time_source=_FakeClock()), client
+
+    @staticmethod
+    def _report(client, value, mid=200, time_ms=1700000000000):
+        """Set what the next poll's status call returns."""
+        client.get_multiple_device_status.return_value = _make_status(mid=mid, value=value, time_ms=time_ms)
+
+    def _values(self, coordinator):
+        """Return the retained payload strings for the device under test."""
+        return [retained["value"] for retained in coordinator.payload_history().get(self.KEY, [])]
+
+    @pytest.mark.asyncio
+    async def test_two_reports_of_one_state_collapse_although_their_bytes_differ(self):
+        """The case an invented byte-identical repeat cannot test.
+
+        These are two real captures of the same dry rain detector. Their RSSI and
+        report clock differ, so comparing payloads keeps both and the buffer holds
+        reports rather than states.
+        """
+        coordinator, client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+            assert self._values(coordinator) == [_RAIN_DRY]
+
+            assert _RAIN_DRY_SECOND != _RAIN_DRY
+            self._report(client, _RAIN_DRY_SECOND)
+            await coordinator.async_refresh()
+
+            assert self._values(coordinator) == [_RAIN_DRY]
+
+    @pytest.mark.asyncio
+    async def test_a_genuine_state_change_is_kept(self):
+        """Dry to wet must survive the collapse that folds dry into dry."""
+        coordinator, client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+
+            self._report(client, _RAIN_WET)
+            await coordinator.async_refresh()
+
+            assert self._values(coordinator) == [_RAIN_DRY, _RAIN_WET]
+
+    @pytest.mark.asyncio
+    async def test_a_state_returning_after_another_is_not_recorded_twice(self):
+        """Deduplicating against only the previous entry would fill every slot with
+        copies of the two states a scheduled device alternates between."""
+        coordinator, client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+            for value in (_RAIN_WET, _RAIN_DRY_SECOND, _RAIN_WET_SECOND, _RAIN_DRY):
+                self._report(client, value)
+                await coordinator.async_refresh()
+
+            assert self._values(coordinator) == [_RAIN_DRY, _RAIN_WET]
+
+    @pytest.mark.asyncio
+    async def test_an_undecodable_payload_falls_back_to_its_own_bytes(self):
+        """An unsupported model has no state to compare, and every frame it sends
+        is worth keeping."""
+        coordinator, client = self._build(model="ZZZ-NOT-A-MODEL", value="10#AA01")
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+            self._report(client, "10#AA02")
+            await coordinator.async_refresh()
+            self._report(client, "10#AA02")
+            await coordinator.async_refresh()
+
+            assert self._values(coordinator) == ["10#AA01", "10#AA02"]
+
+    @pytest.mark.asyncio
+    async def test_the_oldest_state_is_dropped_once_the_cap_is_reached(self):
+        """The cap is what keeps a long-lived install's dump openable."""
+        coordinator, client = self._build(model="ZZZ-NOT-A-MODEL", value="10#AA00")
+        cap = _coord_module.PAYLOAD_HISTORY_MAX
+
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+            for index in range(1, cap + 2):
+                self._report(client, f"10#AA{index:02X}")
+                await coordinator.async_refresh()
+
+            retained = self._values(coordinator)
+            assert len(retained) == cap
+            assert "10#AA00" not in retained
+            assert retained[-1] == f"10#AA{cap + 1:02X}"
+
+    @pytest.mark.asyncio
+    async def test_a_reading_that_never_arrived_records_nothing(self):
+        """An empty string is not a state, and the not-reporting surfaces already
+        say the device said nothing."""
+        coordinator, client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            self._report(client, "")
+            await coordinator.async_config_entry_first_refresh()
+
+            assert self._values(coordinator) == []
+
+    @pytest.mark.asyncio
+    async def test_a_pushed_frame_is_recorded_alongside_the_polled_ones(self):
+        """A device changing state between two 120s polls is invisible to the poll,
+        so the pushed frame is the only record of it."""
+        coordinator, _client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+
+            coordinator.apply_push_update(self.MID, "D1", _RAIN_WET, device_ts=1700000001000)
+
+            assert self._values(coordinator) == [_RAIN_DRY, _RAIN_WET]
+
+    @pytest.mark.asyncio
+    async def test_the_published_history_carries_no_internal_signature(self):
+        """The dump serialises this, so it carries the payload and its time only."""
+        coordinator, _client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+
+            published = coordinator.payload_history()
+            assert isinstance(published[self.KEY], list)
+            assert set(published[self.KEY][0]) == {"value", "time"}
+
+    @pytest.mark.asyncio
+    async def test_a_departed_key_stops_holding_payloads(self):
+        """Both dump paths walk coordinator.data["sensors"], so a departed key's
+        payloads could never be read again."""
+        coordinator, client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+            assert self.KEY in coordinator.payload_history()
+
+            hub = _make_hub(mid=self.MID, model=MODEL_HCS044FRF)
+            hub["subDevices"] = []
+            client.get_devices_by_hid.return_value = [hub]
+            client.get_multiple_device_status.return_value = [{"mid": self.MID, "subDeviceStatus": []}]
+            await coordinator.async_refresh()
+
+            assert self.KEY not in coordinator.payload_history()
+
+
+class TestStateSignatureAgainstCapturedPayloads:
+    """Guards _VOLATILE_STATE_KEYS against the committed corpus.
+
+    The exclusion list is the fragile part of the dedup, and this is what makes a
+    wrong one fail. `raw_bytes` was missing from the first draft, which put the
+    whole payload back into the signature and made the dedup a no-op.
+    """
+
+    CASES: ClassVar[list] = [
+        (MODEL_HCS044FRF, _RAIN_DRY, _RAIN_DRY_SECOND, True),
+        (MODEL_HCS044FRF, _RAIN_WET, _RAIN_WET_SECOND, True),
+        (MODEL_HCS044FRF, _RAIN_DRY, _RAIN_WET, False),
+        (MODEL_VALVE_145, SAMPLE_HTV145_CLOSED_PAYLOAD, SAMPLE_HTV145_OPEN_PAYLOAD, False),
+        (MODEL_MOISTURE_SIMPLE, _MOISTURE_SIMPLE_PAYLOAD, MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD, False),
+    ]
+
+    @pytest.mark.parametrize(("model", "first", "second", "same_state"), CASES)
+    def test_captures_of_one_state_collapse_and_different_states_do_not(self, model, first, second, same_state):
+        signature = _coord_module._state_signature
+        decode = _coord_module._decode_subdevice_payload
+
+        collapsed = signature(decode(model, first, None), first) == signature(decode(model, second, None), second)
+
+        assert first != second
+        assert collapsed is same_state

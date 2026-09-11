@@ -101,7 +101,7 @@ To get your device added:
 
 1. Open a [New device support issue](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) (the notification link, or the Not Reporting entity's report link, pre-fills the model and whatever payload is available for you).
 2. Include raw payloads in a few known states (valve closed vs open, a sensor at a known reading). One capture shows the byte layout; different states reveal what each byte means. See [`DEBUG_VALVE_PAYLOAD.md`](DEBUG_VALVE_PAYLOAD.md) for how to capture. A device that never reports has no payload to capture; describe what you see in the RainPoint app instead.
-3. Attach a diagnostics file, which carries the same information without any capturing on your part. See [Downloading diagnostics](#downloading-diagnostics).
+3. Attach a diagnostics file, which usually carries the same information without any capturing on your part: it holds the last few different readings the device sent, so using the device and then downloading once often covers step 2 on its own. See [Downloading diagnostics](#downloading-diagnostics).
 
 ---
 
@@ -304,7 +304,7 @@ Short of deleting entities yourself under **Settings → Devices & services → 
 
 ## Downloading diagnostics
 
-Home Assistant can write out a diagnostics file describing what this integration last received from RainPoint and what it made of it. It is the single most useful thing to attach to a bug report, and it saves a round trip asking you for details.
+Home Assistant can write out a diagnostics file describing what this integration has received from RainPoint and what it made of it. Alongside each device's latest reading it carries the last few different readings that device sent, so a file downloaded after you have used a valve usually shows it both open and closed. That history starts over whenever the integration reloads, which includes a Home Assistant restart, changing an option, and fixing a repair. The file is the single most useful thing to attach to a bug report, and it saves a round trip asking you for details.
 
 Go to **Settings → Devices & Services**, stay on the **Integrations** tab and click the **RainPoint Cloud** card to open it. Your account is the row underneath, which unless you have renamed it reads **RainPoint** followed by your email address in parentheses. Open the three-dot menu on that row and choose **Download diagnostics**. The file covers every device on the account, and its name begins with `config_entry-rainpoint-`.
 

@@ -286,8 +286,17 @@ def _hub_dump(hub: Any) -> dict:
     return dumped
 
 
-def _sensor_dump(entry: Any) -> dict:
+def _payload_history(coordinator: Any) -> dict:
+    """Return the coordinator's retained payloads, or {} when setup is incomplete."""
+    reader = getattr(coordinator, "payload_history", None)
+    return reader() if callable(reader) else {}
+
+
+def _sensor_dump(entry: Any, history: list | None = None) -> dict:
     """Return one coordinator sensor entry.
+
+    `history` skips the allow-list pass because it holds the same status entry
+    `value` and `time` that pass already covers.
 
     The undecoded payload and this integration's reading of it are both here,
     and they are the reason the dump is worth downloading: a bug report about a
@@ -303,6 +312,8 @@ def _sensor_dump(entry: Any) -> dict:
     dumped = _select_allowed(entry, _SENSOR_ENTRY_FIELDS)
     if "raw_status" in dumped:
         dumped["raw_status"] = _select_allowed(dumped["raw_status"], _STATUS_ENTRY_FIELDS)
+    if history:
+        dumped["payload_history"] = history
     return dumped
 
 
@@ -449,8 +460,9 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, config_entry: 
     coordinator = entry_store.get("coordinator")
     data = (getattr(coordinator, "data", None) or {}) if coordinator else {}
 
+    history = _payload_history(coordinator)
     hubs = [_hub_dump(hub) for hub in data.get("hubs") or []]
-    sensors = {key: _sensor_dump(entry) for key, entry in (data.get("sensors") or {}).items()}
+    sensors = {key: _sensor_dump(entry, history.get(key)) for key, entry in (data.get("sensors") or {}).items()}
 
     payload = {
         "integration": {"domain": DOMAIN, "version": VERSION},
@@ -514,17 +526,18 @@ async def async_get_device_diagnostics(hass: HomeAssistant, config_entry: Config
         payload["device"]["kind"] = "unrecognised"
         return async_redact_data(payload, TO_REDACT)
 
+    history = _payload_history(coordinator)
     if identifier.startswith(HUB_IDENTIFIER_PREFIX):
         payload["device"]["kind"] = "hub"
-        return async_redact_data(_hub_scoped_payload(payload, _hub_identity(identifier), data), TO_REDACT)
+        return async_redact_data(_hub_scoped_payload(payload, _hub_identity(identifier), data, history), TO_REDACT)
 
     payload["device"]["kind"] = "sub_device"
     sensors = data.get("sensors") or {}
-    payload["sensors"] = {identifier: _sensor_dump(sensors[identifier])} if identifier in sensors else {}
+    payload["sensors"] = {identifier: _sensor_dump(sensors[identifier], history.get(identifier))} if identifier in sensors else {}
     return async_redact_data(payload, TO_REDACT)
 
 
-def _hub_scoped_payload(payload: dict, identity: tuple[str, str | None] | None, data: dict) -> dict:
+def _hub_scoped_payload(payload: dict, identity: tuple[str, str | None] | None, data: dict, history: dict) -> dict:
     """Add the hub's record, connectivity and children to a device payload.
 
     `identity` is `_hub_identity`'s answer: `(hid, mid)` for a migrated row,
@@ -551,7 +564,7 @@ def _hub_scoped_payload(payload: dict, identity: tuple[str, str | None] | None, 
         record_mid: record for record_mid, record in (data.get("hub_connectivity") or {}).items() if f"{record_mid}" in mids
     }
     payload["sensors"] = {
-        key: _sensor_dump(entry)
+        key: _sensor_dump(entry, history.get(key))
         for key, entry in (data.get("sensors") or {}).items()
         if isinstance(entry, dict) and f"{entry.get('hid')}" == hid and f"{entry.get('mid')}" in mids
     }
