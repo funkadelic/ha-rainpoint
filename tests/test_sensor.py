@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import UnitOfTime
+from homeassistant.helpers.entity import EntityCategory
 
+import custom_components.rainpoint.coordinator as _coord_module
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import RainPointApiError, decode_hic801w, decode_htv213frf_valve
@@ -37,11 +40,15 @@ from custom_components.rainpoint.const import (
     MODEL_VALVE_345,
     MODEL_VALVE_405,
     MODEL_VALVE_445,
+    MODEL_VALVE_HUB,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from custom_components.rainpoint.entity import late_adders, register_late_adder
 from custom_components.rainpoint.sensor import (
+    _MODEL_FACTORIES,
+    _SENSOR_MODEL_ALIASES,
     DisplayHubReadingSensor,
+    RainPointCatalogReadingsSensor,
     RainPointCO2HighSensor,
     RainPointCO2HumiditySensor,
     RainPointCO2LowSensor,
@@ -86,7 +93,9 @@ from custom_components.rainpoint.sensor import (
     RainPointZoneRunDurationSensor,
     RainPointZoneStateSensor,
     RainPointZoneWaterUsageSensor,
+    _create_sensor_entities,
     _LateSensorEntityAdder,
+    _make_unknown_entities,
     _render_station_list,
     _slugify,
     async_setup_entry,
@@ -2343,7 +2352,7 @@ class TestRunDurationUniqueIdDisjointness:
         expected = {
             "rainpoint_100_200_1_rssi",
             "rainpoint_100_200_1_raw_payload",
-            "rainpoint_100_200_1_catalog_coverage",
+            "rainpoint_100_200_1_catalog_readings",
             "rainpoint_100_200_1_zone1_water_used",
             "rainpoint_100_200_1_zone1_run_duration",
             "rainpoint_100_200_1_zone1_duration",
@@ -3671,20 +3680,6 @@ class TestFlowMeterEndToEnd:
         assert unknown == []
 
 
-from typing import ClassVar  # noqa: E402
-
-from homeassistant.helpers.entity import EntityCategory  # noqa: E402
-
-import custom_components.rainpoint.coordinator as _coord_module  # noqa: E402
-from custom_components.rainpoint.const import MODEL_VALVE_HUB  # noqa: E402
-from custom_components.rainpoint.sensor import (  # noqa: E402
-    _MODEL_FACTORIES,
-    _SENSOR_MODEL_ALIASES,
-    RainPointCatalogCoverageSensor,
-    _make_unknown_entities,
-)
-
-
 class TestEveryDecodableModelIsServed:
     """A model this integration can decode must build entities for it.
 
@@ -3700,7 +3695,8 @@ class TestEveryDecodableModelIsServed:
     # Empty is the goal; an entry is a known gap, not a licence to add more.
     KNOWN_UNSERVED: ClassVar[frozenset] = frozenset(
         {
-            # Decodes through decode_valve_hub, builds no sensor entities. Its
+            # Decodes through decode_valve_hub and builds no reading entities,
+            # only the two unconditional diagnostics. Its
             # zone valves, duration numbers and per-zone state all work, so this
             # is a missing row in one map rather than a broken model. Not a
             # one-line fix: _make_htv_valve_diagnostic_entities also builds
@@ -3726,10 +3722,12 @@ class TestEveryDecodableModelIsServed:
         return _SENSOR_MODEL_ALIASES.get(model, model) in _MODEL_FACTORIES
 
     def test_no_decodable_model_silently_builds_nothing(self):
+        """Map membership, which is necessary but not sufficient: a factory can
+        still return [] for a device whose payload carries no readings."""
         unserved = {model for model in self._decodable_models() if not self._has_factory(model)}
 
         assert unserved - self.KNOWN_UNSERVED == set(), (
-            f"{sorted(unserved - self.KNOWN_UNSERVED)} decode but build no sensor entities. "
+            f"{sorted(unserved - self.KNOWN_UNSERVED)} decode but have no reading entities. "
             "Add a factory to _MODEL_FACTORIES, or an alias, or list the model in "
             "KNOWN_UNSERVED with the reason."
         )
@@ -3742,21 +3740,24 @@ class TestEveryDecodableModelIsServed:
             f"{sorted(self.KNOWN_UNSERVED - unserved)} now build entities; drop them from KNOWN_UNSERVED."
         )
 
-    def test_an_unserved_model_really_does_build_nothing(self):
-        """Pins the mechanism rather than the map, so the test still means something
-        if the fallback changes."""
-        info = {"data": {"type": "valve_hub", "zones": {}}, "model": MODEL_VALVE_HUB}
+    def test_an_unserved_model_really_does_build_no_readings(self):
+        """Pins what the platform produces, not a sub-step of it. An unserved model
+        gets the unconditional diagnostics and nothing that reads the device, which
+        is the shape the map check above cannot see."""
+        info = {"data": {"type": "valve_hub", "zones": {}}, "model": MODEL_VALVE_HUB, "model_code": None}
 
+        built = _create_sensor_entities(MagicMock(), "100_200_1", info, generic_enabled=False)
+
+        assert [type(entity).__name__ for entity in built] == ["RainPointRawPayloadSensor"]
         assert _make_unknown_entities(MagicMock(), "100_200_1", info, "slug") == []
 
 
-class TestCatalogCoverageSensor:
-    """What the catalog declares, beside what this install decodes.
+class TestCatalogReadingsSensor:
+    """What the catalog declares, beside what this install decoded.
 
-    The gap this closes: a model with a hand-written decoder is kept off the
-    generic path by is_hand_written_model, and RainPointUnknownSensor is built
-    only for models with no decoder, so nothing otherwise reports what a
-    supported device declares and we do not read.
+    The state counts declared readings only. Counting decoded keys was tried and
+    reverted: a rejected frame returns the full key set with every value None
+    plus an error key, so the number rose when the decode failed.
     """
 
     @staticmethod
@@ -3768,57 +3769,72 @@ class TestCatalogCoverageSensor:
         }
         coordinator = MagicMock()
         coordinator.data = {"sensors": {"100_200_1": info}}
-        return RainPointCatalogCoverageSensor(coordinator, "100_200_1", info, "100_200_1")
+        return RainPointCatalogReadingsSensor(coordinator, "100_200_1", info, "100_200_1")
 
-    def test_it_reports_the_status_identities_the_catalog_declares(self):
-        """Against the committed catalog, not a stub, so a refresh that changes
-        what a variant declares shows up here."""
-        attrs = self._sensor().extra_state_attributes
+    def test_the_state_counts_what_the_catalog_declares(self):
+        """Against the committed catalog, not a stub, so a refresh that changes a
+        variant shows up here."""
+        sensor = self._sensor()
+        attrs = sensor.extra_state_attributes
 
         assert "STA_BAT" in attrs["catalog_identities"]
-        assert attrs["catalog_identity_count"] == len(attrs["catalog_identities"])
+        assert sensor.native_value == len(attrs["catalog_identities"])
 
     def test_control_datapoints_are_not_counted_as_readings(self):
         """The HTV245FRF variant declares CTL_WATER and CTL_SET_DELAY. A command
-        is not something the device reports, so counting them would overstate
-        what is unread."""
+        is not something the device reports."""
         attrs = self._sensor().extra_state_attributes
 
         assert not [identity for identity in attrs["catalog_identities"] if not identity.startswith("STA_")]
 
-    def test_the_state_counts_the_readings_this_device_actually_decoded(self):
-        sensor = self._sensor(data={"type": "valve", "rssi_dbm": -45, "battery_flag": 1, "zones": {}})
+    def test_a_rejected_frame_does_not_change_the_count(self):
+        """The defect this design replaced. A rejected decode returns every key
+        with a None value plus an error key, so a count of decoded keys reported
+        more coverage on a failed frame than on a good one."""
+        good = self._sensor(data={"type": "hic801w", "current_station": 3, "rssi_dbm": -45})
+        rejected = self._sensor(
+            data={"type": "hic801w", "current_station": None, "rssi_dbm": None, "error": "bad frame", "decoder": "x"}
+        )
 
-        assert sensor.native_value == 3
+        assert good.native_value == rejected.native_value
 
-    def test_decoder_bookkeeping_is_not_counted_as_a_reading(self):
-        """raw_bytes and type are how the decode describes itself, not readings,
-        and counting them would inflate every device by the same amount."""
-        sensor = self._sensor(data={"type": "valve", "raw_bytes": b"\\x01", "raw_value": "10#01", "battery_flag": 1})
+    def test_decoded_keys_are_listed_without_claiming_a_count(self):
+        """No exclusion list stands behind this, so nothing here can be wrong in
+        the way two hand-maintained sets were."""
+        attrs = self._sensor(data={"type": "valve", "raw_bytes": b"\x01", "battery_flag": 1}).extra_state_attributes
 
-        assert sensor.native_value == 1
-        assert sensor.extra_state_attributes["decoded_keys"] == ["battery_flag"]
+        assert attrs["decoded_keys"] == ["battery_flag", "raw_bytes", "type"]
 
-    def test_a_device_with_no_data_reports_nothing_rather_than_zero(self):
-        """Zero readings and no reading at all are different claims."""
-        sensor = self._sensor()
-        sensor.coordinator.data = {"sensors": {}}
-
-        assert sensor.native_value is None
-
-    def test_a_model_absent_from_the_catalog_declares_nothing_and_does_not_raise(self):
-        """A degraded catalog snapshot loads empty rather than raising, so every
-        reader of it has to survive finding nothing."""
+    def test_a_model_the_catalog_does_not_carry_says_so_rather_than_zero(self):
         attrs = self._sensor(model="ZZZ-NOT-A-MODEL", model_code=None).extra_state_attributes
 
-        assert attrs["catalog_identities"] == []
-        assert attrs["catalog_identity_count"] == 0
+        assert attrs["catalog_status"] == "model_not_in_catalog"
+        assert self._sensor(model="ZZZ-NOT-A-MODEL", model_code=None).native_value is None
 
-    def test_it_carries_the_reason_the_generic_path_declined_this_model(self):
-        attrs = self._sensor().extra_state_attributes
+    def test_a_model_whose_variant_the_device_did_not_identify_says_so(self):
+        """HIC801W is carried under two modelCodes that declare different
+        identities, so without one the catalog cannot answer for this device.
+        Reporting 0 would read as "declares nothing"."""
+        sensor = self._sensor(model="HIC801W", model_code=None)
 
-        assert "unmapped_generic_identities" in attrs
-        assert "generic_gate_blocked_by" in attrs
+        assert sensor.extra_state_attributes["catalog_status"] == "variant_not_identified"
+        assert sensor.native_value is None
+
+    def test_a_variant_that_genuinely_declares_nothing_reports_zero(self):
+        """The third zero case, and the only one that is a real count."""
+        sensor = self._sensor(model="HWS019WRF-V2", model_code="78")
+
+        assert sensor.extra_state_attributes["catalog_status"] == "resolved"
+        assert sensor.native_value == 0
+
+    def test_the_model_is_read_live_rather_than_from_the_construction_snapshot(self):
+        """Entity creation is one-shot and a sensor key can be re-keyed to a
+        different model, which would otherwise compare model B's decode against
+        model A's catalog until a reload."""
+        sensor = self._sensor(model="HTV245FRF", model_code="303")
+        sensor.coordinator.data = {"sensors": {"100_200_1": {"model": "HWS019WRF-V2", "model_code": "78", "data": {}}}}
+
+        assert sensor.native_value == 0
 
     def test_no_addressing_identifier_reaches_an_attribute(self):
         """The log rule's narrow model exemption does not extend to productKey,
@@ -3832,28 +3848,26 @@ class TestCatalogCoverageSensor:
         }
         coordinator = MagicMock()
         coordinator.data = {"sensors": {"100_200_1": info}}
-        sensor = RainPointCatalogCoverageSensor(coordinator, "100_200_1", info, "100_200_1")
+        sensor = RainPointCatalogReadingsSensor(coordinator, "100_200_1", info, "100_200_1")
 
         rendered = repr(sensor.extra_state_attributes)
 
         assert "SECRET_PK" not in rendered
         assert "MAC-A84674BB91F0" not in rendered
 
-    def test_the_catalog_read_happens_once_per_entity(self):
-        """extra_state_attributes is read on every state write, and the answer
-        depends only on this entity's fixed model and modelCode."""
+    def test_the_catalog_is_resolved_once_per_entity(self):
+        """extra_state_attributes is read on every state write."""
         sensor = self._sensor()
 
         with patch("custom_components.rainpoint.sensor.get_catalog_entry") as get_entry:
             assert sensor.extra_state_attributes is not None
             assert sensor.extra_state_attributes is not None
-            first_call_count = get_entry.call_count
 
-        assert first_call_count == 1
+            assert get_entry.call_count == 1
 
     def test_it_is_a_disabled_diagnostic_so_nobody_gets_it_unasked(self):
         sensor = self._sensor()
 
         assert sensor._attr_entity_registry_enabled_default is False
         assert sensor._attr_entity_category == EntityCategory.DIAGNOSTIC
-        assert sensor._attr_unique_id == "rainpoint_100_200_1_catalog_coverage"
+        assert sensor._attr_unique_id == "rainpoint_100_200_1_catalog_readings"

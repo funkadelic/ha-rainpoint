@@ -210,7 +210,7 @@ class TestHic801wWholeEntitySet:
             "program_stations",
             "program_stations_completed",
             "raw_payload",
-            "catalog_coverage",
+            "catalog_readings",
         }
     )
     _EXPECTED_BINARY_SUFFIXES = frozenset({f"station{n}_watering" for n in range(1, 9)})
@@ -357,20 +357,28 @@ class TestHic801wWholeEntitySet:
 
         # Step 2: a b3-mutated refresh clears the thirteen reading entities
         # to no state at once, on the same objects, while every one stays
-        # available. Raw Payload and Catalog Coverage are deliberately
+        # available. Raw Payload and Catalog Readings are deliberately
         # excluded: they are the platform's unconditional diagnostics rather
         # than readings of this device, and both are at their most useful
         # when a decode has failed, one holding the last hex received and the
         # other what the catalog says the model should report.
+        catalog_readings_before = by_suffix["catalog_readings"].native_value
+        assert catalog_readings_before is not None, "the comparison below would be None == None"
         client.get_multiple_device_status.return_value = _status(_B3_MUTATED_PAYLOAD)
         await coordinator.async_refresh()
 
         thirteen_sensors = [
-            suffix_entity for suffix, suffix_entity in by_suffix.items() if suffix not in {"raw_payload", "catalog_coverage"}
+            suffix_entity for suffix, suffix_entity in by_suffix.items() if suffix not in {"raw_payload", "catalog_readings"}
         ]
         for entity in thirteen_sensors:
             assert entity.native_value is None, f"{entity._attr_unique_id!r} retained a value"
             assert entity.available is True, f"{entity._attr_unique_id!r} unexpectedly unavailable"
+        # The one thing Catalog Readings must not do on a rejected frame: report
+        # more than it did on a good one. Counting decoded keys did exactly that,
+        # because the error envelope carries every key with a None value plus an
+        # error key of its own.
+        assert by_suffix["catalog_readings"].native_value == catalog_readings_before
+
         for entity in hic_binaries:
             assert entity.is_on is None, f"{entity._attr_unique_id!r} retained a value"
             assert entity.available is True, f"{entity._attr_unique_id!r} unexpectedly unavailable"
