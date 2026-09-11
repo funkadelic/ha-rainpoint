@@ -68,6 +68,11 @@ _HTV213_TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
 # record; the type-byte check on every read below is what keeps that from being
 # misread as the zone's own value rather than an assumption that it cannot
 # happen.
+#
+# The 0x1C block between state and event time is STA_ALARM, one record per zone.
+# A live HTV245FRF sends it and nothing here reads it: it is compact form, so its
+# value can only be 0x20 to 0x2F, and both zones read 0 on the only capture.
+# Decoding it needs a frame taken while a zone is actually faulting.
 _HTV213_DP_BASE_STATE = 0x18
 _HTV213_DP_BASE_EVENT_TIME = 0x20
 _HTV213_DP_BASE_DURATION = 0x24
@@ -440,6 +445,10 @@ def _decode_htv213frf_hex(raw: str) -> dict:
     family, and dp 0x18 carries the STA_BAT flag. Reading that byte as a
     link state made both zones unavailable when a live HTV245FRF reported
     STA_BAT 2 at -42 dBm.
+
+    The catalog's HTV245FRF variant also declares STA_RSRP and STA_EVTIME2,
+    which a live unit does not send. Absent is the finding, so do not read a
+    missing decoder for either as an unfinished job.
     """
     from ..const import debug_with_version
 
