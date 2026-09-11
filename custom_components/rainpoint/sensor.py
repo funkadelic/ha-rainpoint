@@ -23,6 +23,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .api import _USAGE_GALLONS_PER_COUNT
+from .api.product_catalog import get_catalog_entry
 from .const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
@@ -473,6 +474,9 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
     factory = _MODEL_FACTORIES.get(model)
     if factory is not None:
         entities = list(factory(coordinator, key, info, base_slug))
+        # Only on the served path: RainPointUnknownSensor already carries the
+        # catalog gate for a model with no decoder.
+        entities.append(RainPointCatalogCoverageSensor(coordinator, key, info, base_slug))
     else:
         entities = list(_make_unknown_entities(coordinator, key, info, base_slug))
         if generic_enabled:
@@ -1499,6 +1503,93 @@ class RainPointNotReportingSensor(RainPointSensorBase):
             "This device is listed by RainPoint but returns no readings. Opening report_url files a "
             "pre-filled support request that already states the device reports no status."
         )
+        return attrs
+
+
+class RainPointCatalogCoverageSensor(RainPointSensorBase):
+    """What RainPoint's catalog says this model reports, beside what we decode.
+
+    The complement of RainPointUnknownSensor, which carries this for models with
+    no decoder. A model on the hand-written path is locked out of the generic
+    path by is_hand_written_model, so nothing otherwise reports what a supported
+    device declares and we do not read.
+
+    The state is the live decoded count and `catalog_identity_count` the declared
+    one. They are deliberately not shown as a ratio: a catalog identity and a
+    decoded key do not map one to one, and nothing in this repo declares which
+    key an entity reads, so any fraction would invent a precision it does not
+    have. The two lists sit side by side for a person to compare.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:clipboard-list-outline"
+    _attr_entity_registry_enabled_default = False
+
+    # Decoder bookkeeping rather than readings, so they would inflate the count.
+    _NON_READING_KEYS = frozenset({"raw_bytes", "raw_value", "timestamp_source", "type"})
+
+    # Computed once: both depend only on this entity's fixed model and modelCode,
+    # and extra_state_attributes is read on every state write.
+    _catalog_identities: tuple[str, ...] | None = None
+    _gate_description: dict | None = None
+
+    def __init__(self, coordinator, sensor_key, sensor_info, base_slug) -> None:
+        super().__init__(coordinator, sensor_key, sensor_info, base_slug)
+        self._attr_unique_id = f"rainpoint_{base_slug}_catalog_coverage"
+        self._attr_name = "Catalog Coverage"
+
+    @property
+    def _reading_keys(self) -> list[str]:
+        """Return the decoded keys that represent readings."""
+        return sorted(key for key in (self._sensor_data or {}) if key not in self._NON_READING_KEYS)
+
+    def _declared_identities(self) -> tuple[str, ...]:
+        """Return the status identities this model's catalog variant declares.
+
+        Control identities are excluded: CTL_WATER is a command, not a reading,
+        so counting it would overstate what the device reports.
+        """
+        if self._catalog_identities is None:
+            entries = get_catalog_entry(self._sensor_info.get("model"), self._sensor_info.get("model_code")) or []
+            self._catalog_identities = tuple(
+                sorted(
+                    {
+                        entry["identity"]
+                        for entry in entries
+                        if isinstance(entry, dict) and str(entry.get("identity", "")).startswith("STA_")
+                    }
+                )
+            )
+        return self._catalog_identities
+
+    @property
+    def native_value(self) -> int | None:
+        """Return how many readings this device's decode produced."""
+        if self._sensor_data is None:
+            return None
+        return len(self._reading_keys)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Carry both sides of the comparison, and why the generic path declined.
+
+        Identity and key names only. No productKey, deviceName or any other
+        addressing identifier reaches an attribute here.
+        """
+        attrs = super().extra_state_attributes
+        declared = self._declared_identities()
+
+        if self._gate_description is None:
+            # Imported locally for the cycle generic_entities closes against
+            # this module.
+            from .generic_entities import describe_generic_gate
+
+            self._gate_description = describe_generic_gate(self._sensor_info.get("model"), self._sensor_info.get("model_code"))
+
+        attrs["catalog_identities"] = list(declared)
+        attrs["catalog_identity_count"] = len(declared)
+        attrs["decoded_keys"] = self._reading_keys
+        attrs.update({key: list(value) for key, value in self._gate_description.items()})
         return attrs
 
 

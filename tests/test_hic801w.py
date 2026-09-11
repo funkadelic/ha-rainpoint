@@ -15,7 +15,7 @@ HIC801W sub-device driven through both sensor.async_setup_entry and
 binary_sensor.async_setup_entry off a single coordinator first refresh,
 yielding the five HIC801W sensors, the eight station binary sensors and
 the raw-payload diagnostic. It checks that emitted unique-ID set as an
-equality, that all fourteen resolve to one device-registry identity, and
+equality, that all fifteen resolve to one device-registry identity, and
 that they clear together on a rejected frame and recover together on the
 next good one. A test scoped to one entity or one platform cannot see an
 entity that appears for an undefined reading, a suffix that drifts, or
@@ -191,9 +191,10 @@ class TestHic801wWholeEntitySet:
     """The whole emitted set rather than any one entity: one HIC801W sub-device,
     driven through both sensor.async_setup_entry and
     binary_sensor.async_setup_entry off one coordinator's first refresh,
-    yields exactly fourteen unique IDs (the thirteen entities this model
-    publishes plus the sensor platform's unconditional
-    disabled-by-default raw-payload diagnostic), all resolving to one
+    yields exactly fifteen unique IDs (the thirteen entities this model
+    publishes plus the sensor platform's two unconditional
+    disabled-by-default diagnostics, raw payload and catalog coverage), all
+    resolving to one
     device-registry identity, and the whole set clears to no state
     together on a rejected frame -- while every entity stays available --
     and recovers together on the next good poll.
@@ -209,6 +210,7 @@ class TestHic801wWholeEntitySet:
             "program_stations",
             "program_stations_completed",
             "raw_payload",
+            "catalog_coverage",
         }
     )
     _EXPECTED_BINARY_SUFFIXES = frozenset({f"station{n}_watering" for n in range(1, 9)})
@@ -248,7 +250,7 @@ class TestHic801wWholeEntitySet:
         return [e for e in binary_captured if e._attr_unique_id.startswith(self._UID_PREFIX)]
 
     @pytest.mark.asyncio
-    async def test_the_union_is_exactly_the_locked_fourteen_ids_split_by_domain(self):
+    async def test_the_union_is_exactly_the_locked_fifteen_ids_split_by_domain(self):
         """The locked set as an equality, not a superset or a bare count: an entity
         added later for an undefined reading fails here, and a suffix that
         drifted between the two platforms fails here too. Registry uniqueness is per
@@ -266,7 +268,7 @@ class TestHic801wWholeEntitySet:
         assert binary_ids == expected_binary_ids
         assert sensor_ids.isdisjoint(binary_ids)
         assert sensor_ids | binary_ids == expected_sensor_ids | expected_binary_ids
-        assert len(sensor_ids | binary_ids) == 14
+        assert len(sensor_ids | binary_ids) == 15
 
     @pytest.mark.asyncio
     async def test_no_id_carries_a_substring_for_an_unverified_reading(self):
@@ -311,19 +313,19 @@ class TestHic801wWholeEntitySet:
     async def test_the_whole_set_resolves_to_one_device_identity(self):
         """Every entity in the union, across both platforms, points at the
         same device-registry identity: one device page carrying all
-        fourteen, not two. No per-station device fan-out either, even
+        fifteen, not two. No per-station device fan-out either, even
         though the catalog's portNumber is 8 -- the wire carries one
         aggregate record, not eight per-station ones."""
         _coordinator, _client, sensor_captured, binary_captured = await self._build()
         union = self._hic_sensor_entities(sensor_captured) + self._hic_binary_entities(binary_captured)
-        assert len(union) == 14
+        assert len(union) == 15
 
         identities = {frozenset(e.device_info["identifiers"]) for e in union}
         assert len(identities) == 1
 
     @pytest.mark.asyncio
     async def test_the_set_clears_together_and_recovers_together(self):
-        """One continuous timeline on the same fourteen entity objects: the
+        """One continuous timeline on the same fifteen entity objects: the
         station-3 capture's running state across the whole set, then a
         b3-mutated refresh that must clear every one of them to no state at
         the same moment while every one stays available (at
@@ -335,7 +337,7 @@ class TestHic801wWholeEntitySet:
         coordinator, client, sensor_captured, binary_captured = await self._build()
         hic_sensors = self._hic_sensor_entities(sensor_captured)
         hic_binaries = self._hic_binary_entities(binary_captured)
-        assert len(hic_sensors) + len(hic_binaries) == 14
+        assert len(hic_sensors) + len(hic_binaries) == 15
         by_suffix = {e._attr_unique_id.removeprefix(self._UID_PREFIX): e for e in hic_sensors}
         stations_by_num = {e._station_num: e for e in hic_binaries}
         assert set(stations_by_num) == set(range(1, 9))
@@ -353,17 +355,19 @@ class TestHic801wWholeEntitySet:
             if n != 3:
                 assert stations_by_num[n].is_on is False
 
-        # Step 2: a b3-mutated refresh clears the thirteen entities to
-        # no state at once, on the same objects, while every one stays
-        # available. The Raw Payload diagnostic is deliberately excluded
-        # here: it is the platform's unconditional fourteenth entity, not
-        # one of the thirteen, and its whole purpose is to keep showing the
-        # last-received hex even when the decode failed, so a report is
-        # diagnosable without a capture session.
+        # Step 2: a b3-mutated refresh clears the thirteen reading entities
+        # to no state at once, on the same objects, while every one stays
+        # available. Raw Payload and Catalog Coverage are deliberately
+        # excluded: they are the platform's unconditional diagnostics rather
+        # than readings of this device, and both are at their most useful
+        # when a decode has failed, one holding the last hex received and the
+        # other what the catalog says the model should report.
         client.get_multiple_device_status.return_value = _status(_B3_MUTATED_PAYLOAD)
         await coordinator.async_refresh()
 
-        thirteen_sensors = [suffix_entity for suffix, suffix_entity in by_suffix.items() if suffix != "raw_payload"]
+        thirteen_sensors = [
+            suffix_entity for suffix, suffix_entity in by_suffix.items() if suffix not in {"raw_payload", "catalog_coverage"}
+        ]
         for entity in thirteen_sensors:
             assert entity.native_value is None, f"{entity._attr_unique_id!r} retained a value"
             assert entity.available is True, f"{entity._attr_unique_id!r} unexpectedly unavailable"
