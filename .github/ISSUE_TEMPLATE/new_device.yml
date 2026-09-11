@@ -21,11 +21,15 @@ body:
         so we can tell which device is which, so read it before attaching if that
         matters to you.
 
-        For a second and third capture in different states, take one diagnostics file
-        per state. If you would rather not attach files, `DEBUG_VALVE_PAYLOAD.md` has
-        the manual route: enable the per-device **"Raw Payload"** diagnostic sensor
-        (disabled by default), then read its value from the entity's attributes or the
-        logs.
+        The file also carries the earlier readings the device sent while Home Assistant
+        was running, so if you have opened and closed a valve, or the reading has moved,
+        one download may already hold every state we need. It only covers the time since
+        Home Assistant last restarted, so a download taken right after a restart holds
+        one state and a second file per state is still worth taking.
+
+        If you would rather not attach files, `DEBUG_VALVE_PAYLOAD.md` has the manual
+        route: enable the per-device **"Raw Payload"** diagnostic sensor (disabled by
+        default), then read its value from the entity's attributes or the logs.
 
         **Device returning no readings at all?** If you got here from a **"Not Reporting"**
         entity, there is no payload to capture and the payload field below is already

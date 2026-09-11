@@ -158,6 +158,7 @@ def _make_coord(hids=None):
         _client=mock_client,
         _hids=hids if hids is not None else [100],
         _notified_unknown_models=set(),
+        _payload_history={},
         _last_valve_command_at={},
         _silent_poll_counts={},
         _silent_issues=MagicMock(),
@@ -7308,3 +7309,149 @@ class TestHicStalenessGuard:
         )
 
         assert result is fresh
+
+
+class TestPayloadHistoryRealTimeline:
+    """Payload history is built by driving the real coordinator through
+    consecutive refreshes, never by injecting a finished buffer.
+
+    The feature is entirely about what happens across polls, so an injected
+    end state would assert the deque works rather than that the coordinator
+    fills it.
+    """
+
+    MID = 200
+
+    @staticmethod
+    def _vary(suffix: str) -> str:
+        """Return a payload differing from the fixture in two hex digits.
+
+        Length and prefix are preserved so the payload stays the shape the
+        parser accepts; whether it decodes is beside the point, because the
+        recorder reads the status entry and never the decode.
+        """
+        return _MOISTURE_SIMPLE_PAYLOAD.replace("E1C6", f"E1{suffix}")
+
+    def _build(self):
+        """Return (coordinator, client) wired the way __init__.py wires it."""
+        client = AsyncMock()
+        client.get_devices_by_hid.return_value = [_make_hub(mid=self.MID)]
+        client.get_multiple_device_status.return_value = _make_status(mid=self.MID)
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+
+        hass = MagicMock()
+        hass.data = {}
+        return _coord_module.RainPointCoordinator(hass, client, entry, time_source=_FakeClock()), client
+
+    @staticmethod
+    def _report(client, value, mid=200, time_ms=1700000000000):
+        """Set what the next poll's status call returns."""
+        client.get_multiple_device_status.return_value = _make_status(mid=mid, value=value, time_ms=time_ms)
+
+    @staticmethod
+    def _values(coordinator, key="100_200_1"):
+        """Return the retained payload strings for one sensor key."""
+        return [retained["value"] for retained in coordinator.payload_history().get(key, [])]
+
+    @pytest.mark.asyncio
+    async def test_a_repeated_payload_costs_one_slot_and_a_changed_one_appends(self):
+        """The buffer holds states, not polls.
+
+        A device reporting the same reading every poll is one state, so five
+        identical polls must leave one entry; the poll that reports something
+        different is the one that adds a second.
+        """
+        coordinator, client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+            assert self._values(coordinator) == [_MOISTURE_SIMPLE_PAYLOAD]
+
+            for _ in range(4):
+                await coordinator.async_refresh()
+            assert self._values(coordinator) == [_MOISTURE_SIMPLE_PAYLOAD]
+
+            self._report(client, self._vary("D7"))
+            await coordinator.async_refresh()
+            assert self._values(coordinator) == [_MOISTURE_SIMPLE_PAYLOAD, self._vary("D7")]
+
+    @pytest.mark.asyncio
+    async def test_a_state_returning_after_another_is_not_recorded_twice(self):
+        """A scheduled valve alternates between two payloads for hours.
+
+        Deduplicating against only the previous entry would fill every slot
+        with copies of those two and lose the buffer's whole purpose, so the
+        check is against everything retained.
+        """
+        coordinator, client = self._build()
+        closed, opened = _MOISTURE_SIMPLE_PAYLOAD, self._vary("D7")
+
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+            for value in (opened, closed, opened, closed, opened):
+                self._report(client, value)
+                await coordinator.async_refresh()
+
+            assert self._values(coordinator) == [closed, opened]
+
+    @pytest.mark.asyncio
+    async def test_the_oldest_state_is_dropped_once_the_cap_is_reached(self):
+        """The cap is what keeps a long-lived install's dump openable."""
+        coordinator, client = self._build()
+        cap = _coord_module.PAYLOAD_HISTORY_MAX
+
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+            for index in range(cap + 2):
+                self._report(client, self._vary(f"{index:02X}"))
+                await coordinator.async_refresh()
+
+            retained = self._values(coordinator)
+            assert len(retained) == cap
+            # The fixture payload and the first two varied ones have aged out.
+            assert _MOISTURE_SIMPLE_PAYLOAD not in retained
+            assert self._vary("00") not in retained
+            assert retained[-1] == self._vary(f"{cap + 1:02X}")
+
+    @pytest.mark.asyncio
+    async def test_a_reading_that_never_arrived_records_nothing(self):
+        """A silent device has no payload, and an empty string is not a state.
+
+        Recording it would spend a slot saying the device said nothing, which
+        the not-reporting surfaces already say.
+        """
+        coordinator, client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            self._report(client, "")
+            await coordinator.async_config_entry_first_refresh()
+
+            assert self._values(coordinator) == []
+
+    @pytest.mark.asyncio
+    async def test_a_pushed_frame_is_recorded_alongside_the_polled_ones(self):
+        """Both paths run through _decode_one_subdevice, and the pushed frame
+        is often the only record of the state change worth capturing: a valve
+        opened and closed between two 120s polls is invisible to the poll."""
+        coordinator, _client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+
+            coordinator.apply_push_update(self.MID, "D1", self._vary("D7"), device_ts=1700000001000)
+
+            assert self._values(coordinator) == [_MOISTURE_SIMPLE_PAYLOAD, self._vary("D7")]
+
+    @pytest.mark.asyncio
+    async def test_the_published_history_is_plain_lists_the_caller_cannot_reach_into(self):
+        """The dump serialises what this returns, so it must not hand out the
+        live deques."""
+        coordinator, _client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            await coordinator.async_config_entry_first_refresh()
+
+            published = coordinator.payload_history()
+            assert isinstance(published["100_200_1"], list)
+
+            published["100_200_1"].clear()
+            assert self._values(coordinator) == [_MOISTURE_SIMPLE_PAYLOAD]

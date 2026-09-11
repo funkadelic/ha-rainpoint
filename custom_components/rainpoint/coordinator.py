@@ -1,5 +1,6 @@
 import logging
 import re
+from collections import deque
 from collections.abc import Callable, Iterable
 from collections.abc import Set as AbstractSet
 from datetime import UTC, datetime, timedelta
@@ -200,6 +201,13 @@ HUB_ABSENT_DEBOUNCE_POLLS = SILENT_DEBOUNCE_POLLS
 # single most likely thing a later reader will "correct" in the wrong
 # direction.
 ORPHANED_KEY_DEBOUNCE_POLLS = 30
+
+# How many distinct payloads to keep per sub-device for the diagnostics dump.
+# Low on purpose: the point is to catch a device in more than one state, and a
+# handful of changes covers a valve opened and closed or a sensor read at two
+# values. A dump that grows without bound is worse than one holding a single
+# state, because nobody downloads the one they cannot open.
+PAYLOAD_HISTORY_MAX = 10
 
 # Hub-level cloud connectivity tri-state. Absent is never coerced to
 # disconnected: HUB_CONNECTIVITY_UNKNOWN covers three distinct causes -- older
@@ -954,6 +962,13 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._hids = entry.data.get(CONF_HIDS, [])
         self._time_source = time_source
         self._notified_unknown_models: set[tuple[str | None, int | None]] = set()
+        # The last PAYLOAD_HISTORY_MAX distinct payloads per sub-device, for the
+        # diagnostics dump alone. Unlike the poll-counted windows below, a push
+        # writes this too: both paths run through _decode_one_subdevice, and a
+        # pushed frame is often the only record of a state change worth
+        # capturing. Safe for a push to write because it is an append-only
+        # record of what arrived, never an input to any verdict.
+        self._payload_history: dict[str, deque[dict]] = {}
         self._last_valve_command_at: dict[tuple[str, int], datetime] = {}
         self._silent_poll_counts: dict[str, int] = {}
         self._silent_issues = RainPointSilentDeviceIssues(hass)
@@ -1749,6 +1764,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         _attach_device_timestamp(decoded, status_entry)
 
         sensor_key = _sensor_key(hub["hid"], mid, addr)
+        RainPointCoordinator._record_payload_history(self, sensor_key, status_entry)
         decoded = self._preserve_recent_valve_command_state(
             sensor_key,
             model,
@@ -1764,6 +1780,30 @@ class RainPointCoordinator(DataUpdateCoordinator):
         if _LOGGER.isEnabledFor(logging.DEBUG):
             _LOGGER.debug(debug_with_version("Sensor entity key=%s info=%s"), sensor_key, _summarize_record(sensor_entry))
         return sensor_key, sensor_entry
+
+    def _record_payload_history(self, sensor_key: str, status_entry: dict) -> None:
+        """Keep this payload unless one equal to it is already retained for the key.
+
+        Deduplicated against the whole buffer rather than against the previous
+        entry, because a scheduled valve alternates between two states and would
+        otherwise fill every slot with copies of those two. `time` is therefore
+        when a state was first seen this session, not when it was last seen.
+        """
+        raw_value = status_entry.get("value")
+        if not raw_value:
+            return
+        history = self._payload_history.setdefault(sensor_key, deque(maxlen=PAYLOAD_HISTORY_MAX))
+        if any(retained["value"] == raw_value for retained in history):
+            return
+        history.append({"value": raw_value, "time": status_entry.get("time")})
+
+    def payload_history(self) -> dict[str, list[dict]]:
+        """Return the retained payloads per sensor key, for the diagnostics dump.
+
+        Copied out as plain lists so a consumer cannot reach back into the
+        deques, and so the dump serialises without knowing what a deque is.
+        """
+        return {key: list(history) for key, history in self._payload_history.items()}
 
     def _preserve_recent_valve_command_state(
         self,
