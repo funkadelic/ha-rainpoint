@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.24.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.0...v1.24.1) (2026-09-12)
+
+
+### Fixed
+
+* show which catalog readings a device actually sends ([#256](https://github.com/funkadelic/ha-rainpoint/issues/256)) ([57884ed](https://github.com/funkadelic/ha-rainpoint/commit/57884eded1f7b12d8a28f976c8281cc22713d250))
+
 ## [1.24.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.23.0...v1.24.0) (2026-09-11)
 
 ### What's new
