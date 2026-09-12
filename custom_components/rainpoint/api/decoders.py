@@ -70,9 +70,11 @@ _HTV213_TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
 # happen.
 #
 # The 0x1C block between state and event time is STA_ALARM, one record per zone.
-# A live HTV245FRF sends it and nothing here reads it: it is compact form, so its
-# value can only be 0x20 to 0x2F, and both zones read 0 on the only capture.
-# Decoding it needs a frame taken while a zone is actually faulting.
+# A live HTV245FRF sends it and no reading is published from it. It arrives in
+# compact form, where the header byte is its own value, so the record reads 32
+# and the alarm code is the low nibble. Both committed captures read 0 on both
+# zones, including the one taken with zone 2 mid-run, so decoding it needs a
+# frame taken while a zone is actually faulting.
 _HTV213_DP_BASE_STATE = 0x18
 _HTV213_DP_BASE_EVENT_TIME = 0x20
 _HTV213_DP_BASE_DURATION = 0x24

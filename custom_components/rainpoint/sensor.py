@@ -22,7 +22,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .api import _USAGE_GALLONS_PER_COUNT, _parse_entries, _split_prefix
+from .api import _USAGE_GALLONS_PER_COUNT, _is_ascii_payload, _parse_entries, _split_prefix
 from .api.product_catalog import get_catalog_entry, get_catalog_variant_codes
 from .const import (
     CONF_GENERIC_ENTITIES_ENABLED,
@@ -1522,8 +1522,10 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
     _attr_icon = "mdi:clipboard-list-outline"
     _attr_entity_registry_enabled_default = False
 
-    # Resolved once: depends only on this entity's model and modelCode.
-    _catalog: tuple[str, tuple[str, ...], dict[int, str]] | None = None
+    # Resolved once per (model, modelCode). Re-keying a sub-device to another
+    # model must not leave a stale declared side to compare a live frame against.
+    _catalog: tuple[str, tuple[str, ...], dict[int, set[str]]] | None = None
+    _catalog_key: tuple[Any, Any] | None = None
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug) -> None:
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
@@ -1536,35 +1538,34 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
         model it used to carry."""
         return (self.coordinator.data or {}).get("sensors", {}).get(self._sensor_key) or self._sensor_info
 
-    def _resolve_catalog(self) -> tuple[str, tuple[str, ...], dict[int, str]]:
-        """Return (status, declared status identities, {dpCode: identity}).
+    def _resolve_catalog(self) -> tuple[str, tuple[str, ...], dict[int, set[str]]]:
+        """Return (status, declared status identities, {dpCode: identities}).
 
         The three zero cases stay apart: absent model, unidentified variant, and a
         variant that declares nothing. Control datapoints are not readings. The
         count comes from the identities and never from the dpCode map, so a
-        variant the vendor ships without a dpCode cannot quietly lower it.
+        variant the vendor ships without a dpCode cannot quietly lower it, and the
+        map holds a set per dpCode so a refreshed catalog that ever declares two
+        identities on one code reports both rather than silently dropping one.
         """
-        if self._catalog is None:
-            info = self._live_info
-            model, model_code = info.get("model"), info.get("model_code")
-            entries = get_catalog_entry(model, model_code)
+        info = self._live_info
+        key = (info.get("model"), info.get("model_code"))
+        if self._catalog_key != key:
+            entries = get_catalog_entry(*key)
             if entries is None:
-                status = "variant_not_identified" if get_catalog_variant_codes(model) else "model_not_in_catalog"
+                status = "variant_not_identified" if get_catalog_variant_codes(key[0]) else "model_not_in_catalog"
                 self._catalog = (status, (), {})
             else:
-                declared = [
-                    (entry.get("dpCode"), entry["identity"])
-                    for entry in entries
-                    if isinstance(entry, dict) and str(entry.get("identity", "")).startswith("STA_")
-                ]
-                self._catalog = (
-                    "resolved",
-                    tuple(sorted({identity for _, identity in declared})),
-                    dict(declared),
-                )
+                by_code: dict[int, set[str]] = {}
+                for entry in entries:
+                    if isinstance(entry, dict) and str(entry.get("identity", "")).startswith("STA_"):
+                        by_code.setdefault(entry.get("dpCode"), set()).add(entry["identity"])
+                identities = {identity for group in by_code.values() for identity in group}
+                self._catalog = ("resolved", tuple(sorted(identities)), by_code)
+            self._catalog_key = key
         return self._catalog
 
-    def _received_identities(self, by_code: dict[int, str]) -> list[str] | None:
+    def _received_identities(self, by_code: dict[int, set[str]]) -> list[str] | None:
         """Return the declared identities this frame carries, or None if it cannot say.
 
         A record's structural index is the catalog's dpCode on both the flat and
@@ -1576,7 +1577,10 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
         goes hunting for a decoder that was never owed.
         """
         raw = (self._live_info.get("raw_status") or {}).get("value")
-        if not by_code or not isinstance(raw, str):
+        if not by_code or not isinstance(raw, str) or _is_ascii_payload(raw):
+            # The ASCII framing is routed out by name rather than left to fail
+            # the hex parse: its header token is decimal, and a two-digit one
+            # parses as hex and walks into records the device never sent.
             return None
         body, dp_id_prefixed = _split_prefix(raw)
         try:
@@ -1585,7 +1589,10 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
             return None
         if not data:
             return None
-        return sorted({by_code[e["field"]] for e in _parse_entries(data, dp_id_prefixed) if e["field"] in by_code})
+        received: set[str] = set()
+        for entry in _parse_entries(data, dp_id_prefixed):
+            received |= by_code.get(entry["field"], set())
+        return sorted(received)
 
     @property
     def native_value(self) -> int | None:
