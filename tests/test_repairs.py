@@ -1654,10 +1654,12 @@ class _OrderedActiveSet(set):
     """
 
     def __init__(self, ordered_items):
+        """Store the items both as a set and in their given, pinned order."""
         super().__init__(ordered_items)
         self._ordered = list(ordered_items)
 
     def __sub__(self, other):
+        """Diff against `other`, preserving the pinned order instead of hash order."""
         return [item for item in self._ordered if item not in other]
 
 

@@ -506,6 +506,7 @@ class TestRainPointHubFirmwareSensor:
         assert "firmware" in sensor._attr_unique_id
 
     def test_name_is_firmware_version(self):
+        """The entity name is the real "Firmware Version" label."""
         sensor = self._make()
         assert sensor._attr_name == "Firmware Version"
 
@@ -532,6 +533,7 @@ class TestRainPointHubMACSensor:
         assert "mac" in sensor._attr_unique_id
 
     def test_name_is_mac_address(self):
+        """The entity name is the real "MAC Address" label."""
         sensor = self._make()
         assert sensor._attr_name == "MAC Address"
 
@@ -686,6 +688,7 @@ class TestRainPointHubChannelSelect:
         assert select.current_option is None
 
     def test_name_is_rf_communication_channel(self):
+        """The entity name is the real "RF Communication Channel" label."""
         select = self._make()
         assert select._attr_name == "RF Communication Channel"
 
@@ -778,6 +781,7 @@ class TestRainPointHubBroadcastSwitch:
         assert switch._attr_unique_id == "rainpoint_hub_100_1001_broadcast"
 
     def test_name_is_automatic_broadcast_time(self):
+        """The entity name is the real "Automatic Broadcast Time" label."""
         switch = self._make()
         assert switch._attr_name == "Automatic Broadcast Time"
 
@@ -866,6 +870,7 @@ class TestRainPointHubBroadcastButton:
         assert button._attr_unique_id == "rainpoint_hub_100_1001_broadcast_now"
 
     def test_name_is_broadcast_time_now(self):
+        """The entity name is the real "Broadcast Time Now" label."""
         button = self._make()
         assert button._attr_name == "Broadcast Time Now"
 
@@ -988,10 +993,12 @@ class TestRainPointPushConnectedBinarySensor:
     """Tests for the push-connected diagnostic entity."""
 
     def _make(self):
+        """Build a push-connected entity wired to a fresh mock mqtt client."""
         mqtt_client = MagicMock()
         return RainPointPushConnectedBinarySensor(mqtt_client, _make_hub_info()), mqtt_client
 
     def test_name_is_push_connected(self):
+        """The entity name is the real "Push Connected" label."""
         entity, _ = self._make()
         assert entity._attr_name == "Push Connected"
 
@@ -1058,6 +1065,7 @@ class TestRainPointPushLastMessageSensor:
         assert getattr(entity, "_attr_entity_registry_enabled_default", True) is True
 
     def test_name_is_push_last_message(self):
+        """The entity name is the real "Push Last Message" label."""
         entity, _ = self._make()
         assert entity._attr_name == "Push Last Message"
 

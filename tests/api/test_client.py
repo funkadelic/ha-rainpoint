@@ -852,27 +852,40 @@ class TestLoginThrottling:
 
         spy.assert_called_once_with("code 9993 operate too frequently")
 
-    def test_cooldown_remaining_between_zero_and_one_second_is_not_floored_to_zero(self, monkeypatch):
-        """Pins '> 0', not '> 1': a fractional-second remainder must still report its real value."""
-        client = _make_client()
+    @staticmethod
+    def _freeze_client_clock(monkeypatch):
+        """Pin the client module's datetime.now() to a fixed instant and return it.
+
+        A real sub-second deadline can expire under a slow CI scheduler before the check runs.
+        """
         fixed_now = datetime(2025, 1, 1, tzinfo=UTC)
 
         class _FixedDatetime(datetime):
+            """A datetime subclass whose now() always returns the fixed test time."""
+
             @classmethod
             def now(cls, tz=None):
+                """Return the fixed test time regardless of the tz argument."""
                 return fixed_now
 
         monkeypatch.setattr(_client_module, "datetime", _FixedDatetime)
+        return fixed_now
+
+    def test_cooldown_remaining_between_zero_and_one_second_is_not_floored_to_zero(self, monkeypatch):
+        """Pins '> 0', not '> 1': a fractional-second remainder must still report its real value."""
+        client = _make_client()
+        fixed_now = self._freeze_client_clock(monkeypatch)
         client._login_cooldown_until = fixed_now + timedelta(milliseconds=500)
 
         assert client._cooldown_remaining() == pytest.approx(0.5)
 
     @pytest.mark.asyncio
-    async def test_ensure_logged_in_raises_for_a_sub_one_second_cooldown(self):
+    async def test_ensure_logged_in_raises_for_a_sub_one_second_cooldown(self, monkeypatch):
         """A cooldown under a second still fast-fails: pins '> 0', not '> 1'."""
         client = _make_client()
         client._token = None
-        client._login_cooldown_until = datetime.now(UTC) + timedelta(milliseconds=500)
+        fixed_now = self._freeze_client_clock(monkeypatch)
+        client._login_cooldown_until = fixed_now + timedelta(milliseconds=500)
         client._session.post = MagicMock()
 
         with pytest.raises(RainPointThrottledError):
@@ -881,16 +894,18 @@ class TestLoginThrottling:
         client._session.post.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_in_lock_recheck_honors_a_sub_one_second_cooldown(self):
+    async def test_in_lock_recheck_honors_a_sub_one_second_cooldown(self, monkeypatch):
         """The in-lock recheck (a separate '> 0' check) also honors a
         sub-one-second cooldown rather than proceeding to a real login."""
         client = _make_client()
         client._token = None
+        fixed_now = self._freeze_client_clock(monkeypatch)
         release = asyncio.Event()
 
         async def fake_login():
+            """Wait for release, then set a fresh cooldown and fail like a throttled login."""
             await release.wait()
-            client._login_cooldown_until = datetime.now(UTC) + timedelta(milliseconds=500)
+            client._login_cooldown_until = fixed_now + timedelta(milliseconds=500)
             raise RainPointApiError("throttled")
 
         client._login = fake_login
@@ -1114,7 +1129,7 @@ class TestClientInitialState:
 
     def test_fresh_client_has_no_token_and_the_real_base_url(self):
         """_make_client() immediately sets _token, which masks the constructor
-        defaults everywhere else in this module -- so this constructs directly."""
+        defaults everywhere else in this module, so this constructs directly."""
         session = MagicMock()
         client = RainPointClient(area_code="1", email="test@example.com", password="testpass", session=session)
 
@@ -1162,8 +1177,11 @@ class TestTokenManagement:
         fixed_now = datetime(2025, 1, 1, tzinfo=UTC)
 
         class _FixedDatetime(datetime):
+            """A datetime subclass whose now() always returns the fixed test time."""
+
             @classmethod
             def now(cls, tz=None):
+                """Return the fixed test time regardless of the tz argument."""
                 return fixed_now
 
         monkeypatch.setattr(_client_module, "datetime", _FixedDatetime)
@@ -1178,8 +1196,11 @@ class TestTokenManagement:
         fixed_now = datetime(2025, 1, 1, tzinfo=UTC)
 
         class _FixedDatetime(datetime):
+            """A datetime subclass whose now() always returns the fixed test time."""
+
             @classmethod
             def now(cls, tz=None):
+                """Return the fixed test time regardless of the tz argument."""
                 return fixed_now
 
         monkeypatch.setattr(_client_module, "datetime", _FixedDatetime)
@@ -1534,8 +1555,11 @@ class TestSessionInvalidationFloodVisibility:
         fixed_now = datetime(2025, 1, 1, tzinfo=UTC)
 
         class _FixedDatetime(datetime):
+            """A datetime subclass whose now() always returns the fixed test time."""
+
             @classmethod
             def now(cls, tz=None):
+                """Return the fixed test time regardless of the tz argument."""
                 return fixed_now
 
         monkeypatch.setattr(_client_module, "datetime", _FixedDatetime)

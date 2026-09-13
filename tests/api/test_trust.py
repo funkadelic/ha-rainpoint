@@ -150,12 +150,13 @@ class TestHasBluetoothControlIdentity:
         """Pins the exact call shape rather than just its result.
 
         A swapped, dropped or defaulted argument here can still land on the
-        right answer by coincidence for a single-variant model, so the call
-        itself is what the arg-shuffle mutants need to be caught by.
+        right answer by coincidence for a single-variant model, so only the
+        call itself shows the difference.
         """
         calls = []
 
         def fake_get_catalog_entry(model, model_code=None):
+            """Record the exact arguments it was called with and return a matching catalog entry."""
             calls.append((model, model_code))
             return [{"identity": "CTL_BT_WATER"}]
 

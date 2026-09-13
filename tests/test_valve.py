@@ -986,6 +986,7 @@ class TestValveSetupEntryGenericControl:
 
     @staticmethod
     def _hass_entry(sensors):
+        """Build a mock hass and config entry with generic control enabled over the given sensors."""
         mock_coordinator = MagicMock()
         mock_coordinator.data = {"sensors": sensors}
         hass = MagicMock()
@@ -1851,6 +1852,7 @@ class TestDpValveControlArgs:
 
     @pytest.mark.asyncio
     async def test_open_sends_the_real_identity_zone_and_encoded_duration(self):
+        """Opening the DP valve sends the real mid, addr, device identity and hex-encoded duration."""
         valve = _make_dp_valve()
         valve._get_configured_duration_seconds = MagicMock(return_value=60)
         mock_control = AsyncMock(return_value=None)
@@ -1870,6 +1872,7 @@ class TestDpValveControlArgs:
 
     @pytest.mark.asyncio
     async def test_open_falls_back_to_empty_identity_when_absent(self):
+        """A missing device_name or product_key sends an empty string, not a placeholder or None."""
         valve = _make_dp_valve()
         valve._sensor_info = dict(valve._sensor_info)
         del valve._sensor_info["device_name"]
@@ -1885,6 +1888,7 @@ class TestDpValveControlArgs:
 
     @pytest.mark.asyncio
     async def test_open_applies_the_actual_response_returned_by_the_client(self):
+        """The valve applies the exact response string the client returned, not a synthesized one."""
         valve = _make_dp_valve()
         valve._get_configured_duration_seconds = MagicMock(return_value=60)
         valve.coordinator._client.control_work_mode_dp = AsyncMock(return_value="1,D821AF3C000000B7D1230B1A")
@@ -1896,6 +1900,7 @@ class TestDpValveControlArgs:
 
     @pytest.mark.asyncio
     async def test_close_sends_the_real_identity_and_zeroed_param(self):
+        """Closing the DP valve sends the real device identity with a zeroed duration param."""
         valve = _make_dp_valve()
         mock_control = AsyncMock(return_value=None)
         valve.coordinator._client.control_work_mode_dp = mock_control
@@ -1914,6 +1919,7 @@ class TestDpValveControlArgs:
 
     @pytest.mark.asyncio
     async def test_close_falls_back_to_empty_identity_when_absent(self):
+        """A missing device_name or product_key sends an empty string, not a placeholder or None."""
         valve = _make_dp_valve()
         valve._sensor_info = dict(valve._sensor_info)
         del valve._sensor_info["device_name"]
@@ -1928,6 +1934,7 @@ class TestDpValveControlArgs:
 
     @pytest.mark.asyncio
     async def test_close_applies_the_actual_response_returned_by_the_client(self):
+        """The valve applies the exact response string the client returned, not a synthesized one."""
         valve = _make_dp_valve()
         valve.coordinator._client.control_work_mode_dp = AsyncMock(return_value="0,D800AF00000000B700000000")
         valve._apply_response_state = MagicMock()

@@ -1875,6 +1875,7 @@ class TestSweepsCallRegistryAccessorsWithTheHassTheyWereGiven:
         return entry
 
     def test_remove_stale_generic_entities_passes_through_hass(self):
+        """The registry lookup receives this call's own hass, not a dropped reference."""
         hass = _make_hass()
         entry = self._entry()
         coordinator = MagicMock()
@@ -1889,6 +1890,7 @@ class TestSweepsCallRegistryAccessorsWithTheHassTheyWereGiven:
         get.assert_called_once_with(hass)
 
     def test_remove_withdrawn_probe_entities_passes_through_hass(self):
+        """The registry lookup receives this call's own hass, not a dropped reference."""
         hass = _make_hass()
         entry = self._entry()
 
@@ -1901,6 +1903,7 @@ class TestSweepsCallRegistryAccessorsWithTheHassTheyWereGiven:
         get.assert_called_once_with(hass)
 
     def test_reconcile_sub_device_parents_passes_through_hass(self):
+        """The device registry lookup receives this call's own hass, not a dropped reference."""
         hass = _make_hass()
         entry = self._entry()
         coordinator = MagicMock()
@@ -1915,6 +1918,7 @@ class TestSweepsCallRegistryAccessorsWithTheHassTheyWereGiven:
         get.assert_called_once_with(hass)
 
     def test_refresh_device_registry_fields_passes_through_hass(self):
+        """The device registry lookup receives this call's own hass, not a dropped reference."""
         hass = _make_hass()
         entry = self._entry()
         coordinator = MagicMock()
@@ -3091,13 +3095,18 @@ class TestReconcileSubDeviceParentsGuardOrdering:
         updated = []
 
         class _FakeRegistry:
+            """A device registry stand-in that records every via_device_id clear."""
+
             def async_update_device(self, device_id, *, via_device_id):
+                """Record the device_id and via_device_id passed for this clear."""
                 updated.append((device_id, via_device_id))
 
         def _async_get(hass):
+            """Return the fake registry regardless of the hass passed in."""
             return _FakeRegistry()
 
         def _async_entries_for_config_entry(registry, entry_id):
+            """Return this test's fixed row list regardless of registry or entry id."""
             return rows
 
         entry = MagicMock()
@@ -3115,7 +3124,7 @@ class TestReconcileSubDeviceParentsGuardOrdering:
 
     def test_a_skip_at_any_guard_still_lets_a_later_eligible_row_clear(self):
         """One row per guard, each triggering that guard's own `continue`, followed by
-        one row that should clear -- proving none of the four skips, nor the
+        one row that should clear, proving none of the four skips, nor the
         exception handler's, abort the sweep for the rows still to come."""
         no_via_device = SimpleNamespace(id="row_a", identifiers={(DOMAIN, "1_1_1")}, via_device_id=None)
         no_domain_identifier = SimpleNamespace(id="row_b", identifiers={("other", "1_1_2")}, via_device_id="hub_1")
@@ -3860,13 +3869,18 @@ class TestRemoveWithdrawnProbeEntities:
         removed = []
 
         class _FakeRegistry:
+            """A registry stand-in that records every entity_id it is asked to remove."""
+
             def async_remove(self, entity_id):
+                """Record the entity_id passed for removal."""
                 removed.append(entity_id)
 
         def _async_get(hass):
+            """Return the fake registry regardless of the hass passed in."""
             return _FakeRegistry()
 
         def _async_entries_for_config_entry(registry, entry_id):
+            """Return this test's fixed row list regardless of registry or entry id."""
             return rows
 
         entry = MagicMock()
@@ -3884,6 +3898,8 @@ class TestRemoveWithdrawnProbeEntities:
         """getattr's default must stand in for a missing attribute rather than raise out of the sweep."""
 
         class _RowWithNoUniqueId:
+            """A registry row missing the unique_id attribute entirely."""
+
             entity_id = "button.mystery"
 
         eligible_probe = SimpleNamespace(
@@ -3895,13 +3911,18 @@ class TestRemoveWithdrawnProbeEntities:
         removed = []
 
         class _FakeRegistry:
+            """A registry stand-in that records every entity_id it is asked to remove."""
+
             def async_remove(self, entity_id):
+                """Record the entity_id passed for removal."""
                 removed.append(entity_id)
 
         def _async_get(hass):
+            """Return the fake registry regardless of the hass passed in."""
             return _FakeRegistry()
 
         def _async_entries_for_config_entry(registry, entry_id):
+            """Return this test's fixed row list regardless of registry or entry id."""
             return rows
 
         entry = MagicMock()
@@ -3945,6 +3966,7 @@ class TestRefreshDeviceRegistryFieldsOnUpdatesArgs:
     """The listener wrapper's initial sweep call must hand through this hass, entry and coordinator."""
 
     def test_initial_sweep_passes_through_hass_entry_coordinator(self):
+        """The first, unconditional sweep call must receive this exact triple, not a dropped hass."""
         hass = _make_hass()
         entry = _make_entry()
         coordinator = MagicMock()
@@ -4432,6 +4454,8 @@ class TestDeviceRegistryFieldRefresh:
         """Neither the unresolvable-key skip nor the per-row exception guard may abort the sweep."""
 
         class _RaisesOnIdentifiers:
+            """A registry row whose identifiers cannot even be read."""
+
             id = "raising-row"
 
             @property

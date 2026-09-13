@@ -2202,11 +2202,13 @@ class TestGenericRowRemovalReason:
     UNIQUE_ID = f"rainpoint_{SENSOR_KEY}{GENERIC_UNIQUE_ID_MARKER}humidity"
 
     def test_the_toggle_off_reason_reads_exactly(self):
+        """Disabling generic entities produces this exact reason text."""
         from custom_components.rainpoint import _generic_row_removal_reason
 
         assert _generic_row_removal_reason(self.UNIQUE_ID, False, {}) == "generic entities are disabled"
 
     def test_the_graduated_model_reason_reads_exactly(self):
+        """A model that graduated to a hand-written decoder produces this exact reason text."""
         from custom_components.rainpoint import _generic_row_removal_reason
         from custom_components.rainpoint.const import MODEL_VALVE_245
 
@@ -2235,11 +2237,13 @@ class TestGenericControlRowRemovalReason:
     UNIQUE_ID = f"rainpoint_{SENSOR_KEY}{GENERIC_CONTROL_UNIQUE_ID_MARKER}1"
 
     def test_the_toggle_off_reason_reads_exactly(self):
+        """Disabling generic control produces this exact reason text."""
         from custom_components.rainpoint import _generic_control_row_removal_reason
 
         assert _generic_control_row_removal_reason(self.UNIQUE_ID, False, {}) == "generic control is disabled"
 
     def test_the_graduated_model_reason_reads_exactly(self):
+        """A model that graduated to a hand-written decoder produces this exact reason text."""
         from custom_components.rainpoint import _generic_control_row_removal_reason
         from custom_components.rainpoint.const import MODEL_VALVE_245
 
@@ -2247,6 +2251,7 @@ class TestGenericControlRowRemovalReason:
         assert _generic_control_row_removal_reason(self.UNIQUE_ID, True, sensors) == "the model now has a hand-written decoder"
 
     def test_the_force_disabled_override_reason_reads_exactly(self, monkeypatch):
+        """A maintainer-forced override produces this exact reason text, distinct from the toggle-off case."""
         import custom_components.rainpoint as rp
 
         sensors = {SENSOR_KEY: {"model": "SomeUnsupportedModel", "model_code": 7}}
@@ -2258,6 +2263,7 @@ class TestGenericControlRowRemovalReason:
         )
 
     def test_the_base_slug_is_cut_at_the_first_marker_not_the_last(self):
+        """A base slug carrying the marker twice must still split on the first one, or the sensors lookup misses."""
         from custom_components.rainpoint import _generic_control_row_removal_reason
         from custom_components.rainpoint.const import MODEL_VALVE_245
 
@@ -2271,6 +2277,7 @@ class TestDeclaredAdderDomains:
     """Only a real, non-empty domain string may be declared."""
 
     def test_an_empty_domain_string_is_not_declared(self):
+        """An adder with an empty domain string contributes nothing to the declared set."""
         from custom_components.rainpoint import _declared_adder_domains
         from custom_components.rainpoint.entity import LATE_ADDER_STORE_KEY
 
@@ -2279,6 +2286,7 @@ class TestDeclaredAdderDomains:
         assert _declared_adder_domains(entry_store) == frozenset()
 
     def test_a_real_domain_string_is_declared(self):
+        """An adder with a real domain string is included in the declared set."""
         from custom_components.rainpoint import _declared_adder_domains
         from custom_components.rainpoint.entity import LATE_ADDER_STORE_KEY
 
@@ -2291,6 +2299,7 @@ class TestLeftoverPairForRowDomainSplit:
     """The pair's domain is the segment before the FIRST dot, never the last."""
 
     def test_an_entity_id_with_more_than_one_dot_still_splits_on_the_first(self):
+        """An entity_id with extra dots still yields the domain from the first dot, not the last."""
         from custom_components.rainpoint import _leftover_pair_for_row
 
         entity_id = "sensor.extra.dotted"
@@ -2311,6 +2320,7 @@ class TestSettledLeftoverPairsUncountedDefault:
     """An (sensor key, pair) never yet observed must read as zero updates served."""
 
     def test_a_pair_with_no_entry_in_counts_has_not_settled(self, monkeypatch):
+        """A pair missing from counts entirely reads as zero updates served, not as already settled."""
         import custom_components.rainpoint as rp
 
         monkeypatch.setattr(rp, "LEFTOVER_ROW_DEBOUNCE_UPDATES", 1)
@@ -2325,6 +2335,7 @@ class TestResolveDeviceNamesSkipsRatherThanStops:
     """A device row with no resolvable key must not strand the rows after it."""
 
     def test_an_unkeyed_row_does_not_block_a_later_named_row(self):
+        """A device row with no resolvable key is skipped, and later rows still resolve their names."""
         from custom_components.rainpoint import _resolve_device_names
 
         unkeyed = SimpleNamespace(identifiers=set(), name_by_user=None, name=None, id="d1")
@@ -2339,6 +2350,7 @@ class TestReportingSensorKeysSkipsRatherThanStops:
     """A silent record must only be excluded, never stop the whole scan."""
 
     def test_a_silent_key_does_not_block_a_later_reporting_key(self):
+        """A silent sensor is excluded from the result, and a later reporting sensor is still included."""
         from custom_components.rainpoint import _reporting_sensor_keys
         from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 
@@ -2357,6 +2369,7 @@ class TestTakeDoomedRowsDomainSplit:
     """The removed row's pair domain is the segment before the FIRST dot."""
 
     def test_an_entity_id_with_more_than_one_dot_still_splits_on_the_first(self):
+        """A removed row's entity_id with extra dots still yields the domain from the first dot."""
         from custom_components.rainpoint import _take_doomed_rows
 
         row = SimpleNamespace(entity_id="sensor.extra.dotted", unique_id="rainpoint_x")
@@ -2372,6 +2385,7 @@ class TestLeftoverPairsNowDefaultIsNotBlind:
     """blind must default to False, so an ordinary call is not silently a no-op."""
 
     def test_omitting_blind_still_lets_a_readable_pass_compute(self):
+        """Calling without the blind argument still runs a normal computation instead of a silent no-op."""
         from custom_components.rainpoint import _leftover_pairs_now
 
         harness = _Harness()
@@ -2391,6 +2405,7 @@ class TestBuildLeftoverRowPairsSkipsRatherThanStops:
     """A row on an unmapped device must only be skipped, never abort the scan."""
 
     def test_an_unmapped_device_id_does_not_block_a_later_leftover_row(self):
+        """A row on an unmapped device is skipped, and a later legitimate leftover row is still built."""
         harness = _Harness()
         harness.add_row("sensor.unmapped", "rainpoint_unmapped", device_id="no_such_device_row", state=_live_state())
         harness.add_leftover_row()
@@ -2409,6 +2424,7 @@ class TestBuildLeftoverRowPairsPassesItsOwnHass:
     """
 
     def test_a_different_hass_object_reaches_the_registry_accessor_unchanged(self):
+        """The exact hass instance passed in is what reaches er.async_get, not None or a stand-in."""
         from custom_components.rainpoint import _build_leftover_row_pairs
 
         harness = _Harness()
@@ -2419,12 +2435,14 @@ class TestBuildLeftoverRowPairsPassesItsOwnHass:
         seen = []
 
         def _entity_get(passed_hass):
+            """Record the hass received and raise if it is not the real one."""
             seen.append(passed_hass)
             if passed_hass is not real_hass:
                 raise RuntimeError("wrong hass reached the registry accessor")
             return MagicMock()
 
         def _entity_entries(_registry, entry_id):
+            """Return the harness's entity rows belonging to this config entry."""
             return [row for row in harness.entity_rows if getattr(row, "config_entry_id", None) == entry_id]
 
         with (

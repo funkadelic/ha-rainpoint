@@ -359,7 +359,7 @@ class TestDecodeHtv213frfValve:
         """The scan's own upper bound must not stop one byte short of the frame end.
 
         A 4-byte frame's only possible header position is offset 0, needing
-        b[3] to complete the PHY read -- the last index the scan is allowed
+        b[3] to complete the PHY read, the last index the scan is allowed
         to touch. A narrower upper bound would skip this position entirely
         and report no signal at all.
         """
@@ -597,6 +597,10 @@ class TestDecodeHtv145frf:
     def test_malformed_payload_error_envelope_is_the_documented_shape(self):
         """Every key of the error envelope, not just the ones spot-checked above."""
         result = decode_htv145frf("10#not_hex")
+        # The error text comes from bytes.fromhex, so only its stable fragments are checked.
+        error = result.pop("error")
+        assert "non-hexadecimal" in error
+        assert "position 0" in error
         assert result == {
             "type": "valve_hub",
             "rssi_dbm": None,
@@ -606,7 +610,6 @@ class TestDecodeHtv145frf:
             "hub_online": False,
             "battery_flag": None,
             "decoder": "htv145frf_error",
-            "error": "non-hexadecimal number found in fromhex() arg at position 0",
         }
 
     def test_empty_payload_returns_error_dict(self):
@@ -914,7 +917,7 @@ class TestHtv213DpMapEdgeCases:
         """
         from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
 
-        # DP 0x10, type 0xB7 (needs 4 value bytes, only 3 remain) -- truncated.
+        # DP 0x10, type 0xB7 (needs 4 value bytes, only 3 remain), truncated.
         payload = bytes([0x10, 0xB7, 0xDC, 0xD8, 0x77])
         dp_map = _scan_htv213_dp_map(payload)
         assert dp_map == {0xB7: (0xDC, 0xD8)}
@@ -1391,57 +1394,65 @@ class TestBasicDecoderGuardBoundary:
     """Pin the '> 1' boundary on 'if b and len(b) > 1' precisely, decoder by decoder.
 
     At len(b) == 1, _extract_rssi(b) reads b[1] and raises IndexError, which
-    every one of these decoders catches and swallows -- so a mutant weakening
-    the guard to 'or' or '>= 1' still produces the same final dict at that
-    length (rssi stays None either way) and is not worth a test. Only a
-    mutant that instead *tightens* the guard to '> 2' is observable, since at
+    every one of these decoders catches and swallows, so weakening the guard
+    to 'or' or '>= 1' still produces the same final dict at that length (rssi
+    stays None either way) and is not worth a test. Only tightening the guard
+    to '> 2' is observable, since at
     len(b) == 2 the branch runs cleanly and sets a real rssi with no
     exception to mask the difference.
     """
 
     def test_decode_soil_two_byte_buffer_enters_the_rssi_branch(self):
+        """At exactly two bytes, decode_soil takes the rssi branch and sets a real value."""
         result = decode_soil("10#E1B0")
         assert result["rssi"] is not None
         assert result["raw_bytes"] == bytes.fromhex("E1B0")
 
     def test_decode_temp_hum_two_byte_buffer_enters_the_rssi_branch(self):
+        """At exactly two bytes, decode_temp_hum takes the rssi branch and sets a real value."""
         result = decode_temp_hum("10#E1B0")
         assert result["rssi"] is not None
         assert result["raw_bytes"] == bytes.fromhex("E1B0")
 
     def test_decode_temp_hum_full_two_byte_buffer_enters_the_rssi_branch(self):
+        """At exactly two bytes, decode_temp_hum_full takes the rssi branch and sets a real value."""
         result = decode_temp_hum_full("10#E1B0")
         assert result["rssi"] is not None
         assert result["raw_bytes"] == bytes.fromhex("E1B0")
 
     def test_decode_co2_two_byte_buffer_enters_the_rssi_branch(self):
+        """At exactly two bytes, decode_co2 takes the rssi branch and sets a real value."""
         result = decode_co2("10#E1B0")
         assert result["rssi"] is not None
         assert result["raw_bytes"] == bytes.fromhex("E1B0")
 
     def test_decode_display_two_byte_buffer_enters_the_rssi_branch(self):
+        """At exactly two bytes, decode_display takes the rssi branch and sets a real value."""
         result = decode_display("10#E1B0")
         assert result["rssi"] is not None
         assert result["raw_bytes"] == bytes.fromhex("E1B0")
 
     def test_decode_temphum_two_byte_buffer_enters_the_rssi_branch(self):
+        """At exactly two bytes, decode_temphum takes the rssi branch and sets a real value."""
         result = decode_temphum("10#E1B0")
         assert result["rssi"] is not None
         assert result["raw_bytes"] == bytes.fromhex("E1B0")
 
     def test_decode_unknown_two_byte_buffer_enters_the_rssi_branch(self):
+        """At exactly two bytes, decode_unknown takes the rssi branch and sets a real value."""
         result = decode_unknown("10#E1B0")
         assert result["rssi"] is not None
         assert result["raw_bytes"] == bytes.fromhex("E1B0")
 
     def test_decode_pool_plus_two_byte_buffer_enters_the_rssi_branch(self):
+        """At exactly two bytes, decode_pool_plus takes the rssi branch and sets a real value."""
         result = decode_pool_plus("10#E1B0")
         assert result["rssi"] is not None
 
     def test_decode_pool_one_byte_buffer_skips_the_field_walk(self):
         """decode_pool reads via _find_field_int, which never raises on a short
         buffer, so its guard is fully observable at the 'and'/'>=1' boundary
-        too -- unlike the _extract_rssi-based decoders above."""
+        too, unlike the _extract_rssi-based decoders above."""
         result = decode_pool("10#AA")
         assert "raw_bytes" not in result
 

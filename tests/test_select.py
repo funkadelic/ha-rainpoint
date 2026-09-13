@@ -196,6 +196,7 @@ class TestSubDevicePowerSelectConstruction:
 
     @staticmethod
     def _build():
+        """Build a select entity for a fixed HTV210B sensor key and its coordinator."""
         coordinator = MagicMock()
         coordinator.data = {"hubs": [], "sensors": {}}
         sensor_info = {"hid": 300, "mid": 400, "addr": 5, "model": MODEL_HTV210B}
@@ -207,10 +208,12 @@ class TestSubDevicePowerSelectConstruction:
         assert select._attr_unique_id == "rainpoint_300_400_5_power_mode"
 
     def test_sensor_key_is_stored_as_given(self):
+        """The sensor key passed to __init__ is kept verbatim, not rebuilt."""
         select, _coordinator = self._build()
         assert select._sensor_key == "300_400_5"
 
     def test_options_are_the_three_power_mode_labels(self):
+        """The select exposes the three power mode labels, not the raw DP values."""
         select, _coordinator = self._build()
         assert select._attr_options == ["Power Saving", "Standard", "Enhance"]
 

@@ -853,7 +853,7 @@ class TestConfigFlowSelectHomesReconfigure:
     @pytest.mark.asyncio
     async def test_select_homes_reconfigure_no_input_form_schema_and_preselection(self):
         """The dropdown offers the real hid strings and pre-selects whichever
-        one the stored entry already carries -- not a mangled key and not a
+        one the stored entry already carries, not a mangled key and not a
         literal "None" string."""
         flow = self._make_flow_with_reconfigure_context()
         flow._homes = [{"hid": 1, "homeName": "Home A"}, {"hid": 2, "homeName": "Home B"}]
@@ -1261,6 +1261,7 @@ class TestOptionsFlowControlConsentStamp:
         calls = []
 
         def fake_gate(model, model_code):
+            """Record the exact arguments it was called with and report a passing gate."""
             calls.append((model, model_code))
             return SimpleNamespace(passed=True)
 

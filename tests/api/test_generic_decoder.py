@@ -97,7 +97,8 @@ class TestDecodeGenericRobustness:
     def test_non_hex_body_error_names_the_real_condition(self):
         """The hex branch's except carries the real exception text, not a placeholder."""
         result = decode_generic("11#ZZZZ")
-        assert result["error"] == "invalid literal for int() with base 16: 'ZZ'"
+        assert "base 16" in result["error"]
+        assert "ZZ" in result["error"]
 
     def test_non_string_raw_is_tolerated(self):
         """A malformed cloud record can hand this a non-string value despite the
@@ -600,8 +601,8 @@ class TestDecodeGenericCatalogAnnotation:
 
         A version that dropped it (forcing the flat-framing path even for a
         TLV payload) would send the two duplicate-index STA_WKSTATE fields
-        through _match_catalog_dp, which refuses an ambiguous index outright
-        -- so they would carry no catalog key at all instead of resolving
+        through _match_catalog_dp, which refuses an ambiguous index outright,
+        so they would carry no catalog key at all instead of resolving
         through the dp_id/dpPort pairing this framing supports.
         """
         duplicate_wkstate_catalog = [

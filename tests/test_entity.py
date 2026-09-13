@@ -38,9 +38,11 @@ class TestHic801wStationIsRunning:
         assert result is True
 
     def test_none_when_no_reading(self):
+        """No station data at all yields None rather than a false running/idle guess."""
         assert hic801w_station_is_running(None, 1) is None
 
     def test_none_when_out_of_range(self):
+        """A current_station past HIC801W_STATION_COUNT yields None instead of a bad boolean."""
         from custom_components.rainpoint.const import HIC801W_STATION_COUNT
 
         assert hic801w_station_is_running({"current_station": HIC801W_STATION_COUNT + 1}, 1) is None

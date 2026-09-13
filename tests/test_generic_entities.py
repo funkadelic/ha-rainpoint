@@ -587,6 +587,7 @@ class TestEvaluateGenericGate:
         captured = []
 
         def _port_number_spy(model, model_code=None):
+            """Record the arguments passed to the port-number lookup and return a fixed port."""
             captured.append((model, model_code))
             return 5
 
@@ -662,6 +663,7 @@ class TestEvaluateGenericGate:
         assert result.blocked_by == (f"{FAKE_MODEL} is not in the product catalog, so nothing is known about what it reports",)
 
     def test_variant_declaring_only_control_identities(self, monkeypatch):
+        """A variant whose catalog entries are all control identities reports no readings and fails the gate."""
         dp_entries = [{"identity": "CTL_WATER", "dpPort": 0}, {"identity": "CTL_SOCK", "dpPort": 1}]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 3)
@@ -676,9 +678,11 @@ class TestEvaluateGenericGate:
         assert result.port_number == 3
 
     def test_exactly_one_curated_status_datapoint_passes(self, monkeypatch):
+        """A single curated status datapoint is enough for the gate to pass."""
         captured = []
 
         def _port_number_spy(model, model_code=None):
+            """Record the arguments passed to the port-number lookup and return a fixed port."""
             captured.append((model, model_code))
             return 1
 
@@ -721,6 +725,7 @@ class TestEvaluateGenericGate:
         assert result.unmapped_identities == ("STA_AAA", "STA_ZZZ")
 
     def test_duplicate_identity_and_dp_port_fails_naming_both(self, monkeypatch):
+        """Two catalog entries sharing an identity and port fail the gate, naming both in the reason."""
         dp_entries = [_dp("STA_RH", dp_port=0, dp_code=10), _dp("STA_RH", dp_port=0, dp_code=11)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 7)
@@ -768,6 +773,7 @@ class TestEvaluateGenericGate:
         assert result.blocked_by
 
     def test_hand_written_model_states_hand_written_reason(self):
+        """A model with a hand-written decoder fails the gate with the hand-written reason, never a catalog one."""
         model = sorted(HAND_WRITTEN_MODELS)[0]
 
         result = evaluate_generic_gate(model, None)
@@ -811,6 +817,8 @@ class TestEvaluateGenericGate:
         assert entities[0]._identity == "STA_TEM"
 
     def test_catalog_lookup_raising_yields_fail_closed_result(self, monkeypatch):
+        """A raising catalog lookup fails the gate closed rather than propagating the exception."""
+
         def _boom(model, model_code=None):
             raise RuntimeError("boom")
 
@@ -1995,13 +2003,16 @@ class TestRunStateSpecHasOneSource:
 
 
 # ---------------------------------------------------------------------------
-# Mutmut survivor kills: exact wording, sort order and argument forwarding
+# Exact wording, sort order and argument forwarding
 # that a substring or truthiness assertion cannot catch.
 # ---------------------------------------------------------------------------
 
 
 class TestRecordWidthBytesType:
+    """record_width_bytes returns a plain int, never a float."""
+
     def test_returns_a_plain_int_not_a_float(self):
+        """The byte-count result is a plain int, not a float that happens to compare equal."""
         result = generic_entities_module.record_width_bytes({"raw": "aabbccdd"})
         assert result == 4
         assert isinstance(result, int)
@@ -2009,13 +2020,18 @@ class TestRecordWidthBytesType:
 
 
 class TestRssiTransformSignBitBoundary:
+    """_rssi_dbm flips sign exactly at the sign-bit boundary of 128, not at 127 or 129."""
+
     def test_a_low_byte_of_exactly_128_is_the_most_negative_reading(self):
         """128 is the sign-bit boundary: >=128 must flip to negative, not >128 or >=129."""
         assert generic_entities_module._rssi_dbm(128) == -128.0
 
 
 class TestBadPortReasonExactWording:
+    """_bad_port_reason names every offending identity, sorted, in one fixed sentence."""
+
     def test_two_offenders_produce_the_exact_sorted_sentence(self):
+        """Two unusable-port entries are named alphabetically in the exact reason sentence."""
         dp_entries = [_dp("STA_TEM", dp_port=None), _dp("STA_RH", dp_port="0")]
         reason = generic_entities_module._bad_port_reason(dp_entries)
         assert reason == (
@@ -2024,6 +2040,8 @@ class TestBadPortReasonExactWording:
 
 
 class TestDuplicatePortReasonBehavior:
+    """_duplicate_port_reason keeps scanning past a rejected entry and formats its message deterministically."""
+
     def test_an_earlier_rejected_entry_does_not_stop_a_later_duplicate_from_being_found(self):
         """The unusable-port entry is skipped with `continue`, not `break`: the scan must keep going."""
         dp_entries = [
@@ -2036,6 +2054,7 @@ class TestDuplicatePortReasonBehavior:
         assert "STA_RH" in reason
 
     def test_exact_message_is_sorted_by_identity_then_port_as_strings(self):
+        """Duplicate-port offenders are sorted by identity then by port compared as strings, not numerically."""
         dp_entries = [
             _dp("A", dp_port=10, dp_code=1),
             _dp("A", dp_port=10, dp_code=2),
@@ -2054,6 +2073,8 @@ class TestDuplicatePortReasonBehavior:
 
 
 class TestDpCodeSortKeyNonIntTieBreak:
+    """_dp_code_sort_key breaks ties among non-int codes by their own string value, not a shared placeholder."""
+
     def test_two_distinct_non_int_codes_sort_by_their_own_string_not_a_shared_placeholder(self):
         """Both fall in the non-int bucket; the tiebreak must read the real code, not a constant.
 
@@ -2067,6 +2088,8 @@ class TestDpCodeSortKeyNonIntTieBreak:
 
 
 class TestDpCodeReasonsExactWordingAndScanContinuation:
+    """_dp_code_reasons keeps scanning past bad entries and formats each reason with exact, fixed wording."""
+
     def test_an_earlier_non_dict_entry_does_not_stop_a_later_duplicate_from_being_found(self):
         """The non-dict guard uses `continue`, not `break`: the scan must keep going."""
         raw_entry = [
@@ -2089,6 +2112,7 @@ class TestDpCodeReasonsExactWordingAndScanContinuation:
         assert any("dpCode" in reason and "9" in reason for reason in reasons)
 
     def test_unusable_message_exact_wording(self):
+        """Entries with unhashable dpCode values produce the exact fixed unusable-code sentence."""
         raw_entry = [
             {"identity": "STA_ZZZ", "dpCode": [1], "dpPort": 0},
             {"identity": "STA_AAA", "dpCode": {"a": 1}, "dpPort": 1},
@@ -2099,6 +2123,7 @@ class TestDpCodeReasonsExactWordingAndScanContinuation:
         ]
 
     def test_duplicate_message_exact_wording(self):
+        """Two readings sharing a dpCode produce the exact fixed duplicate-code sentence."""
         raw_entry = [
             _dp("STA_TEM", dp_port=0, dp_code=9),
             _dp("STA_RSSI", dp_port=1, dp_code=9),
@@ -2111,12 +2136,16 @@ class TestDpCodeReasonsExactWordingAndScanContinuation:
 
 
 class TestUnresolvedVariantReasonExactWording:
+    """_unresolved_variant_reason names the real model and code, with exact fixed wording."""
+
     def test_uncatalogued_model_uses_the_real_model_not_a_stale_argument(self, monkeypatch):
+        """The reason names the model it was actually called with, not a value left over from another call."""
         monkeypatch.setattr(generic_entities_module, "get_catalog_variant_codes", lambda model: () if model else ("278",))
         reason = generic_entities_module._unresolved_variant_reason("REAL_MODEL", None)
         assert reason == "REAL_MODEL is not in the product catalog, so nothing is known about what it reports"
 
     def test_reported_code_absent_from_the_catalog_joins_known_codes_with_a_plain_comma(self, monkeypatch):
+        """When the device reported a code the catalog does not list, the known codes are joined with a plain comma."""
         monkeypatch.setattr(generic_entities_module, "get_catalog_variant_codes", lambda model: ("111", "222"))
         reason = generic_entities_module._unresolved_variant_reason("REAL_MODEL", 999)
         assert reason == (
@@ -2125,6 +2154,7 @@ class TestUnresolvedVariantReasonExactWording:
         )
 
     def test_no_reported_code_joins_known_codes_with_a_plain_comma(self, monkeypatch):
+        """With no reported code at all, the known variant codes are still joined with a plain comma."""
         monkeypatch.setattr(generic_entities_module, "get_catalog_variant_codes", lambda model: ("111", "222"))
         reason = generic_entities_module._unresolved_variant_reason("REAL_MODEL", None)
         assert reason == (
@@ -2134,6 +2164,8 @@ class TestUnresolvedVariantReasonExactWording:
 
 
 class TestEvaluateGenericGateSortKeyUsesTheRealFields:
+    """The datapoint emission order sorts by the entries' real port and identity fields, not by input order."""
+
     def test_wrong_port_key_would_sort_by_identity_alone_this_must_not_happen(self, monkeypatch):
         """Two curated identities at ports that disagree with alphabetical identity order."""
         dp_entries = [_dp("STA_TEM", dp_port=1, dp_code=1), _dp("STA_RSSI", dp_port=5, dp_code=2)]
@@ -2158,10 +2190,14 @@ class TestEvaluateGenericGateSortKeyUsesTheRealFields:
 
 
 class TestDescribeGenericGateForwardsArguments:
+    """describe_generic_gate forwards its model and model_code arguments to evaluate_generic_gate unchanged."""
+
     def test_forwards_model_and_model_code_unchanged(self, monkeypatch):
+        """The model and model_code arguments reach evaluate_generic_gate unswapped and undefaulted."""
         captured = []
 
         def spy(model, model_code=None):
+            """Record the arguments evaluate_generic_gate was called with and return an empty result."""
             captured.append((model, model_code))
             return GenericGateResult(datapoints=[], unmapped_identities=(), blocked_by=(), port_number=None)
 
@@ -2173,10 +2209,14 @@ class TestDescribeGenericGateForwardsArguments:
 
 
 class TestCountGenericEligibleDevicesArgumentForwardingAndIncrement:
+    """count_generic_eligible_devices passes each device's own model/model_code and accumulates its count."""
+
     def test_evaluate_generic_gate_receives_this_devices_own_model_and_model_code(self, monkeypatch):
+        """Each device's own model and model_code reach evaluate_generic_gate, not another device's."""
         captured = []
 
         def spy(model, model_code=None):
+            """Record the arguments evaluate_generic_gate was called with and return an empty result."""
             captured.append((model, model_code))
             return GenericGateResult(datapoints=[], unmapped_identities=(), blocked_by=(), port_number=None)
 
@@ -2188,6 +2228,7 @@ class TestCountGenericEligibleDevicesArgumentForwardingAndIncrement:
         assert captured == [("MODEL_A", "CODE_A")]
 
     def test_eligible_count_increments_rather_than_resets_per_device(self, monkeypatch):
+        """The eligible-device count accumulates across devices instead of resetting for each one."""
         passing_result = GenericGateResult(
             datapoints=[{"identity": "STA_TEM", "dpPort": 0}], unmapped_identities=(), blocked_by=(), port_number=1
         )
@@ -2203,7 +2244,10 @@ class TestCountGenericEligibleDevicesArgumentForwardingAndIncrement:
 
 
 class TestBuildGenericEntitiesForwardsConstructorArguments:
+    """build_generic_entities passes the real sensor_info and resolved port number into each entity's constructor."""
+
     def test_entities_carry_the_real_sensor_info_and_port_number(self, monkeypatch):
+        """Built entities carry this device's real sensor_info and the resolved port number, not placeholders."""
         dp_entries = [_dp("STA_TEM", dp_port=1, dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
         monkeypatch.setattr(generic_entities_module, "get_catalog_port_number", lambda model, model_code=None: 2)
@@ -2221,7 +2265,10 @@ class TestBuildGenericEntitiesForwardsConstructorArguments:
 
 
 class TestRainPointGenericSensorConstructorWiring:
+    """RainPointGenericSensor's constructor arguments reach the base entity class unchanged."""
+
     def test_sensor_info_flows_through_to_the_base_class(self):
+        """sensor_info passed to the constructor reaches the base entity class rather than being dropped."""
         dp_entry = _dp("STA_TEM", dp_port=0, dp_code=9)
         sensor_info = make_sensor_entry(model=FAKE_MODEL, data=_unknown_data())
         coordinator = MagicMock()

@@ -649,13 +649,16 @@ class TestHicStationLateAddTimeline:
 
 
 # ---------------------------------------------------------------------------
-# Mutmut survivor kills: constructor wiring, wrong-argument substitutions and
+# Constructor wiring, wrong-argument substitutions and
 # a missing/malformed coordinator.data shape that a happy-path test can't see.
 # ---------------------------------------------------------------------------
 
 
 class TestRainDetectedAndBatteryLowConstructorWiring:
+    """The rain-detected and battery-low entity builders wire the real name and sensor info."""
+
     def test_rain_detected_name_and_base_class_wiring(self):
+        """The rain detector entity gets the real name and keeps the sensor info it was built with."""
         sensor_key = "100_200_3"
         entry = _rain_detector_entry()
         coordinator = MagicMock()
@@ -667,6 +670,7 @@ class TestRainDetectedAndBatteryLowConstructorWiring:
         assert sensor._sensor_info is entry
 
     def test_battery_low_name_and_base_class_wiring(self):
+        """The battery low entity gets the real name and keeps the sensor info it was built with."""
         sensor_key = "100_200_1"
         entry = _battery_entry(flag=1, hid=100, mid=200, addr=1)
         coordinator = MagicMock()
@@ -679,6 +683,8 @@ class TestRainDetectedAndBatteryLowConstructorWiring:
 
 
 class TestSetupEntryArgumentForwardingAndDataShapeGuards:
+    """Setup wires the real client into push entities and tolerates missing coordinator data keys."""
+
     @pytest.mark.asyncio
     async def test_push_connected_entities_wrap_the_real_mqtt_client(self):
         """A None client instead of the real one would make is_on raise, not just report wrong."""

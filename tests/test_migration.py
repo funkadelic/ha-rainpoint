@@ -1854,6 +1854,7 @@ class TestResolveResidualHubMidPassesItsOwnHid:
     """
 
     def test_a_registry_backed_answer_needs_no_coordinator_fallback(self):
+        """When the registry alone can answer, the coordinator's hub records are never consulted."""
         from custom_components.rainpoint import _resolve_residual_hub_mid
 
         row = SimpleNamespace(id="hub_device_1", identifiers={(DOMAIN, f"hub_{HID}")})

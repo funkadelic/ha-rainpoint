@@ -62,7 +62,7 @@ class TestValidatePayload:
         `prefix`/`hex_data` differently and raise a different error than the
         one this pins.
         """
-        with pytest.raises(ValueError, match=r"non-hexadecimal number found in fromhex\(\) arg at position 2"):
+        with pytest.raises(ValueError, match=r"non-hexadecimal.*position 2"):
             _validate_payload("10#AA#BB", 1)
 
 

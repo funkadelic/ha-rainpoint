@@ -115,6 +115,7 @@ class TestConstructorStoresArguments:
     """Each constructor argument lands on its own attribute, unswapped and un-nulled."""
 
     def test_constructor_stores_device_name_product_key_and_hid(self):
+        """hub_device_name, hub_product_key and hub_hid land unchanged on their own attributes."""
         entry = object()
         client = RainPointMqttClient(
             MagicMock(),
@@ -284,7 +285,7 @@ class TestMessageReceiptLogging:
         not one byte short of it, so a cut character decodes to the right count.
 
         Also proves the decode tolerates an incomplete trailing character
-        (via 'replace') rather than raising -- this call site is never
+        (via 'replace') rather than raising, this call site is never
         wrapped in a try/except.
         """
         glyph = "\U0001d11e".encode("utf-8")  # a 4-byte UTF-8 character
@@ -293,7 +294,7 @@ class TestMessageReceiptLogging:
 
     def test_payload_preview_truncates_even_when_the_whole_payload_was_captured(self):
         """An over-limit result still gets the marker even if no more payload
-        followed -- the two truncation conditions are an OR, not an AND."""
+        followed, the two truncation conditions are an OR, not an AND."""
         assert mqtt_module._payload_preview(b"abcde", limit=2) == "ab...(truncated)"
 
     def test_payload_preview_at_exactly_the_limit_is_not_truncated(self):
@@ -538,7 +539,7 @@ class TestPushEnvelopeFailSafe:
 
     def test_param_key_is_read_by_name_when_other_params_keys_are_also_present(self):
         """With more than one params key, 'param' must be looked up by its own
-        name -- the single-value fallback only applies when it is the only key."""
+        name, the single-value fallback only applies when it is the only key."""
         payload = _captured_push_payload({"D01": "11#ab"})
         obj = json.loads(payload)
         obj["params"]["extra"] = "noise"
@@ -833,7 +834,7 @@ class TestHubFrameParsing:
 
     def test_payload_exactly_at_the_size_cap_is_still_parsed(self):
         """The size guard is a strict '>', so an envelope landing exactly on
-        the cap still parses -- padded via an unrelated 'id' field so the
+        the cap still parses, padded via an unrelated 'id' field so the
         extracted frame text itself is untouched."""
         base = json.dumps(
             {"method": "thing.service.property.set", "id": "", "params": {"param": SAMPLE_HUB_DISCONNECT_FRAME}}
@@ -1114,7 +1115,7 @@ class TestSubDeviceEnvelopeMidAttribution:
         assert mqtt_module._frame_mid(tail) == 236547
 
     def test_section_one_helper_never_raises_on_invalid_utf8_bytes(self):
-        """The decode must tolerate invalid bytes via replacement -- this runs
+        """The decode must tolerate invalid bytes via replacement, this runs
         off the paho thread hop and has no surrounding try/except."""
         payload = b"#P" + b"\xff\xfe" + b"0" * 28 + b"|{}|1|2#"
         # Must not raise, whatever it returns.
@@ -1122,7 +1123,7 @@ class TestSubDeviceEnvelopeMidAttribution:
 
     def test_unreadable_identity_is_recorded_by_its_real_width_not_as_none(self):
         """A section 1 that is present but fails the width check must be logged
-        under its own width, since section_one is not None here -- passing
+        under its own width, since section_one is not None here, passing
         None instead would collapse every such case into the 'none' bucket."""
         coordinator = MagicMock()
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
@@ -1263,7 +1264,7 @@ class TestAsyncDisconnect:
     @pytest.mark.asyncio
     async def test_async_disconnect_sets_stopping_to_true_not_merely_falsy(self):
         """The supervisor loop checks 'not self._stopping', so True is required,
-        not just something falsy-adjacent -- pinned by identity."""
+        not just something falsy-adjacent, pinned by identity."""
         client = _make_mqtt_client(MagicMock(), _make_fake_paho())
 
         await client.async_disconnect()
@@ -1465,6 +1466,7 @@ class TestSupervisorAttemptCounting:
 
     @pytest.mark.asyncio
     async def test_consecutive_failures_pass_increasing_attempt_numbers_and_the_real_delay(self):
+        """Each consecutive failure passes an incrementing attempt number and its actual delay to the reconnect wait."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -1474,6 +1476,7 @@ class TestSupervisorAttemptCounting:
         seen_attempts: list[int] = []
 
         def _spy_backoff(attempt):
+            """Record each attempt number passed to the backoff calculation and return a zero delay."""
             seen_attempts.append(attempt)
             return 0.0
 
@@ -1504,6 +1507,7 @@ class TestSupervisorAttemptCounting:
         seen_attempts: list[int] = []
 
         def _spy_backoff(attempt):
+            """Record each attempt number passed to the backoff calculation and return a zero delay."""
             seen_attempts.append(attempt)
             return 0.0
 
@@ -1527,6 +1531,7 @@ class TestScheduleReconnect:
 
     @pytest.mark.asyncio
     async def test_schedule_reconnect_sleeps_for_the_given_delay(self):
+        """_schedule_reconnect awaits _sleep with the exact delay it was given."""
         client = _make_mqtt_client(MagicMock(), _make_fake_paho())
 
         with patch.object(client, "_sleep", new=AsyncMock()) as sleep_mock:
@@ -1574,7 +1579,7 @@ class TestCredentialRenewal:
     @pytest.mark.asyncio
     async def test_renew_passes_the_bound_hub_identity_to_get_subscribe_status(self):
         """Exactly the four construction-bound identity args reach
-        get_subscribe_status, in order -- not swapped, dropped, or nulled."""
+        get_subscribe_status, in order, not swapped, dropped, or nulled."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
@@ -1708,7 +1713,7 @@ class TestRenewalDelayFormula:
 
     def test_latest_safe_delay_floors_at_zero_not_one(self):
         """A credential already past its safety margin clamps the safe
-        deadline to 0, not 1 -- a whole extra second matters at this scale."""
+        deadline to 0, not 1, a whole extra second matters at this scale."""
         client = self._client()
         with patch.object(RainPointMqttClient, "_apply_jitter", staticmethod(lambda value: value)):
             delay = client._renewal_delay_seconds(expire_at=1000.0, now=1000.0)
@@ -1936,12 +1941,13 @@ class TestSupervisorTeardown:
     @pytest.mark.asyncio
     async def test_wait_for_renewal_gathers_the_actual_losing_tasks(self):
         """The losing wait tasks are cancelled AND awaited via gather(*pending, ...)
-        before returning -- not an empty gather() that leaves them dangling."""
+        before returning, not an empty gather() that leaves them dangling."""
         client = _make_mqtt_client(MagicMock(), _make_fake_paho())
         real_gather = asyncio.gather
         calls = []
 
         async def _spy_gather(*args, **kwargs):
+            """Record the positional arguments asyncio.gather was called with, then delegate to the real gather."""
             calls.append(args)
             return await real_gather(*args, **kwargs)
 
@@ -2120,10 +2126,11 @@ class TestSupervisorTeardown:
 class TestConnectCredentialFields:
     """_connect reads deviceName/productKey/deviceSecret by their documented
     keys, builds username/password/client_id from them, wires the paho
-    callbacks, and records the final device_name/product_key -- none of it
+    callbacks, and records the final device_name/product_key, none of it
     silently nulled or swapped."""
 
     def _client(self, hass, fake_paho, creds):
+        """Build a RainPointMqttClient wired to a fake rainpoint client returning the given credentials."""
         rainpoint_client = MagicMock()
         rainpoint_client.get_subscribe_status = AsyncMock(return_value=creds)
         factory = MagicMock(return_value=fake_paho)
@@ -2176,7 +2183,7 @@ class TestConnectCredentialFields:
     @pytest.mark.asyncio
     async def test_missing_credential_fields_default_to_empty_strings_not_none(self):
         """A response missing deviceName/productKey must not stringify a None
-        into the wire username -- "&" not "None&None"."""
+        into the wire username, "&" not "None&None"."""
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()

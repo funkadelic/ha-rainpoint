@@ -73,7 +73,7 @@ class TestParseRainpointPayload:
         point, all resolve prefix/hex_data differently for this input and
         raise a different error than the one this pins.
         """
-        with pytest.raises(ValueError, match=r"non-hexadecimal number found in fromhex\(\) arg at position 2"):
+        with pytest.raises(ValueError, match=r"non-hexadecimal.*position 2"):
             _parse_rainpoint_payload("10#AA#BB")
 
 
@@ -205,7 +205,7 @@ class TestParseTlvPayload:
         """The unknown-type skip must advance the cursor by 2, not reset it to 2.
 
         Record 1 (dp_id=0x01, type=0xD8, val=0xFF) consumes 3 bytes, landing
-        the cursor at offset 3 -- past where a reset to the literal 2 would
+        the cursor at offset 3, past where a reset to the literal 2 would
         put it. Record 2 at that offset (dp_id=0x02, type=0xFF, unknown) must
         be skipped forward, not used to rewind into record 1's own value byte,
         which would re-read it as a bogus dp_id and never reach record 3.

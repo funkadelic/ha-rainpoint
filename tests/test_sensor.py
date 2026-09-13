@@ -2802,6 +2802,7 @@ class TestHicRunTimingSensors:
         assert RainPointHicRunEndsAtSensor._attr_device_class == SensorDeviceClass.TIMESTAMP
 
     def test_names(self):
+        """Run Duration and Run Ends At each carry their own display name."""
         _, duration, ends_at = self._entities(SAMPLE_HIC801W_IDLE_PAYLOAD)
         assert duration._attr_name == "Run Duration"
         assert ends_at._attr_name == "Run Ends At"
@@ -2895,6 +2896,7 @@ class TestHicProgramStationSensors:
         assert completed.native_value == "none"
 
     def test_names(self):
+        """Program Stations and Program Stations Completed each carry their own display name."""
         _, stations, completed = self._entities(SAMPLE_HIC801W_IDLE_PAYLOAD)
         assert stations._attr_name == "Program Stations"
         assert completed._attr_name == "Program Stations Completed"
@@ -4012,6 +4014,7 @@ class TestCatalogReadingsSensor:
         assert sensor._attr_unique_id == "rainpoint_100_200_1_catalog_readings"
 
     def test_name_is_catalog_readings(self):
+        """The diagnostic sensor's display name is the fixed literal "Catalog Readings"."""
         assert self._sensor()._attr_name == "Catalog Readings"
 
 
@@ -4026,6 +4029,7 @@ class TestCreateHubEntitiesArgWiring:
     right count, only that each entity actually holds its own arguments."""
 
     def test_the_real_coordinator_reaches_every_hub_sensor(self):
+        """The same coordinator instance passed in is the one every hub entity holds."""
         hub = make_hub_info(hid=100, mid=555)
         coordinator = _make_mock_coordinator(make_coordinator_data(hubs=[hub]))
 
@@ -4080,6 +4084,7 @@ class TestCreateSensorEntitiesArgWiring:
         assert raw_payload._attr_unique_id == f"rainpoint_{expected_base_slug}_raw_payload"
 
     def test_the_silent_path_wires_the_real_coordinator_and_key(self):
+        """A silent sensor's not-reporting entity holds this call's own key and unique_id."""
         key = "5_6_7"
         info = make_sensor_entry(hid=5, mid=6, addr=7, data={"type": SILENT_DATA_TYPE, "silent_state": "stopped_reporting"})
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={key: info}))
@@ -4093,6 +4098,7 @@ class TestCreateSensorEntitiesArgWiring:
         assert sensor.native_value == "stopped_reporting"
 
     def test_the_unsupported_model_path_wires_the_real_coordinator_key_info_and_base_slug(self):
+        """An unrecognized model's unknown-sensor entity is built from this call's own key, info and base_slug."""
         key = "11_22_3"
         info = make_sensor_entry(
             hid=11,
@@ -4213,6 +4219,7 @@ class TestSensorInitWiring:
 
     @pytest.mark.parametrize(("cls", "unique_suffix", "name"), _PLAIN_INIT_CASES, ids=[c[0].__name__ for c in _PLAIN_INIT_CASES])
     def test_real_init_sets_unique_id_name_and_device_info(self, cls, unique_suffix, name):
+        """Each plain sensor class's real __init__ sets unique_id, name and device_info from its own args."""
         base_slug = "31_32_1"
         info = make_sensor_entry(hid=31, mid=32, addr=1)
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={base_slug: info}))
@@ -4233,21 +4240,25 @@ class TestZoneSensorClassesRealInitDeviceInfo:
 
     @staticmethod
     def _entry():
+        """Return a valve_hub sensor entry with one open zone."""
         return make_sensor_entry(hid=40, mid=41, addr=1, data={"type": "valve_hub", "zones": {1: {"open": True}}})
 
     def test_zone_water_usage_device_info(self):
+        """The zone water usage sensor's device_info is built from the real sensor_info, not skipped."""
         info = self._entry()
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"40_41_1": info}))
         sensor = RainPointZoneWaterUsageSensor(coordinator, "40_41_1", info, "40_41_1", 1)
         assert sensor.device_info["manufacturer"] == "RainPoint"
 
     def test_zone_run_duration_device_info(self):
+        """The zone run duration sensor's device_info is built from the real sensor_info, not skipped."""
         info = self._entry()
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"40_41_1": info}))
         sensor = RainPointZoneRunDurationSensor(coordinator, "40_41_1", info, "40_41_1", 1)
         assert sensor.device_info["manufacturer"] == "RainPoint"
 
     def test_zone_state_device_info(self):
+        """The zone state sensor's device_info is built from the real sensor_info, not skipped."""
         info = self._entry()
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"40_41_1": info}))
         sensor = RainPointZoneStateSensor(coordinator, "40_41_1", info, "40_41_1", 1)
@@ -4259,6 +4270,7 @@ class TestDisplayHubReadingSensorRealInit:
     elsewhere in this file, which bypasses __init__ entirely."""
 
     def test_real_init_sets_unique_id_name_and_device_info(self):
+        """DisplayHubReadingSensor's real __init__ sets unique_id, name and device_info from its own args."""
         info = make_sensor_entry(
             hid=50, mid=51, addr=1, model=MODEL_DISPLAY_HUB, data={"type": "display_hub", "readings": {"temp": "707"}}
         )
@@ -4278,6 +4290,7 @@ class TestUnknownSensorModelDefault:
     elsewhere in this file, so the missing-key default is never exercised."""
 
     def test_falls_back_to_the_literal_unknown_when_the_model_key_is_absent(self):
+        """A sensor_info with no "model" key falls back to the literal "unknown", not a crash."""
         info = {"hid": 1, "mid": 2, "addr": 3, "data": {"type": "unknown"}}
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"1_2_3": info}))
 
@@ -4293,6 +4306,7 @@ class TestNotReportingSensorRealInit:
     __init__ and leaves the coordinator/key wiring unverified."""
 
     def test_real_init_reads_state_through_the_given_coordinator_and_key(self):
+        """native_value is read through the coordinator and key passed to the real __init__, not a bypass."""
         info = make_sensor_entry(
             hid=60, mid=61, addr=1, model="HTV210B", data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported"}
         )
@@ -4311,6 +4325,8 @@ class TestNotReportingSensorRealInit:
 
 
 class TestMakeRainEntities:
+    """_make_rain_entities builds all four rain window sensors from real data."""
+
     _EXPECTED: ClassVar[list[tuple[str, str, float]]] = [
         ("rain_last_hour_mm", "Rain (Last Hour)", 0.5),
         ("rain_last_24h_mm", "Rain (Last 24 Hours)", 18.7),
@@ -4319,6 +4335,7 @@ class TestMakeRainEntities:
     ]
 
     def test_all_four_windows_are_named_keyed_and_read_from_the_real_data(self):
+        """Each of the four rain window sensors gets its own unique_id, name and value."""
         base_slug = "70_71_1"
         data = {
             "type": "rain",
@@ -4347,8 +4364,11 @@ class TestMakeRainEntities:
 
 
 class TestFactoryEntityWiring:
+    """The remaining _make_*_entities factories hand their own coordinator, key, info and base_slug to every entity they build."""
+
     @staticmethod
     def _coordinator_and_info(hid, mid, addr, model, data):
+        """Build a sensor entry and its coordinator for a single fixed key."""
         key = f"{hid}_{mid}_{addr}"
         info = make_sensor_entry(hid=hid, mid=mid, addr=addr, model=model, data=data)
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={key: info}))
@@ -4356,6 +4376,7 @@ class TestFactoryEntityWiring:
 
     @staticmethod
     def _assert_all_wired(entities, base_slug, coordinator=None):
+        """Assert every entity carries the given base_slug, manufacturer and coordinator."""
         for entity in entities:
             assert base_slug in entity._attr_unique_id
             assert entity.device_info["manufacturer"] == "RainPoint"
@@ -4363,6 +4384,7 @@ class TestFactoryEntityWiring:
                 assert entity.coordinator is coordinator
 
     def test_make_diagnostic_entities(self):
+        """_make_diagnostic_entities wires RSSI, firmware and last-updated to the real data."""
         key, info, coordinator = self._coordinator_and_info(
             81, 82, 1, MODEL_HCS044FRF, {"rssi_dbm": -55, "device_timestamp": "2024-01-01T00:00:00+00:00"}
         )
@@ -4377,6 +4399,7 @@ class TestFactoryEntityWiring:
         assert last_updated.native_value is not None
 
     def test_make_moisture_simple_entities(self):
+        """_make_moisture_simple_entities wires a simple moisture reading plus diagnostics to the real data."""
         key, info, coordinator = self._coordinator_and_info(
             83,
             84,
@@ -4403,6 +4426,7 @@ class TestFactoryEntityWiring:
         assert last_updated.native_value is not None
 
     def test_make_moisture_full_entities(self):
+        """_make_moisture_full_entities wires moisture, temperature and illuminance plus diagnostics to the real data."""
         key, info, coordinator = self._coordinator_and_info(
             85,
             86,
@@ -4435,6 +4459,7 @@ class TestFactoryEntityWiring:
         assert last_updated.native_value is not None
 
     def test_make_temphum_entities(self):
+        """_make_temphum_entities wires all six temperature/humidity readings to the real data, in order."""
         key, info, coordinator = self._coordinator_and_info(
             87,
             88,
@@ -4465,6 +4490,7 @@ class TestFactoryEntityWiring:
             assert entity.native_value == value
 
     def test_make_flowmeter_entities(self):
+        """_make_flowmeter_entities wires all flow readings plus diagnostics to the real data."""
         key, info, coordinator = self._coordinator_and_info(
             89,
             90,
@@ -4493,6 +4519,7 @@ class TestFactoryEntityWiring:
         assert last_updated.native_value is not None
 
     def test_make_co2_entities(self):
+        """_make_co2_entities wires all five CO2 readings to the real data, in order."""
         key, info, coordinator = self._coordinator_and_info(
             91, 92, 1, MODEL_CO2, {"co2": 600, "co2low": 400, "co2high": 800, "co2temp": 22, "co2humidity": 45}
         )
@@ -4511,6 +4538,7 @@ class TestFactoryEntityWiring:
             assert entity.native_value == value
 
     def test_make_pool_entities(self):
+        """_make_pool_entities wires the single pool temperature reading to the real data."""
         key, info, coordinator = self._coordinator_and_info(93, 94, 1, MODEL_POOL, {"tempcurrent": 27})
         entities = _make_pool_entities(coordinator, key, info, key)
         assert len(entities) == 1
@@ -4518,6 +4546,7 @@ class TestFactoryEntityWiring:
         assert entities[0].native_value == 27
 
     def test_make_pool_plus_entities(self):
+        """_make_pool_plus_entities wires all nine pool/ambient readings to the real data, in order."""
         key, info, coordinator = self._coordinator_and_info(
             95,
             96,
@@ -4554,6 +4583,7 @@ class TestFactoryEntityWiring:
             assert entity.native_value == value
 
     def test_make_hcs_moisture_only_entities(self):
+        """_make_hcs_moisture_only_entities wires the single simple moisture reading to the real data."""
         key, info, coordinator = self._coordinator_and_info(97, 98, 1, MODEL_HCS005FRF, {"moisture_percent": 55})
         entities = _make_hcs_moisture_only_entities(coordinator, key, info, key)
         assert len(entities) == 1
@@ -4562,6 +4592,7 @@ class TestFactoryEntityWiring:
         assert entities[0].native_value == 55
 
     def test_make_hcs_multisensor_entities(self):
+        """_make_hcs_multisensor_entities wires moisture, temperature and illuminance to the real data."""
         key, info, coordinator = self._coordinator_and_info(
             99, 100, 1, MODEL_HCS024FRF_V1, {"moisture_percent": 66, "temperature_c": 19.0, "illuminance_lux": 300}
         )
@@ -4577,6 +4608,7 @@ class TestFactoryEntityWiring:
         assert illuminance.native_value == 300
 
     def test_make_display_hub_entities(self):
+        """_make_display_hub_entities builds one entity per reading key and reads its real value."""
         key, info, coordinator = self._coordinator_and_info(
             101, 102, 1, MODEL_DISPLAY_HUB, {"type": "display_hub", "readings": {"temp": "707", "humidity": "42"}}
         )
@@ -4593,10 +4625,12 @@ class TestFactoryEntityWiring:
         assert entities == []
 
     def test_make_unknown_entities_yields_nothing_for_a_non_unknown_type(self):
+        """A sensor whose data type is not "unknown" gets no unknown-sensor entity at all."""
         key, info, coordinator = self._coordinator_and_info(105, 106, 1, "SOME_MODEL", {"type": "other"})
         assert _make_unknown_entities(coordinator, key, info, key) == []
 
     def test_make_unknown_entities_wires_the_real_coordinator_key_and_base_slug(self):
+        """_make_unknown_entities wires the unknown-sensor entity to the real coordinator, key and base_slug."""
         key, info, coordinator = self._coordinator_and_info(
             107, 108, 1, "SOME_MODEL", {"type": "unknown", "model": "SOME_MODEL", "raw_value": "10#00"}
         )

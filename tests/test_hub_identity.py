@@ -673,12 +673,15 @@ class TestHubIdentityParsing:
         assert _hub_identity(f"{HUB_IDENTIFIER_PREFIX}123_") is None
 
     def test_the_old_shape_yields_a_none_mid(self):
+        """The pre-migration hid-only identifier parses with mid left as None."""
         assert _hub_identity(f"{HUB_IDENTIFIER_PREFIX}100") == ("100", None)
 
     def test_the_migrated_shape_yields_both_segments(self):
+        """The migrated hid_mid identifier parses into both segments."""
         assert _hub_identity(f"{HUB_IDENTIFIER_PREFIX}100_200") == ("100", "200")
 
     def test_a_non_hub_identifier_is_not_recognised(self):
+        """A sub-device identifier (hid_mid_addr) is not mistaken for a hub identifier."""
         assert _hub_identity("100_200_1") is None
 
 

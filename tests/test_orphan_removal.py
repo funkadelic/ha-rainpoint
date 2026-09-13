@@ -2541,6 +2541,7 @@ class TestResolveDoomedRowsSkipsRatherThanMisreads:
 
     @staticmethod
     def _adder(domain, unique_ids):
+        """Build a fake add-once adder reporting the given domain and unique ids."""
         return SimpleNamespace(domain=domain, ledger=SimpleNamespace(unique_ids_for=lambda key: list(unique_ids)))
 
     def test_an_empty_domain_string_is_still_unusable(self):
@@ -2556,6 +2557,7 @@ class TestResolveDoomedRowsSkipsRatherThanMisreads:
         assert resolved == []
 
     def test_an_unusable_adder_does_not_block_a_later_usable_one(self):
+        """A skipped adder with an empty domain must not stop later adders from being resolved."""
         bad = self._adder("", [ZONE_1_UNIQUE_ID])
         good = self._adder("valve", [ZONE_2_UNIQUE_ID])
 
@@ -2570,11 +2572,13 @@ class TestOrphanedEntityRecordDescriptorFields:
 
     @staticmethod
     def _descriptor(**overrides):
+        """Build a minimal orphaned-entity descriptor, with any fields overridden."""
         base = {"addr": 1, "model": "HTV245FRF", "sub_name": "Zone", "hub_name": "Hub"}
         base.update(overrides)
         return base
 
     def test_addr_and_model_are_read_from_the_descriptor(self):
+        """The record's addr and model fields come straight from the descriptor."""
         record = _orphaned_entity_record(
             ENTRY_ID,
             SENSOR_KEY,
@@ -2590,6 +2594,7 @@ class TestOrphanedEntityRecordDescriptorFields:
         assert record.model == "SomeModel"
 
     def test_hub_paired_reads_an_explicit_false(self):
+        """An explicit hub_paired=False on the descriptor is preserved on the record."""
         record = _orphaned_entity_record(
             ENTRY_ID,
             SENSOR_KEY,
@@ -2604,6 +2609,7 @@ class TestOrphanedEntityRecordDescriptorFields:
         assert record.hub_paired is False
 
     def test_hub_paired_defaults_true_when_the_descriptor_omits_it(self):
+        """A descriptor with no hub_paired key still yields a record defaulting to True."""
         descriptor = self._descriptor()
         assert "hub_paired" not in descriptor
 

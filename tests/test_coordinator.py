@@ -472,6 +472,7 @@ class TestCoordinatorUpdate:
         assert "(modelCode `279`)" in message
 
     def test_notification_omits_the_model_code_parenthetical_when_none(self):
+        """A model_code of None produces no "(modelCode ...)" parenthetical at all."""
         coord, _client = _make_coord()
 
         with patch.object(_coord_module, "async_create") as mock_notify:
@@ -483,6 +484,7 @@ class TestCoordinatorUpdate:
         assert "**NOCODEMODEL**\n\n" in message
 
     def test_notification_shows_the_actual_sanitized_model_name(self):
+        """The notification body shows the real model string, not a placeholder."""
         coord, _client = _make_coord()
 
         with patch.object(_coord_module, "async_create") as mock_notify:
@@ -494,6 +496,7 @@ class TestCoordinatorUpdate:
         assert "**HTV999XYZ**" in message
 
     def test_notification_report_link_carries_the_real_model_code(self):
+        """The prefilled report link URL carries the real model_code value."""
         coord, _client = _make_coord()
 
         with patch.object(_coord_module, "async_create") as mock_notify:
@@ -505,6 +508,7 @@ class TestCoordinatorUpdate:
         assert "model_code=303" in message
 
     def test_notification_title_is_exact(self):
+        """The notification title is the exact expected wording."""
         coord, _client = _make_coord()
 
         with patch.object(_coord_module, "async_create") as mock_notify:
@@ -821,6 +825,7 @@ class TestCoordinatorUpdate:
         captured = {}
 
         def fake_describe(model, model_code):
+            """Record the model and model_code it was called with."""
             captured["args"] = (model, model_code)
             return {}
 
@@ -831,9 +836,11 @@ class TestCoordinatorUpdate:
         assert captured["args"] == ("REAL_MODEL", 303)
 
     def test_fence_safe_strips_only_backticks_and_newlines(self):
+        """Only backticks and newlines are stripped, leaving other characters untouched."""
         assert _coord_module._fence_safe("a`b\nc") == "abc"
 
     def test_fence_safe_none_yields_empty_string(self):
+        """A None input yields an empty string rather than raising or returning "None"."""
         assert _coord_module._fence_safe(None) == ""
 
     def test_fit_param_at_exact_budget_returns_the_value_untruncated(self, monkeypatch):
@@ -888,9 +895,11 @@ class TestCoordinatorUpdate:
         assert _coord_module._ISSUE_PAYLOAD_TOO_LONG_NOTE not in url
 
     def test_build_new_device_issue_url_passes_the_real_model_and_model_code_to_the_generic_decode(self, monkeypatch):
+        """The issue URL builder forwards the real model and model_code into decode_generic."""
         captured = {}
 
         def fake_decode_generic(raw_value, model=None, model_code=None):
+            """Record the model and model_code it was called with."""
             captured["model"] = model
             captured["model_code"] = model_code
             return {"decoder": "generic-tlv", "fields": []}
@@ -903,9 +912,11 @@ class TestCoordinatorUpdate:
         assert captured["model_code"] == 303
 
     def test_build_new_device_issue_url_passes_the_real_model_and_model_code_to_gate_diagnostics(self, monkeypatch):
+        """The issue URL builder forwards the real model and model_code into gate diagnostics."""
         captured = {}
 
         def fake_gate(model, model_code):
+            """Record the model and model_code it was called with."""
             captured["args"] = (model, model_code)
             return "Blocked: reason"
 
@@ -921,6 +932,7 @@ class TestFindHubStatusEntries:
     tri-state id that never showed up in this poll's subDeviceStatus."""
 
     def test_missing_state_entry_returns_none_not_empty_string(self):
+        """A tri-state id absent from subDeviceStatus resolves to None, not an empty string."""
         connected, state = _coord_module._find_hub_status_entries({"subDeviceStatus": [{"id": "connected", "value": "1"}]})
 
         assert connected == {"id": "connected", "value": "1"}
@@ -1393,6 +1405,7 @@ class TestCoordinatorInitPassesItsArgsThroughToTheBaseClassAndItsCollaborators:
     instance, so a dropped or swapped argument here cannot hide."""
 
     def test_hass_logger_entry_name_and_poll_interval_reach_the_base_class(self):
+        """Every constructor argument and derived attribute lands on the built instance."""
         hass = MagicMock()
         client = AsyncMock()
         entry = MagicMock()
@@ -1419,12 +1432,14 @@ class TestKnowsHubMidAndPushEntryPointsToleranceOfAMissingHubsKey:
     empty list, not None, when a poll's data dict carries no "hubs" key."""
 
     def test_knows_hub_mid_false_when_no_hubs_key_present(self):
+        """A data dict with no "hubs" key defaults to an empty list, so no mid is known."""
         coord, _client = _make_coord()
         coord.data = {}
 
         assert _coord_module.RainPointCoordinator.knows_hub_mid(coord, 123) is False
 
     def test_apply_push_update_tolerates_data_with_no_hubs_key(self):
+        """A data dict with no "hubs" key is left untouched rather than raising."""
         coord, _client = _make_coord()
         coord.data = {"other": 1}
         coord.async_update_listeners = MagicMock()
@@ -1434,6 +1449,7 @@ class TestKnowsHubMidAndPushEntryPointsToleranceOfAMissingHubsKey:
         assert coord.data == {"other": 1}
 
     def test_apply_hub_push_update_tolerates_data_with_no_hubs_key(self):
+        """A data dict with no "hubs" key is left untouched rather than raising."""
         coord, _client = _make_coord()
         coord.data = {"other": 1}
         coord.async_update_listeners = MagicMock()
@@ -1449,6 +1465,7 @@ class TestMergePushSensorEntryToleranceOfMissingBranches:
     already exist in the shape it is about to read."""
 
     def test_tolerates_data_missing_sensors_and_status_keys_entirely(self):
+        """A push merge builds fresh sensors and status branches when neither key exists yet."""
         hub = _push_hub()
         coord, _client = _make_coord()
         coord.data = {"hubs": [hub]}
@@ -1461,6 +1478,7 @@ class TestMergePushSensorEntryToleranceOfMissingBranches:
         assert coord.data["status"][200]["subDeviceStatus"][0]["id"] == "D1"
 
     def test_tolerates_an_existing_mid_status_entry_missing_subdevicestatus(self):
+        """A push merge builds a fresh subDeviceStatus list when the mid entry exists without one."""
         hub = _push_hub()
         coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}}, status={200: {}})
 
@@ -2021,9 +2039,11 @@ class TestDecodeOneSubdevice:
     unknown-model notification hop."""
 
     def test_passes_the_real_model_code_through_to_the_decode(self, monkeypatch):
+        """The dispatch forwards the real modelCode into the decode call."""
         captured = {}
 
         def fake_decode(model, raw_value, model_code=None):
+            """Record the model_code it was called with."""
             captured["model_code"] = model_code
             return {"type": "known"}
 
@@ -2038,6 +2058,7 @@ class TestDecodeOneSubdevice:
         assert captured["model_code"] == 303
 
     def test_notifies_unknown_model_with_the_real_mid_and_addr(self):
+        """An unrecognised model triggers a notification carrying the real mid and addr."""
         coord, _client = _make_coord()
         hub = {"hid": 100}
         sub = {"model": "TOTALLY_UNKNOWN_MODEL"}
@@ -2055,6 +2076,7 @@ class TestWarnOnMalformedRecords:
     unwarned and unremembered."""
 
     def test_a_malformed_status_entry_is_counted_from_the_real_status_field(self):
+        """A malformed subDeviceStatus entry is counted under the real hid_mid key."""
         coord, _ = _make_coord()
         hub = {"hid": 100, "mid": 200, "subDevices": []}
         status = {"subDeviceStatus": [{"id": None, "value": "x"}]}
@@ -5636,6 +5658,7 @@ class TestPureHelpers:
         captured = {}
 
         def fake_decode_generic(raw_value, model=None, model_code=None):
+            """Record the model_code it was called with."""
             captured["model_code"] = model_code
             return {"decoder": "generic-tlv", "fields": []}
 
@@ -5724,11 +5747,13 @@ class TestValveZonePollIsStale:
     the boundary the '<' vs '<=' choice actually decides."""
 
     def test_a_poll_time_exactly_equal_to_the_command_time_is_not_stale(self):
+        """A poll timestamp exactly equal to the command timestamp is not treated as stale."""
         moment = datetime(2024, 1, 1, tzinfo=UTC)
 
         assert _coord_module._valve_zone_poll_is_stale(moment, moment, datetime(2024, 1, 2, tzinfo=UTC)) is False
 
     def test_wall_clock_elapsed_exactly_equal_to_the_guard_window_is_not_stale(self):
+        """Elapsed wall-clock time exactly equal to the guard window is not treated as stale."""
         command_time = datetime(2024, 1, 1, tzinfo=UTC)
         now = command_time + _coord_module.STALE_VALVE_POLL_GUARD
 
@@ -5741,6 +5766,7 @@ class TestFetchStatusByMidDeviceListShape:
 
     @pytest.mark.asyncio
     async def test_the_request_carries_mid_devicename_and_productkey_per_hub(self):
+        """The multipleDeviceStatus request carries the real mid, deviceName and productKey."""
         coord, client = _make_coord()
         client.get_multiple_device_status.return_value = []
         hub = {"mid": 200, "deviceName": "dev1", "productKey": "pk1"}
@@ -5752,6 +5778,7 @@ class TestFetchStatusByMidDeviceListShape:
 
     @pytest.mark.asyncio
     async def test_missing_devicename_and_productkey_default_to_empty_strings(self):
+        """A hub missing deviceName or productKey sends empty strings rather than None."""
         coord, client = _make_coord()
         client.get_multiple_device_status.return_value = []
         hub = {"mid": 200}
@@ -5763,6 +5790,7 @@ class TestFetchStatusByMidDeviceListShape:
 
     @pytest.mark.asyncio
     async def test_a_multiple_status_entry_missing_subdevicestatus_defaults_to_empty(self):
+        """A response entry missing subDeviceStatus defaults to an empty list."""
         coord, client = _make_coord()
         client.get_multiple_device_status.return_value = [{"mid": 200}]
         hub = {"mid": 200, "deviceName": "d", "productKey": "p"}
@@ -5773,6 +5801,7 @@ class TestFetchStatusByMidDeviceListShape:
 
     @pytest.mark.asyncio
     async def test_a_hub_the_multiple_status_response_never_mentioned_gets_an_empty_entry(self):
+        """A hub absent from the multipleDeviceStatus response still gets an empty status entry."""
         coord, client = _make_coord()
         hub_a = {"mid": 200, "deviceName": "d", "productKey": "p"}
         hub_b = {"mid": 300, "deviceName": "d2", "productKey": "p2"}
@@ -5790,6 +5819,7 @@ class TestFetchStatusByMidDeviceListShape:
         client.get_devices_by_hid.return_value = [_make_hub()]
 
         async def _empty_status_by_mid(_self, _hubs):
+            """Simulate a status fetch that returns nothing for any hub."""
             return {}
 
         monkeypatch.setattr(_coord_module.RainPointCoordinator, "_fetch_status_by_mid", _empty_status_by_mid)

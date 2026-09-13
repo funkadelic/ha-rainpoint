@@ -426,7 +426,7 @@ class TestSupportPayload:
         a dropped getattr default."""
 
         class _BareCoordinator:
-            pass
+            """A coordinator stand-in with no `data` attribute at all."""
 
         hass, entry = _make_hass(coordinator=_BareCoordinator())
 
@@ -487,6 +487,7 @@ class TestDeviceRouting:
 
     @pytest.mark.asyncio
     async def test_a_hub_row_yields_its_record_its_connectivity_and_its_children(self):
+        """A hub device page dumps only its own hub record, connectivity and child sensors."""
         other_hub = _hub_record(mid=999999)
         sensors = {
             "182509_236547_1": _sensor_entry(mid=236547),
@@ -683,7 +684,7 @@ class TestBeforeSetupCompletes:
         raising out of a getattr call that dropped its default."""
 
         class _BareCoordinator:
-            pass
+            """A coordinator stand-in with no `data` attribute at all."""
 
         hass, entry = _make_hass(coordinator=_BareCoordinator())
 
@@ -695,7 +696,7 @@ class TestBeforeSetupCompletes:
 
 class TestCoordinatorDump:
     """`_coordinator_dump` reads real attributes off the coordinator it is
-    given, not off a MagicMock that would auto-vivify whatever name a mutant
+    given, not off a MagicMock that would auto-vivify whatever name the code
     happens to look up."""
 
     class _RealDataCoordinator:
@@ -703,11 +704,13 @@ class TestCoordinatorDump:
         behaves exactly as it would against a real coordinator instance."""
 
         def __init__(self, data):
+            """Store the given data with a None update interval and a successful last update."""
             self.data = data
             self.update_interval = None
             self.last_update_success = True
 
     def test_hub_and_sensor_counts_come_from_the_coordinators_own_data(self):
+        """The dump's hub_count and sensor_count reflect the coordinator's actual data, not a stub."""
         coordinator = self._RealDataCoordinator(
             data={"hubs": [_hub_record(), _hub_record(hid=999)], "sensors": {"a": {}, "b": {}, "c": {}}}
         )
@@ -718,8 +721,10 @@ class TestCoordinatorDump:
         assert dumped["sensor_count"] == 3
 
     def test_missing_attributes_degrade_to_none_rather_than_raising(self):
+        """A coordinator missing every expected attribute still dumps None fields, not a raise."""
+
         class _BareCoordinator:
-            pass
+            """A coordinator stand-in with none of the expected attributes."""
 
         dumped = _coordinator_dump(_BareCoordinator())
 
