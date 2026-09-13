@@ -142,6 +142,20 @@ class TestRainPointFirmwareVersionSensor:
         sensor = self._make()
         assert sensor._attr_unique_id.endswith("_firmware_version")
 
+    def test_display_name_is_firmware_version(self):
+        """The entity's display name is exactly 'Firmware Version'."""
+        sensor = self._make()
+        assert sensor._attr_name == "Firmware Version"
+
+    def test_device_info_is_built_from_the_real_sensor_info_not_a_dropped_one(self):
+        """sensor_info must reach the base class, or device_info loses its identity."""
+        sensor_info = _make_sensor_info(hid=100, mid=200, addr=1)
+        sensor = RainPointFirmwareVersionSensor(_make_coordinator(), "100_200_1", sensor_info, "100_200_1")
+
+        info = sensor.device_info
+
+        assert info["serial_number"] == "200_1"
+
 
 class TestRainPointLastUpdatedSensor:
     """Tests for RainPointLastUpdatedSensor."""
@@ -178,6 +192,20 @@ class TestRainPointLastUpdatedSensor:
         """unique_id should end with '_last_updated'."""
         sensor = self._make()
         assert sensor._attr_unique_id.endswith("_last_updated")
+
+    def test_display_name_is_last_data_change(self):
+        """The entity's display name is exactly 'Last Data Change'."""
+        sensor = self._make()
+        assert sensor._attr_name == "Last Data Change"
+
+    def test_device_info_is_built_from_the_real_sensor_info_not_a_dropped_one(self):
+        """sensor_info must reach the base class, or device_info loses its identity."""
+        sensor_info = _make_sensor_info(hid=100, mid=200, addr=1)
+        sensor = RainPointLastUpdatedSensor(_make_coordinator(), "100_200_1", sensor_info, "100_200_1")
+
+        info = sensor.device_info
+
+        assert info["serial_number"] == "200_1"
 
     def test_native_value_handles_z_suffix(self):
         """native_value should handle 'Z' UTC suffix in timestamp."""
@@ -239,6 +267,22 @@ class TestRainPointDeviceIDSensor:
         """unique_id should end with '_device_id'."""
         sensor = self._make()
         assert sensor._attr_unique_id.endswith("_device_id")
+
+    def test_display_name_is_device_id(self):
+        """The entity's display name is exactly 'Device ID'."""
+        sensor = self._make()
+        assert sensor._attr_name == "Device ID"
+
+    def test_device_info_is_built_from_the_real_sensor_info_not_a_dropped_one(self):
+        """sensor_info must reach the base class, or device_info loses its identity."""
+        coord = MagicMock()
+        coord.data = {"sensors": {"100_200_1": {"firmware_version": "1.0", "data": {}, "addr": 1}}}
+        sensor_info = _make_sensor_info(hid=100, mid=200, addr=1)
+        sensor = RainPointDeviceIDSensor(coord, "100_200_1", sensor_info, "100_200_1")
+
+        info = sensor.device_info
+
+        assert info["serial_number"] == "200_1"
 
     def test_native_value_from_decoded_data_device_id(self):
         """Long device_id inside decoded `data` dict is returned (covers decoded-data loop)."""

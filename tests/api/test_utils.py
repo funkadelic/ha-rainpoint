@@ -66,6 +66,16 @@ class TestParseRainpointPayload:
         with pytest.raises(ValueError):
             _parse_rainpoint_payload("10#ZZZZ")
 
+    def test_prefix_split_keeps_a_second_hash_with_the_body(self):
+        """A second '#' in the body stays in hex_data, pinning split direction and count.
+
+        Splitting unbounded or from the right, or allowing a second split
+        point, all resolve prefix/hex_data differently for this input and
+        raise a different error than the one this pins.
+        """
+        with pytest.raises(ValueError, match=r"non-hexadecimal.*position 2"):
+            _parse_rainpoint_payload("10#AA#BB")
+
 
 class TestParseTlvPayload:
     """Tests for _parse_tlv_payload."""
@@ -190,6 +200,22 @@ class TestParseTlvPayload:
         """Empty hex data returns empty dict."""
         result = _parse_tlv_payload("11#")
         assert result == {}
+
+    def test_unknown_type_advance_does_not_rewind_past_records_already_read(self):
+        """The unknown-type skip must advance the cursor by 2, not reset it to 2.
+
+        Record 1 (dp_id=0x01, type=0xD8, val=0xFF) consumes 3 bytes, landing
+        the cursor at offset 3, past where a reset to the literal 2 would
+        put it. Record 2 at that offset (dp_id=0x02, type=0xFF, unknown) must
+        be skipped forward, not used to rewind into record 1's own value byte,
+        which would re-read it as a bogus dp_id and never reach record 3.
+        """
+        # 01 D8 FF | 02 FF | 03 D8 AA
+        payload = bytes([0x01, 0xD8, 0xFF, 0x02, 0xFF, 0x03, 0xD8, 0xAA])
+        result = _parse_tlv_payload("11#" + payload.hex())
+        assert result[0x01] == (0xD8, 0xFF, b"\xff")
+        assert result[0x03] == (0xD8, 0xAA, b"\xaa")
+        assert 0x02 not in result
 
 
 class TestLe16:
@@ -339,6 +365,25 @@ class TestIsAsciiPayload:
         """A hex payload carrying a comma tail still routes to hex, not ASCII."""
         assert _is_ascii_payload("10#AABBCC,1,2") is False
 
+    def test_a_hash_elsewhere_in_the_payload_still_declines_the_ascii_path(self):
+        """The '#' guard checks for the character itself, not a specific marker string.
+
+        An NN# prefix always wins and routes to the hex path first; a payload
+        shaped like one below (comma before the semicolon, which would
+        otherwise read as ASCII) must still decline here.
+        """
+        assert _is_ascii_payload("1,2;3#4") is False
+
+    def test_corrupted_header_extraction_does_not_pick_up_a_later_comma(self):
+        """The header is only the text before the FIRST ';', taken from the left.
+
+        No comma sits before that first ';', so a header extraction that
+        instead returned the whole payload, or the text before the LAST ';',
+        would pick up a comma that belongs to the body and misreport this as
+        ASCII-framed.
+        """
+        assert _is_ascii_payload("1;2,-50,1;tail2") is False
+
     def test_no_semicolon_no_hash_is_not_ascii(self):
         """A bare hex-looking string with neither marker is not ASCII-shaped."""
         assert _is_ascii_payload("AABBCC") is False
@@ -366,6 +411,16 @@ class TestParseAsciiRssi:
     def test_non_integer_rssi_token_returns_none(self):
         """A non-integer rssi token yields None, no raise."""
         assert _parse_ascii_rssi("1,x,1;body") is None
+
+    def test_corrupted_header_extraction_does_not_pick_up_a_later_comma(self):
+        """The header is only the text before the FIRST ';', taken from the left.
+
+        This header has too few comma-separated parts to carry a trustworthy
+        rssi token, so it must read as None. A header extraction that instead
+        returned the whole payload, or the text before the LAST ';', would
+        pick up the body's own comma-separated '-50' as a false rssi reading.
+        """
+        assert _parse_ascii_rssi("1;2,-50,1;tail2") is None
 
 
 class TestSplitPrefixCommaTruncation:
@@ -422,6 +477,27 @@ class TestParseEntriesTruncation:
     def test_dp_id_prefixed_record_cut_inside_its_value_reads_absent(self):
         """An 11# frame's dp_id byte does not exempt the record from the check."""
         assert _find_field_int(bytes.fromhex("17B3010203"), 20, dp_id_prefixed=True) is None
+
+    def test_unsigned_by_default(self):
+        """A high-bit-set value reads as a large positive number unless signed=True is asked for.
+
+        A caller that omits signed relies on the parameter's own default
+        rather than on a per-record choice; the default must be unsigned, not
+        the reverse, so STA_* fields whose dpDataType is unsigned decode
+        correctly with no per-call signed= argument at all.
+        """
+        assert _find_field_int(bytes.fromhex("B3FFFFFFFF"), 20) == 0xFFFFFFFF
+
+    def test_dp_id_prefixed_flag_is_forwarded_not_defaulted(self):
+        """dp_id_prefixed must reach the structural walk, not be silently dropped.
+
+        0x80 looks like a self-contained wide-form record if it is read
+        instead of skipped as a dp_id, which shifts every following byte's
+        alignment and loses the target field entirely.
+        """
+        b = bytes.fromhex("80B301020304")
+        assert _find_field_int(b, 20, dp_id_prefixed=True) == 0x04030201
+        assert _find_field_int(b, 20, dp_id_prefixed=False) is None
 
 
 class TestParseHubBroadcastFlag:
@@ -701,6 +777,14 @@ class TestSpliceSubPowerMode:
         """Re-splicing a param whose mode already matches the request changes nothing."""
         assert _splice_sub_power_mode("5=02", "2") == "5=02"
 
+    def test_splices_to_power_saving(self):
+        """'0' (Power Saving) is one of the three canonical write targets, not just a refusal."""
+        assert _splice_sub_power_mode("5=01,11=a", "0") == "5=00,11=a"
+
+    def test_splices_to_standard(self):
+        """'1' (Standard) is one of the three canonical write targets, not just a refusal."""
+        assert _splice_sub_power_mode("5=02,11=a", "1") == "5=01,11=a"
+
     @pytest.mark.parametrize("mode", ["3", "x", "", "01", None])
     def test_non_canonical_mode_returns_none(self, mode):
         """A mode that is not one of the three canonical digits refuses the write."""
@@ -751,6 +835,10 @@ class TestSafeKey:
         """A long key is cut at the bound and flagged so the cut is visible."""
         rendered = _safe_key("k" * 100)
         assert rendered == "k" * 40 + "~"
+
+    def test_key_at_exactly_the_bound_is_not_marked(self):
+        """A key of exactly the max length is whole, not one byte over it."""
+        assert _safe_key("k" * 40) == "k" * 40
 
     def test_non_string_key_is_rendered_not_raised(self):
         """An integer key is a legal JSON-decoded key and must not blow up the log call."""
@@ -806,6 +894,18 @@ class TestSummarizeRecord:
         """An empty body still says which shape it was."""
         assert _summarize_record({}) == "dict(n=0) keys=[]"
         assert _summarize_record([]) == "list(n=0) keys=[]"
+
+
+class TestRedactSecret:
+    """A secret is rendered as length + last-4, or a short-value marker below that bound."""
+
+    def test_at_exactly_the_bound_stays_short_form(self):
+        """4 characters is still short: no last-4 tail would be safe to show."""
+        assert _redact_secret("abcd") == "len=4 <short>"
+
+    def test_one_past_the_bound_gets_the_last_4(self):
+        """5 characters is the first length that earns a last-4 tail."""
+        assert _redact_secret("abcde") == "len=5 last4=bcde"
 
 
 class TestRedactIdentifier:
@@ -865,6 +965,18 @@ class TestSummaryIsBounded:
         """Off-by-one guard on both caps."""
         assert ",+" not in _summarize_record({f"f{i:02d}": i for i in range(32)})
         assert "scanned" not in _summarize_record([{"a": 1}] * 50)
+
+    def test_kept_keys_are_joined_by_a_plain_comma(self):
+        """The rendered key list is comma-joined, not by some other separator.
+
+        A count-only assertion on the number of commas cannot tell a plain
+        ',' apart from a wider separator that still contains one comma
+        somewhere in it, so this pins the exact rendered string instead.
+        """
+        record = {f"k{i:02d}": i for i in range(34)}
+        rendered = _summarize_record(record)
+        expected_keys = ",".join(f"k{i:02d}" for i in range(32))
+        assert rendered == f"dict(n=34) keys=[{expected_keys},+2 more]"
 
     def test_duplicate_sanitised_keys_collapse_rather_than_repeating(self):
         """Two keys that sanitise to the same token render once, not twice."""

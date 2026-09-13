@@ -27,8 +27,10 @@ from custom_components.rainpoint import (
     _device_row_for_sensor_key,
     _device_row_is_empty,
     _ledger_pairs_and_descriptors,
+    _orphaned_entity_record,
     _read_aged_out_keys,
     _remove_orphaned_key_rows,
+    _resolve_doomed_rows,
     _sync_orphaned_entity_issues,
     _sync_orphaned_entity_issues_on_updates,
     async_remove_entry,
@@ -1345,6 +1347,42 @@ class TestOrphanedSweepGuards:
 
         executor.assert_called_once()
 
+    def test_a_key_still_listed_by_its_hub_removes_nothing_and_reports_zero(self, caplog):
+        """The "stale card" branch's own return, not just its executor skip.
+
+        A separate return statement from the unreadable-enumeration branch
+        above, so the two must be pinned independently.
+        """
+        coordinator = MagicMock()
+        coordinator.enumerated_sensor_keys.return_value = frozenset({SENSOR_KEY})
+        remover = self._remover_over(coordinator)
+
+        with (
+            caplog.at_level(logging.INFO, logger="custom_components.rainpoint"),
+            patch("custom_components.rainpoint._remove_orphaned_key_rows") as executor,
+        ):
+            taken = remover(SENSOR_KEY, leftover_shape=False, offered_pairs=frozenset({("valve", ZONE_1_UNIQUE_ID)}))
+
+        assert taken == 0
+        executor.assert_not_called()
+
+    def test_the_default_shape_is_still_present_not_departed_key(self):
+        """Omitting leftover_shape must take the narrower, non-releasing shape.
+
+        The departed-key shape's own branch reads the enumeration
+        (coordinator.enumerated_sensor_keys); the still-present shape never
+        does. Defaulting to the departed-key shape would let an unstated
+        caller release a device row and drop ledger bookkeeping for a device
+        that is on the account and reporting.
+        """
+        coordinator = MagicMock()
+        remover = self._remover_over(coordinator)
+
+        with patch("custom_components.rainpoint._remove_orphaned_key_rows", return_value=0):
+            remover(SENSOR_KEY, offered_pairs=frozenset({("valve", ZONE_1_UNIQUE_ID)}))
+
+        coordinator.enumerated_sensor_keys.assert_not_called()
+
     def test_an_adder_with_no_usable_domain_keeps_its_bookkeeping_through_a_removal(self, caplog):
         """The resolve half of the same gate the offer half applies.
 
@@ -2496,3 +2534,94 @@ class TestTheCardsGoWhenTheEntryDoes:
         assert (DOMAIN, first) in held
         assert (DOMAIN, second) not in held
         assert [r.getMessage() for r in caplog.records if "Failed to withdraw the repair issue" in r.getMessage()]
+
+
+class TestResolveDoomedRowsSkipsRatherThanMisreads:
+    """The domain guard's two failure reasons must both mean "skip", never "include"."""
+
+    @staticmethod
+    def _adder(domain, unique_ids):
+        """Build a fake add-once adder reporting the given domain and unique ids."""
+        return SimpleNamespace(domain=domain, ledger=SimpleNamespace(unique_ids_for=lambda key: list(unique_ids)))
+
+    def test_an_empty_domain_string_is_still_unusable(self):
+        """isinstance(domain, str) is True for "", so only the falsiness half
+        of the guard catches it. An `and` in place of the `or` would let it
+        through and mint a (\"\", unique_id) pair no removal should ever offer.
+        """
+        adder = self._adder("", [ZONE_1_UNIQUE_ID])
+
+        doomed, resolved = _resolve_doomed_rows([adder], SENSOR_KEY)
+
+        assert doomed == set()
+        assert resolved == []
+
+    def test_an_unusable_adder_does_not_block_a_later_usable_one(self):
+        """A skipped adder with an empty domain must not stop later adders from being resolved."""
+        bad = self._adder("", [ZONE_1_UNIQUE_ID])
+        good = self._adder("valve", [ZONE_2_UNIQUE_ID])
+
+        doomed, resolved = _resolve_doomed_rows([bad, good], SENSOR_KEY)
+
+        assert doomed == {("valve", ZONE_2_UNIQUE_ID)}
+        assert resolved == [good]
+
+
+class TestOrphanedEntityRecordDescriptorFields:
+    """Every value the record renders must come from the descriptor it was given."""
+
+    @staticmethod
+    def _descriptor(**overrides):
+        """Build a minimal orphaned-entity descriptor, with any fields overridden."""
+        base = {"addr": 1, "model": "HTV245FRF", "sub_name": "Zone", "hub_name": "Hub"}
+        base.update(overrides)
+        return base
+
+    def test_addr_and_model_are_read_from_the_descriptor(self):
+        """The record's addr and model fields come straight from the descriptor."""
+        record = _orphaned_entity_record(
+            ENTRY_ID,
+            SENSOR_KEY,
+            self._descriptor(addr=7, model="SomeModel"),
+            leftover=False,
+            orphaned=True,
+            offered_pairs=frozenset(),
+            device_names={},
+            entity_ids=(),
+        )
+
+        assert record.addr == 7
+        assert record.model == "SomeModel"
+
+    def test_hub_paired_reads_an_explicit_false(self):
+        """An explicit hub_paired=False on the descriptor is preserved on the record."""
+        record = _orphaned_entity_record(
+            ENTRY_ID,
+            SENSOR_KEY,
+            self._descriptor(hub_paired=False),
+            leftover=False,
+            orphaned=True,
+            offered_pairs=frozenset(),
+            device_names={},
+            entity_ids=(),
+        )
+
+        assert record.hub_paired is False
+
+    def test_hub_paired_defaults_true_when_the_descriptor_omits_it(self):
+        """A descriptor with no hub_paired key still yields a record defaulting to True."""
+        descriptor = self._descriptor()
+        assert "hub_paired" not in descriptor
+
+        record = _orphaned_entity_record(
+            ENTRY_ID,
+            SENSOR_KEY,
+            descriptor,
+            leftover=False,
+            orphaned=True,
+            offered_pairs=frozenset(),
+            device_names={},
+            entity_ids=(),
+        )
+
+        assert record.hub_paired is True

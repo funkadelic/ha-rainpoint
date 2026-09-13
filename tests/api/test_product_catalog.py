@@ -87,6 +87,22 @@ class TestLoadCatalogValid:
 
         assert _load_catalog(catalog_path) == {}
 
+    def test_a_malformed_entry_does_not_stop_later_entries_from_loading(self, tmp_path):
+        """One bad entry must skip only itself, not abort the whole parse.
+
+        BAD sits before a later, well-formed entry: a loop that stops on the
+        first failure instead of skipping it would silently drop GOOD too.
+        """
+        catalog_path = tmp_path / "product_catalog.json"
+        catalog_path.write_text(
+            json.dumps({"BAD": "not a list or object", "GOOD": {"1": [{"dpCode": 1}]}}),
+            encoding="utf-8",
+        )
+
+        loaded = _load_catalog(catalog_path)
+
+        assert set(loaded) == {"GOOD"}
+
     def test_get_catalog_entry_unknown_model_returns_none(self):
         """A model the catalog has never heard of is a plain miss."""
         assert get_catalog_entry("TOTALLY_UNKNOWN_MODEL") is None
@@ -386,6 +402,19 @@ class TestCatalogFingerprint:
     def test_a_path_with_an_embedded_null_degrades_rather_than_raising(self, tmp_path):
         """stat() raises ValueError, not OSError, and this runs at import time."""
         assert _read_catalog_bytes(tmp_path / "bad\x00name.json") is None
+
+    def test_a_file_exactly_at_the_size_cap_still_loads(self, tmp_path, monkeypatch):
+        """The cap is exclusive: a file at exactly the limit must still be read.
+
+        Only a file strictly larger than the cap is corrupt-or-hostile by this
+        module's own reasoning; the boundary itself is a legitimate size.
+        """
+        content = b"{}"
+        monkeypatch.setattr(product_catalog_module, "_CATALOG_MAX_BYTES", len(content))
+        path = tmp_path / "boundary.json"
+        path.write_bytes(content)
+
+        assert _read_catalog_bytes(path) == content
 
     def test_shipped_catalog_exposes_a_fingerprint(self):
         """The committed snapshot is readable, so the accessor is never None in a real install."""

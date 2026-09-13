@@ -2,6 +2,8 @@
 
 import ast
 import asyncio
+import hashlib
+import hmac
 import inspect
 import json
 import logging
@@ -107,6 +109,26 @@ class TestConstructorSeams:
         sig = inspect.signature(RainPointMqttClient.__init__)
         assert "paho_client_factory" in sig.parameters
         assert "time_source" in sig.parameters
+
+
+class TestConstructorStoresArguments:
+    """Each constructor argument lands on its own attribute, unswapped and un-nulled."""
+
+    def test_constructor_stores_device_name_product_key_and_hid(self):
+        """hub_device_name, hub_product_key and hub_hid land unchanged on their own attributes."""
+        entry = object()
+        client = RainPointMqttClient(
+            MagicMock(),
+            MagicMock(),
+            entry=entry,
+            hub_device_name="dev-x",
+            hub_product_key="pk-x",
+            hub_hid=777,
+        )
+
+        assert client._hub_device_name == "dev-x"
+        assert client._hub_product_key == "pk-x"
+        assert client._hub_hid == 777
 
 
 class TestConnectDoesNotSubscribe:
@@ -257,6 +279,27 @@ class TestMessageReceiptLogging:
         """A payload over the limit is truncated with a marker."""
         preview = mqtt_module._payload_preview(b"x" * 5000, limit=1024)
         assert preview == "x" * 1024 + "...(truncated)"
+
+    def test_payload_preview_truncated_at_a_multibyte_boundary_keeps_whole_characters(self):
+        """The read-window arithmetic (limit*4+1) must land past the boundary,
+        not one byte short of it, so a cut character decodes to the right count.
+
+        Also proves the decode tolerates an incomplete trailing character
+        (via 'replace') rather than raising, this call site is never
+        wrapped in a try/except.
+        """
+        glyph = "\U0001d11e".encode("utf-8")  # a 4-byte UTF-8 character
+        payload = glyph * 3
+        assert mqtt_module._payload_preview(payload, limit=2) == "\U0001d11e\U0001d11e...(truncated)"
+
+    def test_payload_preview_truncates_even_when_the_whole_payload_was_captured(self):
+        """An over-limit result still gets the marker even if no more payload
+        followed, the two truncation conditions are an OR, not an AND."""
+        assert mqtt_module._payload_preview(b"abcde", limit=2) == "ab...(truncated)"
+
+    def test_payload_preview_at_exactly_the_limit_is_not_truncated(self):
+        """Content whose length equals the limit is returned verbatim, pinning '>' over '>='."""
+        assert mqtt_module._payload_preview(b"ab", limit=2) == "ab"
 
     @pytest.mark.asyncio
     async def test_message_count_increments_across_two_messages(self):
@@ -487,6 +530,52 @@ class TestPushEnvelopeFailSafe:
         payload = json.dumps({"method": "thing.service.property.set", "params": {"anything": param}}).encode()
         assert mqtt_module._parse_push_envelope(payload) == [("D01", "11#ab", 123)]
 
+    def test_wrong_method_is_rejected_even_when_the_rest_of_the_payload_would_otherwise_parse(self):
+        """The method check is a hard gate on its own, not one signal folded
+        into a combined condition that other valid-looking content can outvote."""
+        payload = _captured_push_payload({"D01": "11#ab"})
+        payload = payload.replace(b"thing.service.property.set", b"other.method")
+        assert mqtt_module._parse_push_envelope(payload) == []
+
+    def test_param_key_is_read_by_name_when_other_params_keys_are_also_present(self):
+        """With more than one params key, 'param' must be looked up by its own
+        name, the single-value fallback only applies when it is the only key."""
+        payload = _captured_push_payload({"D01": "11#ab"})
+        obj = json.loads(payload)
+        obj["params"]["extra"] = "noise"
+        payload2 = json.dumps(obj).encode()
+        assert mqtt_module._parse_push_envelope(payload2) == [("D01", "11#ab", 1784707302285)]
+
+    def test_the_single_value_fallback_does_not_guess_among_several_unnamed_keys(self):
+        """The fallback is for exactly one params key; with two non-'param' keys,
+        nothing is guessed and the payload is dropped."""
+        payload = _captured_push_payload({"D01": "11#ab"})
+        obj = json.loads(payload)
+        real_param = obj["params"].pop("param")
+        obj["params"]["first"] = real_param
+        obj["params"]["second"] = "some-other-value"
+        payload2 = json.dumps(obj).encode()
+        assert mqtt_module._parse_push_envelope(payload2) == []
+
+    def test_leading_whitespace_before_the_inner_json_brace_is_tolerated(self):
+        """The inner-JSON section is found by its leading brace even with
+        leading whitespace before it, pinning lstrip over rstrip."""
+        inner = {"D01": {"time": 1, "value": "11#ab"}}
+        padded_json = " " + json.dumps(inner)
+        param = "|".join(["#P0", padded_json, "1", "t"])
+        payload = _push_outer(params={"param": param})
+        assert mqtt_module._parse_push_envelope(payload) == [("D01", "11#ab", 1)]
+
+    def test_payload_exactly_at_the_size_cap_is_still_parsed(self):
+        """The size guard is a strict '>', so a payload landing exactly on the
+        cap is not dropped."""
+        base = _captured_push_payload({"D01": "11#ab"})
+        padding_needed = mqtt_module.MQTT_PUSH_MAX_PAYLOAD_BYTES - len(base)
+        assert padding_needed > 0
+        payload = _captured_push_payload({"D01": "11#ab" + "0" * padding_needed})
+        assert len(payload) == mqtt_module.MQTT_PUSH_MAX_PAYLOAD_BYTES
+        assert mqtt_module._parse_push_envelope(payload) != []
+
     def test_parse_push_envelope_drops_oversized_payload(self):
         """An oversized payload is dropped before parsing, even if it would
         otherwise be valid JSON, so a huge message cannot drive work."""
@@ -500,6 +589,16 @@ class TestPushEnvelopeFailSafe:
         """The sub-device extractor drops a structurally odd (non-dict) inner
         section instead of raising."""
         assert mqtt_module._subdevice_updates(["not", "a", "dict"]) == []
+
+    def test_a_skipped_key_does_not_stop_later_keys_from_being_read(self):
+        """A non-matching entry is skipped (continue), not a reason to stop
+        reading the rest of the dict (break). Dict order matters here: the
+        skipped entry comes first."""
+        inner = {
+            "update": {"time": 1, "value": 1},  # not a D-prefixed key: skipped
+            "D02": {"time": 222, "value": "20#BB"},
+        }
+        assert mqtt_module._subdevice_updates(inner) == [("D02", "20#BB", 222)]
 
     @pytest.mark.asyncio
     async def test_malformed_payload_through_handler_never_calls_coordinator(self):
@@ -732,6 +831,42 @@ class TestHubFrameParsing:
         """The MQTT_PUSH_MAX_PAYLOAD_BYTES bound is applied before any parse."""
         oversized = SAMPLE_HUB_DISCONNECT_FRAME.encode() + b"0" * mqtt_module.MQTT_PUSH_MAX_PAYLOAD_BYTES
         assert mqtt_module._parse_hub_frame(oversized) is None
+
+    def test_payload_exactly_at_the_size_cap_is_still_parsed(self):
+        """The size guard is a strict '>', so an envelope landing exactly on
+        the cap still parses, padded via an unrelated 'id' field so the
+        extracted frame text itself is untouched."""
+        base = json.dumps(
+            {"method": "thing.service.property.set", "id": "", "params": {"param": SAMPLE_HUB_DISCONNECT_FRAME}}
+        ).encode()
+        padding_needed = mqtt_module.MQTT_PUSH_MAX_PAYLOAD_BYTES - len(base)
+        assert padding_needed > 0
+        payload = json.dumps(
+            {
+                "method": "thing.service.property.set",
+                "id": "0" * padding_needed,
+                "params": {"param": SAMPLE_HUB_DISCONNECT_FRAME},
+            }
+        ).encode()
+        assert len(payload) == mqtt_module.MQTT_PUSH_MAX_PAYLOAD_BYTES
+        assert mqtt_module._parse_hub_frame(payload) is not None
+
+    def test_param_key_is_read_by_name_when_other_params_keys_are_also_present(self):
+        """With more than one params key, 'param' is looked up by its own name."""
+        payload = json.dumps(
+            {"method": "thing.service.property.set", "params": {"param": SAMPLE_HUB_DISCONNECT_FRAME, "extra": "noise"}}
+        ).encode()
+        frame = mqtt_module._parse_hub_frame(payload)
+        assert frame is not None
+        assert frame.connected is False
+
+    def test_the_single_value_fallback_does_not_guess_among_several_unnamed_keys(self):
+        """With two non-'param' keys, the single-value fallback must not fire;
+        the whole outer JSON text is left as the candidate and fails to parse."""
+        payload = json.dumps(
+            {"method": "thing.service.property.set", "params": {"first": SAMPLE_HUB_DISCONNECT_FRAME, "second": "noise"}}
+        ).encode()
+        assert mqtt_module._parse_hub_frame(payload) is None
 
     def test_non_utf8_bytes_do_not_raise(self):
         """Undecodable bytes degrade via 'replace' rather than raising, and the
@@ -979,6 +1114,28 @@ class TestSubDeviceEnvelopeMidAttribution:
         assert len(tail) == 32
         assert mqtt_module._frame_mid(tail) == 236547
 
+    def test_section_one_helper_never_raises_on_invalid_utf8_bytes(self):
+        """The decode must tolerate invalid bytes via replacement, this runs
+        off the paho thread hop and has no surrounding try/except."""
+        payload = b"#P" + b"\xff\xfe" + b"0" * 28 + b"|{}|1|2#"
+        # Must not raise, whatever it returns.
+        mqtt_module._push_envelope_section_one(payload)
+
+    def test_unreadable_identity_is_recorded_by_its_real_width_not_as_none(self):
+        """A section 1 that is present but fails the width check must be logged
+        under its own width, since section_one is not None here, passing
+        None instead would collapse every such case into the 'none' bucket."""
+        coordinator = MagicMock()
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator)
+        short_section_one = "#P" + "1" * 20  # correct prefix, wrong width
+        inner = json.dumps({"D01": {"time": 1, "value": "11#ab"}})
+        param = "|".join([short_section_one, inner, "1", "2#"])
+        payload = json.dumps({"method": "thing.service.property.set", "params": {"param": param}}).encode()
+
+        client._dispatch_push("topic", payload)
+
+        assert client._unrecognised_shapes == {f"identity-width:{len(short_section_one)}"}
+
 
 class TestUnrecognisedShapeLogging:
     """The first payload of a distinct unrecognized shape announces that shape
@@ -1003,6 +1160,20 @@ class TestUnrecognisedShapeLogging:
         assert mqtt_module._section_class("{not-really-json") == "J"
         assert mqtt_module._section_class("112882164350") == "D"
         assert mqtt_module._section_class("not-digits-or-json") == "O"
+
+    def test_section_class_treats_leading_whitespace_before_the_brace_as_json(self):
+        """Pins lstrip over rstrip: a leading-space-then-brace section is JSON-shaped."""
+        assert mqtt_module._section_class(" {abc") == "J"
+
+    def test_shape_key_joins_section_classes_with_no_separator(self):
+        """The per-section class letters are concatenated directly."""
+        assert mqtt_module._shape_key(b"a|1") == "2:OD"
+
+    def test_shape_key_never_raises_on_invalid_utf8_bytes(self):
+        """The classification decode must tolerate invalid bytes via replacement."""
+        payload = b"\xff\xfe|abc"
+        # Must not raise, whatever it returns.
+        mqtt_module._shape_key(payload)
 
     def test_first_shape_logs_info_repeat_logs_debug_new_shape_logs_info_again(self, caplog):
         """Under DEBUG each of the three payloads yields a preview: the two
@@ -1089,6 +1260,16 @@ class TestAsyncDisconnect:
 
         fake_paho.loop_stop.assert_called_once()
         fake_paho.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_disconnect_sets_stopping_to_true_not_merely_falsy(self):
+        """The supervisor loop checks 'not self._stopping', so True is required,
+        not just something falsy-adjacent, pinned by identity."""
+        client = _make_mqtt_client(MagicMock(), _make_fake_paho())
+
+        await client.async_disconnect()
+
+        assert client._stopping is True
 
 
 class TestConnectCallbackHandling:
@@ -1222,6 +1403,20 @@ class TestBackoffDelay:
         assert all(delay <= mqtt_module._BACKOFF_CEILING_SECONDS * 1.3 for delay in samples)
         assert all(delay >= mqtt_module._BACKOFF_CEILING_SECONDS * 0.7 for delay in samples)
 
+    def test_backoff_delay_doubles_per_attempt_not_triples(self):
+        """attempt=2 (exponent=1) must double the base, not triple it."""
+        client = self._client()
+        with patch.object(RainPointMqttClient, "_apply_jitter", staticmethod(lambda value: value)):
+            assert client._backoff_delay(2) == mqtt_module._BACKOFF_BASE_SECONDS * 2
+
+    def test_apply_jitter_can_both_reduce_and_increase_the_value(self):
+        """The jitter sign is drawn from both -1 and +1, pinning the two-element choice."""
+        client = self._client()
+        results = {client._apply_jitter(100.0) for _ in range(200)}
+
+        assert any(r < 100.0 for r in results)
+        assert any(r > 100.0 for r in results)
+
 
 class TestSupervisorUnboundedRetry:
     """Six or more consecutive connect failures still schedule a further retry."""
@@ -1264,6 +1459,87 @@ class TestSupervisorUnboundedRetry:
         await client.async_disconnect()
 
 
+class TestSupervisorAttemptCounting:
+    """The failure-streak counter drives the backoff delay: starts at 0,
+    increments by exactly 1 per consecutive failure, and resets to 0 after a
+    successful connect."""
+
+    @pytest.mark.asyncio
+    async def test_consecutive_failures_pass_increasing_attempt_numbers_and_the_real_delay(self):
+        """Each consecutive failure passes an incrementing attempt number and its actual delay to the reconnect wait."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        fake_paho.connect.side_effect = OSError("connection refused")
+        client = _make_mqtt_client(hass, fake_paho)
+
+        seen_attempts: list[int] = []
+
+        def _spy_backoff(attempt):
+            """Record each attempt number passed to the backoff calculation and return a zero delay."""
+            seen_attempts.append(attempt)
+            return 0.0
+
+        reconnect_mock = AsyncMock(side_effect=_instant_sleep)
+        with (
+            patch.object(client, "_backoff_delay", side_effect=_spy_backoff),
+            patch.object(RainPointMqttClient, "_schedule_reconnect", new=reconnect_mock),
+        ):
+            await client.async_start()
+            await _settle(times=20)
+
+        assert seen_attempts[:4] == [1, 2, 3, 4]
+        delays_passed = [call.args[0] for call in reconnect_mock.await_args_list[:4]]
+        assert delays_passed == [0.0, 0.0, 0.0, 0.0]
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_attempt_counter_resets_after_a_successful_connect(self):
+        """A success resets the streak, so the next failure counts from 1 again
+        rather than continuing from where the streak left off."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        fake_paho.connect.side_effect = [OSError("boom"), None, OSError("boom"), OSError("boom")]
+        client = _make_mqtt_client(hass, fake_paho)
+
+        seen_attempts: list[int] = []
+
+        def _spy_backoff(attempt):
+            """Record each attempt number passed to the backoff calculation and return a zero delay."""
+            seen_attempts.append(attempt)
+            return 0.0
+
+        with (
+            patch.object(client, "_backoff_delay", side_effect=_spy_backoff),
+            patch.object(RainPointMqttClient, "_schedule_reconnect", new=AsyncMock(side_effect=_instant_sleep)),
+            patch.object(RainPointMqttClient, "_wait_for_renewal", new=AsyncMock(return_value=None)),
+        ):
+            await client.async_start()
+            await _settle(times=30)
+
+        # 1st failure -> attempt 1. Then a success resets the streak. Then two
+        # more failures must start counting from 1 again, not continue from 2.
+        assert seen_attempts[:3] == [1, 1, 2]
+
+        await client.async_disconnect()
+
+
+class TestScheduleReconnect:
+    """_schedule_reconnect is a thin, patchable wrapper around _sleep."""
+
+    @pytest.mark.asyncio
+    async def test_schedule_reconnect_sleeps_for_the_given_delay(self):
+        """_schedule_reconnect awaits _sleep with the exact delay it was given."""
+        client = _make_mqtt_client(MagicMock(), _make_fake_paho())
+
+        with patch.object(client, "_sleep", new=AsyncMock()) as sleep_mock:
+            await client._schedule_reconnect(5.0)
+
+        sleep_mock.assert_awaited_once_with(5.0)
+
+
 def test_no_bounded_range_governs_reconnect():
     """No bounded attempt-count loop governs reconnect in the module source."""
     import inspect as _inspect
@@ -1299,6 +1575,35 @@ def _make_mqtt_client_with_distinct_paho_instances(hass, get_subscribe_status_mo
 
 class TestCredentialRenewal:
     """Clean disconnect-old/reconnect-new renewal cycle before ~570s expiry."""
+
+    @pytest.mark.asyncio
+    async def test_renew_passes_the_bound_hub_identity_to_get_subscribe_status(self):
+        """Exactly the four construction-bound identity args reach
+        get_subscribe_status, in order, not swapped, dropped, or nulled."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        rainpoint_client = MagicMock()
+        rainpoint_client.get_subscribe_status = AsyncMock(return_value=_fake_creds())
+        factory = MagicMock(return_value=fake_paho)
+        client = RainPointMqttClient(
+            hass,
+            rainpoint_client,
+            entry=MagicMock(),
+            hub_device_name="dev-x",
+            hub_product_key="pk-x",
+            hub_mid=555,
+            hub_hid=777,
+            paho_client_factory=factory,
+            time_source=lambda: 1000.0,
+        )
+
+        await client.async_start()
+        await _settle()
+
+        rainpoint_client.get_subscribe_status.assert_called_once_with("dev-x", "pk-x", 555, 777)
+
+        await client.async_disconnect()
 
     @pytest.mark.asyncio
     async def test_renewal_crosses_boundary_and_reconnects_with_fresh_creds(self):
@@ -1406,6 +1711,14 @@ class TestRenewalDelayFormula:
         assert len(samples) > 1
         assert all(510.0 * 0.7 <= delay < 510.0 for delay in samples)
 
+    def test_latest_safe_delay_floors_at_zero_not_one(self):
+        """A credential already past its safety margin clamps the safe
+        deadline to 0, not 1, a whole extra second matters at this scale."""
+        client = self._client()
+        with patch.object(RainPointMqttClient, "_apply_jitter", staticmethod(lambda value: value)):
+            delay = client._renewal_delay_seconds(expire_at=1000.0, now=1000.0)
+        assert delay == 0.0
+
     def test_renewal_delay_never_exceeds_safe_deadline_under_max_jitter(self):
         """A short-lived credential must renew before expiry even when jitter and
         the 120s floor would otherwise push the delay past the expiry deadline."""
@@ -1454,6 +1767,21 @@ class TestRenewalDelayFormula:
         client = self._client_with_wall_clock(wall_now)
         creds = {"expire": (wall_now - 50.0) * 1000}
         assert client._credential_lifetime_seconds(creds) == mqtt_module._DEFAULT_CREDENTIAL_LIFETIME_SECONDS
+
+    def test_credential_lifetime_boundary_expire_ms_of_one_is_honored(self):
+        """expire_ms=1 (a tiny but positive value) is honored, pinning '> 0' over '> 1'."""
+        client = self._client_with_wall_clock(0.0)
+        assert client._credential_lifetime_seconds({"expire": 1}) == pytest.approx(0.001)
+
+    def test_credential_lifetime_sub_one_second_remaining_is_honored(self):
+        """A sub-one-second remainder is returned as-is, pinning '> 0' over '> 1'."""
+        client = self._client_with_wall_clock(4.5)
+        assert client._credential_lifetime_seconds({"expire": 5000}) == pytest.approx(0.5)
+
+    def test_credential_lifetime_exactly_zero_remaining_falls_back_to_default(self):
+        """Zero remaining time is not a usable lifetime, pinning '> 0' over '>= 0'."""
+        client = self._client_with_wall_clock(5.0)
+        assert client._credential_lifetime_seconds({"expire": 5000}) == mqtt_module._DEFAULT_CREDENTIAL_LIFETIME_SECONDS
 
 
 class TestProtocolTimestampUsesWallClock:
@@ -1609,6 +1937,29 @@ class TestSupervisorTeardown:
         assert client._supervisor_task is None
         fake_paho.loop_stop.assert_called_once()
         fake_paho.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_wait_for_renewal_gathers_the_actual_losing_tasks(self):
+        """The losing wait tasks are cancelled AND awaited via gather(*pending, ...)
+        before returning, not an empty gather() that leaves them dangling."""
+        client = _make_mqtt_client(MagicMock(), _make_fake_paho())
+        real_gather = asyncio.gather
+        calls = []
+
+        async def _spy_gather(*args, **kwargs):
+            """Record the positional arguments asyncio.gather was called with, then delegate to the real gather."""
+            calls.append(args)
+            return await real_gather(*args, **kwargs)
+
+        with patch.object(mqtt_module.asyncio, "gather", side_effect=_spy_gather):
+            task = asyncio.create_task(client._wait_for_renewal(delay=1000.0))
+            await asyncio.sleep(0)
+            client._stop_event.set()
+            await task
+
+        assert len(calls) == 1
+        # The two losing tasks (sleep_task and renew_task); stop_task won the race.
+        assert len(calls[0]) == 2
 
     @pytest.mark.asyncio
     async def test_supervisor_loop_exits_when_stopping_flag_set_without_cancel(self):
@@ -1772,6 +2123,98 @@ class TestSupervisorTeardown:
         assert supervisor.cancelled()
 
 
+class TestConnectCredentialFields:
+    """_connect reads deviceName/productKey/deviceSecret by their documented
+    keys, builds username/password/client_id from them, wires the paho
+    callbacks, and records the final device_name/product_key, none of it
+    silently nulled or swapped."""
+
+    def _client(self, hass, fake_paho, creds):
+        """Build a RainPointMqttClient wired to a fake rainpoint client returning the given credentials."""
+        rainpoint_client = MagicMock()
+        rainpoint_client.get_subscribe_status = AsyncMock(return_value=creds)
+        factory = MagicMock(return_value=fake_paho)
+        client = RainPointMqttClient(
+            hass,
+            rainpoint_client,
+            entry=MagicMock(),
+            hub_device_name="hub-device",
+            hub_product_key="hub-pk",
+            paho_client_factory=factory,
+            time_source=lambda: 1000.0,
+            wall_clock_source=lambda: 1_700_000_000.0,
+        )
+        return client, factory
+
+    @pytest.mark.asyncio
+    async def test_connect_wires_credentials_paho_client_and_final_state_exactly(self):
+        """One end-to-end check of everything _connect derives from a real creds dict."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        creds = _fake_creds(device_name="dev-42", product_key="pk-42")
+        client, factory = self._client(hass, fake_paho, creds)
+
+        await client.async_start()
+        await _settle()
+
+        # username/password read the documented keys, not a stand-in default.
+        username, password = fake_paho.username_pw_set.call_args.args
+        assert username == "dev-42&pk-42"
+        timestamp_ms = 1_700_000_000_000
+        sign_content = f"clientId{'dev-42'}deviceName{'dev-42'}productKey{'pk-42'}timestamp{timestamp_ms}"
+        expected_password = hmac.new(FAKE_DEVICE_SECRET.encode(), sign_content.encode(), hashlib.sha1).hexdigest()
+        assert password == expected_password
+
+        # The paho client is built with the real callback-API version and callbacks.
+        assert factory.call_args.args == (paho.CallbackAPIVersion.VERSION2,)
+        expected_client_id_prefix = f"dev-42|securemode=2,signmethod=hmacsha1,timestamp={timestamp_ms}"
+        assert factory.call_args.kwargs["client_id"].startswith(expected_client_id_prefix)
+        assert fake_paho.on_connect == client._on_connect
+        assert fake_paho.on_message == client._on_message
+        assert fake_paho.on_disconnect == client._on_disconnect
+
+        # The final recorded identity matches what was actually used, not None.
+        assert client._device_name == "dev-42"
+        assert client._product_key == "pk-42"
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_missing_credential_fields_default_to_empty_strings_not_none(self):
+        """A response missing deviceName/productKey must not stringify a None
+        into the wire username, "&" not "None&None"."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        client, _factory = self._client(hass, fake_paho, creds={})
+
+        await client.async_start()
+        await _settle()
+
+        username, _password = fake_paho.username_pw_set.call_args.args
+        assert username == "&"
+
+        await client.async_disconnect()
+
+    @pytest.mark.asyncio
+    async def test_missing_device_secret_does_not_crash_the_connect_attempt(self):
+        """A missing deviceSecret must default to '' (encodable), not None,
+        which has no .encode() and would raise before username_pw_set runs."""
+        loop = asyncio.get_running_loop()
+        hass = _make_hass(loop)
+        fake_paho = _make_fake_paho()
+        creds = {"deviceName": "d", "productKey": "p"}  # no deviceSecret at all
+        client, _factory = self._client(hass, fake_paho, creds)
+
+        await client.async_start()
+        await _settle()
+
+        fake_paho.username_pw_set.assert_called_once()
+
+        await client.async_disconnect()
+
+
 class TestBrokerHostSelection:
     """The broker host comes from the credential-provided mqttHostUrl (or the
     templated host when absent); the port is always the TLS port, never the
@@ -1788,12 +2231,13 @@ class TestBrokerHostSelection:
         await client.async_start()
         await _settle()
 
-        host, port, _keepalive = fake_paho.connect.call_args.args
+        host, port, keepalive = fake_paho.connect.call_args.args
         assert host == "pk123.iot-as-mqtt.us-west-1.aliyuncs.com"
         # The advertised plaintext 1883 is ignored: connect uses the const, and
         # the const pins the TLS port 8883 as a transport-contract invariant.
         assert mqtt_module.MQTT_BROKER_PORT == 8883
         assert port == mqtt_module.MQTT_BROKER_PORT
+        assert keepalive == mqtt_module.MQTT_KEEPALIVE
 
         await client.async_disconnect()
 
@@ -2210,6 +2654,10 @@ class TestTopicKindKeepsIdentifiersOutOfTheLog:
         assert kind == "thing/service/property/set"
         assert "a3iCXW3C5CP" not in kind
         assert "0ct1T72LlR7exSXOG2UU" not in kind
+
+    def test_exactly_five_non_empty_parts_is_the_minimum_recognized_shape(self):
+        """Pins '>= 5', not '> 5' or '>= 6': five is the minimum, not one more."""
+        assert _topic_kind("/sys/pk/dn/action") == "action"
 
     @pytest.mark.parametrize(
         "topic",

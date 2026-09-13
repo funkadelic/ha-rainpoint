@@ -1,6 +1,7 @@
 """Tests for the shared trust-boundary predicates."""
 
 import custom_components.rainpoint.api.product_catalog as product_catalog_module
+import custom_components.rainpoint.api.trust as trust_module
 from custom_components.rainpoint.api import decode_generic, has_bluetooth_control_identity, is_hand_written_model
 from custom_components.rainpoint.api.trust import BLUETOOTH_CONTROL_IDENTITY
 from custom_components.rainpoint.const import (
@@ -144,6 +145,27 @@ class TestHasBluetoothControlIdentity:
 
         for model in VALVE_MODELS:
             assert has_bluetooth_control_identity(model, None) is False
+
+    def test_the_catalog_lookup_is_called_with_the_model_and_model_code_verbatim(self, monkeypatch):
+        """Pins the exact call shape rather than just its result.
+
+        A swapped, dropped or defaulted argument here can still land on the
+        right answer by coincidence for a single-variant model, so only the
+        call itself shows the difference.
+        """
+        calls = []
+
+        def fake_get_catalog_entry(model, model_code=None):
+            """Record the exact arguments it was called with and return a matching catalog entry."""
+            calls.append((model, model_code))
+            return [{"identity": "CTL_BT_WATER"}]
+
+        monkeypatch.setattr(trust_module, "get_catalog_entry", fake_get_catalog_entry)
+
+        result = has_bluetooth_control_identity("SOME_MODEL", 7)
+
+        assert calls == [("SOME_MODEL", 7)]
+        assert result is True
 
     def test_true_regardless_of_where_the_identity_sits_in_the_dp_list(self, monkeypatch):
         """The walk does not depend on entry order, and a non-dict entry in

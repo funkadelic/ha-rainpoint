@@ -9,6 +9,7 @@ from homeassistant.components.valve import ValveDeviceClass, ValveEntityFeature
 
 from custom_components.rainpoint.api import _encode_dp_duration_param, decode_hic801w
 from custom_components.rainpoint.const import (
+    CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
     HIC801W_STATION_COUNT,
     MODEL_HIC801W,
@@ -32,6 +33,8 @@ from custom_components.rainpoint.valve import (
     RainPointHicStationValveEntity,
     RainPointValveEntity,
     _build_hic801w_station_valves,
+    _build_trusted_valve_entities,
+    _duration_number_value,
 )
 from tests.helpers import (
     htv210b_hub_devices,
@@ -327,6 +330,35 @@ class TestValveControl:
         )
 
     @pytest.mark.asyncio
+    async def test_async_open_valve_falls_back_to_empty_identity_when_absent(self):
+        """A sensor_info with no device_name/product_key sends empty strings, not "XXXX"."""
+        valve = _make_valve()
+        del valve._sensor_info["device_name"]
+        del valve._sensor_info["product_key"]
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode = mock_control
+        valve._get_configured_duration_seconds = MagicMock(return_value=600)
+
+        await valve.async_open_valve()
+
+        assert mock_control.call_args.kwargs["device_name"] == ""
+        assert mock_control.call_args.kwargs["product_key"] == ""
+
+    @pytest.mark.asyncio
+    async def test_async_close_valve_falls_back_to_empty_identity_when_absent(self):
+        """A sensor_info with no device_name/product_key sends empty strings, not "XXXX"."""
+        valve = _make_valve()
+        del valve._sensor_info["device_name"]
+        del valve._sensor_info["product_key"]
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode = mock_control
+
+        await valve.async_close_valve()
+
+        assert mock_control.call_args.kwargs["device_name"] == ""
+        assert mock_control.call_args.kwargs["product_key"] == ""
+
+    @pytest.mark.asyncio
     async def test_async_close_valve_applies_closed_response_state(self, monkeypatch):
         """A successful close response immediately updates coordinator state."""
         from custom_components.rainpoint import valve as valve_mod
@@ -428,6 +460,16 @@ class TestValveControl:
         valve.coordinator.async_set_updated_data = MagicMock()
 
         valve._apply_response_state("")
+
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_apply_response_state_no_sensors_key_at_all_does_not_raise(self):
+        """coordinator.data with no "sensors" key must not crash a live response decode."""
+        valve = _make_valve(model=MODEL_VALVE_245)
+        valve.coordinator.async_set_updated_data = MagicMock()
+        del valve.coordinator.data["sensors"]
+
+        valve._apply_response_state(SAMPLE_HTV245_ASCII_PAYLOAD)  # must not raise
 
         valve.coordinator.async_set_updated_data.assert_not_called()
 
@@ -540,6 +582,49 @@ class TestValveControl:
         monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", mock_er_module)
 
         assert valve._get_configured_duration_seconds() == 1
+
+    def test_configured_duration_looks_up_this_zones_own_unique_id(self, monkeypatch):
+        """The companion number lookup is keyed on this zone's own hid/mid/addr/zone, not a stray None."""
+        from custom_components.rainpoint import valve as valve_mod
+
+        valve = _make_valve()
+        mock_lookup = MagicMock(return_value=None)
+        monkeypatch.setattr(valve_mod, "_duration_number_value", mock_lookup)
+
+        valve._get_configured_duration_seconds()
+
+        mock_lookup.assert_called_once_with(valve.hass, "rainpoint_100_200_1_zone1_duration")
+
+
+class TestDurationNumberValue:
+    """Direct coverage of _duration_number_value's own entity-registry lookup."""
+
+    def test_reads_state_for_the_resolved_entity_id(self, monkeypatch):
+        """hass.states.get is called with the entity_id the registry actually resolved, not a constant."""
+        import sys
+
+        hass = MagicMock()
+        mock_registry = MagicMock()
+        mock_registry.async_get_entity_id.return_value = "number.rainpoint_valve_zone1_duration"
+        mock_er_module = MagicMock()
+        mock_er_module.async_get.return_value = mock_registry
+
+        fake_state = MagicMock()
+        fake_state.state = "5"
+        hass.states.get.return_value = fake_state
+
+        monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", mock_er_module)
+        monkeypatch.setattr(
+            sys.modules["homeassistant.helpers"],
+            "entity_registry",
+            mock_er_module,
+            raising=False,
+        )
+
+        result = _duration_number_value(hass, "rainpoint_100_200_1_zone1_duration")
+
+        hass.states.get.assert_called_once_with("number.rainpoint_valve_zone1_duration")
+        assert result == 5.0
 
 
 class TestValveInit:
@@ -842,6 +927,139 @@ class TestValveSetupEntry:
         await async_setup_entry(hass, entry, async_add_entities)
 
         assert not async_add_entities.called
+
+    @pytest.mark.asyncio
+    async def test_missing_sensors_key_is_treated_as_no_sensors(self):
+        """coordinator.data with no "sensors" key at all must not crash setup."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.options = {}
+        hass.data = {DOMAIN: {"e1": {"coordinator": mock_coordinator}}}
+
+        async_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, async_add_entities)  # must not raise
+
+        assert not async_add_entities.called
+
+    @pytest.mark.asyncio
+    async def test_hic801w_station_valves_get_the_real_coordinator_and_key(self):
+        """The HIC801W station-valve builder is called with this setup's own coordinator and key."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        sensors = {
+            "10_20_1": {
+                "hid": 10,
+                "mid": 20,
+                "addr": 1,
+                "sub_name": "Controller",
+                "model": MODEL_HIC801W,
+                "device_name": "dev1",
+                "product_key": "pk1",
+                "data": decode_hic801w(SAMPLE_HIC801W_IDLE_PAYLOAD),
+            }
+        }
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {"sensors": sensors}
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.options = {}
+        hass.data = {DOMAIN: {"e1": {"coordinator": mock_coordinator}}}
+
+        captured = []
+        async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert len(captured) == HIC801W_STATION_COUNT
+        assert all(v.coordinator is mock_coordinator for v in captured)
+        assert all(v._sensor_key == "10_20_1" for v in captured)
+
+
+class TestValveSetupEntryGenericControl:
+    """The generic-control branch: build_generic_valve_entities wiring."""
+
+    @staticmethod
+    def _hass_entry(sensors):
+        """Build a mock hass and config entry with generic control enabled over the given sensors."""
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {"sensors": sensors}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        hass.data = {DOMAIN: {"e1": {"coordinator": mock_coordinator}}}
+        return hass, entry, mock_coordinator
+
+    @pytest.mark.asyncio
+    async def test_builder_receives_the_coordinator_key_and_full_slug(self, monkeypatch):
+        """build_generic_valve_entities gets this call's own coordinator, key and slug."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        sensor_info = {"hid": 300, "mid": 400, "addr": 1}
+        hass, entry, mock_coordinator = self._hass_entry({"300_400_1": sensor_info})
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr("custom_components.rainpoint.generic_control.build_generic_valve_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        [call_coordinator, call_key, call_info, call_slug] = captured_calls[0]
+        assert call_coordinator is mock_coordinator
+        assert call_key == "300_400_1"
+        assert call_info is sensor_info
+        assert call_slug == "300_400_1"
+
+    @pytest.mark.asyncio
+    async def test_base_slug_falls_back_to_empty_string_for_a_missing_hid(self, monkeypatch):
+        """A sub-device record with no hid leaves that slug segment empty, not "None"."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        hass, entry, _coord = self._hass_entry({"key1": {"mid": 500, "addr": 2}})
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr("custom_components.rainpoint.generic_control.build_generic_valve_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert captured_calls[0][3] == "_500_2"
+
+    @pytest.mark.asyncio
+    async def test_base_slug_falls_back_to_empty_string_for_a_missing_mid(self, monkeypatch):
+        """A sub-device record with no mid leaves that slug segment empty, not "None"."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        hass, entry, _coord = self._hass_entry({"key1": {"hid": 300, "addr": 2}})
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr("custom_components.rainpoint.generic_control.build_generic_valve_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert captured_calls[0][3] == "300__2"
+
+    @pytest.mark.asyncio
+    async def test_base_slug_falls_back_to_empty_string_for_a_missing_addr(self, monkeypatch):
+        """A sub-device record with no addr leaves that slug segment empty, not "None"."""
+        from custom_components.rainpoint.valve import async_setup_entry
+
+        hass, entry, _coord = self._hass_entry({"key1": {"hid": 300, "mid": 500}})
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr("custom_components.rainpoint.generic_control.build_generic_valve_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert captured_calls[0][3] == "300_500_"
 
 
 class TestValveExtraAttributes:
@@ -1613,6 +1831,118 @@ class TestDpApplyResponseStateBranches:
 
         valve.coordinator.async_set_updated_data.assert_not_called()
 
+    def test_apply_response_state_no_sensors_key_at_all_does_not_raise(self):
+        """coordinator.data with no "sensors" key must not crash a live response decode."""
+        valve = _make_dp_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+        del valve.coordinator.data["sensors"]
+
+        valve._apply_response_state("1,D821AF3C000000B7D1230B1A")  # must not raise
+
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+
+class TestDpValveControlArgs:
+    """Direct unit coverage of the DP entity's own open/close kwargs.
+
+    Lighter-weight than the real-client tracer above: these check the exact
+    identity and param values sent, and that a genuinely missing device_name
+    or product_key sends an empty string rather than "XXXX" or None.
+    """
+
+    @pytest.mark.asyncio
+    async def test_open_sends_the_real_identity_zone_and_encoded_duration(self):
+        """Opening the DP valve sends the real mid, addr, device identity and hex-encoded duration."""
+        valve = _make_dp_valve()
+        valve._get_configured_duration_seconds = MagicMock(return_value=60)
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode_dp = mock_control
+
+        await valve.async_open_valve()
+
+        mock_control.assert_called_once_with(
+            mid=200,
+            addr=1,
+            device_name="dev1",
+            product_key="pk1",
+            port=1,
+            mode=1,
+            param="3C000000",
+        )
+
+    @pytest.mark.asyncio
+    async def test_open_falls_back_to_empty_identity_when_absent(self):
+        """A missing device_name or product_key sends an empty string, not a placeholder or None."""
+        valve = _make_dp_valve()
+        valve._sensor_info = dict(valve._sensor_info)
+        del valve._sensor_info["device_name"]
+        del valve._sensor_info["product_key"]
+        valve._get_configured_duration_seconds = MagicMock(return_value=60)
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode_dp = mock_control
+
+        await valve.async_open_valve()
+
+        assert mock_control.call_args.kwargs["device_name"] == ""
+        assert mock_control.call_args.kwargs["product_key"] == ""
+
+    @pytest.mark.asyncio
+    async def test_open_applies_the_actual_response_returned_by_the_client(self):
+        """The valve applies the exact response string the client returned, not a synthesized one."""
+        valve = _make_dp_valve()
+        valve._get_configured_duration_seconds = MagicMock(return_value=60)
+        valve.coordinator._client.control_work_mode_dp = AsyncMock(return_value="1,D821AF3C000000B7D1230B1A")
+        valve._apply_response_state = MagicMock()
+
+        await valve.async_open_valve()
+
+        valve._apply_response_state.assert_called_once_with("1,D821AF3C000000B7D1230B1A")
+
+    @pytest.mark.asyncio
+    async def test_close_sends_the_real_identity_and_zeroed_param(self):
+        """Closing the DP valve sends the real device identity with a zeroed duration param."""
+        valve = _make_dp_valve()
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode_dp = mock_control
+
+        await valve.async_close_valve()
+
+        mock_control.assert_called_once_with(
+            mid=200,
+            addr=1,
+            device_name="dev1",
+            product_key="pk1",
+            port=1,
+            mode=0,
+            param="00000000",
+        )
+
+    @pytest.mark.asyncio
+    async def test_close_falls_back_to_empty_identity_when_absent(self):
+        """A missing device_name or product_key sends an empty string, not a placeholder or None."""
+        valve = _make_dp_valve()
+        valve._sensor_info = dict(valve._sensor_info)
+        del valve._sensor_info["device_name"]
+        del valve._sensor_info["product_key"]
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode_dp = mock_control
+
+        await valve.async_close_valve()
+
+        assert mock_control.call_args.kwargs["device_name"] == ""
+        assert mock_control.call_args.kwargs["product_key"] == ""
+
+    @pytest.mark.asyncio
+    async def test_close_applies_the_actual_response_returned_by_the_client(self):
+        """The valve applies the exact response string the client returned, not a synthesized one."""
+        valve = _make_dp_valve()
+        valve.coordinator._client.control_work_mode_dp = AsyncMock(return_value="0,D800AF00000000B700000000")
+        valve._apply_response_state = MagicMock()
+
+        await valve.async_close_valve()
+
+        valve._apply_response_state.assert_called_once_with("0,D800AF00000000B700000000")
+
 
 class TestEncodeDpDurationParam:
     """The pure seconds-to-param hex encoder."""
@@ -1702,6 +2032,42 @@ class TestDpClassDispatch:
         assert not isinstance(valve, RainPointDpValveEntity)
 
 
+class TestBuildTrustedValveEntities:
+    """Direct unit coverage of _build_trusted_valve_entities' own guards."""
+
+    def test_silent_type_produces_nothing(self):
+        """A silent entry is never offered a control, even with zones present."""
+        coordinator = MagicMock()
+        info = {
+            "hid": 10,
+            "mid": 20,
+            "addr": 1,
+            "model": MODEL_VALVE_245,
+            "data": {"type": SILENT_DATA_TYPE, "zones": {1: {"open": False}}},
+        }
+        assert _build_trusted_valve_entities(coordinator, "10_20_1", info) == []
+
+    def test_model_code_is_passed_through_to_the_bluetooth_identity_check(self, monkeypatch):
+        """The catalog identity check is asked about this entry's own model_code, not None or a stray key."""
+        from custom_components.rainpoint import valve as valve_mod
+
+        coordinator = MagicMock()
+        info = {
+            "hid": 10,
+            "mid": 20,
+            "addr": 1,
+            "model": MODEL_VALVE_245,
+            "model_code": 41,
+            "data": {"zones": {1: {"open": False}}},
+        }
+        mock_identity = MagicMock(return_value=False)
+        monkeypatch.setattr(valve_mod, "has_bluetooth_control_identity", mock_identity)
+
+        _build_trusted_valve_entities(coordinator, "10_20_1", info)
+
+        mock_identity.assert_called_once_with(MODEL_VALVE_245, 41)
+
+
 class TestHicStationValveBuilder:
     """Which sensor keys grow station valves, and how many."""
 
@@ -1732,6 +2098,11 @@ class TestHicStationValveBuilder:
         assert len(valves) == HIC801W_STATION_COUNT
         assert [v._attr_unique_id for v in valves] == [f"rainpoint_100_200_3_station{n}" for n in range(1, 9)]
         assert [v._attr_name for v in valves] == [f"Station {n}" for n in range(1, 9)]
+
+    def test_each_valve_is_bound_to_the_real_sensor_key(self):
+        """Every station valve reads back through the sensor key it was built for, not None."""
+        valves = self._build(self._entry())
+        assert all(v._sensor_key == "100_200_3" for v in valves)
 
     def test_all_eight_are_water_valves_that_open_and_close(self):
         """Every station is a water valve that opens and closes."""
@@ -2023,6 +2394,35 @@ class TestHicStationValveControl:
     """The commands the settled encoding sends."""
 
     @pytest.mark.asyncio
+    async def test_open_falls_back_to_empty_identity_when_absent(self):
+        """A controller entry with no device_name/product_key sends empty strings, not "XXXX"."""
+        valve = _make_station_valve()
+        del valve._sensor_info["device_name"]
+        del valve._sensor_info["product_key"]
+        valve._get_configured_duration_minutes = MagicMock(return_value=2)
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode = mock_control
+
+        await valve.async_open_valve()
+
+        assert mock_control.call_args.kwargs["device_name"] == ""
+        assert mock_control.call_args.kwargs["product_key"] == ""
+
+    @pytest.mark.asyncio
+    async def test_close_falls_back_to_empty_identity_when_absent(self):
+        """A controller entry with no device_name/product_key sends empty strings, not "XXXX"."""
+        valve = _make_station_valve()
+        del valve._sensor_info["device_name"]
+        del valve._sensor_info["product_key"]
+        mock_control = AsyncMock(return_value=None)
+        valve.coordinator._client.control_work_mode = mock_control
+
+        await valve.async_close_valve()
+
+        assert mock_control.call_args.kwargs["device_name"] == ""
+        assert mock_control.call_args.kwargs["product_key"] == ""
+
+    @pytest.mark.asyncio
     async def test_open_starts_the_station_with_the_duration_in_minutes(self):
         """A start sends mode 1 with the run length in minutes."""
         valve = _make_station_valve()
@@ -2139,6 +2539,14 @@ class TestHicStationValveResponseHandling:
         valve.coordinator.async_set_updated_data = MagicMock()
         valve.coordinator.data["sensors"] = {}
         valve._apply_response_state(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1)
+        valve.coordinator.async_set_updated_data.assert_not_called()
+
+    def test_no_sensors_key_at_all_does_not_raise(self):
+        """coordinator.data with no "sensors" key must not crash a live response decode."""
+        valve = _make_station_valve()
+        valve.coordinator.async_set_updated_data = MagicMock()
+        del valve.coordinator.data["sensors"]
+        valve._apply_response_state(SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1)  # must not raise
         valve.coordinator.async_set_updated_data.assert_not_called()
 
     def test_the_write_is_copy_on_write(self):

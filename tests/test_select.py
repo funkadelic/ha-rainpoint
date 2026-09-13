@@ -102,6 +102,121 @@ class TestSelectSetupEntry:
         # async_add_entities should not be called when hubs is invalid
         mock_add_entities.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_missing_sensors_key_is_treated_as_no_sensors(self):
+        """coordinator.data with no "sensors" key at all must not crash setup."""
+        coord = MagicMock()
+        coord.data = {"hubs": []}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coord}}}
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)  # must not raise
+
+        mock_add_entities.assert_called_once()
+        assert mock_add_entities.call_args[0][0] == []
+
+    @pytest.mark.asyncio
+    async def test_missing_hubs_key_is_treated_as_no_hubs(self):
+        """coordinator.data with no "hubs" key at all must still call async_add_entities.
+
+        The hub-record walk's own unconditional call at the end of setup must
+        still fire; a broken default here makes the isinstance guard treat a
+        missing key as a malformed snapshot and return before it.
+        """
+        coord = MagicMock()
+        coord.data = {"sensors": {}}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coord}}}
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)  # must not raise
+
+        mock_add_entities.assert_called_once()
+        assert mock_add_entities.call_args[0][0] == []
+
+    @pytest.mark.asyncio
+    async def test_two_hubs_sharing_a_mid_collapse_to_one_select(self):
+        """Hubs are deduped in the setup dict by mid; a shared mid keeps only the last one."""
+        hub_a = {"hid": 100, "mid": 1001, "name": "Hub A", "mac": "AA:BB"}
+        hub_b = {"hid": 200, "mid": 1001, "name": "Hub B", "mac": "CC:DD"}
+        hass, entry, _coord = _make_hass(hubs=[hub_a, hub_b])
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        entities = mock_add_entities.call_args[0][0]
+        assert len(entities) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_non_hub_record_does_not_stop_a_later_real_hub(self):
+        """Skipping a non-hub record must not abort the walk over the rest."""
+        not_a_hub = {"hid": 1, "mid": 1, "name": "wrapper"}
+        real_hub = {"hid": 100, "mid": 1001, "name": "Hub", "mac": "AA:BB"}
+        hass, entry, _coord = _make_hass(hubs=[not_a_hub, real_hub])
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        entities = mock_add_entities.call_args[0][0]
+        assert len(entities) == 1
+
+    @pytest.mark.asyncio
+    async def test_channel_select_carries_the_real_coordinator(self):
+        """The channel select must be built with this setup call's own coordinator, not None."""
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "mac": "AA:BB"}
+        hass, entry, coord = _make_hass(hubs=[hub_info])
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        entities = mock_add_entities.call_args[0][0]
+        assert entities[0].coordinator is coord
+
+    @pytest.mark.asyncio
+    async def test_the_registered_adder_carries_the_select_domain(self):
+        """The removal sweep matches on (domain, unique_id); this platform's adder must say "select"."""
+        from custom_components.rainpoint.entity import late_adders
+
+        hass, entry, _coord = _make_hass(hubs=[])
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        adder = late_adders(hass.data[DOMAIN][entry.entry_id])[0]
+        assert adder.domain == "select"
+
+
+class TestSubDevicePowerSelectConstruction:
+    """Direct unit coverage of __init__'s own identity wiring."""
+
+    @staticmethod
+    def _build():
+        """Build a select entity for a fixed HTV210B sensor key and its coordinator."""
+        coordinator = MagicMock()
+        coordinator.data = {"hubs": [], "sensors": {}}
+        sensor_info = {"hid": 300, "mid": 400, "addr": 5, "model": MODEL_HTV210B}
+        return RainPointSubDevicePowerSelect(coordinator, "300_400_5", sensor_info), coordinator
+
+    def test_unique_id_carries_the_real_hid_mid_addr(self):
+        """The unique_id is built from this entry's own hid/mid/addr."""
+        select, _coordinator = self._build()
+        assert select._attr_unique_id == "rainpoint_300_400_5_power_mode"
+
+    def test_sensor_key_is_stored_as_given(self):
+        """The sensor key passed to __init__ is kept verbatim, not rebuilt."""
+        select, _coordinator = self._build()
+        assert select._sensor_key == "300_400_5"
+
+    def test_options_are_the_three_power_mode_labels(self):
+        """The select exposes the three power mode labels, not the raw DP values."""
+        select, _coordinator = self._build()
+        assert select._attr_options == ["Power Saving", "Standard", "Enhance"]
+
 
 class TestSubDevicePowerSelectRealTimeline:
     """End to end: an HTV210B sub-device's transmission power, driven through the
@@ -239,6 +354,8 @@ class TestSubDevicePowerSelectRealTimeline:
         assert body["param"] == self._EXPECTED_ENHANCE_PARAM
 
         assert select.current_option == "Enhance"
+
+        client.get_devices_by_hid.assert_called_with(self._HID)
 
         # The fresh read's own hub list identity was never assigned to
         # coordinator.data["hubs"], so the optimistic override the write set
@@ -615,3 +732,11 @@ class TestSubDeviceRecordHelper:
         """A matching hub with no sub-device at the requested addr yields {}."""
         hub_records = [{"mid": 1, "subDevices": [{"addr": 2, "sid": 9}]}]
         assert _sub_device_record(hub_records, 1, 1) == {}
+
+    def test_a_mid_mismatch_does_not_stop_a_later_matching_hub(self):
+        """Skipping a wrong-mid hub must not abort the walk over the rest."""
+        hub_records = [
+            {"mid": 999, "subDevices": []},
+            {"mid": 1, "subDevices": [{"addr": 1, "sid": 9}]},
+        ]
+        assert _sub_device_record(hub_records, 1, 1) == {"addr": 1, "sid": 9}

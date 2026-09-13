@@ -570,6 +570,227 @@ class TestAsyncSetupEntry:
                 await task
         assert mock_mqtt_client.async_start.await_count == 1
 
+    @pytest.mark.asyncio
+    async def test_client_constructed_with_exact_positional_args(self):
+        """RainPointClient must receive this session, in this order, not a dropped or swapped argument."""
+        hass = _make_hass()
+        entry = _make_entry()
+        sentinel_session = object()
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.async_get_clientsession", return_value=sentinel_session),
+            patch("custom_components.rainpoint.RainPointClient") as mock_client_cls,
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            await async_setup_entry(hass, entry)
+
+        mock_client_cls.assert_called_once_with(
+            entry.data["area_code"], entry.data["email"], entry.data["password"], sentinel_session
+        )
+        mock_client_cls.return_value.restore_tokens.assert_called_once_with(entry.data)
+
+    @pytest.mark.asyncio
+    async def test_relogin_listener_calls_persist_tokens_with_hass_entry_client(self):
+        """The relogin listener's lambda must actually wire to _persist_tokens with these three args."""
+        hass = _make_hass()
+        entry = _make_entry()
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient") as mock_client_cls,
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            await async_setup_entry(hass, entry)
+
+        mock_client = mock_client_cls.return_value
+        # Push resolves to no hub with no coordinator.data seeded, so exactly
+        # one relogin listener (token persistence) was registered.
+        relogin_callback = mock_client.register_relogin_listener.call_args_list[0].args[0]
+
+        with patch("custom_components.rainpoint._persist_tokens") as persist:
+            relogin_callback()
+
+        persist.assert_called_once_with(hass, entry, mock_client)
+
+    @pytest.mark.asyncio
+    async def test_coordinator_constructed_with_hass_client_entry(self):
+        """RainPointCoordinator must receive this hass, not a dropped one."""
+        hass = _make_hass()
+        entry = _make_entry()
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ) as coordinator_cls,
+        ):
+            await async_setup_entry(hass, entry)
+
+        coordinator_cls.assert_called_once_with(hass, mock_client, entry)
+
+    @pytest.mark.asyncio
+    async def test_entry_store_records_the_actual_client_and_options_snapshot(self):
+        """entry_store must hold the real client object and a real copy of entry.options."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: False, "some_flag": True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+        ):
+            await async_setup_entry(hass, entry)
+
+        stored = hass.data[DOMAIN][entry.entry_id]
+        assert stored["client"] is mock_client
+        assert stored["options_snapshot"] == {CONF_PUSH_ENABLED: False, "some_flag": True}
+
+    @pytest.mark.asyncio
+    async def test_setup_time_sweeps_and_probe_store_removal_receive_hass_entry_coordinator(self):
+        """Every setup-time sweep call site must hand through this hass, entry and coordinator."""
+        hass = _make_hass()
+        entry = _make_entry()
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch("custom_components.rainpoint._remove_stale_generic_entities") as remove_generic,
+            patch("custom_components.rainpoint._remove_withdrawn_probe_entities") as remove_probe,
+            patch("custom_components.rainpoint._async_remove_withdrawn_probe_store", new=AsyncMock()) as remove_probe_store,
+            patch("custom_components.rainpoint._reconcile_sub_device_parents_on_updates") as reconcile,
+            patch("custom_components.rainpoint._refresh_device_registry_fields_on_updates") as refresh_fields,
+            patch("custom_components.rainpoint._sync_orphaned_entity_issues_on_updates") as sync_orphans,
+        ):
+            await async_setup_entry(hass, entry)
+
+        remove_generic.assert_called_once_with(hass, entry, mock_coordinator)
+        remove_probe.assert_called_once_with(hass, entry)
+        remove_probe_store.assert_awaited_once_with(hass)
+        reconcile.assert_called_once_with(hass, entry, mock_coordinator)
+        refresh_fields.assert_called_once_with(hass, entry, mock_coordinator)
+        sync_orphans.assert_called_once_with(hass, entry, mock_coordinator)
+
+    @pytest.mark.asyncio
+    async def test_mqtt_client_constructed_with_exact_args(self):
+        """RainPointMqttClient must receive exactly this identity, coordinator, mid and hid."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk", "mid": "mid-1", "hid": "hid-1"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        mock_mqtt_client = MagicMock()
+        mock_mqtt_client.async_start = AsyncMock()
+        mock_mqtt_client.async_disconnect = AsyncMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch(
+                "custom_components.rainpoint.RainPointMqttClient",
+                return_value=mock_mqtt_client,
+            ) as mqtt_cls,
+            patch("custom_components.rainpoint.repairs.RainPointPushWatchdog"),
+        ):
+            await async_setup_entry(hass, entry)
+
+        mqtt_cls.assert_called_once_with(
+            hass,
+            mock_client,
+            entry,
+            "hub-dev",
+            "hub-pk",
+            coordinator=mock_coordinator,
+            hub_mid="mid-1",
+            hub_hid="hid-1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_watchdog_constructed_with_exact_args(self):
+        """RainPointPushWatchdog must receive this hass, entry, mqtt client and coordinator."""
+        hass = _make_hass()
+        entry = _make_entry()
+        entry.options = {CONF_PUSH_ENABLED: True}
+
+        mock_client = MagicMock()
+        mock_client.restore_tokens = MagicMock()
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+        mock_coordinator.data = {"hubs": [{"deviceName": "hub-dev", "productKey": "hub-pk"}]}
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        hass.async_create_background_task = MagicMock()
+
+        mock_mqtt_client = MagicMock()
+        mock_mqtt_client.async_start = AsyncMock()
+        mock_mqtt_client.async_disconnect = AsyncMock()
+        mock_watchdog = MagicMock()
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=mock_client),
+            patch(
+                "custom_components.rainpoint.coordinator.RainPointCoordinator",
+                return_value=mock_coordinator,
+            ),
+            patch(
+                "custom_components.rainpoint.RainPointMqttClient",
+                return_value=mock_mqtt_client,
+            ),
+            patch(
+                "custom_components.rainpoint.repairs.RainPointPushWatchdog",
+                return_value=mock_watchdog,
+            ) as watchdog_cls,
+        ):
+            await async_setup_entry(hass, entry)
+
+        watchdog_cls.assert_called_once_with(hass, entry, mock_mqtt_client, coordinator=mock_coordinator)
+
 
 class TestPushHubIdentityIssue:
     """The push-hub-identity Repairs card, driven through real async_setup_entry runs."""
@@ -951,6 +1172,7 @@ class TestAsyncUnloadEntry:
 
         assert result is True
         assert entry.entry_id not in hass.data[DOMAIN]
+        hass.config_entries.async_unload_platforms.assert_awaited_once_with(entry, PLATFORMS)
 
     @pytest.mark.asyncio
     async def test_async_unload_entry_failure(self):
@@ -964,6 +1186,35 @@ class TestAsyncUnloadEntry:
 
         assert result is False
         assert entry.entry_id in hass.data[DOMAIN]
+
+    @pytest.mark.asyncio
+    async def test_async_unload_entry_with_no_stored_entry_id_does_not_raise(self):
+        """A successful unload whose entry_id was never stored must not raise KeyError."""
+        entry = _make_entry()
+        hass = _make_hass()
+        hass.data[DOMAIN] = {}
+        hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
+
+        result = await async_unload_entry(hass, entry)
+
+        assert result is True
+
+
+class TestAsyncRemoveEntry:
+    """Cover async_remove_entry: the one path left to withdraw a removed entry's cards."""
+
+    @pytest.mark.asyncio
+    async def test_withdraws_this_entrys_cards_with_the_given_hass(self):
+        """async_withdraw_entry_cards must receive this hass and this entry's id, not a dropped hass."""
+        from custom_components.rainpoint import async_remove_entry
+
+        hass = _make_hass()
+        entry = _make_entry()
+
+        with patch("custom_components.rainpoint.async_withdraw_entry_cards") as withdraw:
+            await async_remove_entry(hass, entry)
+
+        withdraw.assert_called_once_with(hass, entry.entry_id)
 
 
 class TestPlatformsListSymmetry:
@@ -1018,6 +1269,7 @@ class TestAsyncReloadIntegration:
         result = await async_reload_integration(hass, "test_id")
 
         assert result is True
+        hass.config_entries.async_get_entry.assert_called_once_with("test_id")
         hass.config_entries.async_reload.assert_awaited_once_with("test_id")
 
     @pytest.mark.asyncio
@@ -1032,15 +1284,22 @@ class TestAsyncReloadIntegration:
 
     @pytest.mark.asyncio
     async def test_async_reload_integration_wrong_domain(self):
-        """Async reload integration wrong domain."""
+        """A wrong-domain entry must return False without ever reloading it.
+
+        `or` turned into `and` here would make this branch fall through
+        (since `not entry` is False) and reload an entry that belongs to a
+        different integration entirely.
+        """
         hass = _make_hass()
         mock_entry = MagicMock()
         mock_entry.domain = "other_domain"
         hass.config_entries.async_get_entry = MagicMock(return_value=mock_entry)
+        hass.config_entries.async_reload = AsyncMock()
 
         result = await async_reload_integration(hass, "some_id")
 
         assert result is False
+        hass.config_entries.async_reload.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_async_reload_integration_exception_returns_false(self):
@@ -1134,7 +1393,9 @@ class TestPersistTokens:
         _persist_tokens(hass, entry, client)
 
         hass.config_entries.async_update_entry.assert_called_once()
-        _, kwargs = hass.config_entries.async_update_entry.call_args
+        args, kwargs = hass.config_entries.async_update_entry.call_args
+        # The entry being updated, not a dropped or swapped positional arg.
+        assert args == (entry,)
         assert kwargs["data"]["token"] == "NEW"
         # Existing (non-token) data is preserved.
         assert kwargs["data"]["email"] == "test@example.com"
@@ -1168,6 +1429,30 @@ class TestPersistTokens:
         _persist_tokens(hass, entry, client)
 
         hass.config_entries.async_update_entry.assert_not_called()
+
+
+class TestResolveHubIdentity:
+    """Cover _resolve_hub_identity: which raw hub keys back the returned tuple."""
+
+    def test_picks_device_name_product_key_mid_and_hid_from_the_first_hub(self):
+        """Each of the four return slots must come from its own named key, not a sibling's."""
+        from custom_components.rainpoint import _resolve_hub_identity
+
+        coordinator = MagicMock()
+        coordinator.data = {
+            "hubs": [
+                {
+                    "deviceName": "dev-1",
+                    "productKey": "pk-1",
+                    "mid": "mid-1",
+                    "hid": "hid-1",
+                }
+            ]
+        }
+
+        result = _resolve_hub_identity(coordinator)
+
+        assert result == ("dev-1", "pk-1", "mid-1", "hid-1")
 
 
 class TestAsyncSupportsReconfigure:
@@ -1209,6 +1494,21 @@ class TestAsyncGetDiagnosticInfo:
         }
 
 
+class TestNotify:
+    """Cover _notify: the (title, notification_id) pair must pass straight through."""
+
+    def test_notify_passes_through_hass_message_and_title(self):
+        """Neither hass, the message nor the title may be dropped on the way to the real API."""
+        from custom_components.rainpoint import _notify
+
+        hass = _make_hass()
+
+        with patch("homeassistant.components.persistent_notification.async_create") as create:
+            _notify(hass, ("My Title", "my_notif_id"), "My message")
+
+        create.assert_called_once_with(hass, "My message", title="My Title", notification_id="my_notif_id")
+
+
 class TestReloadService:
     """Cover async_setup_services + the nested reload_service closure (lines 79-153)."""
 
@@ -1225,9 +1525,10 @@ class TestReloadService:
         # Service registration is the sole side effect; verify it was called
         # with domain + "reload".
         assert hass.services.async_register.called
-        args, _kwargs = hass.services.async_register.call_args
+        args, kwargs = hass.services.async_register.call_args
         assert args[0] == DOMAIN
         assert args[1] == "reload"
+        assert kwargs["supports_response"] is True
 
     @pytest.mark.asyncio
     async def test_reload_service_no_entry_id_no_entries_errors(self):
@@ -1431,6 +1732,205 @@ class TestReloadService:
         assert schema({"entry_id": "abc"}) == {"entry_id": "abc"}
         with pytest.raises(vol.Invalid):
             schema({"entry_id": ""})
+
+    @pytest.mark.asyncio
+    async def test_reload_service_schema_accepts_a_single_character_entry_id(self):
+        """min=1 must accept a length-1 string, not require a second character."""
+        from custom_components.rainpoint import async_setup_services
+
+        hass = _make_hass()
+        captured = {}
+        hass.services.async_register = MagicMock(side_effect=lambda d, n, h, **kw: captured.update(schema=kw.get("schema")))
+
+        await async_setup_services(hass)
+
+        assert captured["schema"]({"entry_id": "a"}) == {"entry_id": "a"}
+
+    @pytest.mark.asyncio
+    async def test_reload_service_schema_coerces_a_non_string_entry_id(self):
+        """cv.string must coerce a non-string value rather than being dropped from the chain."""
+        from custom_components.rainpoint import async_setup_services
+
+        hass = _make_hass()
+        captured = {}
+        hass.services.async_register = MagicMock(side_effect=lambda d, n, h, **kw: captured.update(schema=kw.get("schema")))
+
+        await async_setup_services(hass)
+
+        assert captured["schema"]({"entry_id": 123}) == {"entry_id": "123"}
+
+
+class TestReloadServiceCollaboratorArgs:
+    """The reload_service closure must hand each collaborator this exact hass, on every branch."""
+
+    async def _register(self, hass):
+        """Register the reload service on hass and return its handler."""
+        from custom_components.rainpoint import async_setup_services
+
+        captured = {}
+        hass.services.async_register = MagicMock(side_effect=lambda d, n, h, **kw: captured.update(handler=h))
+        await async_setup_services(hass)
+        return captured["handler"]
+
+    @pytest.mark.asyncio
+    async def test_specific_entry_id_success_hands_hass_to_both_collaborators(self):
+        """A dropped hass in either the reload call or the notify call must be caught here."""
+        from custom_components.rainpoint import _NOTIF_SUCCESS
+
+        hass = _make_hass()
+        handler = await self._register(hass)
+        service_call = MagicMock()
+        service_call.data = {"entry_id": "X"}
+
+        with (
+            patch(
+                "custom_components.rainpoint.async_reload_integration",
+                new=AsyncMock(return_value=True),
+            ) as reload_integration,
+            patch("custom_components.rainpoint._notify") as notify,
+        ):
+            await handler(service_call)
+
+        reload_integration.assert_awaited_once_with(hass, "X")
+        notify.assert_called_once_with(hass, _NOTIF_SUCCESS, "RainPoint integration reloaded successfully")
+
+    @pytest.mark.asyncio
+    async def test_specific_entry_id_failure_notifies_with_the_failed_pair(self):
+        """The failure branch's notify must carry this hass and the failed-reload pair."""
+        from custom_components.rainpoint import _NOTIF_FAILED, _RELOAD_FAILED_MSG
+
+        hass = _make_hass()
+        handler = await self._register(hass)
+        service_call = MagicMock()
+        service_call.data = {"entry_id": "X"}
+
+        with (
+            patch(
+                "custom_components.rainpoint.async_reload_integration",
+                new=AsyncMock(return_value=False),
+            ),
+            patch("custom_components.rainpoint._notify") as notify,
+        ):
+            await handler(service_call)
+
+        notify.assert_called_once_with(hass, _NOTIF_FAILED, _RELOAD_FAILED_MSG)
+
+    @pytest.mark.asyncio
+    async def test_no_entries_found_branch_hands_hass_to_both_collaborators(self):
+        """The lookup and the notify on the no-entries branch must both use this hass."""
+        from custom_components.rainpoint import _NOTIF_FAILED
+
+        hass = _make_hass()
+        hass.config_entries.async_entries = MagicMock(return_value=[])
+        handler = await self._register(hass)
+        service_call = MagicMock()
+        service_call.data = {}
+
+        with patch("custom_components.rainpoint._notify") as notify:
+            await handler(service_call)
+
+        hass.config_entries.async_entries.assert_called_once_with(DOMAIN)
+        notify.assert_called_once_with(hass, _NOTIF_FAILED, "No RainPoint integrations found to reload")
+
+    @pytest.mark.asyncio
+    async def test_reload_all_branch_hands_hass_to_the_reload_call_per_entry_and_to_notify(self):
+        """Every per-entry reload call, and the final notify, must carry this hass."""
+        from custom_components.rainpoint import _RELOAD_STATUS_NOTIFS
+
+        hass = _make_hass()
+        entry_a = MagicMock(entry_id="a", title="Home")
+        entry_b = MagicMock(entry_id="b", title="Cabin")
+        hass.config_entries.async_entries = MagicMock(return_value=[entry_a, entry_b])
+        handler = await self._register(hass)
+        service_call = MagicMock()
+        service_call.data = {}
+
+        with (
+            patch(
+                "custom_components.rainpoint.async_reload_integration",
+                new=AsyncMock(return_value=True),
+            ) as reload_integration,
+            patch("custom_components.rainpoint._notify") as notify,
+        ):
+            await handler(service_call)
+
+        awaited_args = [awaited.args for awaited in reload_integration.await_args_list]
+        assert awaited_args == [(hass, "a"), (hass, "b")]
+        notify.assert_called_once_with(hass, _RELOAD_STATUS_NOTIFS["success"], "Successfully reloaded 2 RainPoint integration(s)")
+
+
+class TestSweepsCallRegistryAccessorsWithTheHassTheyWereGiven:
+    """Each sweep's registry lookup must be handed its own hass, not a dropped one.
+
+    A minimal stub entry/coordinator is enough here: only the argument the
+    registry accessor receives is under test, not the sweep's own removal or
+    reconcile logic, which each has its own dedicated fixture elsewhere.
+    """
+
+    def _entry(self):
+        """Return a bare entry with just enough shape for any of these sweeps."""
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.options = {}
+        return entry
+
+    def test_remove_stale_generic_entities_passes_through_hass(self):
+        """The registry lookup receives this call's own hass, not a dropped reference."""
+        hass = _make_hass()
+        entry = self._entry()
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {}}
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", return_value=MagicMock()) as get,
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", return_value=[]),
+        ):
+            _remove_stale_generic_entities(hass, entry, coordinator)
+
+        get.assert_called_once_with(hass)
+
+    def test_remove_withdrawn_probe_entities_passes_through_hass(self):
+        """The registry lookup receives this call's own hass, not a dropped reference."""
+        hass = _make_hass()
+        entry = self._entry()
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", return_value=MagicMock()) as get,
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", return_value=[]),
+        ):
+            _remove_withdrawn_probe_entities(hass, entry)
+
+        get.assert_called_once_with(hass)
+
+    def test_reconcile_sub_device_parents_passes_through_hass(self):
+        """The device registry lookup receives this call's own hass, not a dropped reference."""
+        hass = _make_hass()
+        entry = self._entry()
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {}}
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", return_value=MagicMock()) as get,
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", return_value=[]),
+        ):
+            _reconcile_sub_device_parents(hass, entry, coordinator)
+
+        get.assert_called_once_with(hass)
+
+    def test_refresh_device_registry_fields_passes_through_hass(self):
+        """The device registry lookup receives this call's own hass, not a dropped reference."""
+        hass = _make_hass()
+        entry = self._entry()
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {}, "hubs": []}
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", return_value=MagicMock()) as get,
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", return_value=[]),
+        ):
+            _refresh_device_registry_fields(hass, entry, coordinator)
+
+        get.assert_called_once_with(hass)
 
 
 class _GenericSweepFixtures:
@@ -2580,6 +3080,120 @@ class TestReconcileSubDeviceParents(_DeviceSweepFixtures):
         assert updated == first_run
 
 
+class TestReconcileSubDeviceParentsGuardOrdering:
+    """Each per-row skip must `continue` to the next row, never `break` the whole sweep.
+
+    A standalone fixture rather than reuse of _DeviceSweepFixtures: that
+    fixture's exact-list assertions elsewhere would break if a new row were
+    added to its shared registry, so this builds its own minimal one instead.
+    """
+
+    ENTRY_ID = "guard_order_entry"
+
+    def _run(self, rows, sensors):
+        """Run the sweep over exactly these rows and this poll's sensors; return the clears."""
+        updated = []
+
+        class _FakeRegistry:
+            """A device registry stand-in that records every via_device_id clear."""
+
+            def async_update_device(self, device_id, *, via_device_id):
+                """Record the device_id and via_device_id passed for this clear."""
+                updated.append((device_id, via_device_id))
+
+        def _async_get(hass):
+            """Return the fake registry regardless of the hass passed in."""
+            return _FakeRegistry()
+
+        def _async_entries_for_config_entry(registry, entry_id):
+            """Return this test's fixed row list regardless of registry or entry id."""
+            return rows
+
+        entry = MagicMock()
+        entry.entry_id = self.ENTRY_ID
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": sensors}
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=_async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=_async_entries_for_config_entry),
+        ):
+            _reconcile_sub_device_parents(MagicMock(), entry, coordinator)
+
+        return updated
+
+    def test_a_skip_at_any_guard_still_lets_a_later_eligible_row_clear(self):
+        """One row per guard, each triggering that guard's own `continue`, followed by
+        one row that should clear, proving none of the four skips, nor the
+        exception handler's, abort the sweep for the rows still to come."""
+        no_via_device = SimpleNamespace(id="row_a", identifiers={(DOMAIN, "1_1_1")}, via_device_id=None)
+        no_domain_identifier = SimpleNamespace(id="row_b", identifiers={("other", "1_1_2")}, via_device_id="hub_1")
+        not_in_current_poll = SimpleNamespace(id="row_c", identifiers={(DOMAIN, "1_1_3")}, via_device_id="hub_1")
+        still_hub_paired = SimpleNamespace(id="row_d", identifiers={(DOMAIN, "1_1_4")}, via_device_id="hub_1")
+
+        class _RaisesOnIdentifiers:
+            """A row whose identifiers cannot even be read, driving the except-continue."""
+
+            id = "row_e"
+            via_device_id = "hub_1"
+
+        eligible = SimpleNamespace(id="row_target", identifiers={(DOMAIN, "1_1_5")}, via_device_id="hub_1")
+
+        rows = [no_via_device, no_domain_identifier, not_in_current_poll, still_hub_paired, _RaisesOnIdentifiers(), eligible]
+        sensors = {
+            "1_1_4": {"hub_paired": True},
+            "1_1_5": {"hub_paired": False},
+        }
+
+        assert self._run(rows, sensors) == [(eligible.id, None)]
+
+    def test_a_sensor_record_missing_hub_paired_defaults_to_paired_and_is_left_alone(self):
+        """A record with no `hub_paired` key at all must default to True (paired),
+        never to a falsy default that would incorrectly clear the link."""
+        row = SimpleNamespace(id="row_missing_hub_paired", identifiers={(DOMAIN, "1_1_9")}, via_device_id="hub_1")
+
+        assert self._run([row], {"1_1_9": {}}) == []
+
+
+class TestReconcileSubDeviceParentsOnUpdatesArgs:
+    """The listener wrapper's own call sites must hand through this hass, entry and coordinator."""
+
+    def test_initial_sweep_passes_through_hass_entry_coordinator(self):
+        """The first, unconditional sweep call must receive this exact triple, not a dropped hass."""
+        hass = _make_hass()
+        entry = _make_entry()
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {}}
+        coordinator.async_add_listener = MagicMock(return_value=lambda: None)
+
+        with patch("custom_components.rainpoint._reconcile_sub_device_parents") as reconcile:
+            _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
+
+        reconcile.assert_called_once_with(hass, entry, coordinator)
+
+    def test_initial_swept_keys_snapshot_is_seeded_from_this_coordinator(self):
+        """An update that repeats the initial snapshot's own keys must not re-sweep.
+
+        That only holds if the initial snapshot was actually read from this
+        coordinator rather than from an empty stand-in.
+        """
+        hass = _make_hass()
+        entry = _make_entry()
+        coordinator = MagicMock()
+        coordinator.data = {"sensors": {"a_b_c": {}}}
+        coordinator.async_add_listener = MagicMock(return_value=lambda: None)
+
+        with patch("custom_components.rainpoint._reconcile_sub_device_parents"):
+            _reconcile_sub_device_parents_on_updates(hass, entry, coordinator)
+
+        listener = coordinator.async_add_listener.call_args.args[0]
+
+        with patch("custom_components.rainpoint._reconcile_sub_device_parents") as reconcile_again:
+            listener()
+
+        reconcile_again.assert_not_called()
+
+
 class TestSubDeviceParentReconcileRealTimeline:
     """Drives construct -> first refresh -> setup -> further polls for the
     device the parenting fix actually exists for: the Bluetooth-only HTV210B,
@@ -3238,20 +3852,105 @@ class TestRemoveWithdrawnProbeEntities:
         self._sweep(removed, async_get, async_entries)
         assert removed == before
 
+    def test_a_skip_at_either_guard_still_lets_a_later_probe_row_get_removed(self):
+        """Neither guard's `continue` may abort the loop for the rows still to come."""
+        fails_first_guard = SimpleNamespace(
+            entity_id="button.other_1", unique_id="other_1_probe_station", config_entry_id=self.ENTRY_ID
+        )
+        fails_second_guard = SimpleNamespace(
+            entity_id="valve.rainpoint_1_station1", unique_id="rainpoint_1_station1", config_entry_id=self.ENTRY_ID
+        )
+        eligible_probe = SimpleNamespace(
+            entity_id="button.rainpoint_1_probe_station",
+            unique_id="rainpoint_1_probe_station",
+            config_entry_id=self.ENTRY_ID,
+        )
+        rows = [fails_first_guard, fails_second_guard, eligible_probe]
+        removed = []
+
+        class _FakeRegistry:
+            """A registry stand-in that records every entity_id it is asked to remove."""
+
+            def async_remove(self, entity_id):
+                """Record the entity_id passed for removal."""
+                removed.append(entity_id)
+
+        def _async_get(hass):
+            """Return the fake registry regardless of the hass passed in."""
+            return _FakeRegistry()
+
+        def _async_entries_for_config_entry(registry, entry_id):
+            """Return this test's fixed row list regardless of registry or entry id."""
+            return rows
+
+        entry = MagicMock()
+        entry.entry_id = self.ENTRY_ID
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=_async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=_async_entries_for_config_entry),
+        ):
+            _remove_withdrawn_probe_entities(MagicMock(), entry)
+
+        assert removed == [eligible_probe.entity_id]
+
+    def test_a_row_with_no_unique_id_attribute_at_all_does_not_abort_the_sweep(self):
+        """getattr's default must stand in for a missing attribute rather than raise out of the sweep."""
+
+        class _RowWithNoUniqueId:
+            """A registry row missing the unique_id attribute entirely."""
+
+            entity_id = "button.mystery"
+
+        eligible_probe = SimpleNamespace(
+            entity_id="button.rainpoint_1_probe_station",
+            unique_id="rainpoint_1_probe_station",
+            config_entry_id=self.ENTRY_ID,
+        )
+        rows = [_RowWithNoUniqueId(), eligible_probe]
+        removed = []
+
+        class _FakeRegistry:
+            """A registry stand-in that records every entity_id it is asked to remove."""
+
+            def async_remove(self, entity_id):
+                """Record the entity_id passed for removal."""
+                removed.append(entity_id)
+
+        def _async_get(hass):
+            """Return the fake registry regardless of the hass passed in."""
+            return _FakeRegistry()
+
+        def _async_entries_for_config_entry(registry, entry_id):
+            """Return this test's fixed row list regardless of registry or entry id."""
+            return rows
+
+        entry = MagicMock()
+        entry.entry_id = self.ENTRY_ID
+
+        with (
+            patch("custom_components.rainpoint.er.async_get", side_effect=_async_get),
+            patch("custom_components.rainpoint.er.async_entries_for_config_entry", side_effect=_async_entries_for_config_entry),
+        ):
+            _remove_withdrawn_probe_entities(MagicMock(), entry)  # must not raise
+
+        assert removed == [eligible_probe.entity_id]
+
 
 class TestRemoveWithdrawnProbeStore:
     """The probe's saved runs go with the feature rather than staying on disk."""
 
     @pytest.mark.asyncio
     async def test_the_store_file_is_deleted(self):
-        """The saved runs file is deleted along with the feature."""
+        """The saved runs file is deleted along with the feature, from this hass and this store version."""
+        hass = _make_hass()
         store = MagicMock()
         store.async_remove = AsyncMock()
         with patch("custom_components.rainpoint.Store", return_value=store) as mock_store:
-            await _async_remove_withdrawn_probe_store(MagicMock())
+            await _async_remove_withdrawn_probe_store(hass)
 
         store.async_remove.assert_awaited_once()
-        assert mock_store.call_args.args[2] == f"{DOMAIN}.hic_control_probe"
+        mock_store.assert_called_once_with(hass, 1, f"{DOMAIN}.hic_control_probe")
 
     @pytest.mark.asyncio
     async def test_a_store_that_will_not_delete_does_not_take_setup_down(self):
@@ -3261,6 +3960,22 @@ class TestRemoveWithdrawnProbeStore:
         store.async_remove = AsyncMock(side_effect=RuntimeError("no such file"))
         with patch("custom_components.rainpoint.Store", return_value=store):
             await _async_remove_withdrawn_probe_store(MagicMock())
+
+
+class TestRefreshDeviceRegistryFieldsOnUpdatesArgs:
+    """The listener wrapper's initial sweep call must hand through this hass, entry and coordinator."""
+
+    def test_initial_sweep_passes_through_hass_entry_coordinator(self):
+        """The first, unconditional sweep call must receive this exact triple, not a dropped hass."""
+        hass = _make_hass()
+        entry = _make_entry()
+        coordinator = MagicMock()
+        coordinator.async_add_listener = MagicMock(return_value=lambda: None)
+
+        with patch("custom_components.rainpoint._refresh_device_registry_fields") as refresh:
+            _refresh_device_registry_fields_on_updates(hass, entry, coordinator)
+
+        refresh.assert_called_once_with(hass, entry, coordinator)
 
 
 class TestDeviceRegistryFieldRefresh:
@@ -3733,3 +4448,55 @@ class TestDeviceRegistryFieldRefresh:
             _refresh_device_registry_fields(hass, entry, coordinator)
 
         assert writes == [("sub-row", {"sw_version": "128"})]
+
+    @pytest.mark.asyncio
+    async def test_a_skip_at_key_resolution_or_an_exception_still_lets_a_later_row_refresh(self):
+        """Neither the unresolvable-key skip nor the per-row exception guard may abort the sweep."""
+
+        class _RaisesOnIdentifiers:
+            """A registry row whose identifiers cannot even be read."""
+
+            id = "raising-row"
+
+            @property
+            def identifiers(self):
+                """Raise, driving the except-continue guard."""
+                raise RuntimeError("registry row unreadable")
+
+        coordinator, hass, entry = self._build_coordinator(["1.1.1042", "128"])
+        unresolvable = SimpleNamespace(id="foreign-row", identifiers={("other_domain", "whatever")}, sw_version=None, name=None)
+        hub_row, sub_row = self._rows(hub_version="1.1.1041", sub_version="127")
+        rows = [unresolvable, _RaisesOnIdentifiers(), hub_row, sub_row]
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_registry_fields(hass, entry, coordinator)
+
+        assert writes == [("hub-row", {"sw_version": "1.1.1042"}), ("sub-row", {"sw_version": "128"})]
+
+    @pytest.mark.asyncio
+    async def test_a_row_missing_the_name_attribute_still_gets_its_version_refreshed(self):
+        """getattr's default must stand in for a missing attribute rather than
+        raise and abandon the whole row's refresh, sw_version included."""
+        coordinator, hass, entry = self._build_coordinator(["1.1.1042", "128"])
+        # Deliberately no `name` attribute at all.
+        sub_row = SimpleNamespace(id="sub-row", identifiers={(DOMAIN, self.SUB_ROW)}, sw_version="127")
+        writes, async_get, async_entries = self._make_device_registry([sub_row])
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_registry_fields(hass, entry, coordinator)
+
+        matching = [fields for device_id, fields in writes if device_id == "sub-row"]
+        assert len(matching) == 1
+        assert "sw_version" in matching[0]
+        assert "name" in matching[0]

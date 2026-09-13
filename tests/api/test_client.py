@@ -310,6 +310,32 @@ class TestControlWorkModeCode4:
             "duration": 300,
         }
 
+    @pytest.mark.asyncio
+    async def test_posts_to_the_expected_url_with_auth_headers(self):
+        """The POST call names the real controlWorkMode URL and carries the auth headers."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": ""}))
+
+        await client.control_work_mode(mid=1, addr=1, device_name="d", product_key="p", port=1, mode=1, duration=1)
+
+        args, kwargs = client._session.post.call_args
+        assert args == (f"{client._base_url}/app/device/controlWorkMode",)
+        assert kwargs["headers"] == client._auth_headers()
+
+    @pytest.mark.asyncio
+    async def test_error_path_invalidates_the_matching_token(self):
+        """A session-rejection code expires the token that made this request."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError, match="controlWorkMode failed: code 1001"):
+            await client.control_work_mode(mid=1, addr=1, device_name="d", product_key="p", port=1, mode=1, duration=1)
+
+        assert client._token_expires_at is None
+
 
 class TestControlWorkModeDp:
     """controlWorkModeDP's full verdict matrix, mirroring TestControlWorkModeCode4's shape."""
@@ -558,6 +584,17 @@ class TestControlWorkModeDp:
 
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_posts_with_auth_headers(self):
+        """The request carries the auth headers, not a call missing them."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": ""}))
+
+        await client.control_work_mode_dp(mid=1, addr=3, device_name="MAC-x", product_key="pk", port=1, mode=1, param="3C000000")
+
+        assert client._session.post.call_args.kwargs["headers"] == client._auth_headers()
+
 
 class TestLogin:
     """Tests for the _login method including MD5 hashing and token storage."""
@@ -677,6 +714,66 @@ class TestLogin:
         expected_device_id = hashlib.md5(b"test@example.com1").hexdigest()
         assert payload["deviceId"] == expected_device_id
 
+    @pytest.mark.asyncio
+    async def test_login_request_url_payload_and_headers_are_exact(self):
+        """Pins every key and value the login request sends, and the URL it posts to."""
+        client = _make_client()
+        client._token = None
+        client._session.post = MagicMock(return_value=_mock_response(_login_json_body()))
+
+        await client._login()
+
+        args, kwargs = client._session.post.call_args
+        assert args == (f"{client._base_url}/auth/basic/app/login",)
+        expected_md5 = hashlib.md5(b"testpass").hexdigest()
+        expected_device_id = hashlib.md5(b"test@example.com1").hexdigest()
+        assert kwargs["json"] == {
+            "areaCode": "1",
+            "phoneOrEmail": "test@example.com",
+            "password": expected_md5,
+            "deviceId": expected_device_id,
+        }
+        assert kwargs["headers"] == {
+            "Content-Type": "application/json",
+            "lang": "en",
+            "appCode": "2",
+            "User-Agent": _USER_AGENT,
+        }
+
+    @pytest.mark.asyncio
+    async def test_login_missing_token_expired_defaults_to_zero_seconds(self):
+        """A response omitting tokenExpired treats the lifetime as 0, not None."""
+        client = _make_client()
+        client._token = None
+        ts_ms = 1700000000000
+        json_body = {
+            "code": 0,
+            "data": {"token": "tok", "refreshToken": "ref"},  # no tokenExpired
+            "ts": ts_ms,
+        }
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        await client._login()
+
+        expected_base = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
+        assert client._token_expires_at == expected_base
+
+    @pytest.mark.asyncio
+    async def test_login_missing_server_timestamp_falls_back_to_an_aware_now(self):
+        """The datetime.now(UTC) fallback must stay timezone-aware, not naive."""
+        client = _make_client()
+        client._token = None
+        json_body = {
+            "code": 0,
+            "data": {"token": "tok", "refreshToken": "ref", "tokenExpired": 60},
+            # no "ts" key at all
+        }
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        await client._login()
+
+        assert client._token_expires_at.tzinfo is not None
+
 
 class TestLoginThrottling:
     """Login throttle handling: cooldown on 403 / code 9993, and the login lock.
@@ -711,6 +808,21 @@ class TestLoginThrottling:
         assert client._cooldown_remaining() > 0
 
     @pytest.mark.asyncio
+    async def test_403_cooldown_reason_is_logged_verbatim(self):
+        """The reason string reaching _enter_login_cooldown is exactly 'HTTP 403'."""
+        client = _make_client()
+        client._token = None
+        client._session.post = MagicMock(return_value=_mock_response({}, status=403))
+
+        with (
+            patch.object(client, "_enter_login_cooldown", wraps=client._enter_login_cooldown) as spy,
+            pytest.raises(RainPointThrottledError),
+        ):
+            await client._login()
+
+        spy.assert_called_once_with("HTTP 403")
+
+    @pytest.mark.asyncio
     async def test_code_9993_arms_cooldown(self):
         """A code 9993 'operate too frequently' body arms the cooldown."""
         client = _make_client()
@@ -723,6 +835,92 @@ class TestLoginThrottling:
 
         assert exc.value.retry_after > 0
         assert client._cooldown_remaining() > 0
+
+    @pytest.mark.asyncio
+    async def test_code_9993_cooldown_reason_is_logged_verbatim(self):
+        """The reason string reaching _enter_login_cooldown is exactly the documented sentence."""
+        client = _make_client()
+        client._token = None
+        json_body = {"code": 9993, "msg": "operate too frequently"}
+        client._session.post = MagicMock(return_value=_mock_response(json_body))
+
+        with (
+            patch.object(client, "_enter_login_cooldown", wraps=client._enter_login_cooldown) as spy,
+            pytest.raises(RainPointThrottledError),
+        ):
+            await client._login()
+
+        spy.assert_called_once_with("code 9993 operate too frequently")
+
+    @staticmethod
+    def _freeze_client_clock(monkeypatch):
+        """Pin the client module's datetime.now() to a fixed instant and return it.
+
+        A real sub-second deadline can expire under a slow CI scheduler before the check runs.
+        """
+        fixed_now = datetime(2025, 1, 1, tzinfo=UTC)
+
+        class _FixedDatetime(datetime):
+            """A datetime subclass whose now() always returns the fixed test time."""
+
+            @classmethod
+            def now(cls, tz=None):
+                """Return the fixed test time regardless of the tz argument."""
+                return fixed_now
+
+        monkeypatch.setattr(_client_module, "datetime", _FixedDatetime)
+        return fixed_now
+
+    def test_cooldown_remaining_between_zero_and_one_second_is_not_floored_to_zero(self, monkeypatch):
+        """Pins '> 0', not '> 1': a fractional-second remainder must still report its real value."""
+        client = _make_client()
+        fixed_now = self._freeze_client_clock(monkeypatch)
+        client._login_cooldown_until = fixed_now + timedelta(milliseconds=500)
+
+        assert client._cooldown_remaining() == pytest.approx(0.5)
+
+    @pytest.mark.asyncio
+    async def test_ensure_logged_in_raises_for_a_sub_one_second_cooldown(self, monkeypatch):
+        """A cooldown under a second still fast-fails: pins '> 0', not '> 1'."""
+        client = _make_client()
+        client._token = None
+        fixed_now = self._freeze_client_clock(monkeypatch)
+        client._login_cooldown_until = fixed_now + timedelta(milliseconds=500)
+        client._session.post = MagicMock()
+
+        with pytest.raises(RainPointThrottledError):
+            await client.ensure_logged_in()
+
+        client._session.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_in_lock_recheck_honors_a_sub_one_second_cooldown(self, monkeypatch):
+        """The in-lock recheck (a separate '> 0' check) also honors a
+        sub-one-second cooldown rather than proceeding to a real login."""
+        client = _make_client()
+        client._token = None
+        fixed_now = self._freeze_client_clock(monkeypatch)
+        release = asyncio.Event()
+
+        async def fake_login():
+            """Wait for release, then set a fresh cooldown and fail like a throttled login."""
+            await release.wait()
+            client._login_cooldown_until = fixed_now + timedelta(milliseconds=500)
+            raise RainPointApiError("throttled")
+
+        client._login = fake_login
+        first = asyncio.create_task(client.ensure_logged_in())
+        await asyncio.sleep(0)  # first acquires the lock, blocks on release
+        second = asyncio.create_task(client.ensure_logged_in())
+        await asyncio.sleep(0)  # second runs, blocks on the held lock
+        release.set()
+        results = await asyncio.gather(first, second, return_exceptions=True)
+
+        assert isinstance(results[0], RainPointApiError)
+        # The second caller's in-lock recheck must catch the fresh sub-one-second
+        # cooldown and fast-fail with the throttled error, not attempt a real
+        # login (which would raise RainPointApiError a second time instead).
+        assert isinstance(results[1], RainPointThrottledError)
 
     @pytest.mark.asyncio
     async def test_ensure_logged_in_fast_fails_during_cooldown(self):
@@ -926,6 +1124,20 @@ class TestReloginListeners:
         assert any("relogin listener raised" in r.message for r in caplog.records)
 
 
+class TestClientInitialState:
+    """A freshly constructed client (before any test helper overrides fields)."""
+
+    def test_fresh_client_has_no_token_and_the_real_base_url(self):
+        """_make_client() immediately sets _token, which masks the constructor
+        defaults everywhere else in this module, so this constructs directly."""
+        session = MagicMock()
+        client = RainPointClient(area_code="1", email="test@example.com", password="testpass", session=session)
+
+        assert client._token is None
+        assert client._refresh_token is None
+        assert client._base_url == "https://region3.homgarus.com"
+
+
 class TestTokenManagement:
     """Tests for token lifecycle: validity checks, restore, export, ensure_logged_in."""
 
@@ -957,6 +1169,44 @@ class TestTokenManagement:
         # 3 minutes from now, within the 5-min buffer
         client._token_expires_at = datetime.now(UTC) + timedelta(minutes=3)
         assert client._token_valid() is False
+
+    def test_token_valid_boundary_uses_strict_less_than(self, monkeypatch):
+        """Exactly at the 5-minute buffer, the token counts as invalid: pins '<', not '<='."""
+        client = _make_client()
+        client._token = "tok"
+        fixed_now = datetime(2025, 1, 1, tzinfo=UTC)
+
+        class _FixedDatetime(datetime):
+            """A datetime subclass whose now() always returns the fixed test time."""
+
+            @classmethod
+            def now(cls, tz=None):
+                """Return the fixed test time regardless of the tz argument."""
+                return fixed_now
+
+        monkeypatch.setattr(_client_module, "datetime", _FixedDatetime)
+        client._token_expires_at = fixed_now + timedelta(minutes=5)
+
+        assert client._token_valid() is False
+
+    def test_token_valid_uses_a_five_minute_buffer_not_six(self, monkeypatch):
+        """30 seconds inside a 5-minute buffer is valid; a 6-minute buffer would call it invalid."""
+        client = _make_client()
+        client._token = "tok"
+        fixed_now = datetime(2025, 1, 1, tzinfo=UTC)
+
+        class _FixedDatetime(datetime):
+            """A datetime subclass whose now() always returns the fixed test time."""
+
+            @classmethod
+            def now(cls, tz=None):
+                """Return the fixed test time regardless of the tz argument."""
+                return fixed_now
+
+        monkeypatch.setattr(_client_module, "datetime", _FixedDatetime)
+        client._token_expires_at = fixed_now + timedelta(minutes=5, seconds=30)
+
+        assert client._token_valid() is True
 
     def test_restore_tokens(self):
         """restore_tokens sets _token, _refresh_token, and _token_expires_at."""
@@ -1299,6 +1549,28 @@ class TestSessionInvalidationFloodVisibility:
         warning.assert_not_called()
         assert len(client._recent_invalidations) == 1
 
+    def test_an_invalidation_exactly_at_the_window_boundary_is_dropped(self, monkeypatch):
+        """Pins 'seen > cutoff', not '>=': a timestamp exactly at the cutoff is stale, not current."""
+        client = _make_client()
+        fixed_now = datetime(2025, 1, 1, tzinfo=UTC)
+
+        class _FixedDatetime(datetime):
+            """A datetime subclass whose now() always returns the fixed test time."""
+
+            @classmethod
+            def now(cls, tz=None):
+                """Return the fixed test time regardless of the tz argument."""
+                return fixed_now
+
+        monkeypatch.setattr(_client_module, "datetime", _FixedDatetime)
+        cutoff = fixed_now - timedelta(seconds=_client_module._INVALIDATION_FLOOD_WINDOW_SECONDS)
+        client._recent_invalidations = [cutoff]
+
+        client._record_invalidation(1001)
+
+        assert cutoff not in client._recent_invalidations
+        assert len(client._recent_invalidations) == 1  # only the new one appended
+
 
 class TestTokenInvalidationListeners:
     """register_token_invalidated_listener fires only on a genuine expiry transition."""
@@ -1623,6 +1895,22 @@ class TestAuthHeaders:
         assert headers["User-Agent"] == _USER_AGENT
         assert "HomeAssistant" not in _USER_AGENT
 
+    def test_auth_headers_dict_is_exact(self):
+        """Pins every key and value, not just auth/appCode/User-Agent."""
+        client = _make_client()
+        client._token = "mytoken"
+
+        headers = client._auth_headers()
+
+        assert headers == {
+            "auth": "mytoken",
+            "lang": "en",
+            "appCode": "2",
+            "version": "1.16.1065",
+            "sceneType": "1",
+            "User-Agent": _USER_AGENT,
+        }
+
     def test_auth_headers_no_token_raises(self):
         """_auth_headers raises RainPointApiError when no token is set."""
         client = _make_client()
@@ -1671,6 +1959,41 @@ class TestListHomes:
 
         with pytest.raises(RainPointApiError, match="list_homes failed: code 2"):
             await client.list_homes()
+
+    @pytest.mark.asyncio
+    async def test_list_homes_requests_the_expected_url_and_headers(self):
+        """The GET call names the real URL and carries the auth headers, nothing dropped."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": []}))
+
+        await client.list_homes()
+
+        args, kwargs = client._session.get.call_args
+        assert args == (f"{client._base_url}/app/member/appHome/list",)
+        assert kwargs == {"headers": client._auth_headers()}
+
+    @pytest.mark.asyncio
+    async def test_list_homes_missing_data_key_returns_empty_list(self):
+        """code=0 with no 'data' key returns [], not None."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0}))
+
+        assert await client.list_homes() == []
+
+    @pytest.mark.asyncio
+    async def test_list_homes_error_path_invalidates_the_matching_token(self):
+        """A session-rejection code expires the token that made this request."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client._session.get = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError, match="list_homes failed: code 1001"):
+            await client.list_homes()
+
+        assert client._token_expires_at is None
 
 
 class TestGetProductCatalog:
@@ -1764,6 +2087,32 @@ class TestGetProductCatalog:
 
         with pytest.raises(RainPointApiError, match="get_product_catalog HTTP 500"):
             await client.get_product_catalog()
+
+    @pytest.mark.asyncio
+    async def test_get_product_catalog_requests_the_expected_url_and_headers(self):
+        """The GET call names the real URL and carries the auth headers, nothing dropped."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": []}))
+
+        await client.get_product_catalog()
+
+        args, kwargs = client._session.get.call_args
+        assert args == (f"{client._base_url}/app/common/core/productModel",)
+        assert kwargs == {"headers": client._auth_headers()}
+
+    @pytest.mark.asyncio
+    async def test_get_product_catalog_error_path_invalidates_the_matching_token(self):
+        """A session-rejection code expires the token that made this request."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client._session.get = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError, match="get_product_catalog failed: code 1001"):
+            await client.get_product_catalog()
+
+        assert client._token_expires_at is None
 
 
 class TestTrimCatalog:
@@ -2450,6 +2799,59 @@ class TestGetDevicesByHid:
         with pytest.raises(RainPointApiError, match="getDeviceByHid failed: code 1"):
             await client.get_devices_by_hid(hid=42)
 
+    @pytest.mark.asyncio
+    async def test_get_devices_by_hid_requests_the_expected_url_params_and_headers(self):
+        """The GET call names the real URL, carries the hid param and the auth headers."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": []}))
+
+        await client.get_devices_by_hid(hid=42)
+
+        args, kwargs = client._session.get.call_args
+        assert args == (f"{client._base_url}/app/device/getDeviceByHid",)
+        assert kwargs == {"headers": client._auth_headers(), "params": {"hid": 42}}
+
+    @pytest.mark.asyncio
+    async def test_get_devices_by_hid_missing_data_key_returns_empty_list(self):
+        """code=0 with no 'data' key returns [], not None."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0}))
+
+        assert await client.get_devices_by_hid(hid=1) == []
+
+
+class TestGetFirmwareInfo:
+    """_get_firmware_info is the shared implementation behind get_hub_firmware_info
+    and get_sub_firmware_info; driven here through the hub-facing entry point."""
+
+    @pytest.mark.asyncio
+    async def test_request_carries_headers_alongside_params(self):
+        """The GET call sends auth headers together with the addressing params, not either alone."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": {}}))
+
+        await client.get_hub_firmware_info(mid=361277)
+
+        args, kwargs = client._session.get.call_args
+        assert args[0].endswith("/app/device/firmware/upgrade/info/v2")
+        assert kwargs == {"headers": client._auth_headers(), "params": {"mid": 361277}}
+
+    @pytest.mark.asyncio
+    async def test_error_path_invalidates_the_matching_token(self):
+        """A session-rejection code expires the token that made this request."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client._session.get = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError, match="get_hub_firmware_info failed: code 1001"):
+            await client.get_hub_firmware_info(mid=1)
+
+        assert client._token_expires_at is None
+
 
 class TestGetMultipleDeviceStatus:
     """Tests for get_multiple_device_status API method."""
@@ -2516,6 +2918,56 @@ class TestGetMultipleDeviceStatus:
         with pytest.raises(RainPointApiError, match="multipleDeviceStatus HTTP 500"):
             await client.get_multiple_device_status(devices=[{"mid": 100}])
 
+    @pytest.mark.asyncio
+    async def test_request_body_maps_device_fields_by_their_documented_keys(self):
+        """Each device is reduced to exactly the addressing triple, read by name."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({"code": 0, "data": []}))
+
+        await client.get_multiple_device_status(devices=[{"mid": 5, "deviceName": "dev-a", "productKey": "pk-a"}])
+
+        args, kwargs = client._session.post.call_args
+        assert args == (f"{client._base_url}/app/device/multipleDeviceStatus",)
+        assert kwargs["json"] == {"devices": [{"deviceName": "dev-a", "mid": 5, "productKey": "pk-a"}]}
+        assert kwargs["headers"] == client._auth_headers()
+
+    @pytest.mark.asyncio
+    async def test_request_body_defaults_missing_optional_fields_to_empty_string(self):
+        """A device missing deviceName/productKey sends empty strings, not None."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({"code": 0, "data": []}))
+
+        await client.get_multiple_device_status(devices=[{"mid": 5}])
+
+        body = client._session.post.call_args.kwargs["json"]
+        assert body == {"devices": [{"deviceName": "", "mid": 5, "productKey": ""}]}
+
+    @pytest.mark.asyncio
+    async def test_get_multiple_status_device_entry_missing_status_key_defaults_to_empty_list(self):
+        """A device_data entry with no 'status' key converts to an empty subDeviceStatus."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({"code": 0, "data": [{"mid": 7}]}))
+
+        result = await client.get_multiple_device_status(devices=[{"mid": 7}])
+
+        assert result == [{"mid": 7, "subDeviceStatus": []}]
+
+    @pytest.mark.asyncio
+    async def test_get_multiple_status_error_path_invalidates_the_matching_token(self):
+        """A session-rejection code expires the token that made this request."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client._session.post = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError, match="multipleDeviceStatus failed: code 1001"):
+            await client.get_multiple_device_status(devices=[{"mid": 1}])
+
+        assert client._token_expires_at is None
+
 
 class TestGetDeviceStatus:
     """Tests for get_device_status API method."""
@@ -2559,6 +3011,41 @@ class TestGetDeviceStatus:
         with pytest.raises(RainPointApiError, match="getDeviceStatus failed: code 1"):
             await client.get_device_status(mid=100)
 
+    @pytest.mark.asyncio
+    async def test_get_device_status_requests_the_expected_url_params_and_headers(self):
+        """The GET call names the real URL, carries the mid param and the auth headers."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": {}}))
+
+        await client.get_device_status(mid=55)
+
+        args, kwargs = client._session.get.call_args
+        assert args == (f"{client._base_url}/app/device/getDeviceStatus",)
+        assert kwargs == {"headers": client._auth_headers(), "params": {"mid": 55}}
+
+    @pytest.mark.asyncio
+    async def test_get_device_status_missing_data_key_returns_empty_dict(self):
+        """code=0 with no 'data' key returns {}, not None."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.get = MagicMock(return_value=_mock_response({"code": 0}))
+
+        assert await client.get_device_status(mid=1) == {}
+
+    @pytest.mark.asyncio
+    async def test_get_device_status_error_path_invalidates_the_matching_token(self):
+        """A session-rejection code expires the token that made this request."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client._session.get = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError, match="getDeviceStatus failed: code 1001"):
+            await client.get_device_status(mid=1)
+
+        assert client._token_expires_at is None
+
 
 class TestSetDeviceState:
     """Tests for set_device_state API method."""
@@ -2598,6 +3085,33 @@ class TestSetDeviceState:
 
         with pytest.raises(RainPointApiError):
             await client.set_device_state(home_id=1, device_name="dev", mid=100, product_key="pk", state={})
+
+    @pytest.mark.asyncio
+    async def test_set_device_state_request_url_and_body_are_exact(self):
+        """Pins every key the request body carries, and the URL it posts to."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({"code": 0}))
+
+        await client.set_device_state(home_id=1, device_name="dev", mid=100, product_key="pk", state={"mode": 1})
+
+        args, kwargs = client._session.post.call_args
+        assert args == (f"{client._base_url}/app/device/setDeviceStatus",)
+        assert kwargs["json"] == {"homeId": 1, "deviceName": "dev", "mid": 100, "productKey": "pk", "status": {"mode": 1}}
+        assert kwargs["headers"] == client._auth_headers()
+
+    @pytest.mark.asyncio
+    async def test_set_device_state_error_path_invalidates_the_matching_token(self):
+        """A session-rejection code expires the token that made this request."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client._session.post = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError):
+            await client.set_device_state(home_id=1, device_name="dev", mid=100, product_key="pk", state={})
+
+        assert client._token_expires_at is None
 
 
 class TestUpdateMainParam:
@@ -2661,6 +3175,30 @@ class TestUpdateMainParam:
 
         for record in caplog.records:
             assert distinctive_param not in record.getMessage()
+
+    @pytest.mark.asyncio
+    async def test_posts_with_auth_headers(self):
+        """The request carries the auth headers, not a call missing them."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({"code": 0, "data": {}}))
+
+        await client.update_main_param(mid=1, param="0|0||")
+
+        assert client._session.post.call_args.kwargs["headers"] == client._auth_headers()
+
+    @pytest.mark.asyncio
+    async def test_not_token_code_invalidates_using_the_request_token(self):
+        """A session-rejection code expires the token that made this request."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client._session.post = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError, match="main/update failed: code 1001"):
+            await client.update_main_param(mid=1, param="0|0||")
+
+        assert client._token_expires_at is None
 
 
 class TestUpdateSubParam:
@@ -2745,6 +3283,17 @@ class TestUpdateSubParam:
 
         assert client._token_expires_at is None
         assert client._token == request_token
+
+    @pytest.mark.asyncio
+    async def test_posts_with_auth_headers(self):
+        """The request carries the auth headers, not a call missing them."""
+        client = _make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=_mock_response({"code": 0, "data": {}}))
+
+        await client.update_sub_param(mid=1, sid=1, param="5=00")
+
+        assert client._session.post.call_args.kwargs["headers"] == client._auth_headers()
 
     @pytest.mark.asyncio
     async def test_no_log_record_carries_the_param_string(self, caplog):
@@ -2852,6 +3401,31 @@ class TestGetSubscribeStatus:
 
         with pytest.raises(RainPointApiError, match="code 1"):
             await client.get_subscribe_status("hub-device", "pk123", 236547, 182509)
+
+    @pytest.mark.asyncio
+    async def test_subscribe_status_posts_to_the_expected_url(self):
+        """The POST call names the real subscribeStatus URL."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": {}}))
+
+        await client.get_subscribe_status("hub-device", "pk123", 236547, 182509)
+
+        args, _kwargs = client._session.post.call_args
+        assert args == (f"{client._base_url}/app/device/subscribeStatus",)
+
+    @pytest.mark.asyncio
+    async def test_subscribe_status_error_path_invalidates_the_matching_token(self):
+        """A session-rejection code expires the token that made this request."""
+        client = self._make_client()
+        client.ensure_logged_in = AsyncMock()
+        client._token_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        client._session.post = MagicMock(return_value=self._mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
+
+        with pytest.raises(RainPointApiError, match="subscribeStatus failed: code 1001"):
+            await client.get_subscribe_status("hub-device", "pk123", 236547, 182509)
+
+        assert client._token_expires_at is None
 
     @pytest.mark.asyncio
     async def test_subscribe_status_never_logs_device_secret(self, caplog):

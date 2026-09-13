@@ -475,6 +475,11 @@ class TestRainDetectedBinarySensor:
 
         entities = add.call_args[0][0]
         assert [type(e) for e in entities] == [RainPointRainDetectedBinarySensor, RainPointBatteryLowBinarySensor]
+        rain_entity, battery_entity = entities
+        assert rain_entity._sensor_key == "100_200_3"
+        assert rain_entity.coordinator is coord
+        assert battery_entity._sensor_key == "100_200_3"
+        assert battery_entity.coordinator is coord
 
 
 class TestBuildHic801wStationEntitiesGuards:
@@ -641,3 +646,82 @@ class TestHicStationLateAddTimeline:
         _coordinator, _client, hass, entry, _captured = await self._build_silent_timeline()
         adders = late_adders(hass.data[DOMAIN][entry.entry_id])
         assert any(a.domain == "binary_sensor" for a in adders)
+
+
+# ---------------------------------------------------------------------------
+# Constructor wiring, wrong-argument substitutions and
+# a missing/malformed coordinator.data shape that a happy-path test can't see.
+# ---------------------------------------------------------------------------
+
+
+class TestRainDetectedAndBatteryLowConstructorWiring:
+    """The rain-detected and battery-low entity builders wire the real name and sensor info."""
+
+    def test_rain_detected_name_and_base_class_wiring(self):
+        """The rain detector entity gets the real name and keeps the sensor info it was built with."""
+        sensor_key = "100_200_3"
+        entry = _rain_detector_entry()
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+
+        (sensor,) = _build_rain_detector_entities(coordinator, sensor_key, entry)
+
+        assert sensor._attr_name == "Rain Detected"
+        assert sensor._sensor_info is entry
+
+    def test_battery_low_name_and_base_class_wiring(self):
+        """The battery low entity gets the real name and keeps the sensor info it was built with."""
+        sensor_key = "100_200_1"
+        entry = _battery_entry(flag=1, hid=100, mid=200, addr=1)
+        coordinator = MagicMock()
+        coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
+
+        (sensor,) = _build_battery_low_entities(coordinator, sensor_key, entry)
+
+        assert sensor._attr_name == "Battery Low"
+        assert sensor._sensor_info is entry
+
+
+class TestSetupEntryArgumentForwardingAndDataShapeGuards:
+    """Setup wires the real client into push entities and tolerates missing coordinator data keys."""
+
+    @pytest.mark.asyncio
+    async def test_push_connected_entities_wrap_the_real_mqtt_client(self):
+        """A None client instead of the real one would make is_on raise, not just report wrong."""
+        hubs = [_hub(100, "Hub 1", mid=111)]
+        client = MagicMock()
+        client.connected = True
+        hass, entry, _coord = _make_hass(hubs=hubs, mqtt_client=client)
+        add = MagicMock()
+
+        await async_setup_entry(hass, entry, add)
+
+        entities = add.call_args[0][0]
+        push_entities = [e for e in entities if isinstance(e, RainPointPushConnectedBinarySensor)]
+        assert len(push_entities) == 1
+        assert push_entities[0].is_on is True
+
+    @pytest.mark.asyncio
+    async def test_missing_sensors_key_in_coordinator_data_does_not_raise(self):
+        """`.get("sensors", {})` must default to an empty mapping, never None."""
+        hass, entry, coord = _make_hass(hubs=[_hub()], mqtt_client=None)
+        coord.data = {"hubs": [_hub()], "hub_connectivity": {}}
+        add = MagicMock()
+
+        await async_setup_entry(hass, entry, add)
+
+        entities = add.call_args[0][0]
+        assert len(entities) == 1
+        assert isinstance(entities[0], RainPointHubConnectivityBinarySensor)
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_record_does_not_stop_later_valid_records_from_being_processed(self):
+        """The non-dict guard must `continue`, not `break`, past the bad record."""
+        hass, entry, coord = _make_hass(hubs=[_hub()], mqtt_client=None)
+        coord.data["sensors"] = {"bad": "not-a-dict", "100_200_3": _rain_detector_entry()}
+        add = MagicMock()
+
+        await async_setup_entry(hass, entry, add)
+
+        entities = add.call_args[0][0]
+        assert any(isinstance(e, RainPointRainDetectedBinarySensor) for e in entities)

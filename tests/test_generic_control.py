@@ -205,14 +205,17 @@ class TestResolveControlPort:
 
 
 class TestEvaluateControlGateTerminalRules:
+    """The whole-model refusal rules evaluate_control_gate checks before any per-variant logic."""
+
     def test_hand_written_model_is_refused(self):
+        """A model with a hand-written decoder is refused outright, never handed to generic control."""
         model = sorted(HAND_WRITTEN_MODELS)[0]
 
         result = evaluate_control_gate(model, None)
 
         assert result.passed is False
-        assert len(result.blocked_by) == 1
-        assert "hand-written" in result.blocked_by[0]
+        assert result.datapoints == ()
+        assert result.blocked_by == ("this model already has a hand-written decoder, so it never uses generic control",)
 
     def test_every_hand_written_model_is_refused_across_every_modelcode(self):
         for model in HAND_WRITTEN_MODELS:
@@ -259,6 +262,8 @@ class TestEvaluateControlGateTerminalRules:
         assert "no allowlisted control identity" in result.blocked_by[0]
 
     def test_catalog_lookup_raising_never_propagates(self, monkeypatch):
+        """A catalog lookup that raises is caught and reported as a refusal, not an exception."""
+
         def _boom(model, model_code=None):
             raise RuntimeError("boom")
 
@@ -269,6 +274,7 @@ class TestEvaluateControlGateTerminalRules:
         assert result.passed is False
         assert result.datapoints == ()
         assert result.blocked_by == ("the product catalog could not be read",)
+        assert result.port_number is None
 
     def test_two_consecutive_evaluations_of_the_same_variant_are_equal(self):
         first = evaluate_control_gate("HTV214FRF", 288)
@@ -498,6 +504,8 @@ class TestEvaluateControlGateSynthetic:
 
 
 class TestOverrideRule:
+    """GENERIC_CONTROL_OVERRIDE_DISABLED force-disables a specific (model, model_code) pair only."""
+
     @staticmethod
     def _synthetic_entry(dp_port: int = 1) -> list[dict]:
         return [
@@ -512,11 +520,13 @@ class TestOverrideRule:
         monkeypatch.setattr(generic_control_module, "GENERIC_CONTROL_OVERRIDE_DISABLED", override)
 
     def test_override_disables_exactly_that_variant(self, monkeypatch):
+        """The override refuses only the exact (model, model_code) pair it names."""
         self._patch_catalog(monkeypatch, frozenset({("FAKE_MODEL", "1")}))
 
         result = evaluate_control_gate("FAKE_MODEL", 1)
 
         assert result.passed is False
+        assert result.datapoints == ()
         assert any("force-disabled" in reason for reason in result.blocked_by)
 
     def test_sibling_variant_under_a_different_modelcode_is_unaffected(self, monkeypatch):
@@ -1274,6 +1284,8 @@ class TestRainPointGenericValveControl:
 
 
 class TestGenericValveConfiguredDuration:
+    """_get_configured_duration_seconds looks up its companion duration number entity and falls back safely."""
+
     def test_unique_id_is_the_valve_unique_id_plus_the_duration_suffix(self, monkeypatch):
         entity, _, _ = _build_anchor_valve()
         mock_registry = _patch_duration_registry(monkeypatch, entity_id=None)
@@ -1307,6 +1319,7 @@ class TestGenericValveConfiguredDuration:
         assert entity._get_configured_duration_seconds() == DEFAULT_CONTROL_DURATION_SECONDS
 
     def test_numeric_state_converts_minutes_to_seconds(self, monkeypatch):
+        """The duration number stores minutes; the valve converts to seconds for the control call."""
         entity, _, _ = _build_anchor_valve()
         _patch_duration_registry(monkeypatch, entity_id="number.rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration")
         fake_state = MagicMock()
@@ -1314,6 +1327,7 @@ class TestGenericValveConfiguredDuration:
         entity.hass.states.get.return_value = fake_state
 
         assert entity._get_configured_duration_seconds() == 300
+        entity.hass.states.get.assert_called_once_with("number.rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration")
 
     def test_min_floor_of_one_second(self, monkeypatch):
         entity, _, _ = _build_anchor_valve()
@@ -1805,11 +1819,39 @@ class TestNewControlsNotice:
         notify = MagicMock()
         monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
 
-        _build_anchor_valve()
+        _entity, coordinator, sensor_info = _build_anchor_valve()
 
         assert notify.call_count == 1
+        assert notify.call_args.args[0] is coordinator.hass
+        assert notify.call_args.args[1] is coordinator.config_entry.entry_id
+        assert notify.call_args.args[2] == "100_200_1"
+        assert notify.call_args.kwargs["model"] == sensor_info["model"]
+        assert notify.call_args.kwargs["addr"] == sensor_info["addr"]
         assert notify.call_args.kwargs["count"] == 1
         assert notify.call_args.kwargs["control_kind"] == "valve"
+
+    def test_registry_lookup_uses_the_real_hass_object(self, monkeypatch):
+        """er.async_get must receive coordinator.hass, not a stale or missing argument."""
+        mock_registry = MagicMock()
+        mock_registry.async_get_entity_id.return_value = None
+        mock_er_module = MagicMock()
+        mock_er_module.async_get.return_value = mock_registry
+        monkeypatch.setattr(generic_control_module, "er", mock_er_module)
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", MagicMock())
+
+        _entity, coordinator, _sensor_info = _build_anchor_valve()
+
+        mock_er_module.async_get.assert_called_once_with(coordinator.hass)
+
+    def test_switch_notice_carries_the_real_sensor_key(self, monkeypatch):
+        """A mutated sensor_key argument would make every device look identical to the consent check."""
+        _patch_control_registry(monkeypatch, entity_id=None)
+        notify = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_notify_new_generic_controls", notify)
+
+        _build_anchor_switch(sensor_key="300_400_1")
+
+        assert notify.call_args.args[2] == "300_400_1"
 
     def test_no_notice_when_a_row_is_already_registered(self, monkeypatch):
         """An existing row means this install has controlled the device before."""
@@ -2111,6 +2153,8 @@ class TestResponseCodeFromError:
 
 
 class TestGenericControlCommandFailedRepairIssue:
+    """A failed generic control command re-raises and also opens a one-shot repair issue."""
+
     @pytest.mark.asyncio
     async def test_open_reraises_the_original_exception_type(self):
         entity, coordinator, _ = _build_anchor_valve()
@@ -2129,6 +2173,7 @@ class TestGenericControlCommandFailedRepairIssue:
 
     @pytest.mark.asyncio
     async def test_failure_creates_exactly_one_issue_with_the_expected_fields(self):
+        """The repair issue carries the real model, error code and error text, not placeholders."""
         entity, coordinator, sensor_info = _build_anchor_valve()
         coordinator._client.control_work_mode = AsyncMock(side_effect=RainPointApiError("controlWorkMode failed: code 5"))
 
@@ -2138,6 +2183,7 @@ class TestGenericControlCommandFailedRepairIssue:
         create.assert_called_once()
         args, kwargs = create.call_args
         _hass, domain, issue_id = args
+        assert _hass is entity.hass
         assert domain == DOMAIN
         assert issue_id == f"{GENERIC_CONTROL_ISSUE_ID_PREFIX}_{sensor_info['model']}_5"
         assert kwargs["is_fixable"] is False
@@ -2373,3 +2419,206 @@ class TestGenericAndHandWrittenUniqueIdNamespacesAreDisjoint:
 
         assert generic_ids.isdisjoint(hand_written_ids)
         assert not any(GENERIC_UNIQUE_ID_MARKER in uid for uid in hand_written_ids)
+
+
+# ---------------------------------------------------------------------------
+# Exact wording, gate-branch field values and argument
+# forwarding that a substring or truthiness assertion cannot catch.
+# ---------------------------------------------------------------------------
+
+
+class TestResolveDatapointExactBehavior:
+    """_resolve_datapoint's exact failure wording and its success-path field values."""
+
+    def test_ambiguous_run_state_message_exact_wording(self):
+        """More than one matching run-state reading produces this exact, specific message."""
+        entry = {"identity": "CTL_WATER", "dpPort": 1, "dpCode": 5, "dpDataType": "U8"}
+        run_state_entries = [{"dpPort": 1}, {"dpPort": 1}]
+
+        result = generic_control_module._resolve_datapoint(entry, run_state_entries, port_number=1)
+
+        assert result == (
+            "CTL_WATER on port 1 has 2 matching run-state readings instead of exactly one, so its state can never be confirmed"
+        )
+
+    def test_success_carries_the_real_dp_code_and_dp_data_type(self):
+        """A single matching run-state reading resolves to a datapoint with the entry's own dp_code and type."""
+        entry = {"identity": "CTL_WATER", "dpPort": 1, "dpCode": 7, "dpDataType": "U16"}
+        run_state_entries = [{"dpPort": 1}]
+
+        result = generic_control_module._resolve_datapoint(entry, run_state_entries, port_number=1)
+
+        assert isinstance(result, ControlDatapoint)
+        assert result.dp_code == 7
+        assert result.dp_data_type == "U16"
+
+
+class TestEvaluateControlGatePortNumberBranches:
+    """Every refusal branch of evaluate_control_gate still reports the real port_number, not a placeholder."""
+
+    def test_override_branch_reports_the_real_port_number_and_empty_datapoints(self, monkeypatch):
+        """The force-disabled override branch still resolves and reports the variant's real port number."""
+        captured = []
+
+        def spy(model, model_code=None):
+            """Record the call arguments and return a fixed port number."""
+            captured.append((model, model_code))
+            return 9
+
+        monkeypatch.setattr(generic_control_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(generic_control_module, "get_catalog_port_number", spy)
+        monkeypatch.setattr(generic_control_module, "GENERIC_CONTROL_OVERRIDE_DISABLED", frozenset({("FAKE_MODEL", "1")}))
+
+        result = evaluate_control_gate("FAKE_MODEL", 1)
+
+        assert result.passed is False
+        assert result.datapoints == ()
+        assert result.port_number == 9
+        assert captured == [("FAKE_MODEL", 1)]
+
+    def test_unresolved_variant_branch_reports_empty_datapoints_and_forwards_the_real_arguments(self, monkeypatch):
+        """When the variant is unresolved, the real model and model_code still reach the reason builder."""
+        captured = []
+
+        def spy(model, model_code):
+            """Record the call arguments and return a fixed reason string."""
+            captured.append((model, model_code))
+            return "custom reason"
+
+        monkeypatch.setattr(generic_control_module, "get_catalog_entry", lambda model, model_code=None: None)
+        monkeypatch.setattr(generic_control_module, "_unresolved_variant_reason", spy)
+
+        result = evaluate_control_gate("FAKE_MODEL", 42)
+
+        assert result.datapoints == ()
+        assert result.blocked_by == ("custom reason",)
+        assert captured == [("FAKE_MODEL", 42)]
+
+    def test_empty_dp_list_branch_reports_empty_datapoints_and_the_real_port_number(self, monkeypatch):
+        """An empty catalog dp list still resolves and reports the variant's real port number."""
+        captured = []
+
+        def spy(model, model_code=None):
+            """Record the call arguments and return a fixed port number."""
+            captured.append((model, model_code))
+            return 4
+
+        monkeypatch.setattr(generic_control_module, "get_catalog_entry", lambda model, model_code=None: [])
+        monkeypatch.setattr(generic_control_module, "get_catalog_port_number", spy)
+
+        result = evaluate_control_gate("FAKE_MODEL", 7)
+
+        assert result.datapoints == ()
+        assert result.port_number == 4
+        assert captured == [("FAKE_MODEL", 7)]
+
+    def test_normal_path_port_number_lookup_uses_the_real_model_and_code(self, monkeypatch):
+        """Also exercises the no-allowlisted-identity branch's own port_number/datapoints fields."""
+        captured = []
+
+        def spy(model, model_code=None):
+            """Record the call arguments and return a fixed port number."""
+            captured.append((model, model_code))
+            return 6
+
+        dp_entries = [{"dpCode": 1, "identity": "STA_TEM", "dpPort": 0}]
+        monkeypatch.setattr(generic_control_module, "is_hand_written_model", lambda model: False)
+        monkeypatch.setattr(generic_control_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
+        monkeypatch.setattr(generic_control_module, "get_catalog_port_number", spy)
+
+        result = evaluate_control_gate("FAKE_MODEL", 3)
+
+        assert result.datapoints == ()
+        assert result.port_number == 6
+        assert captured == [("FAKE_MODEL", 3)]
+
+
+class TestDescribeControlGateForwardsArguments:
+    """describe_control_gate passes its model and model_code straight through unchanged."""
+
+    def test_forwards_model_and_model_code_unchanged(self, monkeypatch):
+        """The exact model and model_code given reach evaluate_control_gate unmodified."""
+        captured = []
+
+        def spy(model, model_code=None):
+            """Record the call arguments and return an empty passing result."""
+            captured.append((model, model_code))
+            return ControlGateResult(datapoints=(), blocked_by=(), port_number=None)
+
+        monkeypatch.setattr(generic_control_module, "evaluate_control_gate", spy)
+
+        describe_control_gate("MODEL_A", "CODE_A")
+
+        assert captured == [("MODEL_A", "CODE_A")]
+
+
+class TestCountGenericControlEligibleDevicesArgumentForwardingAndIncrement:
+    """count_generic_control_eligible_devices forwards each device's own model/model_code and tallies across devices."""
+
+    def test_evaluate_control_gate_receives_this_devices_own_model_and_model_code(self, monkeypatch):
+        """Each sensor's own model and model_code are what reaches evaluate_control_gate, not a shared default."""
+        captured = []
+
+        def spy(model, model_code=None):
+            """Record the call arguments and return an empty passing result."""
+            captured.append((model, model_code))
+            return ControlGateResult(datapoints=(), blocked_by=(), port_number=None)
+
+        monkeypatch.setattr(generic_control_module, "evaluate_control_gate", spy)
+        data = {"sensors": {"a": {"model": "MODEL_A", "model_code": "CODE_A", "data": {"type": "unknown"}}}}
+
+        count_generic_control_eligible_devices(data)
+
+        assert captured == [("MODEL_A", "CODE_A")]
+
+    def test_eligible_count_increments_rather_than_resets_per_device(self, monkeypatch):
+        """The eligible count accumulates across devices instead of being overwritten by the last one."""
+        passing_result = ControlGateResult(
+            datapoints=(ControlDatapoint(identity="CTL_WATER", dp_port=0, command_port=1, dp_code=1, dp_data_type="U8"),),
+            blocked_by=(),
+            port_number=1,
+        )
+        monkeypatch.setattr(generic_control_module, "evaluate_control_gate", lambda model, model_code=None: passing_result)
+        data = {
+            "sensors": {
+                "a": {"model": "MODEL_A", "data": {"type": "unknown"}},
+                "b": {"model": "MODEL_A", "data": {"type": "unknown"}},
+            }
+        }
+
+        assert count_generic_control_eligible_devices(data) == (2, 2)
+
+
+class TestConsentedKeysWithoutADefault:
+    """_consented_keys degrades gracefully when the config entry has no options attribute."""
+
+    def test_no_options_attribute_at_all_returns_none_rather_than_raising(self):
+        """A config entry with no `options` attribute yields None, not an AttributeError."""
+
+        class BareEntry:
+            """An object with no `options` attribute, unlike every real ConfigEntry."""
+
+        assert generic_control_module._consented_keys(BareEntry()) is None
+
+
+class TestMissingDeviceNameAndProductKeyDefaultToEmptyString:
+    """A falsy device_name or product_key is sent to the API as an empty string, never a placeholder."""
+
+    @pytest.mark.asyncio
+    async def test_falsy_device_name_and_product_key_send_empty_strings_not_a_placeholder(self, monkeypatch):
+        """None device_name and empty-string product_key both reach the API call as empty strings."""
+        sensor_key = "100_200_1"
+        sensor_info = _anchor_sensor_info()
+        sensor_info["device_name"] = None
+        sensor_info["product_key"] = ""
+        coordinator = _make_coordinator(sensor_key, sensor_info)
+        entities = build_generic_valve_entities(coordinator, sensor_key, sensor_info, sensor_key)
+        entity = entities[0]
+        entity.hass = MagicMock()
+        monkeypatch.setattr(generic_control_module, "async_call_later", MagicMock(return_value=MagicMock()))
+
+        await entity.async_close_valve()
+
+        kwargs = coordinator._client.control_work_mode.call_args.kwargs
+        assert kwargs["device_name"] == ""
+        assert kwargs["product_key"] == ""

@@ -16,6 +16,7 @@ so without the guard below the whole two-hub proof would pass against nothing.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,7 +24,12 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.rainpoint import _HUB_MIGRATABLE_SUFFIXES, _domain_sensor_key
+from custom_components.rainpoint import (
+    _HUB_MIGRATABLE_SUFFIXES,
+    _domain_sensor_key,
+    _hub_identity,
+    _resolve_hub_mid,
+)
 from custom_components.rainpoint.const import DOMAIN, HUB_IDENTIFIER_PREFIX, HUB_UNIQUE_ID_PREFIX
 from custom_components.rainpoint.device import RainPointHubDevice
 from tests.helpers import VALVE_ZONES_TLV_PAYLOAD
@@ -652,3 +658,70 @@ class TestPushReachesTheHubItNamesThroughARealCoordinator:
 
         assert coordinator.data["sensors"][sensor_key] is not before
         assert push_client.last_message_at_for(MID_A) == 1000.0
+
+
+class TestHubIdentityParsing:
+    """_hub_identity as a pure function: both accepted shapes, and everything else."""
+
+    def test_a_remainder_with_two_segments_where_one_is_empty_is_not_the_migrated_shape(self):
+        """len(parts) == 2 is not enough on its own; both segments must be non-empty.
+
+        A leading or trailing underscore inside the remainder produces an empty
+        segment, which is not a real hid/mid pair and must not be accepted as one.
+        """
+        assert _hub_identity(f"{HUB_IDENTIFIER_PREFIX}_123") is None
+        assert _hub_identity(f"{HUB_IDENTIFIER_PREFIX}123_") is None
+
+    def test_the_old_shape_yields_a_none_mid(self):
+        """The pre-migration hid-only identifier parses with mid left as None."""
+        assert _hub_identity(f"{HUB_IDENTIFIER_PREFIX}100") == ("100", None)
+
+    def test_the_migrated_shape_yields_both_segments(self):
+        """The migrated hid_mid identifier parses into both segments."""
+        assert _hub_identity(f"{HUB_IDENTIFIER_PREFIX}100_200") == ("100", "200")
+
+    def test_a_non_hub_identifier_is_not_recognised(self):
+        """A sub-device identifier (hid_mid_addr) is not mistaken for a hub identifier."""
+        assert _hub_identity("100_200_1") is None
+
+
+class TestResolveHubMidRegistrySources:
+    """_resolve_hub_mid's two ordered registry sources, as a pure function."""
+
+    def test_a_row_not_actually_parented_to_this_hub_is_not_matched_by_name_alone(self):
+        """The via_device_id check and the len/shape checks are all required together.
+
+        A sub-device row that merely happens to carry this hid as its first
+        segment, but hangs off a different hub row (or none at all), must not be
+        read as this hub's mid.
+        """
+        hub_row = SimpleNamespace(id="hub_device_1")
+        unrelated_child = SimpleNamespace(
+            via_device_id="some_other_device",
+            identifiers={(DOMAIN, "100_9_1")},
+        )
+        assert _resolve_hub_mid(hub_row, "100", entity_rows=[], device_rows=[unrelated_child]) is None, (
+            "a row not parented to this hub row must never supply its mid"
+        )
+
+    def test_only_the_mid_segment_is_checked_for_being_numeric(self):
+        """A non-digit mid segment must be rejected even if the addr segment is numeric.
+
+        Guards against reading the wrong list index when validating the middle
+        segment of a {hid}_{mid}_{addr} identifier.
+        """
+        hub_row = SimpleNamespace(id="hub_device_1")
+        child = SimpleNamespace(
+            via_device_id="hub_device_1",
+            identifiers={(DOMAIN, "100_abc_5")},
+        )
+        assert _resolve_hub_mid(hub_row, "100", entity_rows=[], device_rows=[child]) is None
+
+    def test_a_real_child_correctly_supplies_the_mid(self):
+        """The positive case the two guards above are protecting."""
+        hub_row = SimpleNamespace(id="hub_device_1")
+        child = SimpleNamespace(
+            via_device_id="hub_device_1",
+            identifiers={(DOMAIN, "100_200_1")},
+        )
+        assert _resolve_hub_mid(hub_row, "100", entity_rows=[], device_rows=[child]) == "200"

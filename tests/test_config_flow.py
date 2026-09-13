@@ -8,12 +8,15 @@ regardless of test collection order.
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import voluptuous as vol
+from homeassistant.helpers.selector import CountrySelector
 
 from custom_components.rainpoint.api import RainPointApiError, RainPointThrottledError
-from custom_components.rainpoint.config_flow import RainPointConfigFlow, RainPointOptionsFlow
+from custom_components.rainpoint.config_flow import RainPointConfigFlow, RainPointOptionsFlow, _country_selector
 from custom_components.rainpoint.const import (
     CONF_AREA_CODE,
     CONF_COUNTRY,
@@ -26,6 +29,7 @@ from custom_components.rainpoint.const import (
     CONF_PUSH_ENABLED,
     DOMAIN,
 )
+from custom_components.rainpoint.country_codes import COUNTRY_TO_PHONE_CODE
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,6 +85,35 @@ class TestConfigEntryVersion:
         re-key on every install that has not yet migrated."""
         assert RainPointConfigFlow.VERSION == 2
 
+    def test_reconfigure_flag_starts_false(self):
+        """A fresh flow is never mid-reconfigure until async_step_reconfigure says so."""
+        assert RainPointConfigFlow()._reconfigure is False
+
+
+class TestCountrySelector:
+    """The helper behind the config-flow country picker."""
+
+    def test_returns_a_country_selector_carrying_a_countries_list(self):
+        """isinstance alone is not enough: CountrySelector(None) is still a
+        CountrySelector, just one whose config carries no "countries" key at
+        all, which the real picker below relies on being present."""
+        selector = _country_selector()
+
+        assert isinstance(selector, CountrySelector)
+        assert "countries" in selector.config
+
+    def test_ha_s_own_countries_set_is_passed_through_rather_than_none(self):
+        """This module's own conftest stub accepts every code (see its
+        comment: the real intersection is tested in test_country_codes.py), so
+        the call itself has to be pinned rather than its filtered output."""
+        from homeassistant.generated.countries import COUNTRIES
+
+        with patch("custom_components.rainpoint.config_flow.get_supported_countries") as fake:
+            fake.return_value = ["US"]
+            _country_selector()
+
+        fake.assert_called_once_with(COUNTRIES)
+
 
 class TestConfigFlowUserStep:
     """Tests for ConfigFlowUserStep."""
@@ -117,6 +150,55 @@ class TestConfigFlowUserStep:
         assert flow._homes == [{"hid": 1, "homeName": "My Home"}]
         # Email must be normalised to lowercase + stripped
         assert flow._email == "test@example.com"
+
+    @pytest.mark.asyncio
+    async def test_user_step_builds_the_client_with_the_exact_arguments_and_stores_them(self):
+        """Every argument RainPointClient is constructed with, and every temp
+        value stashed for the next step, pinned in one place.
+
+        A swapped or dropped constructor argument can still let a mocked
+        client through unnoticed, so the client class itself is spied on
+        rather than trusted to a fixed return value.
+        """
+        flow = _make_flow()
+        mock_client = _make_mock_client()
+        client_class = MagicMock(return_value=mock_client)
+        session = MagicMock()
+        get_session = MagicMock(return_value=session)
+
+        with (
+            patch("custom_components.rainpoint.config_flow.async_get_clientsession", get_session),
+            patch("custom_components.rainpoint.config_flow.RainPointClient", client_class),
+        ):
+            flow.async_step_select_homes = AsyncMock(return_value={"type": "form"})
+            await flow.async_step_user(_VALID_USER_INPUT)
+
+        get_session.assert_called_once_with(flow.hass)
+        client_class.assert_called_once_with(COUNTRY_TO_PHONE_CODE["US"], "test@example.com", "secret", session)
+        flow.async_set_unique_id.assert_awaited_once_with(f"{DOMAIN}_test@example.com")
+
+        assert flow._country == "US"
+        assert flow._area_code == COUNTRY_TO_PHONE_CODE["US"]
+        assert flow._password == "secret"
+        assert flow._client is mock_client
+
+    @pytest.mark.asyncio
+    async def test_user_step_form_schema_and_default_country(self):
+        """The no-input form's schema carries all three fields, and the
+        country default reflects Home Assistant's own configured country."""
+        flow = _make_flow()
+        flow.hass.config.country = "GB"
+
+        await flow.async_step_user(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        keys = set(schema.schema)
+        assert CONF_COUNTRY in keys
+        assert CONF_EMAIL in keys
+        assert CONF_PASSWORD in keys
+        (country_marker,) = [k for k in schema.schema if k == CONF_COUNTRY]
+        default = country_marker.default
+        assert (default() if callable(default) else default) == "GB"
 
     @pytest.mark.asyncio
     async def test_user_step_auth_error(self):
@@ -251,6 +333,49 @@ class TestConfigFlowSelectHomes:
         entry_data = call_kwargs.get("data", {})
         assert entry_data.get(CONF_COUNTRY) == "US"
         assert entry_data.get(CONF_AREA_CODE) == "1"
+        assert entry_data.get(CONF_HIDS) == [1]
+
+    @pytest.mark.asyncio
+    async def test_select_homes_no_input_form_schema(self):
+        """The dropdown's keys are the real hid strings, not a placeholder."""
+        flow = _make_flow()
+        flow._homes = [{"hid": 1, "homeName": "Home1"}, {"hid": 2, "homeName": "Home2"}]
+        flow._reconfigure = False
+
+        await flow.async_step_select_homes(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        assert set(schema.schema) == {CONF_HIDS}
+        (marker,) = schema.schema
+        validator = schema.schema[marker]
+        assert validator("1") == "1"
+        with pytest.raises(vol.Invalid):
+            validator("999")
+
+    @pytest.mark.asyncio
+    async def test_select_homes_reconfigure_branch_updates_the_existing_entry(self):
+        """async_step_select_homes carries its own reconfigure branch (kept
+        in step with async_step_select_homes_reconfigure's dedicated copy).
+        Exercised directly here since the real HA framework wrapper it defers
+        to is mocked throughout this file."""
+        flow = _make_flow()
+        flow._homes = [{"hid": 1, "homeName": "Home1"}]
+        flow._country = "US"
+        flow._area_code = "1"
+        flow._email = "test@example.com"
+        flow._password = "secret"
+        flow._client = _make_mock_client()
+        flow._reconfigure = True
+        mock_entry = MagicMock()
+        flow._get_reconfigure_entry = MagicMock(return_value=mock_entry)
+
+        await flow.async_step_select_homes({CONF_HIDS: "1"})
+
+        flow.async_update_reload_and_abort.assert_called_once()
+        call_args = flow.async_update_reload_and_abort.call_args
+        assert call_args.args[0] is mock_entry
+        assert call_args.kwargs["data"][CONF_COUNTRY] == "US"
+        assert call_args.kwargs["title"] == "RainPoint (test@example.com)"
 
     @pytest.mark.asyncio
     async def test_select_homes_no_selection_shows_error(self):
@@ -303,6 +428,20 @@ class TestConfigFlowReconfigure:
         return flow
 
     @pytest.mark.asyncio
+    async def test_reconfigure_sets_the_reconfigure_flag(self):
+        """Read by async_step_user and async_step_select_homes on the same
+        instance, so a fresh flow's False must actually flip here."""
+        flow = _make_flow()
+        mock_entry = MagicMock()
+        mock_entry.data = {CONF_COUNTRY: "US", CONF_AREA_CODE: "1", CONF_EMAIL: "e@example.com", CONF_PASSWORD: "p"}
+        flow._get_reconfigure_entry = MagicMock(return_value=mock_entry)
+        assert flow._reconfigure is False
+
+        await flow.async_step_reconfigure(None)
+
+        assert flow._reconfigure is True
+
+    @pytest.mark.asyncio
     async def test_reconfigure_no_input_shows_form(self):
         """Reconfigure no input shows form."""
         flow = self._make_reconfigure_flow()
@@ -338,6 +477,32 @@ class TestConfigFlowReconfigure:
         assert flow._email == "new@example.com"
         # Unique ID must be set (and awaited) using the normalised email
         flow.async_set_unique_id.assert_awaited_once_with("rainpoint_new@example.com")
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_builds_the_client_with_the_exact_arguments_and_stores_them(self):
+        """Mirrors the user-step version of this test: every constructor
+        argument and every temp value stashed for the next step, pinned in
+        one place rather than left to a fixed-return mock to hide a swap."""
+        flow = self._make_reconfigure_flow()
+        mock_client = _make_mock_client()
+        client_class = MagicMock(return_value=mock_client)
+        session = MagicMock()
+        get_session = MagicMock(return_value=session)
+
+        with (
+            patch("custom_components.rainpoint.config_flow.async_get_clientsession", get_session),
+            patch("custom_components.rainpoint.config_flow.RainPointClient", client_class),
+        ):
+            flow.async_step_select_homes_reconfigure = AsyncMock(return_value={"type": "form"})
+            await flow.async_step_reconfigure({CONF_COUNTRY: "GB", CONF_EMAIL: "New@Example.com", CONF_PASSWORD: "newpass"})
+
+        get_session.assert_called_once_with(flow.hass)
+        client_class.assert_called_once_with(COUNTRY_TO_PHONE_CODE["GB"], "new@example.com", "newpass", session)
+
+        assert flow._country == "GB"
+        assert flow._area_code == COUNTRY_TO_PHONE_CODE["GB"]
+        assert flow._password == "newpass"
+        assert flow._client is mock_client
 
     @pytest.mark.asyncio
     async def test_reconfigure_auth_error(self):
@@ -469,6 +634,132 @@ class TestConfigFlowReconfigure:
 
         assert country_default == "CA"
 
+    @staticmethod
+    def _marker_default(schema, key):
+        """Return the resolved default for one vol.Required marker in schema.schema."""
+        (marker,) = [k for k in schema.schema if k == key]
+        default = marker.default
+        return default() if callable(default) else default
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_no_input_form_prefills_email_and_password(self):
+        """When the stored entry carries them, the form must echo those exact
+        values back, not a default that happens to look right when absent."""
+        flow = self._make_reconfigure_flow()
+
+        await flow.async_step_reconfigure(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        assert self._marker_default(schema, CONF_EMAIL) == "existing@example.com"
+        assert self._marker_default(schema, CONF_PASSWORD) == "oldpass"
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_missing_email_falls_back_to_empty_string_default(self):
+        """Absent from the stored entry, the field pre-fills empty, not a
+        stray None a bare text field would render as the literal "None"."""
+        flow = _make_flow()
+        flow._reconfigure = True
+        mock_entry = MagicMock()
+        mock_entry.data = {CONF_COUNTRY: "US", CONF_AREA_CODE: "1", CONF_PASSWORD: "oldpass"}
+        flow._get_reconfigure_entry = MagicMock(return_value=mock_entry)
+
+        await flow.async_step_reconfigure(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        assert self._marker_default(schema, CONF_EMAIL) == ""
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_missing_password_falls_back_to_empty_string_default(self):
+        """Mirrors the email case above for the password field."""
+        flow = _make_flow()
+        flow._reconfigure = True
+        mock_entry = MagicMock()
+        mock_entry.data = {CONF_COUNTRY: "US", CONF_AREA_CODE: "1", CONF_EMAIL: "existing@example.com"}
+        flow._get_reconfigure_entry = MagicMock(return_value=mock_entry)
+
+        await flow.async_step_reconfigure(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        assert self._marker_default(schema, CONF_PASSWORD) == ""
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_prefers_ha_s_own_country_even_when_not_alphabetically_first(self):
+        """CX shares dial code 61 with AU and CC; AU sorts first among them.
+        If HA's own configured country were silently dropped from the match
+        (replaced with None, or with the "US" fallback constant), the
+        resolution would fall through to the alphabetical loop and return AU
+        instead of the CX that actually matches the stored dial code."""
+        flow = _make_flow()
+        flow.hass.config.country = "CX"
+        flow._reconfigure = True
+
+        mock_entry = MagicMock()
+        mock_entry.data = {CONF_AREA_CODE: "61", CONF_EMAIL: "existing@example.com", CONF_PASSWORD: "oldpass"}
+        flow._get_reconfigure_entry = MagicMock(return_value=mock_entry)
+
+        await flow.async_step_reconfigure(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        assert self._marker_default(schema, CONF_COUNTRY) == "CX"
+
+    @pytest.mark.asyncio
+    async def test_reconfigure_area_code_resolution_reads_the_stored_dial_code(self):
+        """A legacy entry's own CONF_AREA_CODE, not HA's configured country's
+        code and not a stray None, drives the dial-code resolution when the
+        two disagree and share no dial code."""
+        flow = _make_flow()
+        flow.hass.config.country = "US"
+        flow._reconfigure = True
+
+        mock_entry = MagicMock()
+        mock_entry.data = {CONF_AREA_CODE: "44", CONF_EMAIL: "existing@example.com", CONF_PASSWORD: "oldpass"}
+        flow._get_reconfigure_entry = MagicMock(return_value=mock_entry)
+
+        await flow.async_step_reconfigure(None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        assert self._marker_default(schema, CONF_COUNTRY) == "GB"
+
+    @pytest.mark.asyncio
+    async def test_every_reconfigure_error_branch_reuses_the_prefilled_schema_and_step_id(self):
+        """All three login-failure branches share one schema object built
+        before the try, and the step id has to be the exact literal Home
+        Assistant matches against a translation catalog entry."""
+        scenarios = [
+            (RainPointThrottledError("cooling down 120s", 120), "rate_limited"),
+            (RainPointApiError("bad"), "auth_failed"),
+            (TimeoutError(), "cannot_connect"),
+        ]
+        for side_effect, expected_error in scenarios:
+            flow = self._make_reconfigure_flow()
+            mock_client = _make_mock_client()
+            mock_client.ensure_logged_in = AsyncMock(side_effect=side_effect)
+
+            with (
+                patch("custom_components.rainpoint.config_flow.async_get_clientsession", return_value=MagicMock()),
+                patch("custom_components.rainpoint.config_flow.RainPointClient", return_value=mock_client),
+            ):
+                await flow.async_step_reconfigure({CONF_COUNTRY: "US", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "pw"})
+
+            call_kwargs = flow.async_show_form.call_args.kwargs
+            assert call_kwargs["step_id"] == "reconfigure"
+            assert call_kwargs["errors"] == {"base": expected_error}
+            schema = call_kwargs["data_schema"]
+            assert self._marker_default(schema, CONF_EMAIL) == "existing@example.com"
+
+        # The no_homes branch: a successful login with an empty homes list.
+        flow = self._make_reconfigure_flow()
+        mock_client = _make_mock_client(homes=[])
+        with (
+            patch("custom_components.rainpoint.config_flow.async_get_clientsession", return_value=MagicMock()),
+            patch("custom_components.rainpoint.config_flow.RainPointClient", return_value=mock_client),
+        ):
+            await flow.async_step_reconfigure({CONF_COUNTRY: "US", CONF_EMAIL: "new@example.com", CONF_PASSWORD: "pw"})
+        call_kwargs = flow.async_show_form.call_args.kwargs
+        assert call_kwargs["step_id"] == "reconfigure"
+        assert call_kwargs["errors"] == {"base": "no_homes"}
+        assert self._marker_default(call_kwargs["data_schema"], CONF_EMAIL) == "existing@example.com"
+
     @pytest.mark.asyncio
     async def test_reconfigure_no_homes_shows_error(self):
         """Reconfigure with empty homes list surfaces a no_homes error on the form."""
@@ -535,10 +826,14 @@ class TestConfigFlowSelectHomesReconfigure:
         flow._client.export_tokens = MagicMock(return_value={"token": "T"})
         flow.async_update_reload_and_abort = MagicMock(return_value={"type": "abort", "reason": "reconfigure_successful"})
 
+        mock_entry = flow._get_reconfigure_entry()
+
         await flow.async_step_select_homes_reconfigure(user_input={CONF_HIDS: "1"})
 
         flow.async_update_reload_and_abort.assert_called_once()
-        call_kwargs = flow.async_update_reload_and_abort.call_args.kwargs
+        call_args = flow.async_update_reload_and_abort.call_args
+        assert call_args.args[0] is mock_entry
+        call_kwargs = call_args.kwargs
         assert call_kwargs["title"] == "RainPoint (test@example.com)"
         assert call_kwargs["data"][CONF_HIDS] == [1]
         assert call_kwargs["data"][CONF_EMAIL] == "test@example.com"
@@ -554,6 +849,28 @@ class TestConfigFlowSelectHomesReconfigure:
         flow.async_show_form.assert_called_once()
         errors = flow.async_show_form.call_args.kwargs.get("errors", {})
         assert errors.get("base") == "select_at_least_one"
+
+    @pytest.mark.asyncio
+    async def test_select_homes_reconfigure_no_input_form_schema_and_preselection(self):
+        """The dropdown offers the real hid strings and pre-selects whichever
+        one the stored entry already carries, not a mangled key and not a
+        literal "None" string."""
+        flow = self._make_flow_with_reconfigure_context()
+        flow._homes = [{"hid": 1, "homeName": "Home A"}, {"hid": 2, "homeName": "Home B"}]
+        mock_entry = flow._get_reconfigure_entry()
+        mock_entry.data = {CONF_HIDS: [2]}
+
+        await flow.async_step_select_homes_reconfigure(user_input=None)
+
+        schema = flow.async_show_form.call_args.kwargs["data_schema"]
+        assert set(schema.schema) == {CONF_HIDS}
+        (marker,) = schema.schema
+        default = marker.default
+        assert (default() if callable(default) else default) == "2"
+        validator = schema.schema[marker]
+        assert validator("2") == "2"
+        with pytest.raises(vol.Invalid):
+            validator("999")
 
 
 # ---------------------------------------------------------------------------
@@ -823,6 +1140,23 @@ class TestOptionsFlowControlConsentStamp:
         assert CONF_GENERIC_CONTROL_ACKED_KEYS not in flow.async_create_entry.call_args.kwargs["data"]
 
     @pytest.mark.asyncio
+    async def test_turning_control_off_pops_the_acked_keys_key_from_the_submitted_dict(self):
+        """The pop must target the real key: if the acked-keys field ever
+        arrives inside user_input itself, turning control off has to strip it
+        from there too, not leave it because the wrong key was popped."""
+        flow = _make_options_flow(current_control_enabled=True, sensors=_control_eligible_sensors())
+
+        payload = {
+            CONF_PUSH_ENABLED: True,
+            CONF_GENERIC_ENTITIES_ENABLED: False,
+            CONF_GENERIC_CONTROL_ENABLED: False,
+            CONF_GENERIC_CONTROL_ACKED_KEYS: ["100_200_1"],
+        }
+        await flow.async_step_init(payload)
+
+        assert CONF_GENERIC_CONTROL_ACKED_KEYS not in flow.async_create_entry.call_args.kwargs["data"]
+
+    @pytest.mark.asyncio
     async def test_an_unloaded_entry_carries_the_previous_stamp_forward(self):
         """Opening Options while the entry retries against a cloud outage is
         real. Writing an empty stamp there would announce every device the
@@ -890,6 +1224,55 @@ class TestOptionsFlowControlConsentStamp:
         )
 
         assert flow.async_create_entry.call_args.kwargs["data"][CONF_GENERIC_CONTROL_ACKED_KEYS] == []
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_record_does_not_stop_later_devices_from_being_evaluated(self):
+        """continue only skips the one malformed record; break would also
+        skip every eligible device enumerated after it, since dict iteration
+        order is insertion order and "bad" is inserted first."""
+        sensors = {"bad": "not-a-dict", **_control_eligible_sensors()}
+        flow = _make_options_flow(sensors=sensors)
+
+        await flow.async_step_init(
+            {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}
+        )
+
+        assert flow.async_create_entry.call_args.kwargs["data"][CONF_GENERIC_CONTROL_ACKED_KEYS] == ["100_200_1"]
+
+    @pytest.mark.asyncio
+    async def test_a_decoded_record_does_not_stop_later_devices_from_being_evaluated(self):
+        """Mirrors the malformed-record case for the second continue: a
+        decoded (non-"unknown") record must not abort the scan of the
+        devices enumerated after it."""
+        decoded = {"decoded": {"model": "HTV245FRF", "data": {"type": "valve"}}}
+        sensors = {**decoded, **_control_eligible_sensors()}
+        flow = _make_options_flow(sensors=sensors)
+
+        await flow.async_step_init(
+            {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}
+        )
+
+        assert flow.async_create_entry.call_args.kwargs["data"][CONF_GENERIC_CONTROL_ACKED_KEYS] == ["100_200_1"]
+
+    @pytest.mark.asyncio
+    async def test_the_control_gate_is_called_with_the_model_and_model_code_verbatim(self):
+        """Pins the exact call, not just its eventual verdict: a swapped or
+        dropped argument can still land on the right answer by coincidence."""
+        calls = []
+
+        def fake_gate(model, model_code):
+            """Record the exact arguments it was called with and report a passing gate."""
+            calls.append((model, model_code))
+            return SimpleNamespace(passed=True)
+
+        flow = _make_options_flow(sensors=_control_eligible_sensors())
+
+        with patch("custom_components.rainpoint.generic_control.evaluate_control_gate", fake_gate):
+            await flow.async_step_init(
+                {CONF_PUSH_ENABLED: True, CONF_GENERIC_ENTITIES_ENABLED: False, CONF_GENERIC_CONTROL_ENABLED: True}
+            )
+
+        assert calls == [("HTV103FRF", 31)]
 
 
 class TestOptionsFlowGenericEligibilityCopy:

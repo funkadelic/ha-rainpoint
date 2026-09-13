@@ -25,6 +25,7 @@ import pytest
 from custom_components.rainpoint.const import DOMAIN, VERSION
 from custom_components.rainpoint.diagnostics import (
     TO_REDACT,
+    _coordinator_dump,
     _select_allowed,
     async_get_config_entry_diagnostics,
     async_get_device_diagnostics,
@@ -358,6 +359,15 @@ class TestNothingSensitiveSurvives:
         assert "data" not in result["entry"]
 
     @pytest.mark.asyncio
+    async def test_area_code_is_read_from_the_entry_data_under_its_own_key(self):
+        """`area_code` is not itself a credential and is carried by value."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["entry"]["area_code"] == "1"
+
+    @pytest.mark.asyncio
     async def test_no_credential_reaches_a_device_dump(self):
         """The device path builds its own payload, so it needs its own proof."""
         hass, entry = _make_hass(coordinator=_make_coordinator())
@@ -400,6 +410,29 @@ class TestSupportPayload:
         result = await async_get_config_entry_diagnostics(hass, entry)
 
         assert result["integration"] == {"domain": DOMAIN, "version": VERSION}
+
+    @pytest.mark.asyncio
+    async def test_the_integration_version_is_also_stamped_on_a_device_dump(self):
+        """The device-scoped path builds its own payload dict and needs its own proof."""
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))
+
+        assert result["integration"] == {"domain": DOMAIN, "version": VERSION}
+
+    @pytest.mark.asyncio
+    async def test_a_coordinator_missing_a_data_attribute_degrades_to_empty_sensors(self):
+        """Not a MagicMock, which would auto-vivify a `data` attribute and hide
+        a dropped getattr default."""
+
+        class _BareCoordinator:
+            """A coordinator stand-in with no `data` attribute at all."""
+
+        hass, entry = _make_hass(coordinator=_BareCoordinator())
+
+        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))
+
+        assert result["sensors"] == {}
 
 
 class TestPushSection:
@@ -454,6 +487,7 @@ class TestDeviceRouting:
 
     @pytest.mark.asyncio
     async def test_a_hub_row_yields_its_record_its_connectivity_and_its_children(self):
+        """A hub device page dumps only its own hub record, connectivity and child sensors."""
         other_hub = _hub_record(mid=999999)
         sensors = {
             "182509_236547_1": _sensor_entry(mid=236547),
@@ -469,6 +503,8 @@ class TestDeviceRouting:
         assert [hub["mid"] for hub in result["hubs"]] == [236547]
         assert list(result["hub_connectivity"]) == [236547]
         assert list(result["sensors"]) == ["182509_236547_1"]
+        # Each child is dumped, not stood in for by an unexpected-type placeholder.
+        assert result["sensors"]["182509_236547_1"]["model"] == "HTV245FRF"
 
     @pytest.mark.asyncio
     async def test_a_hub_row_still_on_the_older_hid_only_identity_still_resolves(self):
@@ -640,6 +676,64 @@ class TestBeforeSetupCompletes:
         result = await async_get_config_entry_diagnostics(hass, entry)
 
         assert result["coordinator"]["update_interval_seconds"] == 120.0
+
+    @pytest.mark.asyncio
+    async def test_a_coordinator_missing_a_data_attribute_does_not_raise(self):
+        """A truthy coordinator with no `data` attribute at all (not a MagicMock,
+        which would auto-vivify one) must degrade to empty sections rather than
+        raising out of a getattr call that dropped its default."""
+
+        class _BareCoordinator:
+            """A coordinator stand-in with no `data` attribute at all."""
+
+        hass, entry = _make_hass(coordinator=_BareCoordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["hubs"] == []
+        assert result["sensors"] == {}
+
+
+class TestCoordinatorDump:
+    """`_coordinator_dump` reads real attributes off the coordinator it is
+    given, not off a MagicMock that would auto-vivify whatever name the code
+    happens to look up."""
+
+    class _RealDataCoordinator:
+        """A plain object, so a getattr on the wrong name or with no default
+        behaves exactly as it would against a real coordinator instance."""
+
+        def __init__(self, data):
+            """Store the given data with a None update interval and a successful last update."""
+            self.data = data
+            self.update_interval = None
+            self.last_update_success = True
+
+    def test_hub_and_sensor_counts_come_from_the_coordinators_own_data(self):
+        """The dump's hub_count and sensor_count reflect the coordinator's actual data, not a stub."""
+        coordinator = self._RealDataCoordinator(
+            data={"hubs": [_hub_record(), _hub_record(hid=999)], "sensors": {"a": {}, "b": {}, "c": {}}}
+        )
+
+        dumped = _coordinator_dump(coordinator)
+
+        assert dumped["hub_count"] == 2
+        assert dumped["sensor_count"] == 3
+
+    def test_missing_attributes_degrade_to_none_rather_than_raising(self):
+        """A coordinator missing every expected attribute still dumps None fields, not a raise."""
+
+        class _BareCoordinator:
+            """A coordinator stand-in with none of the expected attributes."""
+
+        dumped = _coordinator_dump(_BareCoordinator())
+
+        assert dumped == {
+            "last_update_success": None,
+            "update_interval_seconds": None,
+            "hub_count": 0,
+            "sensor_count": 0,
+        }
 
 
 class TestRedactionKeySet:
@@ -889,6 +983,38 @@ class TestDeviceIdentityMap:
             "name_by_user": None,
             "in_current_poll": False,
         }
+
+    @pytest.mark.asyncio
+    async def test_an_unrecognised_rows_name_by_user_is_read_from_the_row_itself(self, _registry_rows):
+        """A non-null name_by_user must come from the row, not from a dropped one."""
+        device = MagicMock()
+        device.identifiers = {("other_integration", "whatever")}
+        device.name = "Something Else"
+        device.name_by_user = "Renamed By Owner"
+        device.id = "device-row-10"
+        _registry_rows.append(device)
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert result["devices"]["unrecognised_device-row-10"]["name_by_user"] == "Renamed By Owner"
+
+    @pytest.mark.asyncio
+    async def test_an_unrecognised_row_does_not_stop_a_later_recognised_row_from_being_mapped(self, _registry_rows):
+        """The unrecognised branch's `continue` must not become a `break`."""
+        unrecognised = MagicMock()
+        unrecognised.identifiers = {("other_integration", "whatever")}
+        unrecognised.name = "Something Else"
+        unrecognised.name_by_user = None
+        unrecognised.id = "device-row-11"
+        _registry_rows.append(unrecognised)
+        _registry_rows.append(_device("182509_236547_1"))
+        hass, entry = _make_hass(coordinator=_make_coordinator())
+
+        result = await async_get_config_entry_diagnostics(hass, entry)
+
+        assert "unrecognised_device-row-11" in result["devices"]
+        assert "182509_236547_1" in result["devices"]
 
 
 class TestDeviceIdentityMapEdges:

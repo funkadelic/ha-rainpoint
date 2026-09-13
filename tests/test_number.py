@@ -404,6 +404,40 @@ class TestNumberAsyncAddedToHass:
 
         assert num._current_value == 10.0
 
+    @pytest.mark.asyncio
+    async def test_restore_at_the_minimum_boundary_is_accepted(self):
+        """DURATION_MIN_MINUTES itself is a valid restore value, not excluded by the bound check."""
+        from unittest.mock import AsyncMock
+
+        num = _make_number(current_value=10.0)
+        last_state = MagicMock()
+        last_state.state = str(DURATION_MIN_MINUTES)
+        num.async_get_last_state = AsyncMock(return_value=last_state)
+
+        import custom_components.rainpoint.number as num_mod
+
+        real_fn = num_mod.RainPointZoneDurationNumber.async_added_to_hass
+        await real_fn(num)
+
+        assert num._current_value == DURATION_MIN_MINUTES
+
+    @pytest.mark.asyncio
+    async def test_restore_at_the_maximum_boundary_is_accepted(self):
+        """DURATION_MAX_MINUTES itself is a valid restore value, not excluded by the bound check."""
+        from unittest.mock import AsyncMock
+
+        num = _make_number(current_value=10.0)
+        last_state = MagicMock()
+        last_state.state = str(DURATION_MAX_MINUTES)
+        num.async_get_last_state = AsyncMock(return_value=last_state)
+
+        import custom_components.rainpoint.number as num_mod
+
+        real_fn = num_mod.RainPointZoneDurationNumber.async_added_to_hass
+        await real_fn(num)
+
+        assert num._current_value == DURATION_MAX_MINUTES
+
 
 class TestNumberSetupEntry:
     """Cover async_setup_entry (lines 30-53)."""
@@ -554,6 +588,111 @@ class TestNumberSetupEntry:
         await async_setup_entry(hass, entry, added)
 
         added.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_sensors_key_is_treated_as_no_sensors(self):
+        """coordinator.data with no "sensors" key at all must not crash setup."""
+        from custom_components.rainpoint.number import async_setup_entry
+
+        coord = MagicMock()
+        coord.data = {}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        added = MagicMock()
+        await async_setup_entry(hass, entry, added)  # must not raise
+
+        added.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_silent_entry_with_zones_still_produces_nothing(self):
+        """The silent-type guard blocks creation even when a zones mapping is present."""
+        from custom_components.rainpoint.number import async_setup_entry
+
+        coord = MagicMock()
+        coord.data = {
+            "sensors": {
+                "1_2_3": {
+                    "hid": 1,
+                    "mid": 2,
+                    "addr": 3,
+                    "model": "HTV245FRF",
+                    "data": {"type": SILENT_DATA_TYPE, "zones": {1: {}}},
+                }
+            }
+        }
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        added = MagicMock()
+        await async_setup_entry(hass, entry, added)
+
+        added.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_valve_model_with_no_zones_key_at_all_does_not_raise(self):
+        """A decoded record with no "zones" key must not crash the sorted-keys walk."""
+        from custom_components.rainpoint.number import async_setup_entry
+
+        coord = MagicMock()
+        coord.data = {
+            "sensors": {
+                "1_2_3": {
+                    "hid": 1,
+                    "mid": 2,
+                    "addr": 3,
+                    "model": "HTV245FRF",
+                    "data": {},  # no "type", no "zones"
+                }
+            }
+        }
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        added = MagicMock()
+        await async_setup_entry(hass, entry, added)  # must not raise
+
+        added.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hic801w_station_durations_get_the_real_coordinator_and_key(self):
+        """The HIC801W station-duration builder is called with this setup's own coordinator and key."""
+        from custom_components.rainpoint.number import async_setup_entry
+
+        coord = MagicMock()
+        coord.data = {
+            "sensors": {
+                "10_20_1": {
+                    "hid": 10,
+                    "mid": 20,
+                    "addr": 1,
+                    "model": MODEL_HIC801W,
+                    "data": decode_hic801w(SAMPLE_HIC801W_IDLE_PAYLOAD),
+                }
+            }
+        }
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        added = MagicMock()
+        await async_setup_entry(hass, entry, added)
+
+        entities = added.call_args[0][0]
+        assert len(entities) == HIC801W_STATION_COUNT
+        assert all(e.coordinator is coord for e in entities)
+        assert all(e._sensor_key == "10_20_1" for e in entities)
 
 
 # ---------------------------------------------------------------------------
@@ -853,6 +992,99 @@ class TestNumberSetupEntryGenericControl:
         assert isinstance(entities[0], RainPointGenericZoneDurationNumber)
         assert entities[0]._attr_unique_id == "rainpoint_100_200_1_generic_ctl_ctl_water_p1_duration"
 
+    @pytest.mark.asyncio
+    async def test_builder_receives_the_coordinator_key_and_full_slug(self, monkeypatch):
+        """build_generic_duration_entities gets this call's own coordinator, key and slug."""
+        from custom_components.rainpoint import number as number_mod
+        from custom_components.rainpoint.number import async_setup_entry
+
+        sensor_info = {"hid": 300, "mid": 400, "addr": 1}
+        coord = MagicMock()
+        coord.data = {"sensors": {"300_400_1": sensor_info}}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr(number_mod, "build_generic_duration_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        [call_coordinator, call_key, call_info, call_slug] = captured_calls[0]
+        assert call_coordinator is coord
+        assert call_key == "300_400_1"
+        assert call_info is sensor_info
+        assert call_slug == "300_400_1"
+
+    @pytest.mark.asyncio
+    async def test_base_slug_falls_back_to_empty_string_for_a_missing_hid(self, monkeypatch):
+        """A sub-device record with no hid leaves that slug segment empty, not "None"."""
+        from custom_components.rainpoint import number as number_mod
+        from custom_components.rainpoint.number import async_setup_entry
+
+        coord = MagicMock()
+        coord.data = {"sensors": {"key1": {"mid": 500, "addr": 2}}}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr(number_mod, "build_generic_duration_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert captured_calls[0][3] == "_500_2"
+
+    @pytest.mark.asyncio
+    async def test_base_slug_falls_back_to_empty_string_for_a_missing_mid(self, monkeypatch):
+        """A sub-device record with no mid leaves that slug segment empty, not "None"."""
+        from custom_components.rainpoint import number as number_mod
+        from custom_components.rainpoint.number import async_setup_entry
+
+        coord = MagicMock()
+        coord.data = {"sensors": {"key1": {"hid": 300, "addr": 2}}}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr(number_mod, "build_generic_duration_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert captured_calls[0][3] == "300__2"
+
+    @pytest.mark.asyncio
+    async def test_base_slug_falls_back_to_empty_string_for_a_missing_addr(self, monkeypatch):
+        """A sub-device record with no addr leaves that slug segment empty, not "None"."""
+        from custom_components.rainpoint import number as number_mod
+        from custom_components.rainpoint.number import async_setup_entry
+
+        coord = MagicMock()
+        coord.data = {"sensors": {"key1": {"hid": 300, "mid": 500}}}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e"
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        hass.data = {DOMAIN: {"e": {"coordinator": coord}}}
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr(number_mod, "build_generic_duration_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert captured_calls[0][3] == "300_500_"
+
 
 class TestNumberAdderRegistration:
     """The number platform publishes its adder where the removal sweep reads."""
@@ -881,6 +1113,18 @@ class TestNumberAdderRegistration:
         registered = late_adders(hass.data[DOMAIN]["e"])
         assert len(registered) == 1
         assert isinstance(registered[0], LateEntityAdder)
+
+    @pytest.mark.asyncio
+    async def test_the_registered_adder_carries_the_number_domain(self):
+        """The removal sweep matches on (domain, unique_id); this platform's adder must say "number"."""
+        from custom_components.rainpoint.number import async_setup_entry
+
+        hass, entry = self._hass_and_entry()
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        registered = late_adders(hass.data[DOMAIN]["e"])
+        assert registered[0].domain == "number"
 
     @pytest.mark.asyncio
     async def test_a_second_platforms_registration_appends(self):

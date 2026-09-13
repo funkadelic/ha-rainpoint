@@ -458,6 +458,66 @@ class TestCoordinatorUpdate:
 
         assert mock_notify.call_args.kwargs["notification_id"] == "rainpoint_unsupported_ODD*MODEL"
 
+    def test_notification_shows_the_model_code_inline_not_only_in_the_report_link(self):
+        """The report link also carries model_code=279, so this must check the
+        parenthetical specifically rather than the substring "279" anywhere."""
+        coord, _client = _make_coord()
+
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            _coord_module.RainPointCoordinator._notify_unknown_model(
+                coord, model="UNKNOWN_CODED2", model_code=279, mid=200, addr=1, raw_value="10#AA"
+            )
+
+        message = mock_notify.call_args.args[1]
+        assert "(modelCode `279`)" in message
+
+    def test_notification_omits_the_model_code_parenthetical_when_none(self):
+        """A model_code of None produces no "(modelCode ...)" parenthetical at all."""
+        coord, _client = _make_coord()
+
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            _coord_module.RainPointCoordinator._notify_unknown_model(
+                coord, model="NOCODEMODEL", model_code=None, mid=200, addr=1, raw_value="10#AA"
+            )
+
+        message = mock_notify.call_args.args[1]
+        assert "**NOCODEMODEL**\n\n" in message
+
+    def test_notification_shows_the_actual_sanitized_model_name(self):
+        """The notification body shows the real model string, not a placeholder."""
+        coord, _client = _make_coord()
+
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            _coord_module.RainPointCoordinator._notify_unknown_model(
+                coord, model="HTV999XYZ", model_code=None, mid=200, addr=1, raw_value="10#AA"
+            )
+
+        message = mock_notify.call_args.args[1]
+        assert "**HTV999XYZ**" in message
+
+    def test_notification_report_link_carries_the_real_model_code(self):
+        """The prefilled report link URL carries the real model_code value."""
+        coord, _client = _make_coord()
+
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            _coord_module.RainPointCoordinator._notify_unknown_model(
+                coord, model="HTV999XYZ", model_code=303, mid=200, addr=1, raw_value="10#AA"
+            )
+
+        message = mock_notify.call_args.args[1]
+        assert "model_code=303" in message
+
+    def test_notification_title_is_exact(self):
+        """The notification title is the exact expected wording."""
+        coord, _client = _make_coord()
+
+        with patch.object(_coord_module, "async_create") as mock_notify:
+            _coord_module.RainPointCoordinator._notify_unknown_model(
+                coord, model="HTV999XYZ", model_code=None, mid=200, addr=1, raw_value="10#AA"
+            )
+
+        assert mock_notify.call_args.kwargs["title"] == "RainPoint: Unsupported Sensor Detected"
+
     @pytest.mark.asyncio
     async def test_update_unknown_model_notification_sent_once(self):
         """Notification for the same unknown model is sent only once."""
@@ -725,6 +785,159 @@ class TestCoordinatorUpdate:
         query = parse_qs(url.split("?", 1)[1])
         assert decoded_error in query["auto_decoded"][0]
 
+    def test_format_generic_fields_declined_without_an_error_key_uses_an_empty_default(self):
+        """The decline line must render blank, not 'None', when error is absent."""
+        generic = {"ascii_framed": True, "fields": []}
+
+        assert _coord_module._format_generic_fields(generic) == "Decoder: "
+
+    def test_format_generic_fields_dp_prefixed_true_adds_the_dp_id_suffix(self):
+        """dp_id_prefixed must be read from the decode, not defaulted away."""
+        generic = {
+            "dp_id_prefixed": True,
+            "fields": [{"name": "STA_BAT", "dp_id": 5, "raw": "64", "value": 100}],
+        }
+
+        assert _coord_module._format_generic_fields(generic) == "STA_BAT: raw=64 value=100 (dp 5)"
+
+    def test_format_generic_fields_dp_prefixed_defaults_to_false_when_absent(self):
+        """No dp_id_prefixed key at all must render exactly as False would."""
+        generic = {"fields": [{"name": "STA_BAT", "dp_id": 5, "raw": "64", "value": 100}]}
+
+        assert _coord_module._format_generic_fields(generic) == "STA_BAT: raw=64 value=100"
+
+    def test_format_generic_fields_joins_multiple_fields_with_a_real_newline(self):
+        """The join separator itself, not just its per-field content."""
+        generic = {
+            "dp_id_prefixed": False,
+            "fields": [
+                {"name": "STA_BAT", "dp_id": 0, "raw": "64", "value": 100},
+                {"name": "STA_RSSI", "dp_id": 1, "raw": "10", "value": -70},
+            ],
+        }
+
+        assert _coord_module._format_generic_fields(generic) == "STA_BAT: raw=64 value=100\nSTA_RSSI: raw=10 value=-70"
+
+    def test_format_gate_diagnostics_passes_the_real_model_and_model_code_through(self, monkeypatch):
+        """The catalog lookup must be asked about the real device, not a dropped one."""
+        import custom_components.rainpoint.generic_entities as generic_entities_module
+
+        captured = {}
+
+        def fake_describe(model, model_code):
+            """Record the model and model_code it was called with."""
+            captured["args"] = (model, model_code)
+            return {}
+
+        monkeypatch.setattr(generic_entities_module, "describe_generic_gate", fake_describe)
+
+        _coord_module._format_gate_diagnostics("REAL_MODEL", 303)
+
+        assert captured["args"] == ("REAL_MODEL", 303)
+
+    def test_fence_safe_strips_only_backticks_and_newlines(self):
+        """Only backticks and newlines are stripped, leaving other characters untouched."""
+        assert _coord_module._fence_safe("a`b\nc") == "abc"
+
+    def test_fence_safe_none_yields_empty_string(self):
+        """A None input yields an empty string rather than raising or returning "None"."""
+        assert _coord_module._fence_safe(None) == ""
+
+    def test_fit_param_at_exact_budget_returns_the_value_untruncated(self, monkeypatch):
+        """The '<=' fast-path boundary: an exact fit must not fall into the
+        truncating search, which would append the truncation note anyway."""
+        params = {"a": "x"}
+        value = "0123456789"
+        exact_length = len(_coord_module._url_for_params({**params, "b": value}))
+        monkeypatch.setattr(_coord_module, "ISSUE_URL_MAX_LENGTH", exact_length)
+
+        result = _coord_module._fit_param(params, "b", value)
+
+        assert result["b"] == value
+
+    def test_fit_param_uses_every_character_the_budget_allows(self, monkeypatch):
+        """The search's own '<=' boundary must not cost the reporter one usable
+        character: fixing the budget to the exact encoded length of a known
+        truncation point must return exactly that truncation, not a shorter one."""
+        params = {"a": "x"}
+        value = "0" * 500
+        target_mid = 20
+        note = _coord_module._ISSUE_FIELD_TRUNCATION_NOTE
+        exact_length = len(_coord_module._url_for_params({**params, "b": value[:target_mid] + note}))
+        monkeypatch.setattr(_coord_module, "ISSUE_URL_MAX_LENGTH", exact_length)
+
+        result = _coord_module._fit_param(params, "b", value)
+
+        assert result["b"] == value[:target_mid] + note
+
+    def test_build_new_device_issue_url_missing_payload_leaves_primary_payload_exactly_empty(self):
+        """The '(raw_value or ...)' fallback must be the empty string, not a marker."""
+        url = _coord_module._build_new_device_issue_url("HTV999XYZ", None)
+
+        primary_payload_value = url.split("primary_payload=")[1].split("&")[0]
+        assert primary_payload_value == ""
+
+    def test_build_new_device_issue_url_length_equal_to_the_budget_is_not_too_long(self, monkeypatch):
+        """The '> ISSUE_URL_MAX_LENGTH' gate must not trip at exact equality."""
+        model = "M"
+        raw_value = "10#AB"
+        params = {
+            "template": _coord_module.NEW_DEVICE_ISSUE_TEMPLATE,
+            "title": f"Add support for {model}",
+            "model": model,
+            "primary_payload": raw_value,
+        }
+        exact_length = len(_coord_module._url_for_params(params))
+        monkeypatch.setattr(_coord_module, "ISSUE_URL_MAX_LENGTH", exact_length)
+
+        url = _coord_module._build_new_device_issue_url(model, raw_value)
+
+        assert _coord_module._ISSUE_PAYLOAD_TOO_LONG_NOTE not in url
+
+    def test_build_new_device_issue_url_passes_the_real_model_and_model_code_to_the_generic_decode(self, monkeypatch):
+        """The issue URL builder forwards the real model and model_code into decode_generic."""
+        captured = {}
+
+        def fake_decode_generic(raw_value, model=None, model_code=None):
+            """Record the model and model_code it was called with."""
+            captured["model"] = model
+            captured["model_code"] = model_code
+            return {"decoder": "generic-tlv", "fields": []}
+
+        monkeypatch.setattr(_coord_module, "decode_generic", fake_decode_generic)
+
+        _coord_module._build_new_device_issue_url("HTV999XYZ", "10#ABCD", 303)
+
+        assert captured["model"] == "HTV999XYZ"
+        assert captured["model_code"] == 303
+
+    def test_build_new_device_issue_url_passes_the_real_model_and_model_code_to_gate_diagnostics(self, monkeypatch):
+        """The issue URL builder forwards the real model and model_code into gate diagnostics."""
+        captured = {}
+
+        def fake_gate(model, model_code):
+            """Record the model and model_code it was called with."""
+            captured["args"] = (model, model_code)
+            return "Blocked: reason"
+
+        monkeypatch.setattr(_coord_module, "_format_gate_diagnostics", fake_gate)
+
+        _coord_module._build_new_device_issue_url("REAL_MODEL", "10#AA", 303)
+
+        assert captured["args"] == ("REAL_MODEL", 303)
+
+
+class TestFindHubStatusEntries:
+    """`_find_hub_status_entries` returns None, not an empty string, for a
+    tri-state id that never showed up in this poll's subDeviceStatus."""
+
+    def test_missing_state_entry_returns_none_not_empty_string(self):
+        """A tri-state id absent from subDeviceStatus resolves to None, not an empty string."""
+        connected, state = _coord_module._find_hub_status_entries({"subDeviceStatus": [{"id": "connected", "value": "1"}]})
+
+        assert connected == {"id": "connected", "value": "1"}
+        assert state is None
+
     @pytest.mark.asyncio
     async def test_notification_id_unchanged_when_model_code_absent(self):
         """Without a modelCode the notification keeps its pre-existing id.
@@ -908,6 +1121,7 @@ class TestCoordinatorUpdate:
 
         assert result["hubs"] == []
         assert result["sensors"] == {}
+        assert result["status"] == {}
 
     @pytest.mark.asyncio
     async def test_update_hubs_get_hid_and_brand_injected(self):
@@ -1101,6 +1315,75 @@ class TestCoordinatorUpdate:
 
         assert result is decoded
 
+    def test_a_skipped_zone_does_not_stop_a_later_commanded_zone_from_being_preserved(self):
+        """Zone 2 has no recorded command and must be skipped without halting
+        the walk before zone 1, which does have one, gets its turn."""
+        coord, _ = _make_coord()
+        current_zone1 = {"open": False, "duration_seconds": 0, "state_raw": 0}
+        coord.data = {"sensors": {"100_200_1": {"data": {"zones": {1: current_zone1, 2: {"open": True}}}}}}
+        coord._last_valve_command_at = {("100_200_1", 1): datetime(2024, 1, 2, tzinfo=UTC)}
+        decoded = {
+            "zones": {
+                2: {"open": True, "duration_seconds": 5, "state_raw": 9},
+                1: {"open": True, "duration_seconds": 60, "state_raw": 1},
+            }
+        }
+
+        result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
+            coord,
+            "100_200_1",
+            MODEL_VALVE_245,
+            decoded,
+            {"time": int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000)},
+        )
+
+        assert result["zones"][1] == current_zone1
+
+    def test_a_fresh_zone_does_not_stop_a_later_stale_zone_from_being_preserved(self):
+        """Zone 2's poll is newer than its command and must be skipped without
+        halting the walk before zone 1, which is genuinely stale."""
+        coord, _ = _make_coord()
+        current_zone1 = {"open": False, "duration_seconds": 0, "state_raw": 0}
+        coord.data = {"sensors": {"100_200_1": {"data": {"zones": {1: current_zone1, 2: {"open": False}}}}}}
+        coord._last_valve_command_at = {
+            ("100_200_1", 2): datetime(2024, 1, 1, tzinfo=UTC),
+            ("100_200_1", 1): datetime(2024, 1, 5, tzinfo=UTC),
+        }
+        decoded = {
+            "zones": {
+                2: {"open": True, "duration_seconds": 5, "state_raw": 9},
+                1: {"open": True, "duration_seconds": 60, "state_raw": 1},
+            }
+        }
+
+        result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
+            coord,
+            "100_200_1",
+            MODEL_VALVE_245,
+            decoded,
+            {"time": int(datetime(2024, 1, 2, tzinfo=UTC).timestamp() * 1000)},
+        )
+
+        assert result["zones"][1] == current_zone1
+
+    def test_no_zone_needing_preservation_returns_the_original_object(self):
+        """changed must start False: with nothing to preserve, identity of the
+        original decode is what "no work needed" looks like."""
+        coord, _ = _make_coord()
+        coord.data = {"sensors": {"100_200_1": {"data": {"zones": {1: {"open": False}}}}}}
+        coord._last_valve_command_at = {("100_200_1", 1): datetime(2024, 1, 1, tzinfo=UTC)}
+        decoded = {"zones": {1: {"open": True, "duration_seconds": 60, "state_raw": 1}}}
+
+        result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
+            coord,
+            "100_200_1",
+            MODEL_VALVE_245,
+            decoded,
+            {"time": int(datetime(2024, 1, 2, tzinfo=UTC).timestamp() * 1000)},
+        )
+
+        assert result is decoded
+
     def test_status_entry_time_returns_none_for_invalid_time(self):
         """A malformed status time cannot participate in stale-poll comparisons."""
         assert _coord_module._status_entry_time({"time": "not-a-number"}) is None
@@ -1114,6 +1397,94 @@ class TestCoordinatorUpdate:
 
         assert recorded.tzinfo is UTC
         assert instance._last_valve_command_at[("100_200_1", 1)] is recorded
+
+
+class TestCoordinatorInitPassesItsArgsThroughToTheBaseClassAndItsCollaborators:
+    """Every value __init__ hands to DataUpdateCoordinator.__init__, plus the
+    hass it hands its two Repairs collaborators, is observable on the built
+    instance, so a dropped or swapped argument here cannot hide."""
+
+    def test_hass_logger_entry_name_and_poll_interval_reach_the_base_class(self):
+        """Every constructor argument and derived attribute lands on the built instance."""
+        hass = MagicMock()
+        client = AsyncMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.data = {CONF_HIDS: [100]}
+        entry.options = {}
+
+        coordinator = _coord_module.RainPointCoordinator(hass, client, entry)
+
+        assert coordinator.hass is hass
+        assert coordinator.logger is _coord_module._LOGGER
+        assert coordinator.config_entry is entry
+        assert coordinator.name == "RainPoint coordinator"
+        assert coordinator.update_interval == timedelta(seconds=120)
+        assert coordinator._silent_issues._hass is hass
+        assert coordinator._hub_connectivity_issues._hass is hass
+        assert coordinator._aged_out_sensor_keys == frozenset()
+        assert coordinator._last_enumerated_sensor_keys is None
+        assert coordinator._warned_empty_enumeration == set()
+
+
+class TestKnowsHubMidAndPushEntryPointsToleranceOfAMissingHubsKey:
+    """The three read sites sharing `data.get("hubs", [])` must default to an
+    empty list, not None, when a poll's data dict carries no "hubs" key."""
+
+    def test_knows_hub_mid_false_when_no_hubs_key_present(self):
+        """A data dict with no "hubs" key defaults to an empty list, so no mid is known."""
+        coord, _client = _make_coord()
+        coord.data = {}
+
+        assert _coord_module.RainPointCoordinator.knows_hub_mid(coord, 123) is False
+
+    def test_apply_push_update_tolerates_data_with_no_hubs_key(self):
+        """A data dict with no "hubs" key is left untouched rather than raising."""
+        coord, _client = _make_coord()
+        coord.data = {"other": 1}
+        coord.async_update_listeners = MagicMock()
+
+        _coord_module.RainPointCoordinator.apply_push_update(coord, 1, "D1", "x", None)
+
+        assert coord.data == {"other": 1}
+
+    def test_apply_hub_push_update_tolerates_data_with_no_hubs_key(self):
+        """A data dict with no "hubs" key is left untouched rather than raising."""
+        coord, _client = _make_coord()
+        coord.data = {"other": 1}
+        coord.async_update_listeners = MagicMock()
+
+        _coord_module.RainPointCoordinator.apply_hub_push_update(coord, 1, True, 123)
+
+        assert coord.data == {"other": 1}
+
+
+class TestMergePushSensorEntryToleranceOfMissingBranches:
+    """`_merge_push_sensor_entry` must build fresh sensors/status branches, and
+    a fresh subDeviceStatus list, rather than assuming any of the three
+    already exist in the shape it is about to read."""
+
+    def test_tolerates_data_missing_sensors_and_status_keys_entirely(self):
+        """A push merge builds fresh sensors and status branches when neither key exists yet."""
+        hub = _push_hub()
+        coord, _client = _make_coord()
+        coord.data = {"hubs": [hub]}
+        coord.async_update_listeners = MagicMock()
+        coord.async_set_updated_data = MagicMock()
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        assert "zones" in coord.data["sensors"]["100_200_1"]["data"]
+        assert coord.data["status"][200]["subDeviceStatus"][0]["id"] == "D1"
+
+    def test_tolerates_an_existing_mid_status_entry_missing_subdevicestatus(self):
+        """A push merge builds a fresh subDeviceStatus list when the mid entry exists without one."""
+        hub = _push_hub()
+        coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}}, status={200: {}})
+
+        _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
+
+        assert coord.data["status"][200]["subDeviceStatus"][0]["id"] == "D1"
 
 
 class TestHtv210bStalenessGuardCoverage:
@@ -1651,6 +2022,69 @@ class TestBuildSilentSubdevice:
 
         notify.assert_not_called()
 
+    def test_silent_entry_carries_the_subdevices_own_model(self):
+        """The "model" key must come from the real sub-device, not a dropped one."""
+        coord, _ = _make_coord()
+        hub, sub = self._hub_and_sub()
+        sub["model"] = "HTV245FRF"
+        coord._silent_poll_counts["100_200_1"] = 2
+
+        result = _coord_module.RainPointCoordinator._build_silent_subdevice(coord, hub, 200, 1, sub, "100_200_1")
+
+        assert result["data"]["model"] == "HTV245FRF"
+
+
+class TestDecodeOneSubdevice:
+    """Direct-call tests for _decode_one_subdevice's decode dispatch and its
+    unknown-model notification hop."""
+
+    def test_passes_the_real_model_code_through_to_the_decode(self, monkeypatch):
+        """The dispatch forwards the real modelCode into the decode call."""
+        captured = {}
+
+        def fake_decode(model, raw_value, model_code=None):
+            """Record the model_code it was called with."""
+            captured["model_code"] = model_code
+            return {"type": "known"}
+
+        monkeypatch.setattr(_coord_module, "_decode_subdevice_payload", fake_decode)
+        coord, _client = _make_coord()
+        hub = {"hid": 100}
+        sub = {"model": "SOME_MODEL", "modelCode": 303}
+        status_entry = {"id": "D1", "value": "10#AA", "time": 1}
+
+        _coord_module.RainPointCoordinator._decode_one_subdevice(coord, hub, 200, 1, sub, status_entry)
+
+        assert captured["model_code"] == 303
+
+    def test_notifies_unknown_model_with_the_real_mid_and_addr(self):
+        """An unrecognised model triggers a notification carrying the real mid and addr."""
+        coord, _client = _make_coord()
+        hub = {"hid": 100}
+        sub = {"model": "TOTALLY_UNKNOWN_MODEL"}
+        status_entry = {"id": "D1", "value": "10#AA", "time": 1}
+
+        with patch.object(_coord_module.RainPointCoordinator, "_notify_unknown_model") as mock_notify:
+            _coord_module.RainPointCoordinator._decode_one_subdevice(coord, hub, 200, 7, sub, status_entry)
+
+        mock_notify.assert_called_once_with(coord, "TOTALLY_UNKNOWN_MODEL", 200, 7, "10#AA", None)
+
+
+class TestWarnOnMalformedRecords:
+    """The malformed-status count must be read from the real subDeviceStatus
+    field, not a wrong-cased or dropped one, or a real degradation goes
+    unwarned and unremembered."""
+
+    def test_a_malformed_status_entry_is_counted_from_the_real_status_field(self):
+        """A malformed subDeviceStatus entry is counted under the real hid_mid key."""
+        coord, _ = _make_coord()
+        hub = {"hid": 100, "mid": 200, "subDevices": []}
+        status = {"subDeviceStatus": [{"id": None, "value": "x"}]}
+
+        _coord_module.RainPointCoordinator._warn_on_malformed_records(coord, hub, status)
+
+        assert "100_200" in coord._warned_malformed_records
+
 
 class TestHubConnectivity:
     """Tests for _read_hub_connectivity and hub_connected_flag."""
@@ -2136,6 +2570,58 @@ class TestSyncHubConnectivityIssues:
         (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
         assert records[0].hub_name is None
 
+    def test_a_bluetooth_wrapper_record_does_not_stop_a_later_real_hub_from_being_recorded(self):
+        """The "skip a non-hub record" branch must continue the loop, not break it."""
+        coord, _ = _make_coord()
+        wrapper = _wrapper_record()
+        real_hub = _make_hub(hid=100, mid=200)
+        real_hub["hid"] = 100
+        real_hub["name"] = "Garden Hub"
+        real_hub["model"] = "HWG023WBRF-V2"
+        hub_connectivity = {200: {"state": _coord_module.HUB_CONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [wrapper, real_hub], hub_connectivity)
+
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert len(records) == 1
+        assert records[0].hid == 100
+        assert records[0].mid == 200
+        assert records[0].hub_name == "Garden Hub"
+        assert records[0].model == "HWG023WBRF-V2"
+
+    def test_a_hub_below_threshold_does_not_stop_a_later_hub_from_being_recorded(self):
+        """The "below-threshold disconnect" branch must continue, not break."""
+        coord, _ = _make_coord()
+        hub_a = _make_hub(hid=100, mid=200)
+        hub_a["hid"] = 100
+        hub_b = _make_hub(hid=101, mid=300)
+        hub_b["hid"] = 101
+        hub_connectivity = {
+            200: {"state": _coord_module.HUB_DISCONNECTED},
+            300: {"state": _coord_module.HUB_CONNECTED},
+        }
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub_a, hub_b], hub_connectivity)
+
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert [r.mid for r in records] == [300]
+
+    def test_a_disconnected_hub_above_threshold_is_recorded_with_its_own_name(self):
+        """hub_name in the disconnected branch's own record construction must
+        come from the real hub, not a dropped kwarg."""
+        coord, _ = _make_coord()
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        hub["name"] = "Offline Hub"
+        coord._hub_disconnect_since = {(100, 200): self._seconds_ago(coord, _coord_module.HUB_DISCONNECT_DEBOUNCE_SECONDS + 1)}
+        hub_connectivity = {200: {"state": _coord_module.HUB_DISCONNECTED}}
+
+        _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [hub], hub_connectivity)
+
+        (records,) = coord._hub_connectivity_issues.async_sync.call_args.args
+        assert records[0].hub_name == "Offline Hub"
+        assert records[0].disconnected is True
+
 
 class TestSyncSilentDeviceIssues:
     """Direct-call tests for _sync_silent_device_issues: one SilentDeviceRecord
@@ -2332,6 +2818,18 @@ class TestSyncSilentDeviceIssues:
             silent_device_issue_id(100, 200, 1),
             silent_device_issue_id(100, 200, 2),
         }
+
+    def test_a_hid_containing_an_underscore_still_resolves_to_the_right_issue_id(self):
+        """A protected key must be split from the right (rsplit, count 2), or
+        an underscore inside a hid corrupts the recovered (hid, mid, addr)."""
+        coord, _ = _make_coord()
+        coord._silent_poll_counts = {"a_b_200_1": 5}
+        missing_hub_keys = frozenset({("a_b", 200)})
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, {}, [], missing_hub_keys=missing_hub_keys)
+
+        _records, kwargs = coord._silent_issues.async_sync.call_args
+        assert silent_device_issue_id("a_b", 200, 1) in kwargs["unreachable_ids"]
 
 
 class TestSilentIssueSurvivesHubOutage:
@@ -3193,6 +3691,19 @@ class TestTrackMissingHubs:
         assert key not in coord._hub_absent_poll_counts
         assert provisional == set()
 
+    def test_a_hub_that_was_never_missing_does_not_raise_when_marked_present(self):
+        """The reset-on-reappear pop must default rather than raise on a key
+        that was never being tracked as absent."""
+        coord, _ = _make_coord()
+        hub = _make_hub(mid=200)
+        hub["hid"] = 100
+        coord._last_poll_hub_keys = {(100, 200)}
+        coord._hub_absent_poll_counts = {}
+
+        provisional = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [hub])
+
+        assert provisional == frozenset()
+
 
 _TRACK_ORPHANS = _coord_module.RainPointCoordinator._track_orphaned_keys
 
@@ -3483,6 +3994,52 @@ class TestTrackOrphanedKeys:
         assert aged_lines[0].levelno == logging.INFO
         assert self.KEY in aged_lines[0].getMessage()
         assert "Sub1" not in aged_lines[0].getMessage()
+
+    def test_a_hub_that_still_enumerates_its_subdevices_is_not_flagged_as_newly_empty(self):
+        """The "does this hub still list children" gate must read the real
+        subDevices field, not a wrong-cased or dropped one."""
+        coord, _ = _make_coord()
+        hub = self._hub(hid=100, mid=200, addrs=(1,))
+        coord._last_poll_sensor_keys = {"100_200_1", "100_200_9"}
+
+        _TRACK_ORPHANS(coord, [hub])
+
+        assert "100_200" not in coord._warned_empty_enumeration
+
+    def test_a_hub_with_subdevices_does_not_stop_a_later_empty_hub_from_being_checked(self):
+        """The "skip this hub" branch must continue the loop, not break it."""
+        coord, _ = _make_coord()
+        hub1 = self._hub(hid=100, mid=200, addrs=(1,))
+        hub2 = self._hub(hid=101, mid=300, addrs=())
+        coord._last_poll_sensor_keys = {"101_300_1"}
+
+        _TRACK_ORPHANS(coord, [hub1, hub2])
+
+        assert "101_300" in coord._warned_empty_enumeration
+
+    def test_a_hub_with_no_missing_keys_does_not_stop_a_later_hub_from_being_flagged(self):
+        """The "nothing counted under this hub" branch must continue, not break."""
+        coord, _ = _make_coord()
+        hub_a = self._hub(hid=100, mid=200, addrs=())
+        hub_b = self._hub(hid=101, mid=300, addrs=())
+        coord._last_poll_sensor_keys = {"101_300_1"}
+
+        _TRACK_ORPHANS(coord, [hub_a, hub_b])
+
+        assert "101_300" in coord._warned_empty_enumeration
+        assert "100_200" not in coord._warned_empty_enumeration
+
+    def test_an_already_warned_hub_does_not_stop_a_later_hub_from_being_flagged(self):
+        """The dedup-on-already-warned branch must continue, not break."""
+        coord, _ = _make_coord()
+        hub_a = self._hub(hid=100, mid=200, addrs=())
+        hub_b = self._hub(hid=101, mid=300, addrs=())
+        coord._last_poll_sensor_keys = {"100_200_1", "101_300_1"}
+        coord._warned_empty_enumeration = {"100_200"}
+
+        _TRACK_ORPHANS(coord, [hub_a, hub_b])
+
+        assert "101_300" in coord._warned_empty_enumeration
 
 
 class TestOrphanedKeyCounterIsInertOnExistingSurfaces:
@@ -5096,6 +5653,21 @@ class TestPureHelpers:
         assert result["type"] == "unknown"
         assert "generic" in result
 
+    def test_decode_subdevice_payload_passes_the_real_model_code_to_the_generic_decode(self, monkeypatch):
+        """The unknown-model fallback must forward the real modelCode, not a dropped one."""
+        captured = {}
+
+        def fake_decode_generic(raw_value, model=None, model_code=None):
+            """Record the model_code it was called with."""
+            captured["model_code"] = model_code
+            return {"decoder": "generic-tlv", "fields": []}
+
+        monkeypatch.setattr(_coord_module, "decode_generic", fake_decode_generic)
+
+        _coord_module._decode_subdevice_payload("UNKNOWN_XYZ", "10#AA", model_code=303)
+
+        assert captured["model_code"] == 303
+
     # _attach_device_timestamp
     def test_attach_device_timestamp_valid_ms(self):
         """A valid epoch-ms 'time' adds device_timestamp + timestamp_source."""
@@ -5103,6 +5675,12 @@ class TestPureHelpers:
         _coord_module._attach_device_timestamp(decoded, {"time": 1700000000000})
         assert "device_timestamp" in decoded
         assert decoded["timestamp_source"] == "device"
+
+    def test_attach_device_timestamp_divides_by_1000_not_1001(self):
+        """'time' is epoch milliseconds; the divisor must be exactly 1000."""
+        decoded = {"type": "x"}
+        _coord_module._attach_device_timestamp(decoded, {"time": 1700000000000})
+        assert decoded["device_timestamp"] == datetime.fromtimestamp(1700000000000 / 1000, tz=UTC).isoformat()
 
     def test_attach_device_timestamp_decoded_is_none_is_noop(self):
         """A None decoded value is a no-op and does not raise."""
@@ -5151,6 +5729,9 @@ class TestPureHelpers:
         ):
             assert key in entry
         assert entry["hub_name"] == "MyHub"
+        assert entry["home_name"] == "Home"
+        assert entry["device_name"] == "dev1"
+        assert entry["product_key"] == "pk1"
         assert entry["data"] == {"type": "x"}
 
     def test_build_sensor_entry_hub_name_defaults_to_Hub(self):
@@ -5159,6 +5740,93 @@ class TestPureHelpers:
         sub = {"name": "S", "model": "M", "softVer": "1.0"}
         entry = _coord_module._build_sensor_entry(hub, sub, mid=200, addr=1, status_entry={"id": "D1"}, decoded=None)
         assert entry["hub_name"] == "Hub"
+
+
+class TestValveZonePollIsStale:
+    """The two staleness comparisons are strict; an exact-equality poll is
+    the boundary the '<' vs '<=' choice actually decides."""
+
+    def test_a_poll_time_exactly_equal_to_the_command_time_is_not_stale(self):
+        """A poll timestamp exactly equal to the command timestamp is not treated as stale."""
+        moment = datetime(2024, 1, 1, tzinfo=UTC)
+
+        assert _coord_module._valve_zone_poll_is_stale(moment, moment, datetime(2024, 1, 2, tzinfo=UTC)) is False
+
+    def test_wall_clock_elapsed_exactly_equal_to_the_guard_window_is_not_stale(self):
+        """Elapsed wall-clock time exactly equal to the guard window is not treated as stale."""
+        command_time = datetime(2024, 1, 1, tzinfo=UTC)
+        now = command_time + _coord_module.STALE_VALVE_POLL_GUARD
+
+        assert _coord_module._valve_zone_poll_is_stale(None, command_time, now) is False
+
+
+class TestFetchStatusByMidDeviceListShape:
+    """The identity keys `_fetch_status_by_mid` sends to multipleDeviceStatus,
+    and how it fills in the fields per-hub `_async_update_data` relies on."""
+
+    @pytest.mark.asyncio
+    async def test_the_request_carries_mid_devicename_and_productkey_per_hub(self):
+        """The multipleDeviceStatus request carries the real mid, deviceName and productKey."""
+        coord, client = _make_coord()
+        client.get_multiple_device_status.return_value = []
+        hub = {"mid": 200, "deviceName": "dev1", "productKey": "pk1"}
+
+        await _coord_module.RainPointCoordinator._fetch_status_by_mid(coord, [hub])
+
+        sent = client.get_multiple_device_status.await_args.args[0]
+        assert sent == [{"mid": 200, "deviceName": "dev1", "productKey": "pk1"}]
+
+    @pytest.mark.asyncio
+    async def test_missing_devicename_and_productkey_default_to_empty_strings(self):
+        """A hub missing deviceName or productKey sends empty strings rather than None."""
+        coord, client = _make_coord()
+        client.get_multiple_device_status.return_value = []
+        hub = {"mid": 200}
+
+        await _coord_module.RainPointCoordinator._fetch_status_by_mid(coord, [hub])
+
+        sent = client.get_multiple_device_status.await_args.args[0]
+        assert sent == [{"mid": 200, "deviceName": "", "productKey": ""}]
+
+    @pytest.mark.asyncio
+    async def test_a_multiple_status_entry_missing_subdevicestatus_defaults_to_empty(self):
+        """A response entry missing subDeviceStatus defaults to an empty list."""
+        coord, client = _make_coord()
+        client.get_multiple_device_status.return_value = [{"mid": 200}]
+        hub = {"mid": 200, "deviceName": "d", "productKey": "p"}
+
+        result = await _coord_module.RainPointCoordinator._fetch_status_by_mid(coord, [hub])
+
+        assert result[200]["subDeviceStatus"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_hub_the_multiple_status_response_never_mentioned_gets_an_empty_entry(self):
+        """A hub absent from the multipleDeviceStatus response still gets an empty status entry."""
+        coord, client = _make_coord()
+        hub_a = {"mid": 200, "deviceName": "d", "productKey": "p"}
+        hub_b = {"mid": 300, "deviceName": "d2", "productKey": "p2"}
+        client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "D1"}]}]
+
+        result = await _coord_module.RainPointCoordinator._fetch_status_by_mid(coord, [hub_a, hub_b])
+
+        assert result[300]["subDeviceStatus"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_hub_missing_from_the_status_fetch_result_does_not_raise(self, monkeypatch):
+        """The `_absent_status()` default treats a missing entry as an outage,
+        not as an object the rest of the poll can safely call .get() on."""
+        coord, client = _make_coord(hids=[100])
+        client.get_devices_by_hid.return_value = [_make_hub()]
+
+        async def _empty_status_by_mid(_self, _hubs):
+            """Simulate a status fetch that returns nothing for any hub."""
+            return {}
+
+        monkeypatch.setattr(_coord_module.RainPointCoordinator, "_fetch_status_by_mid", _empty_status_by_mid)
+
+        result = await _run(coord)
+
+        assert result["sensors"] == {}
 
 
 class TestApiErrorSurfacing:
@@ -7477,6 +8145,18 @@ class TestPayloadHistoryRealTimeline:
             published = coordinator.payload_history()
             assert isinstance(published[self.KEY], list)
             assert set(published[self.KEY][0]) == {"value", "time"}
+
+    @pytest.mark.asyncio
+    async def test_the_recorded_time_matches_the_status_entrys_own_time(self):
+        """The "time" key must be read from the real status entry, not a
+        wrong-cased or dropped one."""
+        coordinator, client = self._build()
+        with patch.object(_repairs_module.ir, "async_create_issue"), patch.object(_repairs_module.ir, "async_delete_issue"):
+            self._report(client, _RAIN_DRY, time_ms=1234567890123)
+            await coordinator.async_config_entry_first_refresh()
+
+            published = coordinator.payload_history()
+            assert published[self.KEY][0]["time"] == 1234567890123
 
     @pytest.mark.asyncio
     async def test_a_departed_key_stops_holding_payloads(self):
