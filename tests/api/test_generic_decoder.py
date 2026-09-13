@@ -109,7 +109,8 @@ class TestDecodeGenericRobustness:
         # The caught exception's own message, not a placeholder: this is the
         # ASCII-detection branch's except, a different site from the hex
         # branch's (see test_non_hex_body_error_names_the_real_condition).
-        assert result["error"] == "argument of type 'NoneType' is not a container or iterable"
+        # Only the prefix is stable: Python 3.14 reworded the rest of this TypeError.
+        assert result["error"].startswith("argument of type 'NoneType' is not ")
 
     def test_non_string_raw_is_not_logged_verbatim(self, caplog):
         """A list-shaped raw reaches the same except block via a different
