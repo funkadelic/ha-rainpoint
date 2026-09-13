@@ -39,11 +39,11 @@ mutation = ["mutmut>=3.7,<4"]
 # debug.py is left alone for the same reason it is left out of coverage: nothing
 # imports it in a shipped build.
 #
-# The one deselected test pins api/decoders.py by whole-file digest. mutmut works
-# by rewriting every source file with its mutants inlined, so that digest can
-# never match under it, and the test would fail against the unmutated baseline
-# before any mutant is even tried. It still runs, and still guards the file, in
-# every ordinary pytest run.
+# The deselected tests inspect source that mutmut rewrites with every mutant inlined
+# (the decoders.py digest pin and the mqtt.py call-graph pair), so they fail on the
+# unmutated baseline. They still run in every ordinary pytest run. A renamed test
+# leaves a stale node id here, which shows up as "failed to collect stats" before
+# the first mutant runs.
 #
 # on_dependency_change defaults to "warn", which keeps a cache built under the
 # previous config when one of the copied inputs changes. That cache is what
@@ -82,11 +82,24 @@ cache_invalidation_files = [
     ".github/ISSUE_TEMPLATE/*",
 ]
 do_not_mutate = ["*/debug.py"]
+# Mutated log calls were a third of all survivors and test nothing but log text.
+# Only the line a statement starts on is matched, so continuation lines still mutate.
+# mutmut keeps existing mutant files, so delete mutants/ after changing this.
+do_not_mutate_patterns = ['_LOGGER\.', 'debug_with_version\(']
+# At the default of 15, a mutant that breaks a loop keeps growing for about a minute,
+# enough memory to hang WSL. A slow mutant under load becomes a timeout, not a survivor.
+timeout_multiplier = 5.0
+# Vale lints prose and cannot affect the tests, but the git detector counts any
+# non-Python edit as a dependency change, and "rerun" then discards the whole
+# cache at the start of the next run.
+cache_invalidation_exclude = [".vale.ini", ".vale/*"]
 on_dependency_change = "rerun"
 pytest_add_cli_args = [
     "--no-cov",
     "--deselect",
-    "tests/api/test_generic_decoder.py::TestAsciiFramingNonRegression::test_decoders_py_is_byte_identical_to_the_phase_base",
+    "tests/api/test_generic_decoder.py::TestAsciiFramingNonRegression::test_decoders_py_digest_is_pinned",
+    "--deselect",
+    "tests/api/test_mqtt.py::TestPushDispatchNeverRunsOnPahoThread",
 ]
 pytest_add_cli_args_test_selection = ["tests/"]
 
