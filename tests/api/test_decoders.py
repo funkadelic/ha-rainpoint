@@ -114,6 +114,30 @@ class TestDecodeHtv213frfValve:
         assert isinstance(result, dict)
         assert "error" in result
 
+    def test_malformed_payload_error_envelope_is_the_documented_shape(self):
+        """The router's own error envelope carries every key the caller depends on."""
+        result = decode_htv213frf_valve("not_a_valid_payload")
+        assert result == {
+            "type": "valve_hub",
+            "rssi_dbm": None,
+            "raw_bytes": [],
+            "zones": {},
+            "tlv_raw": {},
+            "decoder": "htv213frf_error",
+            "error": "Unexpected payload format: not_a_valid_payload",
+        }
+
+    def test_semicolon_with_no_comma_still_declines_rather_than_misrouting_to_ascii(self):
+        """Routing requires a comma AND a semicolon-or-pipe, not either alone.
+
+        A payload with ';' but no ',' must fall through to the same
+        'Unexpected payload format' error the router raises directly, rather
+        than being handed to the ASCII decoder, which would instead fail on
+        its own header-parsing error.
+        """
+        result = decode_htv213frf_valve("test;no_comma_here")
+        assert result["error"] == "Unexpected payload format: test;no_comma_here"
+
     def test_rssi_negative_value_preserved(self):
         """Negative RSSI value (-84) is preserved in the decoded output."""
         result = decode_htv213frf_valve(SAMPLE_HTV245_ASCII_PAYLOAD)
@@ -160,12 +184,35 @@ class TestDecodeHtv213frfValve:
         assert zone1["raw_zone_id"] == 0
         assert zone1["open"] is True
         assert zone1["duration_seconds"] == 0
+        assert zone1["raw_ascii_data"] == "0,149,0,0,0,0"
 
         # Zone 2: state=6 (!=0 so open), duration=0
         zone2 = result["zones"][2]
         assert zone2["raw_zone_id"] == 0
         assert zone2["open"] is True
         assert zone2["duration_seconds"] == 0
+        assert zone2["raw_ascii_data"] == "0,6,0,0,0,0"
+
+        # debug_info carries the parse intermediates verbatim, for diagnostics.
+        assert result["debug_info"]["payload_format"] == "ascii"
+        assert result["debug_info"]["raw_payload"] == SAMPLE_HTV245_ASCII_PAYLOAD
+        assert result["debug_info"]["header_parts"] == ["1", "-84", "1"]
+        assert result["debug_info"]["zones_found"] == 2
+        assert result["debug_info"]["rssi_raw"] == -84
+
+    def test_ascii_payload_with_two_semicolons_still_parses_both_zones(self):
+        """The header/body split takes only the first ';', however many follow.
+
+        Splitting unbounded or with a wider maxsplit would instead try to
+        unpack more than two pieces and fail; splitting from the right would
+        fold the leading zone data into the header and misread it as a flags
+        field, raising on the non-numeric token that produces.
+        """
+        raw = SAMPLE_HTV245_ASCII_PAYLOAD + ";trailing_extra_semicolon_segment"
+        result = decode_htv213frf_valve(raw)
+
+        assert "error" not in result
+        assert len(result["zones"]) == 2
 
     # --- TLV/hex path assertions ---
 
@@ -178,6 +225,8 @@ class TestDecodeHtv213frfValve:
         """TLV payload decoder field is 'htv213frf_hex'."""
         result = decode_htv213frf_valve(SAMPLE_HTV245_TLV_PAYLOAD)
         assert result["decoder"] == "htv213frf_hex"
+        assert result["tlv_raw"] == {}
+        assert result["raw_bytes"] == _parse_rainpoint_payload(SAMPLE_HTV245_TLV_PAYLOAD)
 
     def test_tlv_payload_zone_states(self):
         """TLV payload zone open/closed states and durations match expected values.
@@ -272,6 +321,20 @@ class TestDecodeHtv213frfValve:
         assert decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)["rssi_dbm"] == -37
         assert decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)["rssi_dbm"] == -39
 
+    def test_rssi_scan_reaches_a_header_at_the_very_last_possible_offset(self):
+        """The scan's own upper bound must not stop one byte short of the frame end.
+
+        A 4-byte frame's only possible header position is offset 0, needing
+        b[3] to complete the PHY read -- the last index the scan is allowed
+        to touch. A narrower upper bound would skip this position entirely
+        and report no signal at all.
+        """
+        assert decode_htv213frf_valve("11#17E1AE00")["rssi_dbm"] == -82
+
+    def test_rssi_dbm_byte_of_exactly_0x80_is_accepted(self):
+        """0x80 (-128 dBm) is negative and must not fall just outside the sign guard."""
+        assert decode_htv213frf_valve("11#17E18000")["rssi_dbm"] == -128
+
     def test_rssi_found_when_header_record_is_not_first(self):
         """The header record is located by signature, so a reordered stream still resolves RSSI."""
         # HTV345FRF frame whose leading records precede the 0x17/0xE1 header (0xCA -> -54).
@@ -321,6 +384,17 @@ class TestDecodeHtv213frfValve:
         assert decode_htv213frf_valve("11#17E1B402FEFF0FEC4BCB19")["rssi_dbm"] is None
 
     # --- Battery (STA_BAT record on real hex frames) ---
+
+    def test_battery_read_is_dp_id_prefixed_not_defaulted(self):
+        """The hex path's battery read must forward dp_id_prefixed=True, not drop it.
+
+        0x80's own bits look like a self-contained wide-form record if read
+        instead of skipped as a dp_id, which shifts the STA_BAT record out of
+        alignment and loses it entirely.
+        """
+        result = decode_htv213frf_valve("11#80DC01")
+        assert result["battery_flag"] == 1
+        assert result["battery_percent"] == 100
 
     def test_full_frame_reports_battery_percent(self):
         """A real full HTV245FRF hex frame surfaces battery_percent from its STA_BAT record."""
@@ -483,6 +557,21 @@ class TestDecodeHtv145frf:
         assert result["decoder"] == "htv145frf_error"
         assert result["zones"] == {}
         assert "error" in result
+
+    def test_malformed_payload_error_envelope_is_the_documented_shape(self):
+        """Every key of the error envelope, not just the ones spot-checked above."""
+        result = decode_htv145frf("10#not_hex")
+        assert result == {
+            "type": "valve_hub",
+            "rssi_dbm": None,
+            "raw_bytes": [],
+            "zones": {},
+            "tlv_raw": {},
+            "hub_online": False,
+            "battery_flag": None,
+            "decoder": "htv145frf_error",
+            "error": "non-hexadecimal number found in fromhex() arg at position 0",
+        }
 
     def test_empty_payload_returns_error_dict(self):
         """A payload missing the '#' separator is handled gracefully."""
@@ -765,6 +854,35 @@ class TestHtv213DpMapEdgeCases:
         assert 0x10 not in dp_map, f"Truncated DP 0x10 should not be captured; got {dp_map}"
         assert dp_map.get(0x11) == (0xDC, 0x05), f"Expected DP 0x11 = (0xDC, 0x05) after re-alignment; got {dp_map}"
 
+    def test_truncated_record_advance_does_not_rewind_past_a_record_already_read(self):
+        """The truncated-record skip must advance the cursor by 1, not reset it to 1.
+
+        Record 1 (dp=0x10, type=0xDC, val=0xAA) consumes 3 bytes, landing the
+        cursor at offset 3, where a 0xB7 (4-byte) record is truncated. That
+        truncation must be skipped forward one byte at a time, not used to
+        rewind into record 1's own value byte and misread it as a bogus dp_id.
+        """
+        from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
+
+        # 10 DC AA | 20 B7 11 22 (0xB7 needs 4 value bytes, only 2 remain)
+        payload = bytes([0x10, 0xDC, 0xAA, 0x20, 0xB7, 0x11, 0x22])
+        dp_map = _scan_htv213_dp_map(payload)
+        assert dp_map == {0x10: (0xDC, 0xAA)}
+
+    def test_truncated_record_advance_is_exactly_one_byte_not_two(self):
+        """The truncated-record branch must advance the cursor by 1, not 2.
+
+        Skipping an extra byte on top of the 1-byte re-alignment step would
+        silently swallow the very byte that re-alignment exists to visit,
+        landing the next record on the wrong dp_id entirely.
+        """
+        from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
+
+        # DP 0x10, type 0xB7 (needs 4 value bytes, only 3 remain) -- truncated.
+        payload = bytes([0x10, 0xB7, 0xDC, 0xD8, 0x77])
+        dp_map = _scan_htv213_dp_map(payload)
+        assert dp_map == {0xB7: (0xDC, 0xD8)}
+
     def test_unknown_type_byte_is_skipped(self):
         """An unrecognized type byte advances 1 byte and produces no dp entry."""
         from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
@@ -797,6 +915,19 @@ class TestDecodeMoistureFull:
         assert result["battery_percent"] == 100
         assert result["report_time"] == "2026-03-27T18:35:58"
 
+    def test_hex_payload_asserts_every_field(self):
+        """Every key the hex decoder builds, not just the ones spot-checked above."""
+        result = decode_moisture_full(MOISTURE_FULL_HEX_PAYLOAD)
+        assert result["temperature_f10"] == 683
+        assert result["illuminance_raw10"] == 1632
+        assert result["raw_bytes"] == bytes.fromhex("E1A200DC0185AB02881FC6600600FF0FFA28F718")
+
+    def test_hex_payload_at_exactly_the_sixteen_byte_floor_succeeds(self):
+        """16 bytes is the documented minimum and must not require a 17th."""
+        result = decode_moisture_full("10#E1A200DC0185AB02881FC6600600FF0F")
+        assert "error" not in result
+        assert result["moisture_percent"] == 31
+
     def test_ascii_payload_fields(self):
         """Ascii payload fields."""
         result = decode_moisture_full(MOISTURE_FULL_ASCII_PAYLOAD)
@@ -806,6 +937,15 @@ class TestDecodeMoistureFull:
         # 694/10=69.4F -> (69.4-32)*5/9 ≈ 20.78C
         assert abs(result["temperature_c"] - 20.78) < 0.05
         assert result["decoder"] == "hcs021frf_ascii"
+
+    def test_ascii_payload_asserts_every_field(self):
+        """Every key the ASCII decoder builds, not just the ones spot-checked above."""
+        result = decode_moisture_full(MOISTURE_FULL_ASCII_PAYLOAD)
+        assert result["temperature_f10"] == 694
+        assert result["raw_bytes"] == MOISTURE_FULL_ASCII_PAYLOAD.encode("ascii")
+        assert result["debug_info"]["payload_format"] == "ascii"
+        assert result["debug_info"]["raw_payload"] == MOISTURE_FULL_ASCII_PAYLOAD
+        assert result["debug_info"]["rssi_raw"] == -73
 
 
 class TestDecodeHws019wrfV2:
@@ -818,6 +958,24 @@ class TestDecodeHws019wrfV2:
         assert result["readings"]["temp"] == "707"
         assert result["readings"]["humidity"] == "42"
         assert result["readings"]["P"] == "9709"
+        assert result["raw"] == HWS019WRF_V2_PAYLOAD
+
+    def test_keyed_item_split_takes_the_first_equals_not_the_last_or_every_one(self):
+        """A key's value may itself contain '=', and only the first '=' divides key from value.
+
+        Splitting unbounded (or with a wider maxsplit) would instead try to
+        unpack more than two pieces and raise, routing the whole payload to
+        the error path; splitting from the right would fold the value's own
+        '=' into the key, storing the reading under the wrong name.
+        """
+        result = decode_hws019wrf_v2("1,0,1;K=a=b")
+        assert "error" not in result
+        assert result["readings"] == {"K": "a=b"}
+
+    def test_empty_readings_token_does_not_stop_later_tokens_from_being_read(self):
+        """An empty token (from a stray comma) must be skipped, not stop the whole scan."""
+        result = decode_hws019wrf_v2("1,0,1;,707(707/694/1)")
+        assert result["readings"] == {"temp": "707"}
 
     def test_missing_separator_routes_to_error_path(self):
         """A payload with no ';' separator must surface via the error path, not return empty readings."""
@@ -827,6 +985,7 @@ class TestDecodeHws019wrfV2:
         assert "flags" not in result
         assert "';'" in result["error"]
         assert "1,0,1" in result["error"]
+        assert result["raw"] == "1,0,1"
 
     def test_malformed_flag_token_routes_to_error_path(self):
         """A non-digit flag token surfaces via the decoder's error path, not a partial list."""
@@ -850,12 +1009,17 @@ class TestDecodeValveHub:
         """Hub online and zone state."""
         result = decode_valve_hub(VALVE_HUB_TLV_PAYLOAD)
         assert result["type"] == "valve_hub"
+        assert result["decoder"] == "valve_hub_tlv"
         assert result["hub_online"] is True
         assert 1 in result["zones"]
         zone1 = result["zones"][1]
         assert zone1["open"] is True
         # 0x012C little-endian = 300
         assert zone1["duration_seconds"] == 300
+        assert zone1["state_raw"] == 0x01
+        assert zone1["duration_raw"] == 300
+        assert result["tlv_raw"] != {}
+        assert result["raw_bytes"] == _parse_rainpoint_payload(VALVE_HUB_TLV_PAYLOAD)
 
     def test_a_frame_with_no_signal_record_reports_no_signal(self):
         """This frame carries no STA_RSSI record, so the answer is unknown.
@@ -869,6 +1033,26 @@ class TestDecodeValveHub:
         assert "e1" not in VALVE_HUB_TLV_PAYLOAD.split("#", 1)[1].lower()
         assert decode_valve_hub(VALVE_HUB_TLV_PAYLOAD)["rssi_dbm"] is None
 
+    def test_battery_read_is_dp_id_prefixed_not_defaulted(self):
+        """The battery read must forward dp_id_prefixed=True, not drop it.
+
+        0x80's own bits look like a self-contained wide-form record if read
+        instead of skipped as a dp_id, which shifts the STA_BAT record out of
+        alignment and loses it entirely.
+        """
+        assert decode_valve_hub("11#80DC02")["battery_flag"] == 2
+
+    def test_rssi_read_is_dp_id_prefixed_and_field_targeted_not_defaulted(self):
+        """The signal read must forward both the real field id and dp_id_prefixed=True.
+
+        0x80's own bits look like a self-contained wide-form record if the
+        dp_id is not skipped, which corrupts the frame's alignment badly
+        enough that the truncated tail record is dropped outright, losing
+        the STA_RSSI record entirely.
+        """
+        result = decode_valve_hub("11#80E080")
+        assert result["rssi_dbm"] == -128
+
 
 class TestDecodeRain:
     """Tests for decode_rain (HCS012ARF rain gauge)."""
@@ -881,6 +1065,22 @@ class TestDecodeRain:
         assert result["rain_last_24h_mm"] == 187.0
         assert result["rain_last_7d_mm"] == 187.0
         assert result["rain_total_mm"] == 187.0
+        assert result["rain_last_hour_raw10"] == 0
+        assert result["rain_last_24h_raw10"] == 1870
+        assert result["rain_last_7d_raw10"] == 1870
+        assert result["rain_total_raw10"] == 1870
+        assert result["raw_bytes"] is not None
+
+    def test_last_hour_mm_divides_by_ten_not_a_different_factor(self):
+        """A non-zero last-hour reading pins the /10.0 scale, which 0.0 cannot.
+
+        0mm is invariant under *10.0 or /11.0 as well as /10.0, so the
+        all-zero real capture cannot tell a wrong factor from the right one.
+        """
+        modified = RAIN_HEX_PAYLOAD.replace("FD040000FD05", "FD046400FD05")
+        result = decode_rain(modified)
+        assert result["rain_last_hour_raw10"] == 100
+        assert result["rain_last_hour_mm"] == 10.0
 
     def test_an_empty_signal_record_reads_unknown_rather_than_zero_dbm(self):
         """This capture's STA_RSSI record is the vendor's empty E1 00 00."""
@@ -921,6 +1121,12 @@ class TestDecodeMoistureSimple:
         assert result["type"] == "moisture_simple"
         assert result["rssi_dbm"] == -58
         assert result["moisture_percent"] == 26
+        assert result["raw_bytes"] is not None
+
+    def test_payload_at_exactly_the_nine_byte_floor_succeeds(self):
+        """9 bytes is the documented minimum and must not require a 10th."""
+        result = decode_moisture_simple("10#E1C600DC01881AFF0F")
+        assert result["moisture_percent"] == 26
 
     def test_battery_comes_from_the_sta_bat_record(self):
         """Battery reads the flag byte, not the trailing report-time header."""
@@ -958,6 +1164,17 @@ class TestDecodeHcs044frf:
         assert result["battery_flag"] == 1
         assert result["battery_percent"] == 100
         assert result["report_time"] == "2026-08-30T00:05:06"
+        assert result["raw_bytes"] is not None
+
+    def test_payload_at_exactly_the_twelve_byte_floor_succeeds(self):
+        """12 bytes is the documented minimum and must not require a 13th."""
+        result = decode_hcs044frf("10#DC01E1CB0010B7DC73021A20")
+        assert result["rssi_dbm"] == -53
+
+    def test_rssi_dbm_byte_of_exactly_0x80_is_accepted(self):
+        """0x80 (-128 dBm) is negative and must not fall just outside the sign guard."""
+        raw = RAIN_DETECTOR_DRY_PAYLOAD.replace("E1CB00", "E18000")
+        assert decode_hcs044frf(raw)["rssi_dbm"] == -128
 
     @pytest.mark.parametrize(
         ("payload", "wet", "rssi"),
@@ -1022,48 +1239,121 @@ class TestBasicDecoders:
         result = decode_pool_plus(BASIC_HEX_PAYLOAD)
         assert result["type"] == "co2"
         assert result["rssi"] is not None
+        assert result["decoder"] == "basic"
 
     def test_decode_soil(self):
         """Decode soil."""
         result = decode_soil(BASIC_HEX_PAYLOAD)
         assert result["type"] == "soil"
         assert result["rssi"] is not None
+        assert result["decoder"] == "basic"
+        assert result["raw_bytes"] == bytes.fromhex("E1B000DC01")
 
     def test_decode_temp_hum(self):
         """Decode temp hum."""
         result = decode_temp_hum(BASIC_HEX_PAYLOAD)
         assert result["type"] == "temphum"
         assert result["rssi"] is not None
+        assert result["decoder"] == "basic"
+        assert result["raw_bytes"] == bytes.fromhex("E1B000DC01")
 
     def test_decode_temp_hum_full(self):
         """Decode temp hum full."""
         result = decode_temp_hum_full(BASIC_HEX_PAYLOAD)
         assert result["type"] == "temphum_full"
         assert result["rssi"] is not None
+        assert result["decoder"] == "basic"
+        assert result["raw_bytes"] == bytes.fromhex("E1B000DC01")
 
     def test_decode_co2(self):
         """Decode co2."""
         result = decode_co2(BASIC_HEX_PAYLOAD)
         assert result["type"] == "co2"
         assert result["rssi"] is not None
+        assert result["decoder"] == "basic"
+        assert result["raw_bytes"] == bytes.fromhex("E1B000DC01")
 
     def test_decode_display(self):
         """Decode display."""
         result = decode_display(BASIC_HEX_PAYLOAD)
         assert result["type"] == "display"
         assert result["rssi"] is not None
+        assert result["decoder"] == "basic"
+        assert result["raw_bytes"] == bytes.fromhex("E1B000DC01")
 
     def test_decode_temphum(self):
         """Decode temphum."""
         result = decode_temphum(BASIC_HEX_PAYLOAD)
         assert result["type"] == "temphum"
         assert result["rssi"] is not None
+        assert result["decoder"] == "basic"
+        assert result["raw_bytes"] == bytes.fromhex("E1B000DC01")
 
     def test_decode_pool(self):
         """Decode pool."""
         result = decode_pool(BASIC_HEX_PAYLOAD)
         assert result["type"] == "pool"
         assert result["raw_bytes"] is not None
+        assert result["decoder"] == "pool"
+
+
+class TestBasicDecoderGuardBoundary:
+    """Pin the '> 1' boundary on 'if b and len(b) > 1' precisely, decoder by decoder.
+
+    At len(b) == 1, _extract_rssi(b) reads b[1] and raises IndexError, which
+    every one of these decoders catches and swallows -- so a mutant weakening
+    the guard to 'or' or '>= 1' still produces the same final dict at that
+    length (rssi stays None either way) and is not worth a test. Only a
+    mutant that instead *tightens* the guard to '> 2' is observable, since at
+    len(b) == 2 the branch runs cleanly and sets a real rssi with no
+    exception to mask the difference.
+    """
+
+    def test_decode_soil_two_byte_buffer_enters_the_rssi_branch(self):
+        result = decode_soil("10#E1B0")
+        assert result["rssi"] is not None
+        assert result["raw_bytes"] == bytes.fromhex("E1B0")
+
+    def test_decode_temp_hum_two_byte_buffer_enters_the_rssi_branch(self):
+        result = decode_temp_hum("10#E1B0")
+        assert result["rssi"] is not None
+        assert result["raw_bytes"] == bytes.fromhex("E1B0")
+
+    def test_decode_temp_hum_full_two_byte_buffer_enters_the_rssi_branch(self):
+        result = decode_temp_hum_full("10#E1B0")
+        assert result["rssi"] is not None
+        assert result["raw_bytes"] == bytes.fromhex("E1B0")
+
+    def test_decode_co2_two_byte_buffer_enters_the_rssi_branch(self):
+        result = decode_co2("10#E1B0")
+        assert result["rssi"] is not None
+        assert result["raw_bytes"] == bytes.fromhex("E1B0")
+
+    def test_decode_display_two_byte_buffer_enters_the_rssi_branch(self):
+        result = decode_display("10#E1B0")
+        assert result["rssi"] is not None
+        assert result["raw_bytes"] == bytes.fromhex("E1B0")
+
+    def test_decode_temphum_two_byte_buffer_enters_the_rssi_branch(self):
+        result = decode_temphum("10#E1B0")
+        assert result["rssi"] is not None
+        assert result["raw_bytes"] == bytes.fromhex("E1B0")
+
+    def test_decode_unknown_two_byte_buffer_enters_the_rssi_branch(self):
+        result = decode_unknown("10#E1B0")
+        assert result["rssi"] is not None
+        assert result["raw_bytes"] == bytes.fromhex("E1B0")
+
+    def test_decode_pool_plus_two_byte_buffer_enters_the_rssi_branch(self):
+        result = decode_pool_plus("10#E1B0")
+        assert result["rssi"] is not None
+
+    def test_decode_pool_one_byte_buffer_skips_the_field_walk(self):
+        """decode_pool reads via _find_field_int, which never raises on a short
+        buffer, so its guard is fully observable at the 'and'/'>=1' boundary
+        too -- unlike the _extract_rssi-based decoders above."""
+        result = decode_pool("10#AA")
+        assert "raw_bytes" not in result
 
 
 class TestDecodeUnknown:
@@ -1192,6 +1482,28 @@ class TestDecodeMoistureFullErrorBranches:
         assert result["decoder"] == "hcs021frf_error"
         assert "Unexpected payload format" in result["error"]
 
+    def test_unknown_format_error_envelope_is_the_documented_shape(self):
+        """Every key of the error envelope, not just decoder/error."""
+        result = decode_moisture_full("not_matching_any_format")
+        assert result == {
+            "type": "moisture_full",
+            "rssi_dbm": None,
+            "raw_bytes": [],
+            "decoder": "hcs021frf_error",
+            "error": "Unexpected payload format: not_matching_any_format",
+        }
+
+    def test_comma_alone_with_no_semicolon_or_equals_does_not_misroute_to_ascii(self):
+        """Routing requires a comma AND a semicolon-or-equals, not either alone.
+
+        A payload with ',' but neither ';' nor '=' must fall through to the
+        router's own 'Unexpected payload format' error rather than being
+        handed to the ASCII decoder, which has no way to find its own
+        header/body split in a string with no ';'.
+        """
+        result = decode_moisture_full("1,2,3")
+        assert result["error"] == "Unexpected payload format: 1,2,3"
+
     def test_invalid_hex_returns_error_dict(self):
         """Bad hex characters after '10#' route through the wrapper exception path."""
         result = decode_moisture_full("10#zz")
@@ -1316,9 +1628,11 @@ class TestValveHubErrorPath:
     def test_invalid_payload_returns_error_dict(self):
         """Garbage input produces the documented error-shaped dict, not an exception."""
         result = decode_valve_hub("garbage_no_separator")
+        assert result["type"] == "valve_hub"
         assert result["decoder"] == "valve_hub_error"
         assert result["zones"] == {}
         assert result["raw_bytes"] == []
+        assert result["tlv_raw"] == {}
         # A frame that did not decode carries no reading of any kind. This was
         # 0, which the signal entity rendered as a confident "0 dBm".
         assert result["rssi_dbm"] is None
@@ -1346,6 +1660,17 @@ class TestValveHubErrorPath:
         assert result["battery_flag"] == 1
         assert result["battery_percent"] == 100
         assert result["hub_online"] is True
+
+    def test_dp_0x21_is_never_read_as_a_ninth_zone(self):
+        """This family tops out at 8 zones; DP 0x21 is zone 9's would-be state slot."""
+        result = decode_valve_hub("11#" + bytes([0x21, 0xD8, 0x01]).hex())
+        assert result["zones"] == {}
+
+    def test_zone_with_no_duration_dp_reports_zero_not_a_placeholder_one(self):
+        """A zone with a state DP but no duration DP defaults duration to 0."""
+        result = decode_valve_hub("11#" + bytes([0x19, 0xD8, 0x00]).hex())
+        assert result["zones"][1]["duration_seconds"] == 0
+        assert result["zones"][1]["duration_raw"] is None
 
     def test_no_zone_dp_is_offline(self):
         """Nothing decodes a zone, so nothing evidences the link."""
@@ -1613,6 +1938,7 @@ class TestPoolRealCapture:
         assert result["type"] == "pool"
         assert result["decoder"] == "pool"
         assert result["tempcurrent"] == pytest.approx(16.78, abs=0.01)
+        assert result["battery_flag"] == 1
         assert result["battery_percent"] == 100
         assert result["report_time"] == "2026-08-20T11:39:43"
 
@@ -1730,6 +2056,46 @@ class TestHtv213ZoneUsageAndEventTime:
         assert _decode_packed_timestamp(packed) == "2025-12-31T23:59:59"
 
 
+class TestHtv213ZoneRangeAndLoopBoundaries:
+    """Zone extraction walks exactly zones 1-8, and a skipped zone must not stop the scan."""
+
+    def test_dp_0x18_itself_is_never_read_as_zone_zero(self):
+        """DP 0x18 is the STA_BAT flag's own dp_id, one below the zone range's floor.
+
+        A range starting at 0 would misread a 0xD8-typed record there as a
+        nonexistent zone 0, when a real capture only ever puts STA_BAT (type
+        0xDC) at this dp_id. The type here is deliberately 0xD8 to prove the
+        range itself is what excludes it, not the type guard.
+        """
+        result = decode_htv213frf_valve("11#18D801")
+        assert result["zones"] == {}
+        assert result["hub_online"] is False
+
+    def test_dp_0x21_is_never_read_as_a_ninth_zone(self):
+        """DP 0x21 is zone 9's would-be state slot, one past the range's ceiling.
+
+        This family tops out at 8 zones; a range reaching one past the
+        ceiling would misread a 0xD8-typed record here as a nonexistent
+        ninth zone.
+        """
+        result = decode_htv213frf_valve("11#21D801")
+        assert result["zones"] == {}
+
+    def test_zone_missing_its_state_dp_does_not_stop_later_zones_from_being_read(self):
+        """A skipped zone must `continue` to the next one, not `break` the whole scan."""
+        # Zone 1's state DP (0x19) is absent; zone 2's (0x1A) is present and open.
+        result = decode_htv213frf_valve("11#1AD801")
+        assert 1 not in result["zones"]
+        assert result["zones"][2]["open"] is True
+
+    def test_zone_with_the_wrong_state_type_does_not_stop_later_zones_from_being_read(self):
+        """A wrong-typed state record must `continue` to the next zone, not `break` the scan."""
+        # Zone 1's state DP carries type 0xDC (not 0xD8); zone 2's is a valid open state.
+        result = decode_htv213frf_valve("11#19DC011AD801")
+        assert 1 not in result["zones"]
+        assert result["zones"][2]["open"] is True
+
+
 class TestHtvWiderFamilyUsageRecords:
     """The 3- and 4-zone family members decode through the same dp_id blocks."""
 
@@ -1816,7 +2182,23 @@ class TestDecodeHtv210b:
         assert zones[1]["state_raw"] == 0x21
         assert zones[1]["duration_seconds"] == 120
         assert zones[1]["event_time"] == "2026-07-29T19:08:17"
-        assert zones[2]["open"] is False
+
+    def test_dp_0x18_itself_is_never_read_as_zone_zero(self):
+        """DP 0x18 is one below zone 1's own base and must never be read as a zone."""
+        result = decode_htv210b("11#18D801")
+        assert result["zones"] == {}
+
+    def test_dp_0x21_is_never_read_as_a_ninth_zone(self):
+        """This family tops out at 8 zones; DP 0x21 is one past the ceiling."""
+        result = decode_htv210b("11#21D801")
+        assert result["zones"] == {}
+
+    def test_zone_missing_its_state_record_does_not_stop_later_zones_from_being_read(self):
+        """A zone with no state record must `continue` to the next one, not `break` the scan."""
+        # Zone 1's state DP (0x19) is absent; zone 2's (0x1A) is present and open.
+        result = decode_htv210b("11#1AD801")
+        assert 1 not in result["zones"]
+        assert result["zones"][2]["open"] is True
 
     def test_after_run_latched_bit_still_reads_closed(self):
         """0x20 after the zone's first use: bit 5 is latched, bit 0 is the state."""
@@ -1870,6 +2252,16 @@ class TestDecodeHtv210b:
     def test_rssi_rejects_a_positive_dbm_reading(self):
         """A non-negative dBm value is no reading; no radio reports +5 dBm."""
         assert decode_htv210b("11#17E10500")["rssi_dbm"] is None
+
+    def test_rssi_dbm_byte_of_exactly_0x80_in_a_single_value_byte_record(self):
+        """0x80 (-128 dBm) is accepted, and a one-value-byte record is not too short.
+
+        0xE0's own header bits (extra_len=0, index5=24) encode a
+        one-value-byte STA_RSSI record, unlike 0xE1's two-byte form the other
+        cases here use, so this also pins the length guard is 'at least one
+        byte', not 'at least two'.
+        """
+        assert decode_htv210b("11#17E080")["rssi_dbm"] == -128
 
     def test_rssi_record_truncated_to_no_value_bytes_reads_none(self):
         """A frame ending mid-record leaves the RSSI empty rather than misread."""
@@ -1949,6 +2341,17 @@ class TestDecodeHtv210bDpState:
     def test_missing_comma_returns_none(self):
         """A blob with no ',' separator at all is not the DP comma form."""
         assert decode_htv210b_dp_state("D821AF3C000000B7D1230B1A") is None
+
+    def test_hex_body_split_takes_the_leading_comma_not_the_trailing_one(self):
+        """Only the mode digit precedes the split; a comma anywhere in what
+        should be the hex body must invalidate it, not get silently skipped.
+
+        Splitting from the right instead would treat everything up to the
+        LAST comma as the discarded mode field and let a clean hex tail
+        through, misreading a blob that carries no real hex body as a
+        legitimate one.
+        """
+        assert decode_htv210b_dp_state("1,GARBAGE,D821") is None
 
     def test_odd_length_hex_body_returns_none(self):
         """A truncated hex body cannot be read as bytes."""
@@ -2197,6 +2600,20 @@ class TestDecodeHic801w:
             assert result["run_ends_at"] is None
             assert result["run_ends_at"] != "2020-01-01T02:00:00"
 
+    def test_sentinel_alone_suppresses_run_ends_at_even_on_a_non_idle_station(self):
+        """Either guard alone must suppress the sentinel: this pins the b0-absent side.
+
+        A real 'st3' capture (current_station=3, genuinely running) with its
+        STA_EVTIME word overwritten to the idle sentinel: the frame is not
+        idle by b0, but the sentinel word must still be read as no event,
+        not as the naive 2020-01-01T02:00:00 that word decodes to.
+        """
+        mutated = SAMPLE_HIC801W_STATION3_PAYLOAD.replace("0447151A", "00204200")
+        result = decode_hic801w(mutated)
+
+        assert result["current_station"] == 3
+        assert result["run_ends_at"] is None
+
     @pytest.mark.parametrize("raw", ["", "10#", None, "10#ABC"])
     def test_empty_and_malformed_input_returns_the_error_envelope_never_raises(self, raw):
         """The empty edge: none of these four inputs may raise, and each must
@@ -2257,6 +2674,7 @@ class TestDecodeHic801w:
 
         assert result["decoder"] == "hic801w_error"
         assert result["current_station"] is None
+        assert result["error"] == "HIC801W: STA_WATER_ZONES b3 unexpected non-zero value: 0x01"
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
@@ -2509,6 +2927,16 @@ class TestFlowMeterDecoder:
         assert result["flowrate"] == 0.0
         assert result["rssi_dbm"] == -79
         assert result["report_time"] == "2026-08-14T11:00:12"
+        assert result["device_model"] == "HCS008FRF"
+        assert result["decoder"] == "flowmeter"
+        assert result["raw_bytes"] is not None
+
+    def test_payload_at_exactly_the_thirty_two_byte_floor_succeeds(self):
+        """32 bytes is the documented minimum and must not require a 33rd."""
+        truncated = "10#" + FLOWMETER_IDLE_HEX.split("#", 1)[1][:64]
+        result = decode_flow_meter(truncated)
+        assert "error" not in result
+        assert result["device_model"] == "HCS008FRF"
 
     def test_idle_frame_reports_no_run_in_progress(self):
         """Both current-run readings sit at zero, which is what the app renders as '--'."""

@@ -86,6 +86,51 @@ class TestSwitchSetupEntry:
         assert len(entities) == 2
 
     @pytest.mark.asyncio
+    async def test_missing_hubs_key_is_treated_as_no_hubs(self):
+        """coordinator.data with no "hubs" key at all must not crash setup."""
+        coord = MagicMock()
+        coord.data = {"sensors": {}}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.options = {}
+        hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coord}}}
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        mock_add_entities.assert_called_once()
+        assert mock_add_entities.call_args[0][0] == []
+
+    @pytest.mark.asyncio
+    async def test_two_hubs_sharing_a_mid_collapse_to_one_switch(self):
+        """Hubs are deduped in the setup dict by mid; a shared mid keeps only the last one."""
+        hub_a = {"hid": 100, "mid": 1001, "name": "Hub A", "mac": "AA:BB"}
+        hub_b = {"hid": 200, "mid": 1001, "name": "Hub B", "mac": "CC:DD"}
+        hass, entry, _coord = _make_hass(hubs=[hub_a, hub_b])
+        entry.options = {}
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        entities = mock_add_entities.call_args[0][0]
+        assert len(entities) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_non_hub_record_does_not_stop_a_later_real_hub(self):
+        """Skipping a non-hub record must not abort the walk over the rest."""
+        not_a_hub = {"hid": 1, "mid": 1, "name": "wrapper"}
+        real_hub = {"hid": 100, "mid": 1001, "name": "Hub", "mac": "AA:BB"}
+        hass, entry, _coord = _make_hass(hubs=[not_a_hub, real_hub])
+        entry.options = {}
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        entities = mock_add_entities.call_args[0][0]
+        assert len(entities) == 1
+
+    @pytest.mark.asyncio
     async def test_setup_entry_no_debug_switch_when_url_empty(self, monkeypatch):
         """DEBUG_WORKER_URL is empty by default; no debug switch should be added."""
         # Force the precondition explicitly rather than relying on const.py
@@ -211,3 +256,86 @@ class TestSwitchSetupEntryGenericControl:
         await async_setup_entry(hass, entry, mock_add_entities)
 
         assert len(captured) == 1
+
+    @pytest.mark.asyncio
+    async def test_missing_sensors_key_is_treated_as_no_sensors(self):
+        """coordinator.data with no "sensors" key at all must not crash the generic-control branch."""
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
+        hass, entry, coord = _make_hass(hubs=[hub_info])
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        del coord.data["sensors"]
+
+        captured: list = []
+        mock_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        assert len(captured) == 1
+
+    @pytest.mark.asyncio
+    async def test_builder_receives_the_coordinator_key_and_full_slug(self, monkeypatch):
+        """build_generic_switch_entities gets this call's own coordinator, key and slug."""
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
+        hass, entry, coord = _make_hass(hubs=[hub_info])
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        sensor_info = {"hid": 300, "mid": 400, "addr": 1}
+        coord.data["sensors"] = {"300_400_1": sensor_info}
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr("custom_components.rainpoint.generic_control.build_generic_switch_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        [call_coordinator, call_key, call_info, call_slug] = captured_calls[0]
+        assert call_coordinator is coord
+        assert call_key == "300_400_1"
+        assert call_info is sensor_info
+        assert call_slug == "300_400_1"
+
+    @pytest.mark.asyncio
+    async def test_base_slug_falls_back_to_empty_string_for_a_missing_hid(self, monkeypatch):
+        """A sub-device record with no hid leaves that slug segment empty, not "None"."""
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
+        hass, entry, coord = _make_hass(hubs=[hub_info])
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        coord.data["sensors"] = {"key1": {"mid": 500, "addr": 2}}
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr("custom_components.rainpoint.generic_control.build_generic_switch_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert captured_calls[0][3] == "_500_2"
+
+    @pytest.mark.asyncio
+    async def test_base_slug_falls_back_to_empty_string_for_a_missing_mid(self, monkeypatch):
+        """A sub-device record with no mid leaves that slug segment empty, not "None"."""
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
+        hass, entry, coord = _make_hass(hubs=[hub_info])
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        coord.data["sensors"] = {"key1": {"hid": 300, "addr": 2}}
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr("custom_components.rainpoint.generic_control.build_generic_switch_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert captured_calls[0][3] == "300__2"
+
+    @pytest.mark.asyncio
+    async def test_base_slug_falls_back_to_empty_string_for_a_missing_addr(self, monkeypatch):
+        """A sub-device record with no addr leaves that slug segment empty, not "None"."""
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
+        hass, entry, coord = _make_hass(hubs=[hub_info])
+        entry.options = {CONF_GENERIC_CONTROL_ENABLED: True}
+        coord.data["sensors"] = {"key1": {"hid": 300, "mid": 500}}
+
+        captured_calls: list = []
+        mock_builder = MagicMock(side_effect=lambda *args: captured_calls.append(args) or [])
+        monkeypatch.setattr("custom_components.rainpoint.generic_control.build_generic_switch_entities", mock_builder)
+
+        await async_setup_entry(hass, entry, MagicMock())
+
+        assert captured_calls[0][3] == "300_500_"

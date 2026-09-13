@@ -48,6 +48,23 @@ class TestValidatePayload:
         with pytest.raises(ValueError, match="missing '#' separator"):
             _validate_payload("no_hash_here", 2)
 
+    def test_at_exactly_twice_the_expected_length_succeeds(self):
+        """The upper limit is inclusive: exactly 2x expected bytes must not raise."""
+        result = _validate_payload("10#" + "AA" * 4, 2)
+        assert len(result) == 4
+
+    def test_a_literal_hash_inside_the_hex_body_is_kept_with_the_body(self):
+        """The prefix/body split takes only the first '#', from the left, however many follow.
+
+        A body containing a second '#' is not itself realistic device data,
+        but it pins the split direction and count: splitting unbounded or
+        from the right, or allowing a second split point, all resolve
+        `prefix`/`hex_data` differently and raise a different error than the
+        one this pins.
+        """
+        with pytest.raises(ValueError, match=r"non-hexadecimal number found in fromhex\(\) arg at position 2"):
+            _validate_payload("10#AA#BB", 1)
+
 
 class TestExtractRssi:
     """Tests for _extract_rssi."""
@@ -101,6 +118,18 @@ class TestExtractBatteryFlag:
         """No STA_BAT record means no reading, not a default."""
         b = bytes.fromhex("E1C600881A")
         assert _extract_battery_flag(b) is None
+
+    def test_dp_id_prefixed_flag_is_forwarded_not_defaulted(self):
+        """dp_id_prefixed must reach the structural walk, not be silently dropped.
+
+        0x80's own bits look like a wide-form header (index5=0, one value
+        byte) if it is read as a record instead of skipped as a dp_id, which
+        shifts every following byte's alignment and loses the STA_BAT record
+        entirely.
+        """
+        b = bytes.fromhex("80DC01")
+        assert _extract_battery_flag(b, dp_id_prefixed=True) == 1
+        assert _extract_battery_flag(b, dp_id_prefixed=False) is None
 
     def test_value_byte_equal_to_header_is_not_matched(self):
         """0xDC appearing inside another record's value is not read as STA_BAT.

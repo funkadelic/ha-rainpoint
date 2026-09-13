@@ -12,6 +12,7 @@ from custom_components.rainpoint.entity import (
     EmittedEntityLedger,
     LateEntityAdder,
     RainPointSubDeviceEntity,
+    hic801w_station_is_running,
     late_adders,
     register_late_adder,
     sub_device_attributes,
@@ -22,6 +23,27 @@ from tests.helpers import make_coordinator_data, make_sensor_entry
 def _coordinator(entry):
     """Return a coordinator stub whose sensors map holds one entry under "k"."""
     return SimpleNamespace(data={"sensors": {"k": entry}} if entry is not None else {"sensors": {}})
+
+
+class TestHic801wStationIsRunning:
+    """The shared guard three platforms project the HIC801W's running station through."""
+
+    def test_the_top_of_the_declared_range_is_a_valid_station(self):
+        """<=, not <: HIC801W_STATION_COUNT itself is a legal station number,
+        not one past the end of the declared range."""
+        from custom_components.rainpoint.const import HIC801W_STATION_COUNT
+
+        result = hic801w_station_is_running({"current_station": HIC801W_STATION_COUNT}, HIC801W_STATION_COUNT)
+
+        assert result is True
+
+    def test_none_when_no_reading(self):
+        assert hic801w_station_is_running(None, 1) is None
+
+    def test_none_when_out_of_range(self):
+        from custom_components.rainpoint.const import HIC801W_STATION_COUNT
+
+        assert hic801w_station_is_running({"current_station": HIC801W_STATION_COUNT + 1}, 1) is None
 
 
 class TestSubDeviceAttributes:
@@ -80,6 +102,23 @@ class TestSubDeviceAttributes:
         """An empty firmware string is treated as absent rather than reported."""
         coordinator = _coordinator({"firmware_version": "", "data": {}})
         assert sub_device_attributes(coordinator, "k") == {"hub_connected": None}
+
+    def test_device_timestamp_branch_defaults_timestamp_source_to_server(self):
+        """A device_timestamp with no explicit timestamp_source key defaults to
+        "server", the same default the server_timestamp branch uses."""
+        coordinator = _coordinator({"data": {"device_timestamp": "2026-07-29T12:19:33+00:00"}})
+        assert sub_device_attributes(coordinator, "k")["timestamp_source"] == "server"
+
+    def test_device_timestamp_branch_reads_its_own_key_rather_than_a_default(self):
+        """When timestamp_source is present it must be read back verbatim,
+        proving the lookup key and not just the fallback value."""
+        coordinator = _coordinator({"data": {"device_timestamp": "2026-07-29T12:19:33+00:00", "timestamp_source": "sentinel"}})
+        assert sub_device_attributes(coordinator, "k")["timestamp_source"] == "sentinel"
+
+    def test_server_timestamp_branch_reads_its_own_key_rather_than_a_default(self):
+        """Mirrors the device_timestamp check above for the elif branch."""
+        coordinator = _coordinator({"data": {"server_timestamp": "2026-07-29T12:00:00+00:00", "timestamp_source": "sentinel"}})
+        assert sub_device_attributes(coordinator, "k")["timestamp_source"] == "sentinel"
 
     def test_silent_entry_yields_firmware_alone(self):
         """A silent entry (D-09/D-11) carries neither a device nor a server
@@ -318,6 +357,16 @@ class TestLateEntityAdder:
         assert len(adder.collect("k", {})) == 1
         assert len(adder.collect("k", {})) == 1
 
+    def test_an_entity_missing_the_unique_id_attribute_entirely_does_not_raise(self):
+        """getattr's default has to actually be None, not dropped: a plain
+        object() carries no _attr_unique_id attribute at all, unlike
+        _FakeEntity(None) which sets it explicitly."""
+        _c, adder, _added = self._adder({}, lambda k, i: [object()])
+
+        result = adder.collect("k", {})
+
+        assert len(result) == 1
+
     def test_listener_adds_a_key_that_became_eligible_after_setup(self):
         """The whole point: entity creation is otherwise frozen at first refresh."""
         sensors = {}
@@ -353,6 +402,25 @@ class TestLateEntityAdder:
 
 class TestEmittedEntityLedger:
     """What an adder emitted, indexed by the key that produced it."""
+
+    def test_an_entity_missing_the_unique_id_attribute_entirely_does_not_raise(self):
+        """getattr's default has to actually be None, not dropped: a plain
+        object() carries no _attr_unique_id attribute at all, unlike
+        _FakeEntity(None) which sets it explicitly."""
+        ledger = EmittedEntityLedger()
+
+        ledger.record("k", {}, [object()])
+
+        assert ledger.unique_ids_for("k") == frozenset()
+
+    def test_an_entity_with_no_unique_id_does_not_stop_the_rest_from_being_recorded(self):
+        """continue only skips the one entity with nothing to key on; break
+        would also drop every entity listed after it."""
+        ledger = EmittedEntityLedger()
+
+        ledger.record("k", {}, [_FakeEntity(None), _FakeEntity("z1")])
+
+        assert ledger.unique_ids_for("k") == frozenset({"z1"})
 
     def test_a_key_gaining_entities_across_polls_ends_with_all_of_them(self):
         """The append rule: a per-zone platform emits for one key over several

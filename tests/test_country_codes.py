@@ -174,3 +174,13 @@ class TestResolveCountryFromPhoneCode:
     def test_empty_phone_code_treated_as_no_phone_code(self):
         """Empty-string phone_code behaves like None (pre-upgrade with no stored code)."""
         assert resolve_country_from_phone_code("", preferred_iso="GB") == "GB"
+
+    def test_preferred_iso_match_is_read_off_preferred_iso_not_off_none(self):
+        """The match check must look up ``preferred_iso``'s own dial code.
+
+        CX shares dial code 61 with AU and CC, and AU sorts first among them,
+        so a lookup that silently checked some other key (e.g. one that always
+        misses) would fall through to the shared-code loop below and return
+        AU instead of the CX the caller actually asked to keep.
+        """
+        assert resolve_country_from_phone_code("61", preferred_iso="CX") == "CX"

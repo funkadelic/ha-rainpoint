@@ -74,6 +74,60 @@ class TestButtonSetupEntry:
         assert len(entities) == 2
 
     @pytest.mark.asyncio
+    async def test_missing_hubs_key_is_treated_as_no_hubs(self):
+        """coordinator.data with no "hubs" key at all must not crash setup."""
+        coord = MagicMock()
+        coord.data = {"sensors": {}}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coord}}}
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        mock_add_entities.assert_called_once()
+        assert mock_add_entities.call_args[0][0] == []
+
+    @pytest.mark.asyncio
+    async def test_two_hubs_sharing_a_mid_collapse_to_one_button(self):
+        """Hubs are deduped in the setup dict by mid; a shared mid keeps only the last one."""
+        hub_a = {"hid": 100, "mid": 1001, "name": "Hub A", "mac": "AA:BB"}
+        hub_b = {"hid": 200, "mid": 1001, "name": "Hub B", "mac": "CC:DD"}
+        hass, entry, _coord = _make_hass(hubs=[hub_a, hub_b])
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        entities = mock_add_entities.call_args[0][0]
+        assert len(entities) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_non_hub_record_does_not_stop_a_later_real_hub(self):
+        """Skipping a non-hub record must not abort the walk over the rest."""
+        not_a_hub = {"hid": 1, "mid": 1, "name": "wrapper"}
+        real_hub = {"hid": 100, "mid": 1001, "name": "Hub", "mac": "AA:BB"}
+        hass, entry, _coord = _make_hass(hubs=[not_a_hub, real_hub])
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        entities = mock_add_entities.call_args[0][0]
+        assert len(entities) == 1
+
+    @pytest.mark.asyncio
+    async def test_button_carries_the_real_coordinator(self):
+        """The button must be built with this setup call's own coordinator, not None."""
+        hub_info = {"hid": 100, "mid": 1001, "name": "Hub 1", "softVer": "1.0", "mac": "AA:BB"}
+        hass, entry, coord = _make_hass(hubs=[hub_info])
+
+        mock_add_entities = MagicMock()
+        await async_setup_entry(hass, entry, mock_add_entities)
+
+        entities = mock_add_entities.call_args[0][0]
+        assert entities[0].coordinator is coord
+
+    @pytest.mark.asyncio
     async def test_setup_entry_returns_early_for_non_list_hubs(self):
         """A non-list hubs value logs an error and never calls async_add_entities."""
         coord = MagicMock()

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+import voluptuous as vol
 
 import custom_components.rainpoint.coordinator as _coord_module
 from custom_components.rainpoint import repairs
@@ -390,6 +391,66 @@ def _make_record(hid=100, mid=200, addr=1, model="HTV210B", hub_name="Hub1", mis
         silent=silent,
         hub_paired=hub_paired,
     )
+
+
+class TestWatchdogConstructorAndInternals:
+    """Direct checks the state-machine tests above cannot make.
+
+    Several of those tests assert against ``watchdog._hass`` itself, which is
+    circular: it cannot tell a correctly-stored hass from a constructor that
+    dropped it. These pin the constructor fields and the registry call
+    directly against the value passed in.
+    """
+
+    def test_issue_active_starts_false(self):
+        """Not merely falsy: _on_alive relies on setting it back to exactly
+        this value on recovery."""
+        watchdog = _make_watchdog(_make_client(connected=True), _Clock())
+
+        assert watchdog._issue_active is False
+
+    def test_raised_issue_is_created_against_the_watchdog_s_own_hass(self, issue_mocks):
+        """The hass passed at construction, not a stray value, is what the
+        registry call receives."""
+        create, _delete = issue_mocks
+        hass = MagicMock()
+        clock = _Clock()
+        client = _make_client(connected=False, last_message_at=None)
+        watchdog = RainPointPushWatchdog(hass, MagicMock(), client, time_source=clock)
+
+        watchdog._async_check()
+        clock.advance(PUSH_WATCHDOG_DEAD_AFTER_SECONDS)
+        watchdog._async_check()
+
+        assert create.call_args.args[0] is hass
+        assert create.call_args.kwargs["translation_key"] == PUSH_WATCHDOG_ISSUE_ID
+
+    def test_recovery_resets_the_active_flag_to_false(self, issue_mocks):
+        """A leftover None would still read as falsy everywhere else in this
+        class, so the exact value has to be pinned directly."""
+        _create, _delete = issue_mocks
+        clock = _Clock()
+        client = _make_client(connected=False, last_message_at=None)
+        watchdog = _make_watchdog(client, clock)
+
+        watchdog._async_check()
+        clock.advance(PUSH_WATCHDOG_DEAD_AFTER_SECONDS)
+        watchdog._async_check()
+        assert watchdog._issue_active is True
+
+        client.connected = True
+        watchdog._async_check()
+
+        assert watchdog._issue_active is False
+
+    def test_message_exactly_at_the_grace_boundary_still_reads_alive(self):
+        """<=, not <: a message aged exactly to the grace window must still
+        count as alive, or the boundary itself would flap the channel."""
+        clock = _Clock(start=1_000.0)
+        client = _make_client(connected=False, last_message_at=clock.t - PUSH_WATCHDOG_MESSAGE_GRACE_SECONDS)
+        watchdog = _make_watchdog(client, clock)
+
+        assert watchdog._channel_functional() is True
 
 
 class TestSanitizePlaceholder:
@@ -852,6 +913,19 @@ class TestRainPointSilentDeviceIssues:
         assert domain == DOMAIN
         assert issue_id == silent_device_issue_id(100, 200, 1)
 
+    def test_hass_passed_to_constructor_reaches_create_and_delete(self, issue_mocks):
+        """__init__ must store the given hass verbatim: every other test here
+        passes a throwaway MagicMock and never checks it was the one used."""
+        create, delete = issue_mocks
+        hass = MagicMock()
+        manager = RainPointSilentDeviceIssues(hass)
+
+        manager.async_sync([_make_record()])
+        assert create.call_args.args[0] is hass
+
+        manager.async_sync([_make_record(silent=False)])
+        assert delete.call_args.args[0] is hass
+
 
 class TestUnreachableIdsAreNotCleared:
     """An id whose owning hub could not be reached this poll is left exactly as it is."""
@@ -1145,6 +1219,19 @@ class TestRainPointHubConnectivityIssues:
         _hass, domain, issue_id = delete.call_args.args
         assert domain == DOMAIN
         assert issue_id == hub_connectivity_issue_id(100, 200)
+
+    def test_hass_passed_to_constructor_reaches_create_and_delete(self, issue_mocks):
+        """__init__ must store the given hass verbatim: every other test here
+        passes a throwaway MagicMock and never checks it was the one used."""
+        create, delete = issue_mocks
+        hass = MagicMock()
+        manager = RainPointHubConnectivityIssues(hass)
+
+        manager.async_sync([_make_hub_record()])
+        assert create.call_args.args[0] is hass
+
+        manager.async_sync([_make_hub_record(disconnected=False)])
+        assert delete.call_args.args[0] is hass
 
     def test_async_clear_on_an_id_never_raised_is_still_an_idempotent_delete(self, issue_mocks):
         """A fresh instance after a reload can still clear an issue a prior
@@ -1556,6 +1643,22 @@ class TestWithdrawNewControlsCardsOnToggleOff:
             async_withdraw_new_controls_cards(MagicMock(), "e1")
 
         assert {call.args[2] for call in delete.call_args_list} == {first, second}
+
+
+class _OrderedActiveSet(set):
+    """A set subclass whose ``-`` diffs in a pinned order, for the one test
+    that needs the stale-id sweep to visit a specific id first.
+
+    Plain ``set`` difference iterates in hash order, which is not something a
+    test may pin without disabling hash randomization for the whole process.
+    """
+
+    def __init__(self, ordered_items):
+        super().__init__(ordered_items)
+        self._ordered = list(ordered_items)
+
+    def __sub__(self, other):
+        return [item for item in self._ordered if item not in other]
 
 
 class TestRainPointOrphanedEntityIssues:
@@ -2033,6 +2136,76 @@ class TestRainPointOrphanedEntityIssues:
 
         assert "Distinctive Device Name Xyzzy" not in caplog.text
 
+    def test_hass_passed_to_constructor_reaches_create_and_delete(self, issue_mocks):
+        """__init__ must store the given hass verbatim: every other test here
+        passes a throwaway MagicMock and never checks it was the one used."""
+        create, delete = issue_mocks
+        hass = MagicMock()
+        manager = RainPointOrphanedEntityIssues(hass)
+
+        manager.async_sync([_make_orphan_record()])
+        assert create.call_args.args[0] is hass
+
+        manager.async_sync([_make_orphan_record(orphaned=False)])
+        assert delete.call_args.args[0] is hass
+
+    def test_issue_still_registered_reads_the_manager_s_own_hass(self, issue_mocks):
+        """A stray None here would make every reconcile trust a registry it
+        never actually asked."""
+        hass = MagicMock()
+        manager = RainPointOrphanedEntityIssues(hass)
+
+        with patch.object(repairs.ir, "async_get") as async_get:
+            async_get.return_value = self._registry_holding("some_id")
+            manager._issue_still_registered("some_id")
+
+        assert async_get.call_args.args[0] is hass
+
+    def test_clear_issue_drops_the_keyed_published_entry(self, issue_mocks):
+        """A published entry that is never dropped would dedup a fresh raise
+        against stale values forever."""
+        _create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        issue_id = "some_id"
+        manager._active.add(issue_id)
+        manager._published[issue_id] = {"data": {}}
+
+        manager._clear_issue(issue_id)
+
+        assert issue_id not in manager._published
+
+    def test_a_stale_mark_that_also_fails_to_reraise_is_not_left_falsely_active(self, issue_mocks):
+        """The registry-reconcile discard has to actually take: if the
+        re-raise that follows it also fails, the id must not be left marked
+        active for a card the registry does not hold and the failed create
+        did not restore."""
+        create, _delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        issue_id = orphaned_entities_issue_id("100_200_1", "e1")
+
+        with patch.object(repairs.ir, "async_get", return_value=self._registry_holding(issue_id)):
+            manager.async_sync([_make_orphan_record()])
+        assert issue_id in manager._active
+
+        create.side_effect = RuntimeError("boom")
+        with patch.object(repairs.ir, "async_get", return_value=self._registry_holding()):
+            manager.async_sync([_make_orphan_record()])
+
+        assert issue_id not in manager._active
+
+    def test_a_held_leftover_id_does_not_stop_the_sweep_from_clearing_the_rest(self, issue_mocks):
+        """The stale sweep must skip a held leftover id and keep going, not
+        stop dead the moment it meets one."""
+        _create, delete = issue_mocks
+        manager = RainPointOrphanedEntityIssues(MagicMock())
+        manager._active = _OrderedActiveSet(["held", "plain"])
+        manager._published = {"held": {"data": {"leftover": True}}}
+
+        manager.async_sync([], hold_leftover=True)
+
+        _hass, _domain, cleared_id = delete.call_args.args
+        assert cleared_id == "plain"
+
 
 class TestTheHubBulletResolvesLikeTheDeviceBullet:
     """One home, named one way, on both card shapes.
@@ -2474,6 +2647,47 @@ class TestRainPointOrphanedEntitiesRepairFlow:
         # The offer was still read, so the Submit behind this dialog is still
         # held to it.
         assert flow._offered_pairs == frozenset({("sensor", "rainpoint_100_200_1_left_over")})
+
+    @pytest.mark.asyncio
+    async def test_the_abort_reason_is_the_exact_translation_key(self):
+        """Home Assistant matches this literal against a translation catalog
+        entry; any other spelling renders as a raw untranslated string."""
+        flow = _make_flow(_flow_hass(with_remover=False))
+
+        result = await flow.async_step_confirm({})
+
+        assert result["reason"] == "removal_unavailable"
+
+    @pytest.mark.asyncio
+    async def test_a_successful_submit_creates_an_entry_with_no_data(self):
+        """The confirm dialog carries no state of its own to persist."""
+        _calls, remover = _recording_remover()
+        flow = _make_flow(_flow_hass(remover))
+
+        result = await flow.async_step_confirm({})
+
+        assert result["data"] == {}
+
+    @pytest.mark.asyncio
+    async def test_the_confirm_form_carries_an_empty_schema(self):
+        """No fields: this dialog is a plain yes/no confirmation."""
+        flow = _make_flow(_flow_hass(_recording_remover()[1]))
+
+        step = await flow.async_step_init()
+
+        assert step["data_schema"] == vol.Schema({})
+
+    @pytest.mark.asyncio
+    async def test_read_issue_uses_the_flow_s_own_hass(self):
+        """The registry lookup must read this flow's own hass, never a stray None."""
+        hass = _flow_hass(_recording_remover()[1])
+        flow = _make_flow(hass)
+
+        with patch.object(repairs.ir, "async_get") as async_get:
+            async_get.return_value.async_get_issue.return_value = None
+            flow._read_issue()
+
+        assert async_get.call_args.args[0] is hass
 
 
 PAIR = ("sensor", "rainpoint_100_200_1_left_over")

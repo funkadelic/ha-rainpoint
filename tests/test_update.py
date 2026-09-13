@@ -327,6 +327,56 @@ class TestUpdateSetupEntry:
 
         add_entities.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_hub_entities_are_built_with_the_platform_s_own_client(self):
+        """A swapped-out client would still construct, so the entity's
+        `_client` attribute has to be checked directly rather than inferred
+        from `isinstance`."""
+        hub = {"hid": 1, "mid": 2, "name": "Hub", "did": "d", "mac": "A8:46:74:BB:91:F0"}
+        hass, entry = _make_hass(hubs=[hub])
+
+        add_entities = MagicMock()
+        await async_setup_entry(hass, entry, add_entities)
+
+        entities = add_entities.call_args[0][0]
+        client = hass.data[DOMAIN][entry.entry_id]["client"]
+        assert entities[0]._client is client
+
+    @pytest.mark.asyncio
+    async def test_sub_device_entities_are_built_with_the_coordinator_and_client(self):
+        """Both addressing sources have to be the platform's real objects, not
+        a swapped-out or missing one."""
+        sensors = {"1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 504942, "model": "HTV210B"}}
+        hass, entry = _make_hass(hubs=[], sensors=sensors)
+
+        add_entities = MagicMock()
+        await async_setup_entry(hass, entry, add_entities)
+
+        entities = add_entities.call_args[0][0]
+        coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+        client = hass.data[DOMAIN][entry.entry_id]["client"]
+        assert entities[0]._coordinator is coordinator
+        assert entities[0]._client is client
+
+    @pytest.mark.asyncio
+    async def test_missing_hubs_key_still_builds_sub_device_entities(self):
+        """coordinator.data.get("hubs", []) must default to an empty list, not
+        None: a coordinator snapshot missing the key entirely (rather than
+        holding an empty one) must not abort the whole setup before the
+        sub-device entities below ever get built."""
+        coord = MagicMock()
+        coord.data = {"sensors": {"1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 504942, "model": "HTV210B"}}}
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        hass.data = {DOMAIN: {"test_entry": {"coordinator": coord, "client": MagicMock()}}}
+
+        add_entities = MagicMock()
+        await async_setup_entry(hass, entry, add_entities)
+
+        entities = add_entities.call_args[0][0]
+        assert [e.unique_id for e in entities] == ["rainpoint_1_2_1_firmware_update"]
+
 
 class TestGetHubFirmwareInfo:
     """The client call behind the entity."""

@@ -10,6 +10,7 @@ guard makes that fail loudly instead.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -1656,3 +1657,208 @@ class TestMidResolutionOrdering:
 
         assert await async_migrate_entry(hass, entry) is True
         assert device_registry.async_get(hub.id).identifiers == {(DOMAIN, f"hub_{HID}_9")}
+
+
+class TestUnresolvableHubDoesNotStopTheLoop:
+    """One hub's mid staying unresolved must not strand every hub after it."""
+
+    @pytest.mark.asyncio
+    async def test_a_second_resolvable_hub_still_migrates_after_an_earlier_unresolvable_one(
+        self, hass, entity_registry, device_registry
+    ):
+        """Two independent old-shape hubs; the first can never resolve its mid,
+        the second has a connectivity row that resolves cleanly.
+
+        The working set is iterated once per hub row. Skipping only the
+        unresolvable hub's own migration (continue) must leave every later
+        hub's migration untouched.
+        """
+        entry = _make_entry(hass)
+        unresolvable_hid = 900
+        resolvable_hid = 901
+        resolvable_mid = 555
+
+        unresolvable_hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{unresolvable_hid}")}, name="Hub A"
+        )
+        resolvable_hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{resolvable_hid}")}, name="Hub B"
+        )
+        entity_registry.async_get_or_create(
+            "binary_sensor",
+            DOMAIN,
+            f"{DOMAIN}_hub_{resolvable_hid}_{resolvable_mid}_connectivity",
+            config_entry=entry,
+            suggested_object_id="conn_b",
+        )
+
+        assert await async_migrate_entry(hass, entry) is True
+
+        assert device_registry.async_get(unresolvable_hub.id).identifiers == {(DOMAIN, f"hub_{unresolvable_hid}")}
+        assert device_registry.async_get(resolvable_hub.id).identifiers == {(DOMAIN, f"hub_{resolvable_hid}_{resolvable_mid}")}
+
+
+class TestUnmigratableSuffixDoesNotStopLaterRows:
+    """One row outside the closed suffix set must not strand rows after it."""
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_an_unrecognised_suffix_does_not_block_a_later_migratable_row(
+        self, hass, entity_registry, device_registry
+    ):
+        """A non-member remainder is skipped (continue), never aborts the pass."""
+        entry = _make_entry(hass)
+        device_registry.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub")
+        entity_registry.async_get_or_create(
+            "binary_sensor",
+            DOMAIN,
+            f"{DOMAIN}_hub_{HID}_{MID}_connectivity",
+            config_entry=entry,
+            suggested_object_id="conn",
+        )
+        # An unrecognised remainder under the same hub prefix, registered ahead
+        # of a genuinely migratable row.
+        unrecognised = entity_registry.async_get_or_create(
+            "sensor",
+            DOMAIN,
+            f"{DOMAIN}_hub_{HID}_bogus",
+            config_entry=entry,
+            suggested_object_id="hub_bogus",
+        )
+        migratable = entity_registry.async_get_or_create(
+            "sensor",
+            DOMAIN,
+            f"{DOMAIN}_hub_{HID}_mac",
+            config_entry=entry,
+            suggested_object_id="hub_mac",
+        )
+
+        assert await async_migrate_entry(hass, entry) is True
+
+        assert entity_registry.async_get(unrecognised.entity_id).unique_id == f"{DOMAIN}_hub_{HID}_bogus"
+        assert entity_registry.async_get(migratable.entity_id).unique_id == f"{DOMAIN}_hub_{HID}_{MID}_mac"
+
+
+class TestResidualSweepSkipsRatherThanStops:
+    """continue, not break: one row's fate must never gate the rows after it."""
+
+    @pytest.mark.asyncio
+    async def test_an_already_migrated_row_does_not_block_a_later_old_shape_row(self, hass, device_registry):
+        """A new-shape row seen first must only be skipped, not stop the pass.
+
+        device_rows are walked in registry order. A hub already migrated (or a
+        sub-device row, which also carries a DOMAIN identifier the migrated
+        shape rejects) must never prevent a later old-shape row from being
+        examined.
+        """
+        from custom_components.rainpoint import _complete_hub_identity_rekey
+
+        entry = _make_entry(hass)
+        already_new_shape_hid, already_new_shape_mid = 700, 71
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, f"hub_{already_new_shape_hid}_{already_new_shape_mid}")},
+            name="Already migrated hub",
+        )
+        old_shape_hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{HID}")}, name="Hub"
+        )
+
+        residual = _complete_hub_identity_rekey(hass, entry, _coordinator([_hub_record()]))
+
+        assert residual == frozenset()
+        assert device_registry.async_get(old_shape_hub.id).identifiers == {(DOMAIN, f"hub_{HID}_{MID}")}
+
+    @pytest.mark.asyncio
+    async def test_an_unresolvable_hub_does_not_block_a_later_resolvable_one(self, hass, device_registry):
+        """The no-mid-this-pass branch must only skip its own hub.
+
+        Two independent old-shape hubs; the coordinator carries a hub record
+        for only the second one, so the first can never resolve this pass.
+        """
+        from custom_components.rainpoint import _complete_hub_identity_rekey
+
+        entry = _make_entry(hass)
+        unresolvable_hid = 800
+        resolvable_hid = 801
+        resolvable_mid = 555
+
+        unresolvable_hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{unresolvable_hid}")}, name="Hub A"
+        )
+        resolvable_hub = device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{resolvable_hid}")}, name="Hub B"
+        )
+
+        coordinator = _coordinator([_hub_record(hid=resolvable_hid, mid=resolvable_mid)])
+        residual = _complete_hub_identity_rekey(hass, entry, coordinator)
+
+        assert residual == frozenset({str(unresolvable_hid)})
+        assert device_registry.async_get(unresolvable_hub.id).identifiers == {(DOMAIN, f"hub_{unresolvable_hid}")}
+        assert device_registry.async_get(resolvable_hub.id).identifiers == {(DOMAIN, f"hub_{resolvable_hid}_{resolvable_mid}")}
+
+
+class TestResidualSweepInitialSeeding:
+    """The listener's baseline must reflect the hub list the setup pass actually saw."""
+
+    @pytest.mark.asyncio
+    async def test_an_unchanged_mapping_costs_no_reads_even_when_a_hub_resolved_at_setup(
+        self, hass, device_registry, monkeypatch
+    ):
+        """last_hub_mids has to be seeded from the same hub list the setup pass
+        read, not from an empty snapshot.
+
+        Two independent old-shape hubs: one resolves during the setup pass
+        itself (so its real record is already part of "the current hub
+        mapping" once setup finishes), the other stays residual and is what
+        keeps the listener armed. A baseline that ignored the setup pass's own
+        hub list would read the first update, which changes nothing, as a
+        change and re-scan both registries for no reason.
+        """
+        import custom_components.rainpoint as rp
+
+        entry = _make_entry(hass)
+        resolves_at_setup_hid, resolves_at_setup_mid = 850, 95
+        stays_residual_hid = 851
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{resolves_at_setup_hid}")}, name="Hub A"
+        )
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"hub_{stays_residual_hid}")}, name="Hub B"
+        )
+        coordinator = _coordinator([_hub_record(hid=resolves_at_setup_hid, mid=resolves_at_setup_mid)])
+
+        rp._complete_hub_identity_rekey_on_updates(hass, entry, coordinator)
+        assert coordinator.async_add_listener.call_count == 1
+        listener = coordinator.async_add_listener.call_args[0][0]
+
+        fetches = []
+        real_fetch = rp._fetch_registry_rows
+        monkeypatch.setattr(
+            rp,
+            "_fetch_registry_rows",
+            lambda *args, **kwargs: (fetches.append(args[-1]), real_fetch(*args, **kwargs))[1],
+        )
+
+        listener()
+
+        assert fetches == [], "the hub mapping did not change since setup, so this update must not re-scan"
+
+
+class TestResolveResidualHubMidPassesItsOwnHid:
+    """_resolve_residual_hub_mid must hand its own hid to the registry-backed source.
+
+    The registry-backed source (_resolve_hub_mid) is authoritative and is
+    consulted first; the coordinator's hub records are only a fallback. A hid
+    typo here would silently fall through to the coordinator every time, even
+    when the registry alone could already answer.
+    """
+
+    def test_a_registry_backed_answer_needs_no_coordinator_fallback(self):
+        from custom_components.rainpoint import _resolve_residual_hub_mid
+
+        row = SimpleNamespace(id="hub_device_1", identifiers={(DOMAIN, f"hub_{HID}")})
+        child = SimpleNamespace(via_device_id="hub_device_1", identifiers={(DOMAIN, f"{HID}_{MID}_1")})
+
+        mid = _resolve_residual_hub_mid(row, str(HID), real_hubs=[], entity_rows=[], device_rows=[child])
+
+        assert mid == str(MID)

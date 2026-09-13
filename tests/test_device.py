@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_VALVE_245
-from custom_components.rainpoint.device import RainPointHubDevice, build_sub_device_info
+from custom_components.rainpoint.device import RainPointHubDevice, build_sub_device_info, hub_display_name
 from tests.helpers import VALVE_ZONES_TLV_PAYLOAD
 
 
@@ -196,6 +196,23 @@ class TestRainPointHubDevice:
         """The one flag site covering every hub entity family."""
         hub = self._make_hub(name="Test Hub")
         assert hub._attr_has_entity_name is True
+
+    def test_should_poll_is_false(self):
+        """Hub entities are coordinator-driven; a poll of their own would be redundant."""
+        hub = self._make_hub()
+        assert hub._attr_should_poll is False
+
+
+class TestHubDisplayNameFallback:
+    """The literal fallback name a cloud-unnamed hub's device row carries."""
+
+    def test_unnamed_hub_falls_back_to_the_exact_literal(self):
+        """Pinned exactly: this string reaches the device page verbatim."""
+        assert hub_display_name({}) == "RainPoint Hub"
+
+    def test_a_named_hub_keeps_its_own_name(self):
+        """The fallback applies only when the cloud supplied no name."""
+        assert hub_display_name({"name": "My Hub"}) == "My Hub"
 
 
 class TestBuildSubDeviceInfoIdentity:

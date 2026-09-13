@@ -94,6 +94,11 @@ class TestDecodeGenericRobustness:
     def test_non_hex_body(self):
         assert "error" in decode_generic("11#ZZZZ")
 
+    def test_non_hex_body_error_names_the_real_condition(self):
+        """The hex branch's except carries the real exception text, not a placeholder."""
+        result = decode_generic("11#ZZZZ")
+        assert result["error"] == "invalid literal for int() with base 16: 'ZZ'"
+
     def test_non_string_raw_is_tolerated(self):
         """A malformed cloud record can hand this a non-string value despite the
         type hint; the ASCII-detection check ahead of the hex path must not
@@ -101,6 +106,10 @@ class TestDecodeGenericRobustness:
         result = decode_generic(None)  # type: ignore[arg-type]
         assert result["decoder"] == "generic-tlv"
         assert "error" in result
+        # The caught exception's own message, not a placeholder: this is the
+        # ASCII-detection branch's except, a different site from the hex
+        # branch's (see test_non_hex_body_error_names_the_real_condition).
+        assert result["error"] == "argument of type 'NoneType' is not a container or iterable"
 
     def test_non_string_raw_is_not_logged_verbatim(self, caplog):
         """A list-shaped raw reaches the same except block via a different
@@ -167,6 +176,15 @@ class TestDecodeGenericFraming:
         result = decode_generic("11#18")
         assert "error" not in result
         assert result["fields"] == []
+
+    def test_unrecognised_index_names_itself_unknown(self):
+        """A structural index absent from _STATUS_FIELDS still gets a usable name.
+
+        Compact-form indices 3, 5, 6 and 7 have no STA_* identity in the
+        catalog harvest; 0x30's index (3) is one of them.
+        """
+        fields = decode_generic("10#30")["fields"]
+        assert fields[0]["name"] == "UNKNOWN_3"
 
     def test_truncated_extended_header(self):
         """A wide-form escape header (index5>30) with no trailing byte stops."""
@@ -343,6 +361,25 @@ class TestDecodeGenericCatalogAnnotation:
 
         assert all("catalog" not in f for f in wkstate_fields)
 
+    def test_bool_dp_port_among_real_ints_still_refuses_the_group(self, monkeypatch):
+        """A bool masquerading as a usable int dpPort must not slip the group past the guard.
+
+        Unlike a string dpPort, a bool sorts against a real int without
+        raising, so a version of the usable-port check that merely inverted
+        its logic (rather than dropping the bool exclusion) would let this
+        group through mis-paired instead of being caught by an exception.
+        """
+        bool_port_catalog = [
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": 1, "dpDataType": "U8", "dpLen": 1},
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": True, "dpDataType": "U8", "dpLen": 1},
+        ]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: bool_port_catalog)
+
+        result = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD, model="FAKE_TLV_MODEL")
+        wkstate_fields = [f for f in result["fields"] if f["name"] == "STA_WKSTATE"]
+
+        assert all("catalog" not in f for f in wkstate_fields)
+
     def test_single_member_group_annotates_even_with_unusable_dp_port(self, monkeypatch):
         """A lone field at its index annotates even when the catalog's dpPort for it is unusable.
 
@@ -358,6 +395,32 @@ class TestDecodeGenericCatalogAnnotation:
 
         assert by_name["STA_BAT"]["catalog"]["dp_port"] is None
         assert by_name["STA_BAT"]["catalog"]["declared_width"] == 1
+
+    def test_pair_group_count_mismatch_returns_empty_without_raising(self):
+        """A candidate/field count mismatch is refused directly, not caught as a side effect.
+
+        decode_generic swallows any exception this helper might raise, which
+        would mask a version that let a mismatched zip through and blew up
+        instead of returning cleanly. Called directly, no such net exists.
+        """
+        group_fields = [{"dp_id": 1, "index": 30}, {"dp_id": 2, "index": 30}]
+        candidates = [
+            {"dpCode": 30, "dpPort": 1},
+            {"dpCode": 30, "dpPort": 2},
+            {"dpCode": 30, "dpPort": 3},
+        ]
+        assert generic_decoder_module._pair_group_by_dp_id_and_port(group_fields, candidates) == []
+
+    def test_pair_group_multi_member_with_a_non_int_port_is_refused_before_sorting(self):
+        """The usable-dpPort guard fires for any group over one member, not just larger ones.
+
+        Called directly so a version of the guard that let this two-member
+        group through has to fail on the mixed-type sort that follows,
+        rather than being masked by decode_generic's swallow.
+        """
+        group_fields = [{"dp_id": 1, "index": 30}, {"dp_id": 2, "index": 30}]
+        candidates = [{"dpCode": 30, "dpPort": 1}, {"dpCode": 30, "dpPort": "2"}]
+        assert generic_decoder_module._pair_group_by_dp_id_and_port(group_fields, candidates) == []
 
     def test_ambiguous_dp_code_also_guards_the_flat_framing(self, monkeypatch):
         """The 10# path keys off the same dpCode field, so it needs the same guard."""
@@ -419,6 +482,20 @@ class TestDecodeGenericCatalogAnnotation:
         # STA_BAT decodes to 1 byte here, so a declared 2 is a real mismatch.
         assert by_name["STA_BAT"]["catalog"]["declared_width"] == 2
         assert by_name["STA_BAT"]["catalog"]["width_mismatch"] is True
+        # The dpDataType fallback divides bits by 8; a float result would
+        # still compare equal to 2 but is not the int every other path returns.
+        assert isinstance(by_name["STA_BAT"]["catalog"]["declared_width"], int)
+
+    def test_zero_bit_data_type_with_no_dplen_yields_no_width(self, monkeypatch):
+        """A dpDataType of 0 bits is nonsensical and must not fall through to width 0."""
+        zero_bit_catalog = [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 1, "dpDataType": "U0"}]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: zero_bit_catalog)
+
+        result = decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD, model=CATALOG_ANCHOR_MODEL)
+        by_name = {f["name"]: f for f in result["fields"]}
+
+        assert by_name["STA_BAT"]["catalog"]["declared_width"] is None
+        assert by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
 
     def test_dplen_wins_over_a_disagreeing_data_type(self, monkeypatch):
         """Where dpLen and the type name disagree, dpLen is authoritative.
@@ -493,6 +570,50 @@ class TestDecodeGenericCatalogAnnotation:
         by_name = {f["name"]: f for f in result["fields"]}
 
         assert by_name["STA_BAT"]["catalog"]["width_mismatch"] is False
+
+    def test_model_code_reaches_the_port_number_lookup_verbatim(self, monkeypatch):
+        """model_code must not be dropped before it reaches get_catalog_port_number.
+
+        HIC801W's own committed catalog is the real-world case this guards:
+        variant 278 is a 0-port record and 279 is 8 ports, so a call that
+        silently substituted None for model_code could not tell them apart.
+        """
+        monkeypatch.setattr(
+            generic_decoder_module,
+            "get_catalog_entry",
+            lambda model, model_code=None: [{"dpCode": 31, "identity": "STA_BAT", "dpPort": 0, "dpDataType": "U8", "dpLen": 1}],
+        )
+        monkeypatch.setattr(
+            generic_decoder_module,
+            "get_catalog_port_number",
+            lambda model, model_code=None: 8 if model_code == 279 else None,
+        )
+        fields = [dict(f) for f in decode_generic(SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD)["fields"]]
+        generic_decoder_module._annotate_fields_with_catalog(fields, "HIC801W", False, 279)
+        by_name = {f["name"]: f for f in fields}
+
+        assert by_name["STA_BAT"]["catalog"]["port_number"] == 8
+
+    def test_tlv_dp_id_prefixed_flag_reaches_the_internal_annotation_call(self, monkeypatch):
+        """decode_generic's own model= call site must forward the real dp_id_prefixed value.
+
+        A version that dropped it (forcing the flat-framing path even for a
+        TLV payload) would send the two duplicate-index STA_WKSTATE fields
+        through _match_catalog_dp, which refuses an ambiguous index outright
+        -- so they would carry no catalog key at all instead of resolving
+        through the dp_id/dpPort pairing this framing supports.
+        """
+        duplicate_wkstate_catalog = [
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": 1, "dpDataType": "U8", "dpLen": 1},
+            {"dpCode": 30, "identity": "STA_WKSTATE", "dpPort": 2, "dpDataType": "U8", "dpLen": 1},
+        ]
+        monkeypatch.setattr(generic_decoder_module, "get_catalog_entry", lambda model, model_code=None: duplicate_wkstate_catalog)
+
+        result = decode_generic(SAMPLE_HTV245_TLV_PAYLOAD, model="FAKE_TLV_MODEL_DP_ID_PREFIXED")
+        wkstate_fields = [f for f in result["fields"] if f["name"] == "STA_WKSTATE"]
+
+        assert len(wkstate_fields) == 2
+        assert all("catalog" in f for f in wkstate_fields)
 
     def test_annotation_failure_does_not_break_decode(self, monkeypatch):
         """A broken catalog lookup degrades to the unannotated shape, never raises."""

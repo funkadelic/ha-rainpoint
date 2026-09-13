@@ -407,6 +407,14 @@ class TestRainPointHubDeviceIDSensor:
         sensor = self._make()
         assert "device_id" in sensor._attr_unique_id
 
+    def test_carries_the_real_coordinator(self):
+        """The sensor must be bound to the coordinator it was built with, not None."""
+        coord = _make_coordinator()
+        hub_info = _make_hub_info()
+        sensor = RainPointHubDeviceIDSensor.__new__(RainPointHubDeviceIDSensor)
+        RainPointHubDeviceIDSensor.__init__(sensor, coord, hub_info)
+        assert sensor.coordinator is coord
+
 
 class TestRainPointHubFirmwareSensor:
     """Tests for hub firmware version sensor."""
@@ -497,6 +505,10 @@ class TestRainPointHubFirmwareSensor:
         sensor = self._make()
         assert "firmware" in sensor._attr_unique_id
 
+    def test_name_is_firmware_version(self):
+        sensor = self._make()
+        assert sensor._attr_name == "Firmware Version"
+
 
 class TestRainPointHubMACSensor:
     """Tests for hub MAC address sensor."""
@@ -518,6 +530,18 @@ class TestRainPointHubMACSensor:
         """unique_id should contain 'mac'."""
         sensor = self._make()
         assert "mac" in sensor._attr_unique_id
+
+    def test_name_is_mac_address(self):
+        sensor = self._make()
+        assert sensor._attr_name == "MAC Address"
+
+    def test_carries_the_real_coordinator(self):
+        """The sensor must be bound to the coordinator it was built with, not None."""
+        coord = _make_coordinator()
+        hub_info = _make_hub_info()
+        sensor = RainPointHubMACSensor.__new__(RainPointHubMACSensor)
+        RainPointHubMACSensor.__init__(sensor, coord, hub_info)
+        assert sensor.coordinator is coord
 
 
 class TestRainPointHubChannelSelect:
@@ -640,6 +664,31 @@ class TestRainPointHubChannelSelect:
         select = self._make(hub_info)
         assert len(select.options) == 16
 
+    def test_zero_bitmask_falls_back_to_16_rather_than_an_empty_list(self):
+        """RF:0 carries no selectable bit, so it must fall back like a missing field."""
+        hub_info = _make_hub_info()
+        hub_info["function"] = '{"RF":0}'
+        select = self._make(hub_info)
+        assert len(select.options) == 16
+
+    def test_rf_one_offers_only_channel_one_not_the_full_fallback(self):
+        """RF:1 (bit 0 set) offers exactly channel 1, the boundary right above the RF:0 fallback."""
+        hub_info = _make_hub_info()
+        hub_info["function"] = '{"RF":1}'
+        select = self._make(hub_info)
+        assert select.options == ["1"]
+
+    def test_a_boolean_recich_is_not_a_channel(self):
+        """recich=True is an int subclass but must not be treated as a real channel number."""
+        hub_info = _make_hub_info()
+        hub_info["recich"] = True
+        select = self._make(hub_info)
+        assert select.current_option is None
+
+    def test_name_is_rf_communication_channel(self):
+        select = self._make()
+        assert select._attr_name == "RF Communication Channel"
+
     def test_available_is_true(self):
         """Channel select should always be available."""
         select = self._make()
@@ -728,6 +777,10 @@ class TestRainPointHubBroadcastSwitch:
         assert "broadcast" in switch._attr_unique_id
         assert switch._attr_unique_id == "rainpoint_hub_100_1001_broadcast"
 
+    def test_name_is_automatic_broadcast_time(self):
+        switch = self._make()
+        assert switch._attr_name == "Automatic Broadcast Time"
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bad_param", [None, "", "1"])
     async def test_turn_on_refuses_when_param_is_unreadable(self, bad_param):
@@ -806,6 +859,15 @@ class TestRainPointHubBroadcastButton:
 
         assert button._attr_unique_id.endswith("_broadcast_now")
         assert button._attr_unique_id != switch._attr_unique_id
+
+    def test_unique_id_carries_the_real_hid_and_mid(self):
+        """unique_id is built from the actual hid/mid, not a stray key or default."""
+        button = self._make(hid=100, mid=1001)
+        assert button._attr_unique_id == "rainpoint_hub_100_1001_broadcast_now"
+
+    def test_name_is_broadcast_time_now(self):
+        button = self._make()
+        assert button._attr_name == "Broadcast Time Now"
 
     def test_available_is_true(self):
         """The broadcast button is always available."""
@@ -908,6 +970,31 @@ class TestRainPointHubBroadcastButton:
 
         assert button.coordinator._client.control_work_mode.call_count == 0
 
+    @pytest.mark.asyncio
+    async def test_press_refuses_when_only_the_product_key_is_missing(self):
+        """Either identity field missing alone is enough to refuse, not just both together."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        button = self._make(mid=1001, device_name="MAC-AABBCC", product_key="pk123")
+        button.coordinator.data["hubs"] = [{**button._hub_info, "deviceName": "MAC-AABBCC", "productKey": ""}]
+
+        with pytest.raises(HomeAssistantError):
+            await button.async_press()
+
+        assert button.coordinator._client.control_work_mode.call_count == 0
+
+
+class TestRainPointPushConnectedBinarySensor:
+    """Tests for the push-connected diagnostic entity."""
+
+    def _make(self):
+        mqtt_client = MagicMock()
+        return RainPointPushConnectedBinarySensor(mqtt_client, _make_hub_info()), mqtt_client
+
+    def test_name_is_push_connected(self):
+        entity, _ = self._make()
+        assert entity._attr_name == "Push Connected"
+
 
 class TestRainPointPushLastMessageSensor:
     """Tests for the push last-message-age timestamp entity.
@@ -969,6 +1056,10 @@ class TestRainPointPushLastMessageSensor:
         assert entity._attr_unique_id.endswith(f"_{PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX}")
         assert entity._attr_entity_category == "diagnostic"
         assert getattr(entity, "_attr_entity_registry_enabled_default", True) is True
+
+    def test_name_is_push_last_message(self):
+        entity, _ = self._make()
+        assert entity._attr_name == "Push Last Message"
 
     def test_available_true_when_client_present(self):
         entity, _ = self._make()

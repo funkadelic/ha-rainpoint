@@ -64,6 +64,8 @@ class DataUpdateCoordinator:
         """
         self.hass = hass
         self.logger = logger
+        self.name = name
+        self.update_interval = update_interval
         self.config_entry = config_entry
         self.data = None
         self.last_update_success = True

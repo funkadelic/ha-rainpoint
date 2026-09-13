@@ -22,10 +22,13 @@ from custom_components.rainpoint.const import (
     CONF_HIDS,
     DOMAIN,
     GENERIC_UNIQUE_ID_MARKER,
+    MODEL_CO2,
     MODEL_DISPLAY_HUB,
+    MODEL_FLOWMETER,
     MODEL_HCS005FRF,
     MODEL_HCS015ARF,
     MODEL_HCS024FRF_V1,
+    MODEL_HCS044FRF,
     MODEL_HCS0528ARF,
     MODEL_HIC801W,
     MODEL_HTP160FRF,
@@ -33,7 +36,10 @@ from custom_components.rainpoint.const import (
     MODEL_HTV210B,
     MODEL_MOISTURE_FULL,
     MODEL_MOISTURE_SIMPLE,
+    MODEL_POOL,
+    MODEL_POOL_PLUS,
     MODEL_RAIN,
+    MODEL_TEMPHUM,
     MODEL_VALVE_113,
     MODEL_VALVE_145,
     MODEL_VALVE_213,
@@ -55,6 +61,7 @@ from custom_components.rainpoint.sensor import (
     RainPointCO2LowSensor,
     RainPointCO2Sensor,
     RainPointCO2TempSensor,
+    RainPointFirmwareVersionSensor,
     RainPointFlowCurrentDurationSensor,
     RainPointFlowCurrentUsedSensor,
     RainPointFlowLastUsedDurationSensor,
@@ -68,6 +75,7 @@ from custom_components.rainpoint.sensor import (
     RainPointHicRunDurationSensor,
     RainPointHicRunEndsAtSensor,
     RainPointIlluminanceSensor,
+    RainPointLastUpdatedSensor,
     RainPointMoisturePercentSensor,
     RainPointNotReportingSensor,
     RainPointPoolCurrentTempSensor,
@@ -94,8 +102,21 @@ from custom_components.rainpoint.sensor import (
     RainPointZoneRunDurationSensor,
     RainPointZoneStateSensor,
     RainPointZoneWaterUsageSensor,
+    _create_hub_entities,
     _create_sensor_entities,
     _LateSensorEntityAdder,
+    _make_co2_entities,
+    _make_diagnostic_entities,
+    _make_display_hub_entities,
+    _make_flowmeter_entities,
+    _make_hcs_moisture_only_entities,
+    _make_hcs_multisensor_entities,
+    _make_moisture_full_entities,
+    _make_moisture_simple_entities,
+    _make_pool_entities,
+    _make_pool_plus_entities,
+    _make_rain_entities,
+    _make_temphum_entities,
     _make_unknown_entities,
     _render_station_list,
     _slugify,
@@ -328,6 +349,8 @@ class TestAsyncSetupEntryDispatch:
         assert RainPointHubFirmwareSensor in types
         assert RainPointHubMACSensor in types
         assert RainPointHubRSSISensor in types
+        # The real coordinator, not a stand-in, reaches every hub entity.
+        assert all(e.coordinator is coordinator for e in captured)
 
     @pytest.mark.asyncio
     async def test_bluetooth_wrapper_does_not_displace_the_real_hub(self):
@@ -384,7 +407,8 @@ class TestAsyncSetupEntryDispatch:
         hub = make_hub_info(hid=100)
         coordinator = _make_mock_coordinator(make_coordinator_data(hubs=[hub], sensors={}))
         hass, entry = _make_hass(coordinator)
-        hass.data[DOMAIN]["test_entry"]["mqtt_client"] = MagicMock()
+        mqtt_client = MagicMock()
+        hass.data[DOMAIN]["test_entry"]["mqtt_client"] = mqtt_client
         captured = []
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
 
@@ -392,6 +416,8 @@ class TestAsyncSetupEntryDispatch:
 
         last_message = [e for e in captured if isinstance(e, RainPointPushLastMessageSensor)]
         assert len(last_message) == 1
+        # The real client, not a stand-in, reaches the entity.
+        assert last_message[0]._mqtt_client is mqtt_client
 
     @pytest.mark.asyncio
     async def test_setup_entry_unknown_model_creates_no_reading_entities(self):
@@ -423,6 +449,20 @@ class TestAsyncSetupEntryDispatch:
     async def test_setup_entry_no_entities_skips_add_call(self):
         """Empty data -> no add_entities call."""
         coordinator = _make_mock_coordinator(make_coordinator_data(hubs=[], sensors={}))
+        hass, entry = _make_hass(coordinator)
+        async_add_entities = MagicMock()
+
+        await async_setup_entry(hass, entry, async_add_entities)
+
+        assert not async_add_entities.called
+
+    @pytest.mark.asyncio
+    async def test_a_snapshot_missing_hubs_and_sensors_keys_entirely_degrades_to_empty(self):
+        """ "hubs" and "sensors" default to a list/dict, not None: coordinator.data
+        is a real dict that always carries both keys, but the default is what a
+        malformed or partial snapshot falls back to, and a None default would
+        crash the very next .items()/.values() call instead of finding nothing."""
+        coordinator = _make_mock_coordinator({"status": {}})
         hass, entry = _make_hass(coordinator)
         async_add_entities = MagicMock()
 
@@ -1412,6 +1452,14 @@ class TestRawPayloadSensor:
         sensor.coordinator.data["sensors"].clear()
         assert sensor.native_value is None
 
+    def test_real_init_sets_name(self):
+        """_make_sensor_base bypasses __init__ everywhere else in this class,
+        so the name string itself is only pinned by constructing for real."""
+        info = make_sensor_entry(hid=100, mid=200, addr=1)
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"100_200_1": info}))
+        sensor = RainPointRawPayloadSensor(coordinator, "100_200_1", info, "100_200_1")
+        assert sensor._attr_name == "Raw Payload"
+
 
 # ---------------------------------------------------------------------------
 # HCS sensor model dispatch in async_setup_entry (covers elif branches 176-286)
@@ -1605,6 +1653,8 @@ class TestHtvValveDiagnosticDispatch:
         rssi = [e for e in captured if isinstance(e, RainPointRSSISensor)]
         assert len(rssi) == 1
         assert rssi[0].native_value == -37
+        # The sub-device's own info, not a stand-in, reached this entity.
+        assert rssi[0].device_info["manufacturer"] == "RainPoint"
         assert not any(getattr(e, "_attr_unique_id", "").endswith("_battery") for e in captured)
         # 1 RSSI + 1 raw payload + 1 catalog coverage, nothing else from this platform.
         assert len(captured) == 3
@@ -1646,6 +1696,11 @@ class TestSingleOutletTimerDispatch:
         duration = [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)]
         assert rssi[0].native_value == -62
         assert duration[0].native_value == 1200
+        assert rssi[0]._attr_unique_id == "rainpoint_100_200_1_rssi"
+        assert duration[0]._attr_unique_id == "rainpoint_100_200_1_zone1_run_duration"
+        # The sub-device's own info, not a stand-in, reached both entities.
+        assert rssi[0].device_info["manufacturer"] == "RainPoint"
+        assert duration[0].device_info["manufacturer"] == "RainPoint"
         # 1 RSSI + 1 run duration + 1 raw payload + 1 catalog coverage, nothing else.
         assert len(captured) == 4
 
@@ -1746,6 +1801,8 @@ class TestZoneWaterUsageSensor:
         assert [e.native_value for e in usage] == [0.842, 0.096]
         assert usage[0]._attr_unique_id == "rainpoint_100_200_1_zone1_water_used"
         assert usage[0]._attr_name == "Zone 1 Water Used"
+        # The sub-device's own info, not a stand-in, reached this entity.
+        assert usage[0].device_info["manufacturer"] == "RainPoint"
 
     @pytest.mark.asyncio
     async def test_no_usage_entities_when_no_zones_reported(self):
@@ -1869,6 +1926,8 @@ class TestZoneRunDurationSensor:
         assert durations[0]._attr_name == "Zone 1 Run Duration"
         assert durations[1]._attr_unique_id == "rainpoint_100_200_1_zone2_run_duration"
         assert durations[1]._attr_name == "Zone 2 Run Duration"
+        # The sub-device's own info, not a stand-in, reached this entity.
+        assert durations[0].device_info["manufacturer"] == "RainPoint"
 
     @pytest.mark.asyncio
     async def test_duration_is_displayed_as_whole_seconds(self):
@@ -2466,8 +2525,14 @@ class TestHtv210bDispatch:
         assert len(states) == 2
         assert states[0]._attr_unique_id == "rainpoint_100_200_3_zone1_state"
         assert states[0]._attr_name == "Zone 1 State"
+        # The sub-device's own info, not a stand-in, reached this entity.
+        assert states[0].device_info["manufacturer"] == "RainPoint"
         # RSSI + 2 zone states + raw payload + catalog coverage, nothing else.
         assert len(captured) == 5
+        rssi = next(e for e in captured if isinstance(e, RainPointRSSISensor))
+        assert rssi._attr_unique_id == "rainpoint_100_200_3_rssi"
+        assert rssi.native_value == -76
+        assert rssi.device_info["manufacturer"] == "RainPoint"
 
     @pytest.mark.asyncio
     async def test_no_usage_entities_for_this_model(self):
@@ -2725,6 +2790,11 @@ class TestHicRunTimingSensors:
     def test_run_ends_at_device_class(self):
         assert RainPointHicRunEndsAtSensor._attr_device_class == SensorDeviceClass.TIMESTAMP
 
+    def test_names(self):
+        _, duration, ends_at = self._entities(SAMPLE_HIC801W_IDLE_PAYLOAD)
+        assert duration._attr_name == "Run Duration"
+        assert ends_at._attr_name == "Run Ends At"
+
     def test_run_duration_state_class_is_measurement_and_program_sensors_are_none(self):
         """The one deliberate state-class divergence in the HIC801W entity
         set: Run Duration is a real quantity and takes MEASUREMENT, while
@@ -2812,6 +2882,11 @@ class TestHicProgramStationSensors:
         _, stations, completed = self._entities(SAMPLE_HIC801W_IDLE_PAYLOAD)
         assert stations.native_value == "none"
         assert completed.native_value == "none"
+
+    def test_names(self):
+        _, stations, completed = self._entities(SAMPLE_HIC801W_IDLE_PAYLOAD)
+        assert stations._attr_name == "Program Stations"
+        assert completed._attr_name == "Program Stations Completed"
 
     def test_rejected_frame_reads_no_state_on_either_sensor(self):
         """A failed shape check yields None (not "none") on both sensors."""
@@ -3924,3 +3999,502 @@ class TestCatalogReadingsSensor:
         assert sensor._attr_entity_registry_enabled_default is False
         assert sensor._attr_entity_category == EntityCategory.DIAGNOSTIC
         assert sensor._attr_unique_id == "rainpoint_100_200_1_catalog_readings"
+
+    def test_name_is_catalog_readings(self):
+        assert self._sensor()._attr_name == "Catalog Readings"
+
+
+# ---------------------------------------------------------------------------
+# _create_hub_entities argument wiring
+# ---------------------------------------------------------------------------
+
+
+class TestCreateHubEntitiesArgWiring:
+    """_create_hub_entities hands the same (coordinator, hub_info) pair to all
+    four hub sensors; nothing here checks that a wrong pair still produces the
+    right count, only that each entity actually holds its own arguments."""
+
+    def test_the_real_coordinator_reaches_every_hub_sensor(self):
+        hub = make_hub_info(hid=100, mid=555)
+        coordinator = _make_mock_coordinator(make_coordinator_data(hubs=[hub]))
+
+        entities = _create_hub_entities(coordinator, [hub])
+
+        assert len(entities) == 4
+        assert all(e.coordinator is coordinator for e in entities)
+
+    def test_a_non_hub_record_is_skipped_not_aborted(self):
+        """continue, not break: one bad record before a real hub must not
+        swallow every hub that follows it in the list."""
+        wrapper = make_silent_wrapper_hub_record()
+        hub = make_hub_info(hid=100, mid=555)
+        coordinator = _make_mock_coordinator(make_coordinator_data(hubs=[wrapper, hub]))
+
+        entities = _create_hub_entities(coordinator, [wrapper, hub])
+
+        assert len(entities) == 4
+
+    def test_duplicate_mid_across_two_list_records_collapses_to_the_last(self):
+        """Keyed by mid, not by list position: two top-level records sharing one
+        mid must produce one hub's worth of entities, not two."""
+        first = make_hub_info(hid=100, mid=555, name="First")
+        second = make_hub_info(hid=100, mid=555, name="Second")
+        coordinator = _make_mock_coordinator(make_coordinator_data(hubs=[first, second]))
+
+        entities = _create_hub_entities(coordinator, [first, second])
+
+        assert len(entities) == 4
+
+
+# ---------------------------------------------------------------------------
+# _create_sensor_entities argument wiring
+# ---------------------------------------------------------------------------
+
+
+class TestCreateSensorEntitiesArgWiring:
+    """Covers what the model-count dispatch tests do not: that each branch of
+    _create_sensor_entities hands its OWN coordinator/key/info/base_slug to the
+    entities it builds, not a neighboring branch's."""
+
+    def test_missing_identity_fields_default_to_empty_strings_not_none(self):
+        """hid/mid/addr default to "", not None: base_slug must never render the
+        literal word "None" into an entity's unique_id."""
+        info = {"model": "UNKNOWN_XYZ", "data": {"type": "other"}}
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"k": info}))
+
+        entities = _create_sensor_entities(coordinator, "k", info)
+
+        expected_base_slug = f"{info.get('hid', '')}_{info.get('mid', '')}_{info.get('addr', '')}"
+        raw_payload = next(e for e in entities if isinstance(e, RainPointRawPayloadSensor))
+        assert raw_payload._attr_unique_id == f"rainpoint_{expected_base_slug}_raw_payload"
+
+    def test_the_silent_path_wires_the_real_coordinator_and_key(self):
+        key = "5_6_7"
+        info = make_sensor_entry(hid=5, mid=6, addr=7, data={"type": SILENT_DATA_TYPE, "silent_state": "stopped_reporting"})
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={key: info}))
+
+        entities = _create_sensor_entities(coordinator, key, info)
+
+        assert len(entities) == 1
+        sensor = entities[0]
+        assert isinstance(sensor, RainPointNotReportingSensor)
+        assert sensor._attr_unique_id == f"rainpoint_{key}_not_reporting"
+        assert sensor.native_value == "stopped_reporting"
+
+    def test_the_unsupported_model_path_wires_the_real_coordinator_key_info_and_base_slug(self):
+        key = "11_22_3"
+        info = make_sensor_entry(
+            hid=11,
+            mid=22,
+            addr=3,
+            model="TOTALLY_UNKNOWN",
+            data={"type": "unknown", "model": "TOTALLY_UNKNOWN", "raw_value": "10#00"},
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={key: info}))
+
+        entities = _create_sensor_entities(coordinator, key, info)
+        unknown = next(e for e in entities if isinstance(e, RainPointUnknownSensor))
+
+        assert unknown._attr_unique_id == f"rainpoint_{key}_unknown_TOTALLY_UNKNOWN"
+        assert unknown.native_value == "Unsupported: TOTALLY_UNKNOWN"
+        assert unknown.device_info["manufacturer"] == "RainPoint"
+
+    def test_the_generic_path_wires_the_real_coordinator_key_info_and_base_slug(self):
+        """HWG004WRF/34 is the same real catalog-admitted pair TestLateSensorEntityAdder
+        uses; reused here rather than inventing a second one."""
+        key = "42_43_1"
+        info = make_sensor_entry(
+            hid=42,
+            mid=43,
+            addr=1,
+            model="HWG004WRF",
+            sub_name="Outlet 1",
+            data={
+                "type": "unknown",
+                "model": "HWG004WRF",
+                "raw_value": "10#00",
+                "generic": {"decoder": "generic-tlv", "fields": [], "field_names": []},
+            },
+        )
+        info["model_code"] = 34
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={key: info}))
+
+        entities = _create_sensor_entities(coordinator, key, info, generic_enabled=True)
+        generic = [e for e in entities if GENERIC_UNIQUE_ID_MARKER in getattr(e, "_attr_unique_id", "")]
+
+        assert generic
+        entity = generic[0]
+        assert entity._attr_unique_id.startswith(f"rainpoint_{key}")
+        assert entity.device_info["manufacturer"] == "RainPoint"
+        # raw_status.time only resolves through the real coordinator and key.
+        assert "last_updated" in entity.extra_state_attributes
+
+
+# ---------------------------------------------------------------------------
+# Real __init__ contract: unique_id, name, and device_info for every class
+# that this test file otherwise only ever builds through _make_sensor_base,
+# which bypasses __init__ entirely and leaves these three untested.
+# ---------------------------------------------------------------------------
+
+_PLAIN_INIT_CASES = [
+    (RainPointTemperatureSensor, "temperature", "Temperature"),
+    (RainPointIlluminanceSensor, "illuminance", "Illuminance"),
+    (RainPointTempHumCurrentSensor, "temphum_current", "Current Temperature"),
+    (RainPointTempHumHighSensor, "temphum_high", "High Temperature"),
+    (RainPointTempHumLowSensor, "temphum_low", "Low Temperature"),
+    (RainPointTempHumHumidityCurrentSensor, "temphum_humidity_current", "Current Humidity"),
+    (RainPointTempHumHumidityHighSensor, "temphum_humidity_high", "High Humidity"),
+    (RainPointTempHumHumidityLowSensor, "temphum_humidity_low", "Low Humidity"),
+    (RainPointFlowRateSensor, "flow_rate", "Flow Rate"),
+    (RainPointFlowCurrentUsedSensor, "flow_current_used", "Flow Current Used"),
+    (RainPointFlowCurrentDurationSensor, "flow_current_duration", "Flow Current Duration"),
+    (RainPointFlowLastUsedSensor, "flow_last_used", "Flow Last Used"),
+    (RainPointFlowLastUsedDurationSensor, "flow_last_used_duration", "Flow Last Used Duration"),
+    (RainPointFlowTotalTodaySensor, "flow_total_today", "Flow Total Today"),
+    (RainPointFlowTotalSensor, "flow_total", "Flow Total"),
+    (RainPointCO2Sensor, "co2", "CO2"),
+    (RainPointCO2LowSensor, "co2_low", "CO2 Low"),
+    (RainPointCO2HighSensor, "co2_high", "CO2 High"),
+    (RainPointCO2TempSensor, "co2_temp", "CO2 Temperature"),
+    (RainPointCO2HumiditySensor, "co2_humidity", "CO2 Humidity"),
+    (RainPointPoolCurrentTempSensor, "pool_current_temp", "Pool Current Temperature"),
+    (RainPointPoolPlusPoolCurrentTempSensor, "pool_plus_pool_current_temp", "Pool Temperature"),
+    (RainPointPoolPlusPoolHighTempSensor, "pool_plus_pool_high_temp", "Pool High Temperature"),
+    (RainPointPoolPlusPoolLowTempSensor, "pool_plus_pool_low_temp", "Pool Low Temperature"),
+    (RainPointPoolPlusAmbientCurrentTempSensor, "pool_plus_ambient_current_temp", "Ambient Temperature"),
+    (RainPointPoolPlusAmbientHighTempSensor, "pool_plus_ambient_high_temp", "Ambient High Temperature"),
+    (RainPointPoolPlusAmbientLowTempSensor, "pool_plus_ambient_low_temp", "Ambient Low Temperature"),
+    (RainPointPoolPlusHumidityCurrentSensor, "pool_plus_humidity_current", "Ambient Humidity"),
+    (RainPointPoolPlusHumidityHighSensor, "pool_plus_humidity_high", "Ambient High Humidity"),
+    (RainPointPoolPlusHumidityLowSensor, "pool_plus_humidity_low", "Ambient Low Humidity"),
+]
+
+
+class TestSensorInitWiring:
+    """Every class below is built elsewhere in this file only through
+    _make_sensor_base (bypasses __init__) or not at all, so unique_id, name,
+    and the sensor_info handed to device_info are otherwise never pinned
+    against the real constructor."""
+
+    @pytest.mark.parametrize(("cls", "unique_suffix", "name"), _PLAIN_INIT_CASES, ids=[c[0].__name__ for c in _PLAIN_INIT_CASES])
+    def test_real_init_sets_unique_id_name_and_device_info(self, cls, unique_suffix, name):
+        base_slug = "31_32_1"
+        info = make_sensor_entry(hid=31, mid=32, addr=1)
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={base_slug: info}))
+
+        sensor = cls(coordinator, base_slug, info, base_slug)
+
+        assert sensor._attr_unique_id == f"rainpoint_{base_slug}_{unique_suffix}"
+        assert sensor._attr_name == name
+        # sensor_info reaches device_info: device.py indexes it directly and
+        # raises on a None or otherwise wrong info dict.
+        assert sensor.device_info["manufacturer"] == "RainPoint"
+
+
+class TestZoneSensorClassesRealInitDeviceInfo:
+    """RainPointZoneSensorBase and its three subclasses: device_info is never
+    accessed by the async_setup_entry dispatch tests that already build these
+    with real args, so a wrong sensor_info there goes unnoticed."""
+
+    @staticmethod
+    def _entry():
+        return make_sensor_entry(hid=40, mid=41, addr=1, data={"type": "valve_hub", "zones": {1: {"open": True}}})
+
+    def test_zone_water_usage_device_info(self):
+        info = self._entry()
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"40_41_1": info}))
+        sensor = RainPointZoneWaterUsageSensor(coordinator, "40_41_1", info, "40_41_1", 1)
+        assert sensor.device_info["manufacturer"] == "RainPoint"
+
+    def test_zone_run_duration_device_info(self):
+        info = self._entry()
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"40_41_1": info}))
+        sensor = RainPointZoneRunDurationSensor(coordinator, "40_41_1", info, "40_41_1", 1)
+        assert sensor.device_info["manufacturer"] == "RainPoint"
+
+    def test_zone_state_device_info(self):
+        info = self._entry()
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"40_41_1": info}))
+        sensor = RainPointZoneStateSensor(coordinator, "40_41_1", info, "40_41_1", 1)
+        assert sensor.device_info["manufacturer"] == "RainPoint"
+
+
+class TestDisplayHubReadingSensorRealInit:
+    """DisplayHubReadingSensor is only ever built through _make_sensor_base
+    elsewhere in this file, which bypasses __init__ entirely."""
+
+    def test_real_init_sets_unique_id_name_and_device_info(self):
+        info = make_sensor_entry(
+            hid=50, mid=51, addr=1, model=MODEL_DISPLAY_HUB, data={"type": "display_hub", "readings": {"temp": "707"}}
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"50_51_1": info}))
+
+        sensor = DisplayHubReadingSensor(coordinator, "50_51_1", info, "50_51_1", "temp")
+
+        assert sensor._attr_unique_id == "rainpoint_50_51_1_displayhub_temp"
+        assert sensor._attr_name == "temp"
+        assert sensor.device_info["manufacturer"] == "RainPoint"
+        assert sensor.native_value == 707.0
+
+
+class TestUnknownSensorModelDefault:
+    """RainPointUnknownSensor's own sensor_info.get("model", "unknown") default,
+    which _make_unknown_sensor's sensor_info_overrides always sets a model for
+    elsewhere in this file, so the missing-key default is never exercised."""
+
+    def test_falls_back_to_the_literal_unknown_when_the_model_key_is_absent(self):
+        info = {"hid": 1, "mid": 2, "addr": 3, "data": {"type": "unknown"}}
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"1_2_3": info}))
+
+        sensor = RainPointUnknownSensor(coordinator, "1_2_3", info, "1_2_3")
+
+        assert sensor._attr_unique_id == "rainpoint_1_2_3_unknown_unknown"
+        assert sensor._attr_name == "Unsupported (unknown)"
+
+
+class TestNotReportingSensorRealInit:
+    """RainPointNotReportingSensor is only ever built through _make_sensor_base
+    elsewhere in this file (see _make_not_reporting_sensor), which bypasses
+    __init__ and leaves the coordinator/key wiring unverified."""
+
+    def test_real_init_reads_state_through_the_given_coordinator_and_key(self):
+        info = make_sensor_entry(
+            hid=60, mid=61, addr=1, model="HTV210B", data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported"}
+        )
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"60_61_1": info}))
+
+        sensor = RainPointNotReportingSensor(coordinator, "60_61_1", info, "60_61_1")
+
+        assert sensor.native_value == "never_reported"
+
+
+# ---------------------------------------------------------------------------
+# _make_rain_entities: the window label formatting and the argument wiring
+# live in the factory, not in RainPointRainSensor itself, so both need a real
+# call into the factory rather than direct construction of the sensor.
+# ---------------------------------------------------------------------------
+
+
+class TestMakeRainEntities:
+    _EXPECTED: ClassVar[list[tuple[str, str, float]]] = [
+        ("rain_last_hour_mm", "Rain (Last Hour)", 0.5),
+        ("rain_last_24h_mm", "Rain (Last 24 Hours)", 18.7),
+        ("rain_last_7d_mm", "Rain (Last 7 Days)", 42.0),
+        ("rain_total_mm", "Rain (Total)", 100.0),
+    ]
+
+    def test_all_four_windows_are_named_keyed_and_read_from_the_real_data(self):
+        base_slug = "70_71_1"
+        data = {
+            "type": "rain",
+            "rain_last_hour_mm": 0.5,
+            "rain_last_24h_mm": 18.7,
+            "rain_last_7d_mm": 42.0,
+            "rain_total_mm": 100.0,
+        }
+        info = make_sensor_entry(hid=70, mid=71, addr=1, model=MODEL_RAIN, data=data)
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={base_slug: info}))
+
+        entities = _make_rain_entities(coordinator, base_slug, info, base_slug)
+
+        assert len(entities) == 4
+        for entity, (data_key, name, value) in zip(entities, self._EXPECTED, strict=True):
+            assert entity._attr_unique_id == f"rainpoint_{base_slug}_{data_key}"
+            assert entity._attr_name == name
+            assert entity.native_value == value
+            assert entity.device_info["manufacturer"] == "RainPoint"
+
+
+# ---------------------------------------------------------------------------
+# Remaining _make_*_entities factories: argument wiring not already covered
+# by an async_setup_entry dispatch test that inspects individual entities.
+# ---------------------------------------------------------------------------
+
+
+class TestFactoryEntityWiring:
+    @staticmethod
+    def _coordinator_and_info(hid, mid, addr, model, data):
+        key = f"{hid}_{mid}_{addr}"
+        info = make_sensor_entry(hid=hid, mid=mid, addr=addr, model=model, data=data)
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={key: info}))
+        return key, info, coordinator
+
+    @staticmethod
+    def _assert_all_wired(entities, base_slug):
+        for entity in entities:
+            assert base_slug in entity._attr_unique_id
+            assert entity.device_info["manufacturer"] == "RainPoint"
+
+    def test_make_diagnostic_entities(self):
+        key, info, coordinator = self._coordinator_and_info(
+            81, 82, 1, MODEL_HCS044FRF, {"rssi_dbm": -55, "device_timestamp": "2024-01-01T00:00:00+00:00"}
+        )
+        entities = _make_diagnostic_entities(coordinator, key, info, key)
+        assert len(entities) == 3
+        self._assert_all_wired(entities, key)
+        rssi = next(e for e in entities if isinstance(e, RainPointRSSISensor))
+        firmware = next(e for e in entities if isinstance(e, RainPointFirmwareVersionSensor))
+        last_updated = next(e for e in entities if isinstance(e, RainPointLastUpdatedSensor))
+        assert rssi.native_value == -55
+        assert firmware.native_value == "1.0.0"
+        assert last_updated.native_value is not None
+
+    def test_make_moisture_simple_entities(self):
+        key, info, coordinator = self._coordinator_and_info(
+            83, 84, 1, MODEL_MOISTURE_SIMPLE, {"type": "moisture_simple", "moisture_percent": 33, "rssi_dbm": -60}
+        )
+        entities = _make_moisture_simple_entities(coordinator, key, info, key)
+        assert len(entities) == 4
+        self._assert_all_wired(entities, key)
+        moisture = next(e for e in entities if isinstance(e, RainPointMoisturePercentSensor))
+        assert moisture._simple is True
+        assert moisture.native_value == 33
+
+    def test_make_moisture_full_entities(self):
+        key, info, coordinator = self._coordinator_and_info(
+            85,
+            86,
+            1,
+            MODEL_MOISTURE_FULL,
+            {"type": "moisture_full", "moisture_percent": 44, "temperature_c": 21.0, "illuminance_lux": 500, "rssi_dbm": -60},
+        )
+        entities = _make_moisture_full_entities(coordinator, key, info, key)
+        assert len(entities) == 6
+        self._assert_all_wired(entities, key)
+        moisture = next(e for e in entities if isinstance(e, RainPointMoisturePercentSensor))
+        assert moisture._simple is False
+        temp = next(e for e in entities if isinstance(e, RainPointTemperatureSensor))
+        assert temp.native_value == 21.0
+
+    def test_make_temphum_entities(self):
+        key, info, coordinator = self._coordinator_and_info(
+            87,
+            88,
+            1,
+            MODEL_TEMPHUM,
+            {
+                "tempcurrent": 20,
+                "temphigh": 25,
+                "templow": 15,
+                "humiditycurrent": 40,
+                "humidityhigh": 60,
+                "humiditylow": 20,
+            },
+        )
+        entities = _make_temphum_entities(coordinator, key, info, key)
+        assert len(entities) == 6
+        self._assert_all_wired(entities, key)
+        current = next(e for e in entities if isinstance(e, RainPointTempHumCurrentSensor))
+        assert current.native_value == 20
+
+    def test_make_flowmeter_entities(self):
+        key, info, coordinator = self._coordinator_and_info(
+            89,
+            90,
+            1,
+            MODEL_FLOWMETER,
+            {
+                "flowrate": 1.1,
+                "flowcurrentused": 2.2,
+                "flowcurrenduration": 30,
+                "flowlastused": 3.3,
+                "flowlastusedduration": 40,
+                "flowtotaltoday": 4.4,
+                "flowtotal": 5.5,
+                "rssi_dbm": -50,
+            },
+        )
+        entities = _make_flowmeter_entities(coordinator, key, info, key)
+        assert len(entities) == 10
+        self._assert_all_wired(entities, key)
+        rate = next(e for e in entities if isinstance(e, RainPointFlowRateSensor))
+        assert rate.native_value == 1.1
+
+    def test_make_co2_entities(self):
+        key, info, coordinator = self._coordinator_and_info(
+            91, 92, 1, MODEL_CO2, {"co2": 600, "co2low": 400, "co2high": 800, "co2temp": 22, "co2humidity": 45}
+        )
+        entities = _make_co2_entities(coordinator, key, info, key)
+        assert len(entities) == 5
+        self._assert_all_wired(entities, key)
+        co2 = next(e for e in entities if isinstance(e, RainPointCO2Sensor))
+        assert co2.native_value == 600
+
+    def test_make_pool_entities(self):
+        key, info, coordinator = self._coordinator_and_info(93, 94, 1, MODEL_POOL, {"tempcurrent": 27})
+        entities = _make_pool_entities(coordinator, key, info, key)
+        assert len(entities) == 1
+        self._assert_all_wired(entities, key)
+        assert entities[0].native_value == 27
+
+    def test_make_pool_plus_entities(self):
+        key, info, coordinator = self._coordinator_and_info(
+            95,
+            96,
+            1,
+            MODEL_POOL_PLUS,
+            {
+                "pool_tempcurrent": 27,
+                "pool_temphigh": 29,
+                "pool_templow": 25,
+                "ambient_tempcurrent": 22,
+                "ambient_temphigh": 24,
+                "ambient_templow": 20,
+                "humidity_current": 50,
+                "humidity_high": 55,
+                "humidity_low": 45,
+            },
+        )
+        entities = _make_pool_plus_entities(coordinator, key, info, key)
+        assert len(entities) == 9
+        self._assert_all_wired(entities, key)
+        pool_current = next(e for e in entities if isinstance(e, RainPointPoolPlusPoolCurrentTempSensor))
+        assert pool_current.native_value == 27
+
+    def test_make_hcs_moisture_only_entities(self):
+        key, info, coordinator = self._coordinator_and_info(97, 98, 1, MODEL_HCS005FRF, {"moisture_percent": 55})
+        entities = _make_hcs_moisture_only_entities(coordinator, key, info, key)
+        assert len(entities) == 1
+        self._assert_all_wired(entities, key)
+        assert entities[0]._simple is True
+        assert entities[0].native_value == 55
+
+    def test_make_hcs_multisensor_entities(self):
+        key, info, coordinator = self._coordinator_and_info(
+            99, 100, 1, MODEL_HCS024FRF_V1, {"moisture_percent": 66, "temperature_c": 19.0, "illuminance_lux": 300}
+        )
+        entities = _make_hcs_multisensor_entities(coordinator, key, info, key)
+        assert len(entities) == 3
+        self._assert_all_wired(entities, key)
+        moisture = next(e for e in entities if isinstance(e, RainPointMoisturePercentSensor))
+        assert moisture._simple is False
+        assert moisture.native_value == 66
+
+    def test_make_display_hub_entities(self):
+        key, info, coordinator = self._coordinator_and_info(
+            101, 102, 1, MODEL_DISPLAY_HUB, {"type": "display_hub", "readings": {"temp": "707", "humidity": "42"}}
+        )
+        entities = _make_display_hub_entities(coordinator, key, info, key)
+        assert len(entities) == 2
+        self._assert_all_wired(entities, key)
+        temp = next(e for e in entities if e._reading_key == "temp")
+        assert temp.native_value == 707.0
+
+    def test_make_display_hub_entities_with_no_readings_key_yields_no_entities(self):
+        """readings defaults to {}, not None: iterating it must never raise."""
+        key, info, coordinator = self._coordinator_and_info(103, 104, 1, MODEL_DISPLAY_HUB, {"type": "display_hub"})
+        entities = _make_display_hub_entities(coordinator, key, info, key)
+        assert entities == []
+
+    def test_make_unknown_entities_yields_nothing_for_a_non_unknown_type(self):
+        key, info, coordinator = self._coordinator_and_info(105, 106, 1, "SOME_MODEL", {"type": "other"})
+        assert _make_unknown_entities(coordinator, key, info, key) == []
+
+    def test_make_unknown_entities_wires_the_real_coordinator_key_and_base_slug(self):
+        key, info, coordinator = self._coordinator_and_info(
+            107, 108, 1, "SOME_MODEL", {"type": "unknown", "model": "SOME_MODEL", "raw_value": "10#00"}
+        )
+        entities = _make_unknown_entities(coordinator, key, info, key)
+        assert len(entities) == 1
+        self._assert_all_wired(entities, key)
+        assert entities[0].native_value == "Unsupported: SOME_MODEL"
