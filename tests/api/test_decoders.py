@@ -197,8 +197,42 @@ class TestDecodeHtv213frfValve:
         assert result["debug_info"]["payload_format"] == "ascii"
         assert result["debug_info"]["raw_payload"] == SAMPLE_HTV245_ASCII_PAYLOAD
         assert result["debug_info"]["header_parts"] == ["1", "-84", "1"]
+        assert result["debug_info"]["zone_sections"] == ["0,149,0,0,0,0", "0,6,0,0,0,0"]
         assert result["debug_info"]["zones_found"] == 2
         assert result["debug_info"]["rssi_raw"] == -84
+        assert result["hub_state_raw"] == "ascii_format"
+
+    def test_ascii_header_first_token_is_actually_validated(self):
+        """A non-numeric leading header token must fail the decode, not be silently ignored.
+
+        _flags1 is otherwise unused, so the only observable effect of parsing
+        header_parts[0] at all is that a malformed token there raises.
+        """
+        raw = "notanumber,-84,1;0,149,0,0,0,0|0,6,0,0,0,0"
+        result = decode_htv213frf_valve(raw)
+        assert "error" in result
+
+    def test_ascii_header_third_token_is_actually_validated(self):
+        """A non-numeric trailing header token must fail the decode, not be silently ignored.
+
+        _flags2 is otherwise unused, so the only observable effect of parsing
+        header_parts[2] at all is that a malformed token there raises.
+        """
+        raw = "1,-84,notanumber;0,149,0,0,0,0|0,6,0,0,0,0"
+        result = decode_htv213frf_valve(raw)
+        assert "error" in result
+
+    def test_ascii_zone_duration_reads_the_third_token_not_the_fourth(self):
+        """Duration comes from zone_parts[2]; a shifted index would read the wrong field."""
+        raw = "1,-84,1;0,149,7,8,0,0"
+        result = decode_htv213frf_valve(raw)
+        assert result["zones"][1]["duration_seconds"] == 7
+
+    def test_ascii_zone_state_zero_is_closed_not_a_state_of_one_check(self):
+        """Open is state != 0, not state != 1: a zero state must decode closed."""
+        raw = "1,-84,1;0,0,0,0,0,0"
+        result = decode_htv213frf_valve(raw)
+        assert result["zones"][1]["open"] is False
 
     def test_ascii_payload_with_two_semicolons_still_parses_both_zones(self):
         """The header/body split takes only the first ';', however many follow.
@@ -482,6 +516,8 @@ class TestDecodeHtv145frf:
         assert result["hub_online"] is True
         assert result["battery_flag"] == 1
         assert result["battery_percent"] == 100
+        assert result["raw_bytes"] == _parse_rainpoint_payload(SAMPLE_HTV145_CLOSED_PAYLOAD)
+        assert result["tlv_raw"] == {}
 
         zones = result["zones"]
         assert set(zones) == {1}
@@ -939,13 +975,61 @@ class TestDecodeMoistureFull:
         assert result["decoder"] == "hcs021frf_ascii"
 
     def test_ascii_payload_asserts_every_field(self):
-        """Every key the ASCII decoder builds, not just the ones spot-checked above."""
+        """Full-dict equality against the committed capture: catches any key
+        rename or value change anywhere in the ASCII decoder's return."""
         result = decode_moisture_full(MOISTURE_FULL_ASCII_PAYLOAD)
-        assert result["temperature_f10"] == 694
-        assert result["raw_bytes"] == MOISTURE_FULL_ASCII_PAYLOAD.encode("ascii")
-        assert result["debug_info"]["payload_format"] == "ascii"
-        assert result["debug_info"]["raw_payload"] == MOISTURE_FULL_ASCII_PAYLOAD
-        assert result["debug_info"]["rssi_raw"] == -73
+        assert result == {
+            "type": "moisture_full",
+            "rssi_dbm": -73,
+            "raw_bytes": MOISTURE_FULL_ASCII_PAYLOAD.encode("ascii"),
+            "moisture_percent": 70,
+            "temperature_c": result["temperature_c"],
+            "temperature_f10": 694,
+            "illuminance_lux": 29247.8,
+            "illuminance_raw10": 292478,
+            "decoder": "hcs021frf_ascii",
+            "debug_info": {
+                "payload_format": "ascii",
+                "raw_payload": MOISTURE_FULL_ASCII_PAYLOAD,
+                "header_parts": ["1", "-73", "1"],
+                "sensor_parts": ["694", "70", "G=292478"],
+                "rssi_raw": -73,
+                "lux_data_parsed": "G=292478",
+            },
+        }
+        assert abs(result["temperature_c"] - 20.78) < 0.05
+
+    def test_ascii_header_first_token_is_actually_validated(self):
+        """A non-numeric leading header token must fail the decode, not be silently ignored."""
+        raw = "notanumber,-73,1;694,70,G=292478"
+        result = decode_moisture_full(raw)
+        assert "error" in result
+
+    def test_ascii_header_third_token_is_actually_validated(self):
+        """A non-numeric trailing header token must fail the decode, not be silently ignored."""
+        raw = "1,-73,notanumber;694,70,G=292478"
+        result = decode_moisture_full(raw)
+        assert "error" in result
+
+    def test_ascii_rssi_of_exactly_zero_is_rejected_as_out_of_range(self):
+        """Zero is non-negative, so rssi_dbm must fall back to None, not 0."""
+        raw = "1,0,1;694,70,G=292478"
+        result = decode_moisture_full(raw)
+        assert result["rssi_dbm"] is None
+
+    def test_ascii_zero_temp_raw_reads_as_zero_not_one(self):
+        """A falsy temp_raw must fall back to 0.0 F, not a mutated 1.0 F."""
+        raw = "1,-73,1;0,70,G=292478"
+        result = decode_moisture_full(raw)
+        assert result["temperature_f10"] == 0
+        assert result["temperature_c"] == pytest.approx((0 - 32) * 5 / 9)
+
+    def test_ascii_lux_data_with_no_equals_sign_parses_as_a_direct_value(self):
+        """A falsy lux (0) must leave illuminance_raw10 at 0, not a mutated 1."""
+        raw = "1,-73,1;694,70,0"
+        result = decode_moisture_full(raw)
+        assert result["illuminance_lux"] == 0.0
+        assert result["illuminance_raw10"] == 0
 
 
 class TestDecodeHws019wrfV2:
@@ -1240,6 +1324,12 @@ class TestBasicDecoders:
         assert result["type"] == "co2"
         assert result["rssi"] is not None
         assert result["decoder"] == "basic"
+        # Fixed placeholder fields: this decoder never populates them from the
+        # payload, so they carry the same literal values on every call.
+        assert result["device_model"] == "HCS0530THO"
+        assert result["co2"] is None
+        assert result["temperature_c"] is None
+        assert result["humidity_percent"] is None
 
     def test_decode_soil(self):
         """Decode soil."""
@@ -1364,6 +1454,7 @@ class TestDecodeUnknown:
         result = decode_unknown(BASIC_HEX_PAYLOAD)
         assert result["type"] == "unknown"
         assert result["rssi"] == -80
+        assert result["decoder"] == "basic"
 
     def test_non_parseable_payload(self):
         """Non parseable payload."""
@@ -2143,6 +2234,8 @@ class TestDecodeHtv210b:
         result = decode_htv210b(SAMPLE_HTV210B_TLV_PAYLOAD)
         assert result["decoder"] == "htv210b_hex"
         assert result["type"] == "valve_hub"
+        assert result["raw_bytes"] == _parse_rainpoint_payload(SAMPLE_HTV210B_TLV_PAYLOAD)
+        assert result["tlv_raw"] == {}
         assert sorted(result["zones"]) == [1, 2]
         for zone in result["zones"].values():
             assert zone["open"] is False
@@ -2280,9 +2373,14 @@ class TestDecodeHtv210b:
     def test_non_hex_frame_returns_error_dict(self):
         """A payload this decoder cannot read degrades to the family's error shape."""
         result = decode_htv210b("10#208500968832DC64E0C5")
+        assert result["type"] == "valve_hub"
         assert result["decoder"] == "htv210b_error"
         assert result["zones"] == {}
+        assert result["raw_bytes"] == []
+        assert result["tlv_raw"] == {}
         assert "error" in result
+        # The real exception message, not a mutated "None" placeholder.
+        assert result["error"] != "None"
         # None, not 0: the RSSI sensor renders this verbatim, and 0 dBm would
         # read as a perfect signal instead of no reading.
         assert result["rssi_dbm"] is None
@@ -2571,6 +2669,16 @@ class TestDecodeHic801w:
         assert result["decoder"] == "hic801w_hex"
         assert "error" not in result
 
+    def test_happy_path_rssi_is_always_none_and_raw_bytes_is_the_frame(self):
+        """HIC801W has no RSSI/battery datapoints, so rssi_dbm is a fixed None.
+
+        raw_bytes carries the actual parsed frame on the happy path, not a
+        placeholder, so it must match the structural parse of the payload.
+        """
+        result = decode_hic801w(SAMPLE_HIC801W_STATION3_PAYLOAD)
+        assert result["rssi_dbm"] is None
+        assert result["raw_bytes"] == _parse_rainpoint_payload(SAMPLE_HIC801W_STATION3_PAYLOAD)
+
     def test_corpus_is_exactly_22_frames(self):
         """13 reporter frames plus 9 second-unit
         frames, keyed by capture label so the two byte-identical reporter
@@ -2627,6 +2735,7 @@ class TestDecodeHic801w:
         assert result["run_duration_seconds"] is None
         assert result["run_ends_at"] is None
         assert result["raw_bytes"] == []
+        assert result["rssi_dbm"] is None
         assert "error" in result
 
     def test_truncated_frame_missing_evtime_is_rejected(self):

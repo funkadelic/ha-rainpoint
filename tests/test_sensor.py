@@ -695,6 +695,17 @@ class TestRainSensor:
         sensor._attr_name = "Rain (Last 24 Hours)"
         assert sensor.native_value is None
 
+    def test_a_window_outside_the_map_falls_back_to_its_own_title_case(self):
+        """window_map only covers the four canonical windows; __init__ still
+        has to name any other window rather than defaulting to a missing name."""
+        key = "100_200_1"
+        info = make_sensor_entry(hid=100, mid=200, addr=1, model=MODEL_RAIN, data={"type": "rain"})
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={key: info}))
+
+        sensor = RainPointRainSensor(coordinator, key, info, key, "rain_custom_mm", "rain custom window")
+
+        assert sensor._attr_name == "Rain (Custom Window)"
+
 
 class TestTemperatureSensor:
     """Tests for RainPointTemperatureSensor."""
@@ -4129,6 +4140,30 @@ class TestCreateSensorEntitiesArgWiring:
         # raw_status.time only resolves through the real coordinator and key.
         assert "last_updated" in entity.extra_state_attributes
 
+    def test_generic_enabled_defaults_to_false_when_the_caller_omits_it(self):
+        """A caller that omits generic_enabled must get no generic entities,
+        even for a catalog-admitted model that would otherwise offer them."""
+        key = "42_43_1"
+        info = make_sensor_entry(
+            hid=42,
+            mid=43,
+            addr=1,
+            model="HWG004WRF",
+            sub_name="Outlet 1",
+            data={
+                "type": "unknown",
+                "model": "HWG004WRF",
+                "raw_value": "10#00",
+                "generic": {"decoder": "generic-tlv", "fields": [], "field_names": []},
+            },
+        )
+        info["model_code"] = 34
+        coordinator = _make_mock_coordinator(make_coordinator_data(sensors={key: info}))
+
+        entities = _create_sensor_entities(coordinator, key, info)
+
+        assert not [e for e in entities if GENERIC_UNIQUE_ID_MARKER in getattr(e, "_attr_unique_id", "")]
+
 
 # ---------------------------------------------------------------------------
 # Real __init__ contract: unique_id, name, and device_info for every class
@@ -4320,10 +4355,12 @@ class TestFactoryEntityWiring:
         return key, info, coordinator
 
     @staticmethod
-    def _assert_all_wired(entities, base_slug):
+    def _assert_all_wired(entities, base_slug, coordinator=None):
         for entity in entities:
             assert base_slug in entity._attr_unique_id
             assert entity.device_info["manufacturer"] == "RainPoint"
+            if coordinator is not None:
+                assert entity.coordinator is coordinator
 
     def test_make_diagnostic_entities(self):
         key, info, coordinator = self._coordinator_and_info(
@@ -4331,7 +4368,7 @@ class TestFactoryEntityWiring:
         )
         entities = _make_diagnostic_entities(coordinator, key, info, key)
         assert len(entities) == 3
-        self._assert_all_wired(entities, key)
+        self._assert_all_wired(entities, key, coordinator)
         rssi = next(e for e in entities if isinstance(e, RainPointRSSISensor))
         firmware = next(e for e in entities if isinstance(e, RainPointFirmwareVersionSensor))
         last_updated = next(e for e in entities if isinstance(e, RainPointLastUpdatedSensor))
@@ -4341,14 +4378,29 @@ class TestFactoryEntityWiring:
 
     def test_make_moisture_simple_entities(self):
         key, info, coordinator = self._coordinator_and_info(
-            83, 84, 1, MODEL_MOISTURE_SIMPLE, {"type": "moisture_simple", "moisture_percent": 33, "rssi_dbm": -60}
+            83,
+            84,
+            1,
+            MODEL_MOISTURE_SIMPLE,
+            {
+                "type": "moisture_simple",
+                "moisture_percent": 33,
+                "rssi_dbm": -60,
+                "device_timestamp": "2024-01-01T00:00:00+00:00",
+            },
         )
         entities = _make_moisture_simple_entities(coordinator, key, info, key)
         assert len(entities) == 4
-        self._assert_all_wired(entities, key)
+        self._assert_all_wired(entities, key, coordinator)
         moisture = next(e for e in entities if isinstance(e, RainPointMoisturePercentSensor))
         assert moisture._simple is True
         assert moisture.native_value == 33
+        rssi = next(e for e in entities if isinstance(e, RainPointRSSISensor))
+        firmware = next(e for e in entities if isinstance(e, RainPointFirmwareVersionSensor))
+        last_updated = next(e for e in entities if isinstance(e, RainPointLastUpdatedSensor))
+        assert rssi.native_value == -60
+        assert firmware.native_value == "1.0.0"
+        assert last_updated.native_value is not None
 
     def test_make_moisture_full_entities(self):
         key, info, coordinator = self._coordinator_and_info(
@@ -4356,15 +4408,31 @@ class TestFactoryEntityWiring:
             86,
             1,
             MODEL_MOISTURE_FULL,
-            {"type": "moisture_full", "moisture_percent": 44, "temperature_c": 21.0, "illuminance_lux": 500, "rssi_dbm": -60},
+            {
+                "type": "moisture_full",
+                "moisture_percent": 44,
+                "temperature_c": 21.0,
+                "illuminance_lux": 500,
+                "rssi_dbm": -60,
+                "device_timestamp": "2024-01-01T00:00:00+00:00",
+            },
         )
         entities = _make_moisture_full_entities(coordinator, key, info, key)
         assert len(entities) == 6
-        self._assert_all_wired(entities, key)
+        self._assert_all_wired(entities, key, coordinator)
         moisture = next(e for e in entities if isinstance(e, RainPointMoisturePercentSensor))
         assert moisture._simple is False
+        assert moisture.native_value == 44
         temp = next(e for e in entities if isinstance(e, RainPointTemperatureSensor))
         assert temp.native_value == 21.0
+        illuminance = next(e for e in entities if isinstance(e, RainPointIlluminanceSensor))
+        assert illuminance.native_value == 500
+        rssi = next(e for e in entities if isinstance(e, RainPointRSSISensor))
+        firmware = next(e for e in entities if isinstance(e, RainPointFirmwareVersionSensor))
+        last_updated = next(e for e in entities if isinstance(e, RainPointLastUpdatedSensor))
+        assert rssi.native_value == -60
+        assert firmware.native_value == "1.0.0"
+        assert last_updated.native_value is not None
 
     def test_make_temphum_entities(self):
         key, info, coordinator = self._coordinator_and_info(
@@ -4383,9 +4451,18 @@ class TestFactoryEntityWiring:
         )
         entities = _make_temphum_entities(coordinator, key, info, key)
         assert len(entities) == 6
-        self._assert_all_wired(entities, key)
-        current = next(e for e in entities if isinstance(e, RainPointTempHumCurrentSensor))
-        assert current.native_value == 20
+        self._assert_all_wired(entities, key, coordinator)
+        expected = [
+            (RainPointTempHumCurrentSensor, 20),
+            (RainPointTempHumHighSensor, 25),
+            (RainPointTempHumLowSensor, 15),
+            (RainPointTempHumHumidityCurrentSensor, 40),
+            (RainPointTempHumHumidityHighSensor, 60),
+            (RainPointTempHumHumidityLowSensor, 20),
+        ]
+        for entity, (cls, value) in zip(entities, expected, strict=True):
+            assert isinstance(entity, cls)
+            assert entity.native_value == value
 
     def test_make_flowmeter_entities(self):
         key, info, coordinator = self._coordinator_and_info(
@@ -4402,13 +4479,18 @@ class TestFactoryEntityWiring:
                 "flowtotaltoday": 4.4,
                 "flowtotal": 5.5,
                 "rssi_dbm": -50,
+                "device_timestamp": "2024-01-01T00:00:00+00:00",
             },
         )
         entities = _make_flowmeter_entities(coordinator, key, info, key)
         assert len(entities) == 10
-        self._assert_all_wired(entities, key)
+        self._assert_all_wired(entities, key, coordinator)
         rate = next(e for e in entities if isinstance(e, RainPointFlowRateSensor))
         assert rate.native_value == 1.1
+        firmware = next(e for e in entities if isinstance(e, RainPointFirmwareVersionSensor))
+        last_updated = next(e for e in entities if isinstance(e, RainPointLastUpdatedSensor))
+        assert firmware.native_value == "1.0.0"
+        assert last_updated.native_value is not None
 
     def test_make_co2_entities(self):
         key, info, coordinator = self._coordinator_and_info(
@@ -4416,15 +4498,23 @@ class TestFactoryEntityWiring:
         )
         entities = _make_co2_entities(coordinator, key, info, key)
         assert len(entities) == 5
-        self._assert_all_wired(entities, key)
-        co2 = next(e for e in entities if isinstance(e, RainPointCO2Sensor))
-        assert co2.native_value == 600
+        self._assert_all_wired(entities, key, coordinator)
+        expected = [
+            (RainPointCO2Sensor, 600),
+            (RainPointCO2LowSensor, 400),
+            (RainPointCO2HighSensor, 800),
+            (RainPointCO2TempSensor, 22),
+            (RainPointCO2HumiditySensor, 45),
+        ]
+        for entity, (cls, value) in zip(entities, expected, strict=True):
+            assert isinstance(entity, cls)
+            assert entity.native_value == value
 
     def test_make_pool_entities(self):
         key, info, coordinator = self._coordinator_and_info(93, 94, 1, MODEL_POOL, {"tempcurrent": 27})
         entities = _make_pool_entities(coordinator, key, info, key)
         assert len(entities) == 1
-        self._assert_all_wired(entities, key)
+        self._assert_all_wired(entities, key, coordinator)
         assert entities[0].native_value == 27
 
     def test_make_pool_plus_entities(self):
@@ -4447,15 +4537,27 @@ class TestFactoryEntityWiring:
         )
         entities = _make_pool_plus_entities(coordinator, key, info, key)
         assert len(entities) == 9
-        self._assert_all_wired(entities, key)
-        pool_current = next(e for e in entities if isinstance(e, RainPointPoolPlusPoolCurrentTempSensor))
-        assert pool_current.native_value == 27
+        self._assert_all_wired(entities, key, coordinator)
+        expected = [
+            (RainPointPoolPlusPoolCurrentTempSensor, 27),
+            (RainPointPoolPlusPoolHighTempSensor, 29),
+            (RainPointPoolPlusPoolLowTempSensor, 25),
+            (RainPointPoolPlusAmbientCurrentTempSensor, 22),
+            (RainPointPoolPlusAmbientHighTempSensor, 24),
+            (RainPointPoolPlusAmbientLowTempSensor, 20),
+            (RainPointPoolPlusHumidityCurrentSensor, 50),
+            (RainPointPoolPlusHumidityHighSensor, 55),
+            (RainPointPoolPlusHumidityLowSensor, 45),
+        ]
+        for entity, (cls, value) in zip(entities, expected, strict=True):
+            assert isinstance(entity, cls)
+            assert entity.native_value == value
 
     def test_make_hcs_moisture_only_entities(self):
         key, info, coordinator = self._coordinator_and_info(97, 98, 1, MODEL_HCS005FRF, {"moisture_percent": 55})
         entities = _make_hcs_moisture_only_entities(coordinator, key, info, key)
         assert len(entities) == 1
-        self._assert_all_wired(entities, key)
+        self._assert_all_wired(entities, key, coordinator)
         assert entities[0]._simple is True
         assert entities[0].native_value == 55
 
@@ -4465,10 +4567,14 @@ class TestFactoryEntityWiring:
         )
         entities = _make_hcs_multisensor_entities(coordinator, key, info, key)
         assert len(entities) == 3
-        self._assert_all_wired(entities, key)
+        self._assert_all_wired(entities, key, coordinator)
         moisture = next(e for e in entities if isinstance(e, RainPointMoisturePercentSensor))
         assert moisture._simple is False
         assert moisture.native_value == 66
+        temp = next(e for e in entities if isinstance(e, RainPointTemperatureSensor))
+        assert temp.native_value == 19.0
+        illuminance = next(e for e in entities if isinstance(e, RainPointIlluminanceSensor))
+        assert illuminance.native_value == 300
 
     def test_make_display_hub_entities(self):
         key, info, coordinator = self._coordinator_and_info(
@@ -4476,7 +4582,7 @@ class TestFactoryEntityWiring:
         )
         entities = _make_display_hub_entities(coordinator, key, info, key)
         assert len(entities) == 2
-        self._assert_all_wired(entities, key)
+        self._assert_all_wired(entities, key, coordinator)
         temp = next(e for e in entities if e._reading_key == "temp")
         assert temp.native_value == 707.0
 
@@ -4496,5 +4602,5 @@ class TestFactoryEntityWiring:
         )
         entities = _make_unknown_entities(coordinator, key, info, key)
         assert len(entities) == 1
-        self._assert_all_wired(entities, key)
+        self._assert_all_wired(entities, key, coordinator)
         assert entities[0].native_value == "Unsupported: SOME_MODEL"
