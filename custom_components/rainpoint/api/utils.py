@@ -206,6 +206,17 @@ class _RecordSummary:
         return _summarize_record(self._record)
 
 
+# The second digit selects the framing and the first does not change it: one
+# HTV213FRF sent the same record stream under 11# and later 01#.
+_DP_ID_FRAMED_PREFIXES = ("11#", "01#")
+_KNOWN_PREFIXES = frozenset({"10", "11", "01"})
+
+
+def _is_dp_id_framed(raw: str) -> bool:
+    """True when raw carries the dp_id-prefixed record stream (11# or 01#)."""
+    return raw.startswith(_DP_ID_FRAMED_PREFIXES)
+
+
 def _parse_rainpoint_payload(raw: str) -> bytes:
     """Parse a RainPoint hex payload and return bytes."""
     if "#" not in raw:
@@ -213,15 +224,10 @@ def _parse_rainpoint_payload(raw: str) -> bytes:
 
     prefix, hex_data = raw.split("#", 1)
 
-    # Handle different formats
-    if prefix == "10":
-        # Standard format: 10#ABCDEF...
+    # 10# is flat hex; 11# and 01# are the dp_id-prefixed record stream.
+    if prefix in _KNOWN_PREFIXES:
         return bytes.fromhex(hex_data)
-    elif prefix == "11":
-        # TLV format: 11#ABCDEF...
-        return bytes.fromhex(hex_data)
-    else:
-        raise ValueError(f"Unknown payload prefix: {prefix}")
+    raise ValueError(f"Unknown payload prefix: {prefix}")
 
 
 def _parse_tlv_payload(raw: str) -> dict:
