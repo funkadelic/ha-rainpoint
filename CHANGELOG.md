@@ -10,6 +10,10 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 The Catalog Readings sensor (disabled by default) lists every reading RainPoint's product data says a model can send. It now also shows which of those your device sent in its latest report, so you can tell a reading the hardware never sends from one that arrives but this integration does not read yet.
 
+**Behind the scenes**
+
+Mutation testing turned up behaviour the existing tests never checked, and new tests now cover it, so a future change is less likely to break something without anyone noticing.
+
 
 ### Fixed
 
