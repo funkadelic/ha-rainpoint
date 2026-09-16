@@ -947,6 +947,19 @@ class TestHtv213DpMapEdgeCases:
 
         assert dp_map == {}, f"Unknown-type record should be skipped; got {dp_map}"
 
+    def test_compact_alarm_records_do_not_swallow_neighbours_on_odd_zone_counts(self):
+        """STA_ALARM records are 2 bytes; reading them as 4 mis-frames odd zone counts.
+
+        The 3-zone capture lost its STA_BAT record and the 4-zone one gained a
+        phantom record out of the trailing report-time bytes.
+        """
+        from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
+
+        for raw in (SAMPLE_HTV345_TLV_PAYLOAD, SAMPLE_HTV445_TLV_PAYLOAD):
+            dp_map = _scan_htv213_dp_map(bytes.fromhex(raw.split("#", 1)[1]))
+            assert dp_map[0x18] == (0xDC, 1)
+            assert max(dp_map) < 0x30, f"record past the last zone block: {sorted(hex(k) for k in dp_map)}"
+
 
 class TestDecodeMoistureFull:
     """Tests for decode_moisture_full (HCS021FRF): hex and ASCII paths."""

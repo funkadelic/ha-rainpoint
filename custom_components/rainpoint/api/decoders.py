@@ -60,7 +60,9 @@ def _attach_report_time(result: dict, b: bytes, *, dp_id_prefixed: bool = False)
 
 # Type byte → value byte count for HTV213FRF/HTV245FRF.
 # Subset of types relevant to these models; see _TYPE_WIDTHS in utils.py for the full set.
-_HTV213_TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
+# 0x20 is deliberately absent: STA_ALARM arrives as a 2-byte compact record, and a
+# 2-byte value width swallowed the next record on odd zone counts.
+_HTV213_TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0xAD: 2, 0xB7: 4, 0x9F: 4}
 
 # dp_id block bases for the HTV213FRF/HTV245FRF family. Each per-zone reading
 # owns a block of consecutive dp_ids, so zone N is <base> + N: state 0x19..,
