@@ -947,8 +947,8 @@ class TestHtv213DpMapEdgeCases:
 
         assert dp_map == {}, f"Unknown-type record should be skipped; got {dp_map}"
 
-    def test_compact_alarm_records_do_not_swallow_neighbours_on_odd_zone_counts(self):
-        """STA_ALARM records are 2 bytes; reading them as 4 mis-frames odd zone counts.
+    def test_compact_alarm_records_do_not_swallow_neighbouring_records(self):
+        """STA_ALARM records are 2 bytes; reading them as 4 mis-frames the stream.
 
         The 3-zone capture lost its STA_BAT record and the 4-zone one gained a
         phantom record out of the trailing report-time bytes.
@@ -2434,8 +2434,8 @@ class TestDecodeHtv210b:
     def test_alarm_records_do_not_misframe_the_stream(self):
         """The compact 1-byte alarm records parse as themselves, not as a 2-byte type.
 
-        The HTV213 type-byte table reads 0x20 as a 2-byte record, which on
-        this frame would swallow the second alarm's dp_id. The structural walk
+        Reading 0x20 as a 2-byte type would swallow the second alarm's dp_id
+        on this frame. The structural walk
         keeps every following record intact, which this asserts through the
         zone 2 event time surviving unshifted.
         """

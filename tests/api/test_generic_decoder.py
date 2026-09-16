@@ -26,7 +26,7 @@ from tests.payload_samples import (
 # move this
 # hash forward on purpose; the guard exists to catch decode_generic and its
 # helpers reaching back into this file, not to freeze it.
-_DECODERS_PY_SHA256 = "e2d829c27495fa9fc924622621e6d52a209034a585fc969876190e27e91b7067"
+_DECODERS_PY_SHA256 = "b1df2dbd80b031c02a0f14b07c9d7bea932d05e4ef968c541b2e3e5d98ca9a48"
 
 
 class TestDecodeGenericTLV:
