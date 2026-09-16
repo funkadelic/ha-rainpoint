@@ -2,6 +2,22 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.24.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.0...v1.24.1) (2026-09-16)
+
+
+### Fixed
+
+* show which catalog readings a device actually sends ([#256](https://github.com/funkadelic/ha-rainpoint/issues/256)) ([57884ed](https://github.com/funkadelic/ha-rainpoint/commit/57884eded1f7b12d8a28f976c8281cc22713d250))
+
+
+### Other Changes
+
+* bump astral-sh/setup-uv from 10.0.1 to 10.1.0 ([#261](https://github.com/funkadelic/ha-rainpoint/issues/261)) ([861e630](https://github.com/funkadelic/ha-rainpoint/commit/861e630471c804b3480a0f621124fbf6a94ab50d))
+* bump home-assistant/actions/hassfest ([#263](https://github.com/funkadelic/ha-rainpoint/issues/263)) ([3e35b8e](https://github.com/funkadelic/ha-rainpoint/commit/3e35b8e9a42202fa7ba377873315e60d534b9952))
+* bump pytest-homeassistant-custom-component ([#262](https://github.com/funkadelic/ha-rainpoint/issues/262)) ([13b74e9](https://github.com/funkadelic/ha-rainpoint/commit/13b74e92a3b71b8cfc5a1081e54aa7a95b4c9a59))
+* cover behaviour that mutation testing showed was unchecked ([#260](https://github.com/funkadelic/ha-rainpoint/issues/260)) ([3618697](https://github.com/funkadelic/ha-rainpoint/commit/361869780578c7e2904f422eb73da40bfb550a2c))
+* tune mutmut config and document a memory cap for full runs ([#259](https://github.com/funkadelic/ha-rainpoint/issues/259)) ([ada4d95](https://github.com/funkadelic/ha-rainpoint/commit/ada4d95e8ed6bcc256d32305fbb97df83c5adfba))
+
 ## [1.24.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.23.0...v1.24.0) (2026-09-11)
 
 ### What's new
