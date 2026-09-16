@@ -71,6 +71,7 @@ from tests.payload_samples import (
     SAMPLE_HTV210B_DP_OPEN_60S_STATE,
     SAMPLE_HTV210B_DP_OPEN_120S_STATE,
     SAMPLE_HTV210B_TLV_PAYLOAD,
+    SAMPLE_HTV213_01_PREFIX_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_FULL_IDLE_PAYLOAD,
     SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD,
@@ -343,6 +344,20 @@ class TestDecodeHtv213frfValve:
         assert result["zones"][1]["open"] is False
         assert result["zones"][2]["open"] is False
         assert result["zones"][3]["open"] is False
+
+    def test_01_prefix_frame_decodes_its_zones(self):
+        """A real 01# frame decodes instead of returning the router's error dict."""
+        result = decode_htv213frf_valve(SAMPLE_HTV213_01_PREFIX_PAYLOAD)
+
+        assert result["decoder"] == "htv213frf_hex"
+        assert result["rssi_dbm"] == -45
+        assert sorted(result["zones"]) == [1, 2]
+        assert all(zone["open"] is False for zone in result["zones"].values())
+
+    def test_01_prefix_decodes_exactly_like_11(self):
+        """The leading prefix digit does not change the decode."""
+        body = SAMPLE_HTV213_01_PREFIX_PAYLOAD[3:]
+        assert decode_htv213frf_valve("01#" + body) == decode_htv213frf_valve("11#" + body)
 
     # --- RSSI (0x17/0xE1 header record, not at a fixed offset) ---
 
@@ -2253,6 +2268,11 @@ class TestDecodeHtv210b:
             assert zone["state_raw"] == 0x00
             assert zone["duration_seconds"] == 0
             assert zone["event_time"] is None
+
+    def test_01_prefix_decodes_exactly_like_11(self):
+        """The same record stream under 01# decodes as it does under 11#."""
+        body = SAMPLE_HTV210B_TLV_PAYLOAD[3:]
+        assert decode_htv210b("01#" + body) == decode_htv210b(SAMPLE_HTV210B_TLV_PAYLOAD)
 
     def test_idle_capture_reports_rssi_battery_and_report_time(self):
         """The frame's diagnostics match what the RainPoint app showed at capture time.

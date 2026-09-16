@@ -8,6 +8,7 @@ from custom_components.rainpoint.api import (
     _base_decoder_dict,
     _extract_report_time,
     _f10_to_c,
+    _is_dp_id_framed,
     _le16,
     _parse_hub_broadcast_flag,
     _parse_rainpoint_payload,
@@ -46,6 +47,15 @@ class TestParseRainpointPayload:
     def test_11_prefix_tlv_hex(self):
         """11# prefix returns decoded hex bytes."""
         assert _parse_rainpoint_payload("11#AABB") == b"\xaa\xbb"
+
+    def test_01_prefix_tlv_hex(self):
+        """01# prefix returns decoded hex bytes."""
+        assert _parse_rainpoint_payload("01#AABB") == b"\xaa\xbb"
+
+    @pytest.mark.parametrize(("raw", "expected"), [("11#AA", True), ("01#AA", True), ("10#AA", False), ("1,-84,1;", False)])
+    def test_is_dp_id_framed(self, raw, expected):
+        """Only the 11# and 01# prefixes mark the dp_id-prefixed record stream."""
+        assert _is_dp_id_framed(raw) is expected
 
     def test_missing_hash_separator_raises(self):
         """Payload without '#' raises ValueError."""

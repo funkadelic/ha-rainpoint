@@ -28,6 +28,7 @@ from .utils import (
     _f10_to_c,
     _find_field_int,
     _find_field_value,
+    _is_dp_id_framed,
     _le16,
     _parse_entries,
     _parse_rainpoint_payload,
@@ -99,13 +100,13 @@ def decode_htv213frf_valve(raw: str) -> dict:
     Decode HTV213FRF/HTV245FRF valve hub payload.
 
     These devices support two formats:
-    1. Hex format (11#...) - flat [dp_id][type_byte][value...] stream; value
+    1. Hex format (11#... or 01#...) - flat [dp_id][type_byte][value...] stream; value
        length is inferred from the type byte (not a TLV with explicit length)
     2. ASCII format (1,-84,1;...) - uses comma-separated values
     """
     try:
         # Check payload format and route to appropriate decoder
-        if raw.startswith("11#"):
+        if _is_dp_id_framed(raw):
             return _decode_htv213frf_hex(raw)
         elif "," in raw and (";" in raw or "|" in raw):
             return _decode_htv213frf_ascii(raw)
@@ -626,7 +627,7 @@ def decode_htv210b(raw: str) -> dict:
     online state, so there is no dedicated record to read.
     """
     try:
-        if not raw.startswith("11#"):
+        if not _is_dp_id_framed(raw):
             raise ValueError(f"Unexpected payload format: {raw}")
         b = _parse_rainpoint_payload(raw)
         records = _map_htv210b_records(b)
