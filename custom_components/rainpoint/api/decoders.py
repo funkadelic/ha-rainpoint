@@ -58,15 +58,11 @@ def _attach_report_time(result: dict, b: bytes, *, dp_id_prefixed: bool = False)
         result["report_time"], result["report_time_raw"] = report
 
 
-# Type byte → value byte count for HTV213FRF/HTV245FRF.
-# Subset of types relevant to these models; see _TYPE_WIDTHS in utils.py for the full set.
-_HTV213_TYPE_LENGTHS = {0xDC: 1, 0xD8: 1, 0x20: 2, 0xAD: 2, 0xB7: 4, 0x9F: 4}
-
 # dp_id block bases for the HTV213FRF/HTV245FRF family. Each per-zone reading
 # owns a block of consecutive dp_ids, so zone N is <base> + N: state 0x19..,
 # event time 0x21.., duration 0x25.., usage 0x29.. on a 2-zone hub. The blocks
 # are four wide, so a fifth zone's dp_id would land on the next block's first
-# record; the type-byte check on every read below is what keeps that from being
+# record; the field-index check on every read below is what keeps that from being
 # misread as the zone's own value rather than an assumption that it cannot
 # happen.
 #
@@ -287,45 +283,6 @@ def _extract_htv213_battery(b: bytes) -> tuple[int | None, int | None]:
     return flag, _battery_flag_to_percent(flag)
 
 
-def _scan_htv213_dp_map(b: bytes) -> dict[int, tuple[int, int]]:
-    """Scan a flat dp_id/type/value byte stream into {dp_id: (type_byte, value_int)}.
-
-    Unknown type bytes cause a 1-byte advance so parsing can re-align on the
-    next potential DP record. A misaligned multi-byte-value skip can still
-    bypass trailing records; re-alignment is best-effort only. Duplicate
-    dp_ids are last-write-wins (intentional, not an oversight). Every
-    multi-byte value is little-endian; see _parse_tlv_payload in utils.py for
-    why that is now unconditional.
-    """
-    dp_map: dict[int, tuple[int, int]] = {}
-    i = 0
-    while i < len(b) - 2:  # need at least 3 bytes: dp_id + type_byte + 1 value byte
-        dp_id = b[i]
-        type_byte = b[i + 1]
-        val_len = _HTV213_TYPE_LENGTHS.get(type_byte)
-        if val_len is None:
-            _LOGGER.debug(
-                "HTV213FRF: unknown type byte 0x%02X at offset %d; advancing 1 byte for re-alignment",
-                type_byte,
-                i,
-            )
-            i += 1
-        elif i + 2 + val_len > len(b):
-            _LOGGER.debug(
-                "HTV213FRF: truncated record for type 0x%02X at offset %d: need %d value bytes but have %d; advancing 1 byte",
-                type_byte,
-                i,
-                val_len,
-                len(b) - (i + 2),
-            )
-            i += 1
-        else:
-            val_bytes = b[i + 2 : i + 2 + val_len]
-            dp_map[dp_id] = (type_byte, int.from_bytes(val_bytes, "little"))
-            i += 2 + val_len
-    return dp_map
-
-
 def _decode_packed_timestamp(value: int) -> str | None:
     """Decode a packed wall-clock stamp into an ISO string, or None if unusable.
 
@@ -356,34 +313,29 @@ def _decode_packed_timestamp(value: int) -> str | None:
         return None
 
 
-def _extract_htv213_zones(dp_map: dict[int, tuple[int, int]]) -> dict[int, dict]:
-    """Pull per-zone open state, duration, event time, and water usage from the dp_map.
+def _extract_htv213_zones(records: dict[tuple[int, int], bytes]) -> dict[int, dict]:
+    """Pull per-zone open state, duration, event time, and water usage from the record map.
 
-    Zone states are DP 0x18+N with type 0xD8 only; other types on zone-range
-    IDs are schedule/timer fields, not zone states. Zone durations are DP
-    0x24+N with type 0xAD (2-byte seconds), event times are DP 0x20+N with
-    type 0xB7 (4-byte packed stamp), and water usage is DP 0x28+N with type
-    0x9F (4-byte raw count).
+    Zone states are DP 0x18+N (1-byte STA_WKSTATE), durations DP 0x24+N
+    (2-byte seconds), event times DP 0x20+N (4-byte packed stamp), and water
+    usage DP 0x28+N (4-byte raw count).
 
-    Every one of those reads is guarded on its own type byte, so a record that
-    is absent, or that belongs to a neighbouring dp_id block, leaves the field
-    empty instead of contributing a plausible wrong number.
+    Every one of those reads is guarded on its field index and width, so a
+    record that is absent, or that belongs to a neighbouring dp_id block,
+    leaves the field empty instead of contributing a plausible wrong number.
     """
     zones: dict[int, dict] = {}
     for zone_num in range(1, 9):
-        state_dp = _HTV213_DP_BASE_STATE + zone_num
-        if state_dp not in dp_map:
+        state_bytes = records.get((_HTV213_DP_BASE_STATE + zone_num, STA_WKSTATE_FIELD))
+        if state_bytes is None or len(state_bytes) != 1:
             continue
-        state_type, state_val = dp_map[state_dp]
-        if state_type != 0xD8:
-            continue
-        # Duration only populated for the documented 0xAD DP type; any other type
-        # at this DP (or a missing DP) defaults to 0 rather than misinterpreting a
-        # differently-typed value as seconds.
+        state_val = state_bytes[0]
+        # A missing or differently-shaped duration record defaults to 0 rather
+        # than being misread as seconds.
         duration_seconds = 0
-        dur_entry = dp_map.get(_HTV213_DP_BASE_DURATION + zone_num)
-        if dur_entry is not None and dur_entry[0] == 0xAD:
-            duration_seconds = dur_entry[1]
+        dur_bytes = records.get((_HTV213_DP_BASE_DURATION + zone_num, STA_DURATION_FIELD))
+        if dur_bytes is not None and len(dur_bytes) == 2:
+            duration_seconds = int.from_bytes(dur_bytes, "little")
 
         # On every frame captured so far this is the moment the zone's current
         # run ends (the frame's own report time plus the duration above), and
@@ -392,9 +344,9 @@ def _extract_htv213_zones(dp_map: dict[int, tuple[int, int]]) -> dict[int, dict]
         # firmware that later populates it while idle does not make the name a
         # lie.
         event_time = None
-        event_entry = dp_map.get(_HTV213_DP_BASE_EVENT_TIME + zone_num)
-        if event_entry is not None and event_entry[0] == 0xB7:
-            event_time = _decode_packed_timestamp(event_entry[1])
+        event_bytes = records.get((_HTV213_DP_BASE_EVENT_TIME + zone_num, STA_EVTIME_FIELD))
+        if event_bytes is not None and len(event_bytes) == 4:
+            event_time = _decode_packed_timestamp(int.from_bytes(event_bytes, "little"))
 
         # Raw flow count for the zone's last completed run; it reads zero
         # while that zone is running. None (rather than 0) when the frame
@@ -402,9 +354,9 @@ def _extract_htv213_zones(dp_map: dict[int, tuple[int, int]]) -> dict[int, dict]
         # from "reported as none used".
         usage_counts = None
         usage_gallons = None
-        usage_entry = dp_map.get(_HTV213_DP_BASE_USAGE + zone_num)
-        if usage_entry is not None and usage_entry[0] == 0x9F:
-            usage_counts = usage_entry[1]
+        usage_bytes = records.get((_HTV213_DP_BASE_USAGE + zone_num, STA_LASTUSAGE_FIELD))
+        if usage_bytes is not None and len(usage_bytes) == 4:
+            usage_counts = int.from_bytes(usage_bytes, "little")
             usage_gallons = round(usage_counts * _USAGE_GALLONS_PER_COUNT, 3)
 
         is_open = bool(state_val & 0x01)  # LSB: 1=open, 0=closed (device uses 0x21/0x20, not 0x01/0x00)
@@ -432,16 +384,14 @@ def _decode_htv213frf_hex(raw: str) -> dict:
     """
     Decode HTV213FRF/HTV245FRF hex format payload (11# prefix).
 
-    The payload is a flat sequence of [dp_id][type_byte][value_bytes...] records.
-    The type byte determines value length:
-      0xDC, 0xD8 → 1 byte   (battery flag, zone open/close state)
-      0x20, 0xAD → 2 bytes  (timer config, zone duration in seconds)
-      0xB7, 0x9F → 4 bytes  (schedule/timer extended fields)
+    The payload is a sequence of [dp_id][header][value_bytes...] records, walked
+    structurally so value bytes (the trailing report clock included) are never
+    read as record boundaries.
 
     Known DP IDs:
-      0x18              → STA_BAT flag (type 0xDC)
-      0x18+N (1≤N≤8)   → zone N open state (type 0xD8, value 0x01=open, 0x00=closed)
-      0x24+N (1≤N≤8)   → zone N duration in seconds (type 0xAD, 2-byte little-endian)
+      0x18              → STA_BAT flag
+      0x18+N (1≤N≤8)   → zone N open state (bit 0 set = open)
+      0x24+N (1≤N≤8)   → zone N duration in seconds (2-byte little-endian)
 
     hub_online comes from zone presence, matching decode_htv210b and
     decode_htv145frf. The catalog declares no online datapoint for this
@@ -459,8 +409,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         b = _parse_rainpoint_payload(raw)
         _LOGGER.debug(debug_with_version("HTV213FRF hex raw bytes: %s"), b)
 
-        dp_map = _scan_htv213_dp_map(b)
-        zones = _extract_htv213_zones(dp_map)
+        zones = _extract_htv213_zones(_map_dp_records(b))
 
         battery_flag, battery_percent = _extract_htv213_battery(b)
 
@@ -546,13 +495,12 @@ def _single_zone_from_records(records: dict[int, bytes]) -> dict | None:
     }
 
 
-def _map_htv210b_records(b: bytes) -> dict[tuple[int, int], bytes]:
-    """Walk an HTV210B frame into {(dp_id, field): value_bytes}.
+def _map_dp_records(b: bytes) -> dict[tuple[int, int], bytes]:
+    """Walk a dp_id-prefixed valve frame into {(dp_id, field): value_bytes}.
 
     Keyed on the pair rather than the dp_id alone so every read is guarded on
     the record's own structural field index; a record that belongs to another
-    datapoint can never satisfy a lookup. Duplicate pairs are last-write-wins,
-    matching the HTV213 scanner.
+    datapoint can never satisfy a lookup. Duplicate pairs are last-write-wins.
     """
     return {(e["dp_id"], e["field"]): bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=True)}
 
@@ -630,7 +578,7 @@ def decode_htv210b(raw: str) -> dict:
         if not _is_dp_id_framed(raw):
             raise ValueError(f"Unexpected payload format: {raw}")
         b = _parse_rainpoint_payload(raw)
-        records = _map_htv210b_records(b)
+        records = _map_dp_records(b)
         zones = _extract_htv210b_zones(records)
         # Shared with the HTV213 family on purpose despite the name: the
         # battery extraction is structural and model-agnostic underneath.

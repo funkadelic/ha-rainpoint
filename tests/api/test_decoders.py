@@ -883,69 +883,20 @@ class TestHtv213DpMapEdgeCases:
             f"A non-0xAD value at the duration DP must not populate duration_seconds."
         )
 
-    def test_truncated_known_type_record_is_skipped(self):
-        """A known type byte with insufficient remaining buffer is skipped, and
-        the i += 1 advance lets the scanner pick up valid records that follow.
+    def test_report_clock_bytes_are_never_read_as_records(self):
+        """A report time whose bytes look like record headers must not change any zone.
 
-        Two cases:
-        1. A bare truncated 0xAD record (needs 2 value bytes, has 1) yields
-           an empty dp_map.
-        2. A truncated 0xB7 record (needs 4 value bytes, has 3) followed by a
-           valid 0xDC record exercises the re-alignment path: the truncated
-           branch fires at offset 0, the unknown branch absorbs one byte of
-           drift at offset 1, and the success branch captures DP 0x11 at
-           offset 2. A 2-byte 0xAD truncation cannot be used here because
-           appending any 3+ trailing bytes would satisfy 0xAD's value length
-           and short-circuit the truncated branch.
+        On the zone 2 mid-run capture, a clock of 13:32:26 once decoded zone 2
+        as closed and 10:52:38 rewrote its duration.
         """
-        from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
+        head = SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD[:-8]
+        day = int.from_bytes(bytes.fromhex(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD[-8:]), "little") & ~0x1FFFF
+        expected = decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)["zones"]
 
-        bare_truncated = bytes([0x10, 0xAD, 0x01])
-        assert _scan_htv213_dp_map(bare_truncated) == {}, "Bare truncation should yield empty dp_map"
-
-        with_trailing = bytes([0x10, 0xB7, 0x11, 0xDC, 0x05])
-        dp_map = _scan_htv213_dp_map(with_trailing)
-        assert 0x10 not in dp_map, f"Truncated DP 0x10 should not be captured; got {dp_map}"
-        assert dp_map.get(0x11) == (0xDC, 0x05), f"Expected DP 0x11 = (0xDC, 0x05) after re-alignment; got {dp_map}"
-
-    def test_truncated_record_advance_does_not_rewind_past_a_record_already_read(self):
-        """The truncated-record skip must advance the cursor by 1, not reset it to 1.
-
-        Record 1 (dp=0x10, type=0xDC, val=0xAA) consumes 3 bytes, landing the
-        cursor at offset 3, where a 0xB7 (4-byte) record is truncated. That
-        truncation must be skipped forward one byte at a time, not used to
-        rewind into record 1's own value byte and misread it as a bogus dp_id.
-        """
-        from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
-
-        # 10 DC AA | 20 B7 11 22 (0xB7 needs 4 value bytes, only 2 remain)
-        payload = bytes([0x10, 0xDC, 0xAA, 0x20, 0xB7, 0x11, 0x22])
-        dp_map = _scan_htv213_dp_map(payload)
-        assert dp_map == {0x10: (0xDC, 0xAA)}
-
-    def test_truncated_record_advance_is_exactly_one_byte_not_two(self):
-        """The truncated-record branch must advance the cursor by 1, not 2.
-
-        Skipping an extra byte on top of the 1-byte re-alignment step would
-        silently swallow the very byte that re-alignment exists to visit,
-        landing the next record on the wrong dp_id entirely.
-        """
-        from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
-
-        # DP 0x10, type 0xB7 (needs 4 value bytes, only 3 remain), truncated.
-        payload = bytes([0x10, 0xB7, 0xDC, 0xD8, 0x77])
-        dp_map = _scan_htv213_dp_map(payload)
-        assert dp_map == {0xB7: (0xDC, 0xD8)}
-
-    def test_unknown_type_byte_is_skipped(self):
-        """An unrecognized type byte advances 1 byte and produces no dp entry."""
-        from custom_components.rainpoint.api.decoders import _scan_htv213_dp_map
-
-        # DP 0x10, type 0x00 (not in _HTV213_TYPE_LENGTHS), one trailing byte
-        unknown = bytes([0x10, 0x00, 0x01])
-        dp_map = _scan_htv213_dp_map(unknown)
-
-        assert dp_map == {}, f"Unknown-type record should be skipped; got {dp_map}"
+        for hour, minute, second in ((13, 32, 26), (10, 52, 38)):
+            word = day | (hour << 12) | (minute << 6) | second
+            result = decode_htv213frf_valve(head + word.to_bytes(4, "little").hex())
+            assert result["zones"] == expected, f"{hour:02}:{minute:02}:{second:02}"
 
 
 class TestDecodeMoistureFull:
