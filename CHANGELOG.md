@@ -12,7 +12,7 @@ The Catalog Readings sensor (disabled by default) lists every reading RainPoint'
 
 **Behind the scenes**
 
-Mutation testing turned up behaviour the existing tests never checked, and new tests now cover it, so a future change is less likely to break something without anyone noticing.
+Mutation testing turned up behavior the existing tests never checked, and new tests now cover it, so a future change is less likely to break something without anyone noticing.
 
 
 ### Fixed
