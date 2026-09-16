@@ -4,6 +4,12 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.24.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.0...v1.24.1) (2026-09-16)
 
+### What's new
+
+**Catalog Readings shows what your device actually sends**
+
+The Catalog Readings sensor (disabled by default) lists every reading RainPoint's product data says a model can send. It now also shows which of those your device sent in its latest report, so you can tell a reading the hardware never sends from one that arrives but this integration does not read yet.
+
 
 ### Fixed
 
