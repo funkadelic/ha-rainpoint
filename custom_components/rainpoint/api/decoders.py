@@ -58,7 +58,7 @@ def _attach_report_time(result: dict, b: bytes, *, dp_id_prefixed: bool = False)
         result["report_time"], result["report_time_raw"] = report
 
 
-# dp_id block bases for the HTV213FRF/HTV245FRF family. Each per-zone reading
+# dp_id block bases for the HTV213FRF/HTV245FRF family and the HTV210B. Each per-zone reading
 # owns a block of consecutive dp_ids, so zone N is <base> + N: state 0x19..,
 # event time 0x21.., duration 0x25.., usage 0x29.. on a 2-zone hub. The blocks
 # are four wide, so a fifth zone's dp_id would land on the next block's first
@@ -72,10 +72,10 @@ def _attach_report_time(result: dict, b: bytes, *, dp_id_prefixed: bool = False)
 # and the alarm code is the low nibble. Both committed captures read 0 on both
 # zones, including the one taken with zone 2 mid-run, so decoding it needs a
 # frame taken while a zone is actually faulting.
-_HTV213_DP_BASE_STATE = 0x18
-_HTV213_DP_BASE_EVENT_TIME = 0x20
-_HTV213_DP_BASE_DURATION = 0x24
-_HTV213_DP_BASE_USAGE = 0x28
+_DP_BASE_STATE = 0x18
+_DP_BASE_EVENT_TIME = 0x20
+_DP_BASE_DURATION = 0x24
+_DP_BASE_USAGE = 0x28
 
 # Gallons per raw usage count. Calibrated against a single maintainer reading:
 # a run the frame reported as 421 counts showed as 0.8 gal in the RainPoint app,
@@ -290,7 +290,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
     Known DP IDs:
       0x18              → STA_BAT flag
       0x18+N (1≤N≤8)   → zone N open state (bit 0 set = open)
-      0x24+N (1≤N≤8)   → zone N duration in seconds (2-byte little-endian)
+      0x24+N (1≤N≤8)   → zone N duration in seconds (2 or 4 bytes, little-endian)
 
     hub_online comes from zone presence, matching decode_htv210b and
     decode_htv145frf. The catalog declares no online datapoint for this
@@ -314,8 +314,8 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         battery_flag, battery_percent = _extract_dp_battery(b)
 
         _LOGGER.debug(
-            debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s, battery=%s (flag %s)"),
-            len(zones),
+            debug_with_version("HTV213FRF hex decoded: zones=%s, hub_online=%s, battery=%s (flag %s)"),
+            zones,
             bool(zones),
             battery_percent,
             battery_flag,
@@ -354,33 +354,32 @@ _DURATION_WIDTHS = (2, 4)
 def _rssi_dbm_from_record(value: bytes | list[int] | None) -> int | None:
     """Return the signed dBm from an RSSI record's value bytes, or None.
 
-    The structural walk has already isolated the record (value bytes
-    [signed dBm][PHY]), so the only check left is that the dBm byte is
-    negative. The PHY byte needs no bound.
+    The structural walk has already isolated the record, whose first value byte
+    is the signed dBm (a 2-byte record adds a PHY byte, which needs no bound).
+    The only check left is that the dBm byte is negative.
     """
     if value is None or len(value) < 1 or value[0] < 0x80:
         return None
     return value[0] - 256
 
 
-def _single_zone_from_records(records: dict[int, bytes]) -> dict | None:
-    """Build one zone dict from a dp_id-less record map, or None with no work state.
+def _zone_from_reads(state_bytes: bytes | None, dur_bytes: bytes | None, ev_bytes: bytes | None) -> dict | None:
+    """Build one zone dict from its work-state, duration and event-time value bytes.
 
-    The single-outlet 10# frames and the HTV210B command response each
-    describe exactly one zone, so their records key on the structural field
-    index alone. Semantics are the ones _extract_dp_zones documents.
+    None without a 1-byte work state. Work-state bit 0 is open/closed (bit 5
+    latches on after a zone's first use). The duration is the commanded run
+    length in seconds, 2 or 4 bytes wide, and persists after the run; a missing
+    or other-width record reads 0. The event time is the packed wall-clock
+    moment the current run ends, None while idle or on any other width.
     """
-    state_bytes = records.get(STA_WKSTATE_FIELD)
     if state_bytes is None or len(state_bytes) != 1:
         return None
 
     duration_seconds = 0
-    dur_bytes = records.get(STA_DURATION_FIELD)
     if dur_bytes is not None and len(dur_bytes) in _DURATION_WIDTHS:
         duration_seconds = int.from_bytes(dur_bytes, "little")
 
     event_time = None
-    ev_bytes = records.get(STA_EVTIME_FIELD)
     if ev_bytes is not None and len(ev_bytes) == 4:
         event_time = _decode_packed_timestamp(int.from_bytes(ev_bytes, "little"))
 
@@ -390,6 +389,11 @@ def _single_zone_from_records(records: dict[int, bytes]) -> dict | None:
         "state_raw": state_bytes[0],
         "event_time": event_time,
     }
+
+
+def _single_zone_from_records(records: dict[int, bytes]) -> dict | None:
+    """Build the one zone a dp_id-less record map describes (single-outlet 10# frames, HTV210B command response)."""
+    return _zone_from_reads(records.get(STA_WKSTATE_FIELD), records.get(STA_DURATION_FIELD), records.get(STA_EVTIME_FIELD))
 
 
 def _map_dp_records(b: bytes) -> dict[tuple[int, int], bytes]:
@@ -406,51 +410,30 @@ def _extract_dp_zones(records: dict[tuple[int, int], bytes], *, with_usage: bool
     """Pull per-zone state, duration, event time and (optionally) usage from the record map.
 
     Zone N owns a block of dp_ids on both the HTV213 family and the HTV210B:
-    state 0x18+N, event time 0x20+N, duration 0x24+N, usage 0x28+N. Each read
-    is guarded on field index and width, so an absent or neighbouring record
-    leaves the field empty.
-
-    Work-state bit 0 is open/closed (bit 5 latches on after a zone's first use).
-    The duration is the commanded run length in seconds, 2 bytes on the HTV213
-    family and 4 on the HTV210B, and persists after the run. The event time is
-    the packed wall-clock moment the current run ends, zero while idle.
+    state 0x18+N, event time 0x20+N, duration 0x24+N, usage 0x28+N. Field
+    semantics and defaults are the ones _zone_from_reads documents.
 
     Usage is the raw flow count of the zone's last completed run, None when the
-    frame carries no record. ``with_usage`` is False for the HTV210B, which has
-    no flow meter and whose usage records always read zero.
+    frame carries no 4-byte record. ``with_usage`` is False for the HTV210B,
+    which has no flow meter and whose usage records always read zero.
     """
     zones: dict[int, dict] = {}
     for zone_num in range(1, 9):
-        state_bytes = records.get((_HTV213_DP_BASE_STATE + zone_num, STA_WKSTATE_FIELD))
-        if state_bytes is None or len(state_bytes) != 1:
+        zone = _zone_from_reads(
+            records.get((_DP_BASE_STATE + zone_num, STA_WKSTATE_FIELD)),
+            records.get((_DP_BASE_DURATION + zone_num, STA_DURATION_FIELD)),
+            records.get((_DP_BASE_EVENT_TIME + zone_num, STA_EVTIME_FIELD)),
+        )
+        if zone is None:
             continue
-        state_val = state_bytes[0]
-
-        duration_seconds = 0
-        dur_bytes = records.get((_HTV213_DP_BASE_DURATION + zone_num, STA_DURATION_FIELD))
-        if dur_bytes is not None and len(dur_bytes) in _DURATION_WIDTHS:
-            duration_seconds = int.from_bytes(dur_bytes, "little")
-
-        event_time = None
-        ev_bytes = records.get((_HTV213_DP_BASE_EVENT_TIME + zone_num, STA_EVTIME_FIELD))
-        if ev_bytes is not None and len(ev_bytes) == 4:
-            event_time = _decode_packed_timestamp(int.from_bytes(ev_bytes, "little"))
-
-        zone = {
-            "open": bool(state_val & 0x01),
-            "duration_seconds": duration_seconds,
-            "state_raw": state_val,
-            "event_time": event_time,
-        }
         if with_usage:
             usage_counts = None
-            usage_bytes = records.get((_HTV213_DP_BASE_USAGE + zone_num, STA_LASTUSAGE_FIELD))
+            usage_bytes = records.get((_DP_BASE_USAGE + zone_num, STA_LASTUSAGE_FIELD))
             if usage_bytes is not None and len(usage_bytes) == 4:
                 usage_counts = int.from_bytes(usage_bytes, "little")
             zone["last_usage_counts"] = usage_counts
             zone["last_usage_gallons"] = None if usage_counts is None else round(usage_counts * _USAGE_GALLONS_PER_COUNT, 3)
         zones[zone_num] = zone
-        _LOGGER.debug("Valve zone %d: %s", zone_num, zone)
     return zones
 
 
@@ -474,6 +457,7 @@ def decode_htv210b(raw: str) -> dict:
         b = _parse_rainpoint_payload(raw)
         records = _map_dp_records(b)
         zones = _extract_dp_zones(records, with_usage=False)
+        _LOGGER.debug("HTV210B decoded: zones=%s", zones)
         battery_flag, battery_percent = _extract_dp_battery(b)
         result = {
             "type": "valve_hub",
@@ -518,7 +502,7 @@ def decode_htv210b_dp_state(raw: str) -> dict | None:
     ``dp_id_prefixed=False`` here, not True as in the poll-path decoder.
 
     Returns a single zone dict with exactly the four keys
-    ``_extract_dp_zones(..., with_usage=False)`` produces (``open``, ``duration_seconds``,
+    ``_zone_from_reads`` produces (``open``, ``duration_seconds``,
     ``state_raw``, ``event_time``): no ``type``, ``rssi_dbm``,
     ``battery_flag``, ``zones`` wrapper, or port field, because the blob does
     not carry those and does not say which zone it describes -- the

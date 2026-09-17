@@ -414,6 +414,14 @@ class TestDecodeHtv213frfValve:
         """Any PHY byte is accepted, as in decode_htv210b."""
         assert decode_htv213frf_valve("11#17E1B402FEFF0FEC4BCB19")["rssi_dbm"] == -76
 
+    def test_rssi_read_from_a_one_byte_record(self):
+        """A 1-byte RSSI record (header 0xE0), the width the catalog gives HTV245FRF and HTV345FRF, still reads."""
+        assert decode_htv213frf_valve("11#17E0B4")["rssi_dbm"] == -76
+
+    def test_four_byte_duration_is_read(self):
+        """A 4-byte duration record reads as seconds on this family too, as it does on the HTV210B."""
+        assert decode_htv213frf_valve("11#19D80125AF3C000000")["zones"][1]["duration_seconds"] == 60
+
     def test_rssi_is_not_read_out_of_a_usage_value(self):
         """17 E1 B4 01 inside a 4-byte usage value is read as usage, and the frame reports no signal."""
         assert decode_htv213frf_valve("11#299F17E1B40119D800")["rssi_dbm"] is None
