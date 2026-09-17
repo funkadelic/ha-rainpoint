@@ -2,6 +2,15 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.24.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.1...v1.24.2) (2026-09-17)
+
+
+### Fixed
+
+* decode valve reports that start with 01# ([#264](https://github.com/funkadelic/ha-rainpoint/issues/264)) ([51d0951](https://github.com/funkadelic/ha-rainpoint/commit/51d0951ac1f5f768de517a9fde95a9fb011dc28a))
+* read valve signal strength from the right record ([#268](https://github.com/funkadelic/ha-rainpoint/issues/268)) ([3a6fb68](https://github.com/funkadelic/ha-rainpoint/commit/3a6fb6803cb1e4ef1a2d8943fdcac4928ae481a8))
+* stop valves occasionally showing the wrong zone state ([#267](https://github.com/funkadelic/ha-rainpoint/issues/267)) ([e307398](https://github.com/funkadelic/ha-rainpoint/commit/e3073981a04f60c6b6294f83fb4019123a3dbc05))
+
 ## [1.24.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.0...v1.24.1) (2026-09-16)
 
 ### What's new
