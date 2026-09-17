@@ -288,8 +288,7 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         # internally, with no external reading needed. Its report time unpacks
         # to 17:40:51, its zone-2 event time to 18:29:51, and the difference of
         # 2940 seconds is exactly the raw value this identity carries on that
-        # zone. api/decoders.py (_extract_htv213_zones) and api/decoders.py
-        # (_extract_htv210b_zones) both read the record as little-endian
+        # zone. api/decoders.py (_extract_dp_zones) reads the record as little-endian
         # seconds, at the two widths captures show (2 bytes on the HTV213
         # family, 4 on the HTV210B).
         #
@@ -429,7 +428,7 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         # used to carry both drifted onto unrelated code, a symbol does not,
         # and TestRunStateEvidenceNoteDriftGuard below checks the symbol.
         # - decode_htv213frf_valve, the HTV213FRF/HTV245FRF datapoint-map
-        #   branch, masking through _extract_htv213_zones, device reporting
+        #   branch, masking through _extract_dp_zones, device reporting
         #   0x21 and 0x20 rather than 0x01 and 0x00. Its sibling branch,
         #   _decode_htv213frf_ascii, is deliberately not evidence for this
         #   row: it reads a decimal field out of a comma-separated payload,
