@@ -845,20 +845,19 @@ class TestLittleEndianTripwire:
         )
 
 
-class TestHtv213DpMapEdgeCases:
-    """Defensive parsing edge cases for the HTV213FRF/HTV245FRF dp_map scan
+class TestHtv213RecordEdgeCases:
+    """Defensive parsing edge cases for the HTV213FRF/HTV245FRF record walk
     and zone extraction.
     """
 
     def test_duration_dp_with_wrong_type_defaults_to_zero(self):
-        """A non-0xAD type at DP 0x24+N must not be misread as duration seconds.
+        """A non-duration record at DP 0x24+N must not be misread as duration seconds.
 
-        The documented duration DP type is 0xAD (2-byte little-endian seconds).
-        If the firmware ever places a different type at the duration DP, the
-        decoder should default duration_seconds to 0 rather than reinterpret a
-        differently-typed value as a count of seconds.
+        The documented duration record is 0xAD (field 19, 2-byte little-endian
+        seconds). Any other record at the duration DP leaves duration_seconds
+        at 0 rather than reinterpreting its value as a count of seconds.
         """
-        # Hub online, zone 1 open, zone 1 "duration" sent with type 0xD8 (val_len=1, value=0x05)
+        # Hub online, zone 1 open, zone 1 "duration" sent as a 0xD8 work-state record (1 byte, value 0x05)
         payload_bytes = bytes(
             [
                 0x18,
@@ -891,12 +890,29 @@ class TestHtv213DpMapEdgeCases:
         """
         head = SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD[:-8]
         day = int.from_bytes(bytes.fromhex(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD[-8:]), "little") & ~0x1FFFF
-        expected = decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)["zones"]
 
         for hour, minute, second in ((13, 32, 26), (10, 52, 38)):
             word = day | (hour << 12) | (minute << 6) | second
-            result = decode_htv213frf_valve(head + word.to_bytes(4, "little").hex())
-            assert result["zones"] == expected, f"{hour:02}:{minute:02}:{second:02}"
+            zone2 = decode_htv213frf_valve(head + word.to_bytes(4, "little").hex())["zones"][2]
+            assert (zone2["open"], zone2["duration_seconds"]) == (True, 2940), f"{hour:02}:{minute:02}:{second:02}"
+
+    def test_state_record_with_the_wrong_width_is_not_a_zone(self):
+        """A field 30 record that is 2 bytes wide is not a work state."""
+        assert decode_htv213frf_valve("11#19D90121")["zones"] == {}
+
+    @pytest.mark.parametrize(
+        ("raw", "key", "expected"),
+        [
+            ("11#19D80125AF3C000000", "duration_seconds", 0),  # field 19, 4 bytes
+            ("11#19D80125E13C00", "duration_seconds", 0),  # 2 bytes, field 32
+            ("11#19D801219F7327C919", "event_time", None),  # 4 bytes, field 15
+            ("11#19D801299D1401", "last_usage_counts", None),  # field 15, 2 bytes
+            ("11#19D80129B714010000", "last_usage_counts", None),  # 4 bytes, field 21
+        ],
+    )
+    def test_zone_reads_need_both_field_and_width(self, raw, key, expected):
+        """Each zone read is guarded on the field index and the width, not either alone."""
+        assert decode_htv213frf_valve(raw)["zones"][1][key] == expected
 
 
 class TestDecodeMoistureFull:
@@ -2372,8 +2388,8 @@ class TestDecodeHtv210b:
     def test_alarm_records_do_not_misframe_the_stream(self):
         """The compact 1-byte alarm records parse as themselves, not as a 2-byte type.
 
-        The HTV213 type-byte table reads 0x20 as a 2-byte record, which on
-        this frame would swallow the second alarm's dp_id. The structural walk
+        Reading 0x20 as a 2-byte type would swallow the second alarm's dp_id
+        on this frame. The structural walk
         keeps every following record intact, which this asserts through the
         zone 2 event time surviving unshifted.
         """

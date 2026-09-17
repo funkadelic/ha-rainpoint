@@ -96,8 +96,8 @@ def decode_htv213frf_valve(raw: str) -> dict:
     Decode HTV213FRF/HTV245FRF valve hub payload.
 
     These devices support two formats:
-    1. Hex format (11#... or 01#...) - flat [dp_id][type_byte][value...] stream; value
-       length is inferred from the type byte (not a TLV with explicit length)
+    1. Hex format (11#... or 01#...) - [dp_id][header][value...] records, walked
+       structurally
     2. ASCII format (1,-84,1;...) - uses comma-separated values
     """
     try:
@@ -565,10 +565,8 @@ def decode_htv210b(raw: str) -> dict:
     once paired through a hub; Bluetooth-only, it reports nothing to the cloud
     at all, so this decoder only ever sees hub-paired frames. The frame is the
     same self-describing record stream the generic decoder walks, so records
-    are located structurally rather than through the HTV213 type-byte table:
-    this firmware writes records in widths that table does not know (a 4-byte
-    duration, a compact 1-byte alarm), and a fixed-width table would mis-frame
-    them.
+    are located structurally: this firmware writes records in widths the
+    HTV213 family does not (a 4-byte duration), and the walk handles both.
 
     hub_online comes from zone presence, the same evidence the HTV213 decoder
     falls back on: this model's dp 0x18 record is its battery flag, not an
