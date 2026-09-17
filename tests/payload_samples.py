@@ -51,7 +51,7 @@ SAMPLE_HTV213_01_PREFIX_PAYLOAD = (
 
 # Real full hex (11#) status frames from the maintainer's HTV245FRF (2-zone valve).
 # Both end with a [dp_id 0xFE][STA_REPTIME header 0xFF 0x0F][4-byte packed wall
-# clock] record that the dp_id/type scan skips; the 0xFF 0x0F pair is that
+# clock] record; the 0xFF 0x0F pair is that
 # record's extended-type header, not a battery word. Battery is the 0x18 0xDC
 # record near the front. The second capture (July 4) has zone 2 mid-run: nonzero
 # last-event time (dp 0x22) and duration (dp 0x26), and its report time unpacks
