@@ -370,14 +370,8 @@ class TestDecodeHtv213frfValve:
         assert decode_htv213frf_valve(SAMPLE_HTV245_FULL_IDLE_PAYLOAD)["rssi_dbm"] == -37
         assert decode_htv213frf_valve(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)["rssi_dbm"] == -39
 
-    def test_rssi_scan_reaches_a_header_at_the_very_last_possible_offset(self):
-        """The scan's own upper bound must not stop one byte short of the frame end.
-
-        A 4-byte frame's only possible header position is offset 0, needing
-        b[3] to complete the PHY read, the last index the scan is allowed
-        to touch. A narrower upper bound would skip this position entirely
-        and report no signal at all.
-        """
+    def test_rssi_read_from_a_frame_holding_only_the_rssi_record(self):
+        """A frame that is nothing but the RSSI record still yields its reading."""
         assert decode_htv213frf_valve("11#17E1AE00")["rssi_dbm"] == -82
 
     def test_rssi_dbm_byte_of_exactly_0x80_is_accepted(self):
@@ -385,7 +379,7 @@ class TestDecodeHtv213frfValve:
         assert decode_htv213frf_valve("11#17E18000")["rssi_dbm"] == -128
 
     def test_rssi_found_when_header_record_is_not_first(self):
-        """The header record is located by signature, so a reordered stream still resolves RSSI."""
+        """The RSSI record is located by the walk, so a reordered stream still resolves it."""
         # HTV345FRF frame whose leading records precede the 0x17/0xE1 header (0xCA -> -54).
         assert decode_htv213frf_valve(SAMPLE_HTV345_TLV_PAYLOAD)["rssi_dbm"] == -54
 
@@ -395,42 +389,34 @@ class TestDecodeHtv213frfValve:
         assert result["rssi_dbm"] is None
 
     def test_rssi_ignores_0x17e1_collision_inside_value_bytes(self):
-        """A 0x17/0xE1 pair inside a value (not followed by 0x00) is skipped for the real header.
+        """A 0x17/0xE1 pair inside another record's value bytes is not the RSSI record.
 
-        The leading 0x9F record carries value bytes 17 E1 05 42: a false 0x17/0xE1
-        pair whose fourth byte is 0x42, not the header's trailing 0x00. The decoder
-        must skip it and resolve RSSI from the genuine 17E1CA00 header (0xCA -> -54).
+        The leading 0x9F record carries value bytes 17 E1 05 42. The walk consumes
+        them as that record's value and resolves RSSI from the genuine 17E1CA00
+        record (0xCA -> -54).
         """
         raw = "11#2B9F17E1054217E1CA0018DC0119D800FEFF0FEC4BCB19"
         assert decode_htv213frf_valve(raw)["rssi_dbm"] == -54
 
     def test_rssi_survives_a_non_zero_phy_byte(self):
-        """A header whose fourth byte is a real PHY, not padding, still yields RSSI.
+        """A record whose second value byte is a non-zero PHY still yields RSSI.
 
         The captured HTV210B frame carries 17e1b401: 0xb4 is -76 dBm, which the
-        RainPoint app showed for that device, and the 0x01 is the PHY. Matching the
-        fourth byte against 0x00 voided the reading on any frame reporting a
-        non-zero PHY, and the catalog declares this field two bytes wide on
-        HTV213FRF and HTV405FRF, which share this decoder.
+        RainPoint app showed for that device, and the 0x01 is the PHY.
         """
         assert decode_htv213frf_valve(SAMPLE_HTV210B_TLV_PAYLOAD)["rssi_dbm"] == -76
 
     def test_rssi_rejects_a_positive_dbm_candidate(self):
-        """A 0x17/0xE1 pair whose dBm byte is not negative is not the header.
-
-        0x05 would be +5 dBm, which no radio reports, so the pair belongs to
-        some other record's value bytes.
-        """
+        """An RSSI record with a non-negative dBm byte reads as no signal."""
         assert decode_htv213frf_valve("11#17E10500FEFF0FEC4BCB19")["rssi_dbm"] is None
 
-    def test_rssi_rejects_an_unsupported_phy(self):
-        """A negative dBm paired with a PHY no capture has shown is not accepted.
+    def test_rssi_accepts_any_phy_byte(self):
+        """Any PHY byte is accepted, as in decode_htv210b."""
+        assert decode_htv213frf_valve("11#17E1B402FEFF0FEC4BCB19")["rssi_dbm"] == -76
 
-        0xb4 would be a valid -76, so this pins the PHY bound on its own rather
-        than through the sign guard. Widening it for a future capture then has to
-        be a deliberate change to both the bound and this test.
-        """
-        assert decode_htv213frf_valve("11#17E1B402FEFF0FEC4BCB19")["rssi_dbm"] is None
+    def test_rssi_is_not_read_out_of_a_usage_value(self):
+        """17 E1 B4 01 inside a 4-byte usage value is read as usage, and the frame reports no signal."""
+        assert decode_htv213frf_valve("11#299F17E1B40119D800")["rssi_dbm"] is None
 
     # --- Battery (STA_BAT record on real hex frames) ---
 
@@ -903,7 +889,7 @@ class TestHtv213RecordEdgeCases:
     @pytest.mark.parametrize(
         ("raw", "key", "expected"),
         [
-            ("11#19D80125AF3C000000", "duration_seconds", 0),  # field 19, 4 bytes
+            ("11#19D80125AE3C0000", "duration_seconds", 0),  # field 19, 3 bytes
             ("11#19D80125E13C00", "duration_seconds", 0),  # 2 bytes, field 32
             ("11#19D801219F7327C919", "event_time", None),  # 4 bytes, field 15
             ("11#19D801299D1401", "last_usage_counts", None),  # field 15, 2 bytes
@@ -2227,6 +2213,7 @@ class TestDecodeHtv210b:
         result = decode_htv210b(SAMPLE_HTV210B_TLV_PAYLOAD)
         assert result["decoder"] == "htv210b_hex"
         assert result["type"] == "valve_hub"
+        assert result["hub_state_raw"] is None
         assert result["raw_bytes"] == _parse_rainpoint_payload(SAMPLE_HTV210B_TLV_PAYLOAD)
         assert result["tlv_raw"] == {}
         assert sorted(result["zones"]) == [1, 2]
@@ -2373,6 +2360,7 @@ class TestDecodeHtv210b:
         result = decode_htv210b("10#208500968832DC64E0C5")
         assert result["type"] == "valve_hub"
         assert result["decoder"] == "htv210b_error"
+        assert result["hub_state_raw"] is None
         assert result["zones"] == {}
         assert result["raw_bytes"] == []
         assert result["tlv_raw"] == {}

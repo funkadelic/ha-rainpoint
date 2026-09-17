@@ -231,42 +231,8 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
         raise
 
 
-def _extract_htv213_rssi(b: bytes) -> int | None:
-    """Find the signed-dBm RSSI in an HTV213/245 hex (11#) frame, or None.
-
-    Most 10# frames put the 0xE1 header at offset 0, so _extract_rssi reads its
-    RSSI from b[1] (not all: the HTV157B leads with STA_EVTIME2, which is why
-    decode_htv145frf reads its RSSI record structurally instead). The 11# frame prefixes every record with a dp_id, so the
-    header appears as [dp_id 0x17][type 0xE1][signed dBm][phy] somewhere in the
-    stream, not at a fixed offset (dp records can be reordered). Locate that
-    record and return the signed dBm byte. Reading b[1] here would instead
-    return the constant 0xE1 header byte (a bogus -31), which was the bug this
-    replaces.
-
-    The fourth byte is the PHY the reading was taken on, not padding. It used to
-    be matched against 0x00 to stop a 0x17/0xE1 pair inside another record's
-    value bytes being read as the header, which silently voided the RSSI on any
-    frame reporting a non-zero PHY: a captured HTV210B frame carries 17e1b401,
-    which the RainPoint app shows as -76 dBm at 1M PHY. The catalog declares this
-    field two bytes wide on HTV213FRF and HTV405FRF but one byte on HTV245FRF
-    and HTV345FRF, so the width cannot be trusted to disambiguate either.
-
-    Two constraints replace it. The dBm byte must be negative, which is the one
-    that carries meaning: a real RSSI is always negative and this family already
-    discards non-negative readings. The PHY byte must be one of the values any
-    capture has actually shown, 0x00 on the RF frames and 0x01 on the HTV210B.
-    That keeps the collision this used to catch out (the false pair in a 0x9F
-    value ends 0x42) while letting a real non-zero PHY through. If a capture ever
-    shows a higher PHY, this bound is the thing to widen.
-    """
-    for i in range(len(b) - 3):
-        if b[i] == 0x17 and b[i + 1] == 0xE1 and b[i + 2] >= 0x80 and b[i + 3] <= 0x01:
-            return b[i + 2] - 256
-    return None
-
-
-def _extract_htv213_battery(b: bytes) -> tuple[int | None, int | None]:
-    """Return (raw STA_BAT flag, battery percentage) for an HTV213/245 hex frame.
+def _extract_dp_battery(b: bytes) -> tuple[int | None, int | None]:
+    """Return (raw STA_BAT flag, battery percentage) for a dp_id-prefixed valve frame.
 
     Both may be None: no STA_BAT record yields no flag, and a flag no capture
     pairs with a charge level yields no percentage. The flag is returned
@@ -313,73 +279,6 @@ def _decode_packed_timestamp(value: int) -> str | None:
         return None
 
 
-def _extract_htv213_zones(records: dict[tuple[int, int], bytes]) -> dict[int, dict]:
-    """Pull per-zone open state, duration, event time, and water usage from the record map.
-
-    Zone states are DP 0x18+N (1-byte STA_WKSTATE), durations DP 0x24+N
-    (2-byte seconds), event times DP 0x20+N (4-byte packed stamp), and water
-    usage DP 0x28+N (4-byte raw count).
-
-    Every one of those reads is guarded on its field index and width, so a
-    record that is absent, or that belongs to a neighbouring dp_id block,
-    leaves the field empty instead of contributing a plausible wrong number.
-    """
-    zones: dict[int, dict] = {}
-    for zone_num in range(1, 9):
-        state_bytes = records.get((_HTV213_DP_BASE_STATE + zone_num, STA_WKSTATE_FIELD))
-        if state_bytes is None or len(state_bytes) != 1:
-            continue
-        state_val = state_bytes[0]
-        # A missing or differently-shaped duration record defaults to 0 rather
-        # than being misread as seconds.
-        duration_seconds = 0
-        dur_bytes = records.get((_HTV213_DP_BASE_DURATION + zone_num, STA_DURATION_FIELD))
-        if dur_bytes is not None and len(dur_bytes) == 2:
-            duration_seconds = int.from_bytes(dur_bytes, "little")
-
-        # On every frame captured so far this is the moment the zone's current
-        # run ends (the frame's own report time plus the duration above), and
-        # it reads zero for an idle zone. It is named for RainPoint's own
-        # STA_EVTIME identity rather than for that observed meaning, so a
-        # firmware that later populates it while idle does not make the name a
-        # lie.
-        event_time = None
-        event_bytes = records.get((_HTV213_DP_BASE_EVENT_TIME + zone_num, STA_EVTIME_FIELD))
-        if event_bytes is not None and len(event_bytes) == 4:
-            event_time = _decode_packed_timestamp(int.from_bytes(event_bytes, "little"))
-
-        # Raw flow count for the zone's last completed run; it reads zero
-        # while that zone is running. None (rather than 0) when the frame
-        # carries no usable record, so "not reported" stays distinguishable
-        # from "reported as none used".
-        usage_counts = None
-        usage_gallons = None
-        usage_bytes = records.get((_HTV213_DP_BASE_USAGE + zone_num, STA_LASTUSAGE_FIELD))
-        if usage_bytes is not None and len(usage_bytes) == 4:
-            usage_counts = int.from_bytes(usage_bytes, "little")
-            usage_gallons = round(usage_counts * _USAGE_GALLONS_PER_COUNT, 3)
-
-        is_open = bool(state_val & 0x01)  # LSB: 1=open, 0=closed (device uses 0x21/0x20, not 0x01/0x00)
-        zones[zone_num] = {
-            "open": is_open,
-            "duration_seconds": duration_seconds,
-            "state_raw": state_val,
-            "event_time": event_time,
-            "last_usage_counts": usage_counts,
-            "last_usage_gallons": usage_gallons,
-        }
-        _LOGGER.info(
-            "HTV213FRF Zone %d: open=%s duration=%ds state_raw=0x%02X event_time=%s usage=%s counts",
-            zone_num,
-            is_open,
-            duration_seconds,
-            state_val,
-            event_time,
-            usage_counts,
-        )
-    return zones
-
-
 def _decode_htv213frf_hex(raw: str) -> dict:
     """
     Decode HTV213FRF/HTV245FRF hex format payload (11# prefix).
@@ -409,9 +308,10 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         b = _parse_rainpoint_payload(raw)
         _LOGGER.debug(debug_with_version("HTV213FRF hex raw bytes: %s"), b)
 
-        zones = _extract_htv213_zones(_map_dp_records(b))
+        records = _map_dp_records(b)
+        zones = _extract_dp_zones(records, with_usage=True)
 
-        battery_flag, battery_percent = _extract_htv213_battery(b)
+        battery_flag, battery_percent = _extract_dp_battery(b)
 
         _LOGGER.debug(
             debug_with_version("HTV213FRF hex decoded: %d zones, hub_online=%s, battery=%s (flag %s)"),
@@ -422,7 +322,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         )
         result = {
             "type": "valve_hub",
-            "rssi_dbm": _extract_htv213_rssi(b),
+            "rssi_dbm": _rssi_dbm_from_record(records.get((_DP_RSSI, STA_RSSI_FIELD))),
             "raw_bytes": b,
             "zones": zones,
             "tlv_raw": {},
@@ -441,9 +341,9 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         raise
 
 
-# The HTV210B's own dp_id for the RSSI record. The structural field indices
-# these decoders read by are shared and live in utils.py.
-_HTV210B_DP_RSSI = 0x17
+# dp_id of the RSSI record on dp_id-prefixed valve frames (HTV213 family and
+# HTV210B). The structural field indices these decoders read by live in utils.py.
+_DP_RSSI = 0x17
 
 # The two duration record widths any capture has shown: 4 bytes on the HTV210B
 # and HTV157B, 2 on the HTV113/145 and HTV213 families sharing the field. Any
@@ -454,12 +354,9 @@ _DURATION_WIDTHS = (2, 4)
 def _rssi_dbm_from_record(value: bytes | list[int] | None) -> int | None:
     """Return the signed dBm from an RSSI record's value bytes, or None.
 
-    Read structurally rather than through _extract_htv213_rssi's byte-pattern
-    scan: that scan documents its own false-positive surface and PHY-byte
-    bound, both needed only because the scan has no record boundaries to
-    trust. The walk has already isolated the record here (value bytes
-    [signed dBm][PHY]), so the only check left is the sign - a non-negative
-    dBm is no reading - and the PHY byte needs no bound at all.
+    The structural walk has already isolated the record (value bytes
+    [signed dBm][PHY]), so the only check left is that the dBm byte is
+    negative. The PHY byte needs no bound.
     """
     if value is None or len(value) < 1 or value[0] < 0x80:
         return None
@@ -471,7 +368,7 @@ def _single_zone_from_records(records: dict[int, bytes]) -> dict | None:
 
     The single-outlet 10# frames and the HTV210B command response each
     describe exactly one zone, so their records key on the structural field
-    index alone. Semantics are the ones _extract_htv210b_zones documents.
+    index alone. Semantics are the ones _extract_dp_zones documents.
     """
     state_bytes = records.get(STA_WKSTATE_FIELD)
     if state_bytes is None or len(state_bytes) != 1:
@@ -505,23 +402,22 @@ def _map_dp_records(b: bytes) -> dict[tuple[int, int], bytes]:
     return {(e["dp_id"], e["field"]): bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=True)}
 
 
-def _extract_htv210b_zones(records: dict[tuple[int, int], bytes]) -> dict[int, dict]:
-    """Pull per-zone open state, duration, and event time from the record map.
+def _extract_dp_zones(records: dict[tuple[int, int], bytes], *, with_usage: bool) -> dict[int, dict]:
+    """Pull per-zone state, duration, event time and (optionally) usage from the record map.
 
-    Zone N owns the same dp_id blocks as the HTV213 family: state 0x18+N,
-    event time 0x20+N, duration 0x24+N. Semantics were each confirmed against
-    a known physical state on a timed two-minute run: work-state bit 0 is
-    open/closed (bit 5 latches on after the zone's first use), the duration is
-    the commanded run length in seconds and persists after the run, and the
-    event time is the packed wall-clock moment the current run ends, written
-    at start - the same meaning the HTV213 family documents.
+    Zone N owns a block of dp_ids on both the HTV213 family and the HTV210B:
+    state 0x18+N, event time 0x20+N, duration 0x24+N, usage 0x28+N. Each read
+    is guarded on field index and width, so an absent or neighbouring record
+    leaves the field empty.
 
-    Durations arrive in either of the two observed widths (4 bytes here, 2 on
-    the HTV213 family sharing the field); the little-endian read handles both,
-    and any other width is treated as a truncated or foreign record rather
-    than seconds. There are no usage fields: this valve has no flow meter,
-    and its usage records read zero on every capture, so reporting them would
-    manufacture a meter for water it cannot measure.
+    Work-state bit 0 is open/closed (bit 5 latches on after a zone's first use).
+    The duration is the commanded run length in seconds, 2 bytes on the HTV213
+    family and 4 on the HTV210B, and persists after the run. The event time is
+    the packed wall-clock moment the current run ends, zero while idle.
+
+    Usage is the raw flow count of the zone's last completed run, None when the
+    frame carries no record. ``with_usage`` is False for the HTV210B, which has
+    no flow meter and whose usage records always read zero.
     """
     zones: dict[int, dict] = {}
     for zone_num in range(1, 9):
@@ -540,21 +436,21 @@ def _extract_htv210b_zones(records: dict[tuple[int, int], bytes]) -> dict[int, d
         if ev_bytes is not None and len(ev_bytes) == 4:
             event_time = _decode_packed_timestamp(int.from_bytes(ev_bytes, "little"))
 
-        is_open = bool(state_val & 0x01)
-        zones[zone_num] = {
-            "open": is_open,
+        zone = {
+            "open": bool(state_val & 0x01),
             "duration_seconds": duration_seconds,
             "state_raw": state_val,
             "event_time": event_time,
         }
-        _LOGGER.debug(
-            "HTV210B Zone %d: open=%s duration=%ds state_raw=0x%02X event_time=%s",
-            zone_num,
-            is_open,
-            duration_seconds,
-            state_val,
-            event_time,
-        )
+        if with_usage:
+            usage_counts = None
+            usage_bytes = records.get((_HTV213_DP_BASE_USAGE + zone_num, STA_LASTUSAGE_FIELD))
+            if usage_bytes is not None and len(usage_bytes) == 4:
+                usage_counts = int.from_bytes(usage_bytes, "little")
+            zone["last_usage_counts"] = usage_counts
+            zone["last_usage_gallons"] = None if usage_counts is None else round(usage_counts * _USAGE_GALLONS_PER_COUNT, 3)
+        zones[zone_num] = zone
+        _LOGGER.debug("Valve zone %d: %s", zone_num, zone)
     return zones
 
 
@@ -577,17 +473,16 @@ def decode_htv210b(raw: str) -> dict:
             raise ValueError(f"Unexpected payload format: {raw}")
         b = _parse_rainpoint_payload(raw)
         records = _map_dp_records(b)
-        zones = _extract_htv210b_zones(records)
-        # Shared with the HTV213 family on purpose despite the name: the
-        # battery extraction is structural and model-agnostic underneath.
-        battery_flag, battery_percent = _extract_htv213_battery(b)
+        zones = _extract_dp_zones(records, with_usage=False)
+        battery_flag, battery_percent = _extract_dp_battery(b)
         result = {
             "type": "valve_hub",
-            "rssi_dbm": _rssi_dbm_from_record(records.get((_HTV210B_DP_RSSI, STA_RSSI_FIELD))),
+            "rssi_dbm": _rssi_dbm_from_record(records.get((_DP_RSSI, STA_RSSI_FIELD))),
             "raw_bytes": b,
             "zones": zones,
             "tlv_raw": {},
             "hub_online": bool(zones),
+            "hub_state_raw": None,
             "battery_flag": battery_flag,
             "decoder": "htv210b_hex",
         }
@@ -606,6 +501,7 @@ def decode_htv210b(raw: str) -> dict:
             "zones": {},
             "tlv_raw": {},
             "hub_online": False,
+            "hub_state_raw": None,
             "battery_flag": None,
             "decoder": "htv210b_error",
             "error": str(e),
@@ -622,7 +518,7 @@ def decode_htv210b_dp_state(raw: str) -> dict | None:
     ``dp_id_prefixed=False`` here, not True as in the poll-path decoder.
 
     Returns a single zone dict with exactly the four keys
-    ``_extract_htv210b_zones`` produces (``open``, ``duration_seconds``,
+    ``_extract_dp_zones(..., with_usage=False)`` produces (``open``, ``duration_seconds``,
     ``state_raw``, ``event_time``): no ``type``, ``rssi_dbm``,
     ``battery_flag``, ``zones`` wrapper, or port field, because the blob does
     not carry those and does not say which zone it describes -- the

@@ -1768,7 +1768,7 @@ class RainPointZoneRunDurationSensor(RainPointZoneSensorBase):
     recorded into long-term statistics.
 
     A 0 reading is ambiguous by construction and that ambiguity is inherited
-    rather than fixable here: _extract_htv213_zones defaults a missing or
+    rather than fixable here: _extract_dp_zones defaults a missing or
     wrongly-typed duration datapoint to 0 rather than to absent, so a 0 read
     from a live device cannot be told apart from a duration the frame never
     reported. What this entity can and does guarantee is the absent case: a
