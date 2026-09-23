@@ -4,6 +4,14 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.24.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.1...v1.24.2) (2026-09-23)
 
+### What's new
+
+**Valve fixes**
+
+- Some valve controllers send reports in a format the integration didn't recognize, so their zones never appeared. Those zones now show up.
+- A multi-zone valve no longer shows a running zone as closed, loses a zone, or reports the wrong run time when its report arrives at certain seconds of the day.
+- In rare cases a multi-zone valve's signal strength sensor showed its water usage count. It now shows the real signal.
+
 
 ### Fixed
 
