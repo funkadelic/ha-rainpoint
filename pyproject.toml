@@ -23,7 +23,7 @@ addopts = [
 # 2, so a 4.x could invalidate the [tool.mutmut] block below without failing
 # loudly.
 [dependency-groups]
-mutation = ["mutmut>=3.7,<4"]
+mutation = ["mutmut>=3.8.0,<4"]
 
 # Mutation testing, run by hand rather than in CI. mutmut copies the source and
 # everything listed in also_copy into ./mutants/, mutates the copy, and runs the
