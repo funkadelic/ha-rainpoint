@@ -2,6 +2,23 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.24.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.1...v1.24.2) (2026-09-23)
+
+
+### Fixed
+
+* decode valve reports that start with 01# ([#264](https://github.com/funkadelic/ha-rainpoint/issues/264)) ([51d0951](https://github.com/funkadelic/ha-rainpoint/commit/51d0951ac1f5f768de517a9fde95a9fb011dc28a))
+* read valve signal strength from the right record ([#268](https://github.com/funkadelic/ha-rainpoint/issues/268)) ([3a6fb68](https://github.com/funkadelic/ha-rainpoint/commit/3a6fb6803cb1e4ef1a2d8943fdcac4928ae481a8))
+* stop valves occasionally showing the wrong zone state ([#267](https://github.com/funkadelic/ha-rainpoint/issues/267)) ([e307398](https://github.com/funkadelic/ha-rainpoint/commit/e3073981a04f60c6b6294f83fb4019123a3dbc05))
+
+
+### Other Changes
+
+* bump the actions group with 2 updates ([#274](https://github.com/funkadelic/ha-rainpoint/issues/274)) ([f49df21](https://github.com/funkadelic/ha-rainpoint/commit/f49df21d67dd28f6a192899e2d1eb245e8339f6e))
+* group dependabot updates and add a release cooldown ([#273](https://github.com/funkadelic/ha-rainpoint/issues/273)) ([5327d3f](https://github.com/funkadelic/ha-rainpoint/commit/5327d3f8a75ff587217af644e30a6aee3fcb559a))
+* keep the annotation out of the sonar project version ([#269](https://github.com/funkadelic/ha-rainpoint/issues/269)) ([5aad49a](https://github.com/funkadelic/ha-rainpoint/commit/5aad49abf4e1865f76699481d319efb733234b3a))
+* update mutmut requirement from &lt;4,&gt;=3.7 to &gt;=3.8.0,&lt;4 ([#271](https://github.com/funkadelic/ha-rainpoint/issues/271)) ([3b1492c](https://github.com/funkadelic/ha-rainpoint/commit/3b1492c62b70e6c194348bbfe68f58cc5920b568))
+
 ## [1.24.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.0...v1.24.1) (2026-09-16)
 
 ### What's new
