@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.24.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.2...v1.24.3) (2026-09-25)
+
+
+### Other Changes
+
+* pass the app token's client-id instead of the deprecated app-id ([#275](https://github.com/funkadelic/ha-rainpoint/issues/275)) ([78af289](https://github.com/funkadelic/ha-rainpoint/commit/78af2891403d50e49b378d5f9e0208b0b3fc1402))
+
 ## [1.24.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.1...v1.24.2) (2026-09-23)
 
 ### What's new
