@@ -13,7 +13,7 @@
         "custom_components.rainpoint"
     ],
     "requirements": [
-        "paho-mqtt==2.1.0"
+        "paho-mqtt>=2.1.0"
     ],
     "version": "1.24.2"
 }
