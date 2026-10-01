@@ -2,6 +2,20 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.24.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.2...v1.24.3) (2026-10-01)
+
+
+### Fixed
+
+* accept newer paho-mqtt versions ([#279](https://github.com/funkadelic/ha-rainpoint/issues/279)) ([5b9d22a](https://github.com/funkadelic/ha-rainpoint/commit/5b9d22a72fa0fe4c43e69b57bf4f25c77f66b076))
+
+
+### Other Changes
+
+* bump pytest-homeassistant-custom-component ([#277](https://github.com/funkadelic/ha-rainpoint/issues/277)) ([5c2f66a](https://github.com/funkadelic/ha-rainpoint/commit/5c2f66a0d118218070e378019f1b169170c67e8b))
+* bump the actions group with 2 updates ([#278](https://github.com/funkadelic/ha-rainpoint/issues/278)) ([5dcc040](https://github.com/funkadelic/ha-rainpoint/commit/5dcc04097e6818c973d89d90014b674017a4d468))
+* pass the app token's client-id instead of the deprecated app-id ([#275](https://github.com/funkadelic/ha-rainpoint/issues/275)) ([78af289](https://github.com/funkadelic/ha-rainpoint/commit/78af2891403d50e49b378d5f9e0208b0b3fc1402))
+
 ## [1.24.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.1...v1.24.2) (2026-09-23)
 
 ### What's new
