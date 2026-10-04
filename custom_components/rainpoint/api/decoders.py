@@ -129,9 +129,8 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
     Format: 1,-84,1;0,149,0,0,0,0|0,6,0,0,0,0
     Structure: [flags],[rssi],[flags];[zone1_data]|[zone2_data]
     """
-    from ..const import debug_with_version
 
-    _LOGGER.info(debug_with_version("HTV213FRF ASCII payload: %s"), raw)
+    _LOGGER.info("HTV213FRF ASCII payload: %s", raw)
 
     zones = {}
     hub_online = False
@@ -221,9 +220,7 @@ def _decode_htv213frf_ascii(raw: str) -> dict:
             },
         }
 
-        _LOGGER.info(
-            debug_with_version("HTV213FRF ASCII decoded: %d zones, hub_online=%s, rssi=%s"), len(zones), hub_online, rssi_dbm
-        )
+        _LOGGER.info("HTV213FRF ASCII decoded: %d zones, hub_online=%s, rssi=%s", len(zones), hub_online, rssi_dbm)
         return result
 
     except Exception:
@@ -302,11 +299,10 @@ def _decode_htv213frf_hex(raw: str) -> dict:
     which a live unit does not send. Absent is the finding, so do not read a
     missing decoder for either as an unfinished job.
     """
-    from ..const import debug_with_version
 
     try:
         b = _parse_rainpoint_payload(raw)
-        _LOGGER.debug(debug_with_version("HTV213FRF hex raw bytes: %s"), b)
+        _LOGGER.debug("HTV213FRF hex raw bytes: %s", b)
 
         records = _map_dp_records(b)
         zones = _extract_dp_zones(records, with_usage=True)
@@ -314,7 +310,7 @@ def _decode_htv213frf_hex(raw: str) -> dict:
         battery_flag, battery_percent = _extract_dp_battery(b)
 
         _LOGGER.debug(
-            debug_with_version("HTV213FRF hex decoded: zones=%s, hub_online=%s, battery=%s (flag %s)"),
+            "HTV213FRF hex decoded: zones=%s, hub_online=%s, battery=%s (flag %s)",
             zones,
             bool(zones),
             battery_percent,
@@ -813,9 +809,8 @@ def _decode_moisture_full_ascii(raw: str) -> dict:
     Format: 1,-73,1;694,70,G=292478
     Structure: [flags],[rssi],[flags];[temp_raw],[moisture],[lux_data]
     """
-    from ..const import debug_with_version
 
-    _LOGGER.info(debug_with_version("HCS021FRF ASCII payload: %s"), raw)
+    _LOGGER.info("HCS021FRF ASCII payload: %s", raw)
 
     try:
         # Parse the ASCII format
@@ -894,7 +889,7 @@ def _decode_moisture_full_ascii(raw: str) -> dict:
         }
 
         _LOGGER.info(
-            debug_with_version("HCS021FRF ASCII decoded: temp=%.1f°C, moisture=%d%%, lux=%.1f, rssi=%s"),
+            "HCS021FRF ASCII decoded: temp=%.1f°C, moisture=%d%%, lux=%.1f, rssi=%s",
             temp_c,
             moisture,
             lux,
@@ -1213,15 +1208,14 @@ def decode_valve_hub(raw: str) -> dict:
     that byte as an online state took every zone unavailable on a hub whose
     batteries had gone low.
     """
-    from ..const import debug_with_version
 
     try:
         b = _parse_rainpoint_payload(raw)
-        _LOGGER.debug(debug_with_version("Valve hub raw bytes: %s"), b)
+        _LOGGER.debug("Valve hub raw bytes: %s", b)
 
         tlv = _parse_tlv_payload(raw)
         _LOGGER.debug(
-            debug_with_version("Valve hub TLV entries: %s"),
+            "Valve hub TLV entries: %s",
             _format_valve_hub_tlv_log(tlv),
         )
 
@@ -1243,7 +1237,7 @@ def decode_valve_hub(raw: str) -> dict:
         if battery_percent is not None:
             result["battery_percent"] = battery_percent
 
-        _LOGGER.info(debug_with_version("Valve hub decoded: %d zones, hub_online=%s"), len(zones), bool(zones))
+        _LOGGER.info("Valve hub decoded: %d zones, hub_online=%s", len(zones), bool(zones))
         return result
 
     except Exception as e:
@@ -1454,9 +1448,8 @@ def decode_flow_meter(raw: str) -> dict:
     state the RainPoint app renders as "--", so those two entities sit at zero
     between runs rather than going unknown.
     """
-    from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding HCS008FRF: %s"), raw)
+    _LOGGER.debug("Decoding HCS008FRF: %s", raw)
 
     # Every captured frame is 57 bytes. The floor rejects a payload too short to
     # carry this meter's datapoint set at all; the helper's implicit ceiling of
@@ -1492,9 +1485,8 @@ decode_flowmeter = decode_flow_meter
 
 def decode_pool_plus(raw: str) -> dict:
     """Decode HCS0530THO (pool plus with CO2)."""
-    from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding HCS0530THO: %s"), raw)
+    _LOGGER.debug("Decoding HCS0530THO: %s", raw)
 
     result = {
         "type": "co2",
@@ -1512,19 +1504,18 @@ def decode_pool_plus(raw: str) -> dict:
             result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
 
         # Basic CO2 parsing - can be enhanced with exact RainPoint logic later
-        _LOGGER.debug(debug_with_version("HCS0530THO basic parsing completed"))
+        _LOGGER.debug("HCS0530THO basic parsing completed")
 
     except Exception:
-        _LOGGER.exception(debug_with_version("Error in HCS0530THO decoder"))
+        _LOGGER.exception("Error in HCS0530THO decoder")
 
     return result
 
 
 def decode_soil(raw: str) -> dict:
     """Decode soil sensor."""
-    from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding soil sensor: %s"), raw)
+    _LOGGER.debug("Decoding soil sensor: %s", raw)
 
     result = {
         "type": "soil",
@@ -1539,16 +1530,15 @@ def decode_soil(raw: str) -> dict:
             result["raw_bytes"] = b
 
     except Exception:
-        _LOGGER.exception(debug_with_version("Error in soil decoder"))
+        _LOGGER.exception("Error in soil decoder")
 
     return result
 
 
 def decode_temp_hum(raw: str) -> dict:
     """Decode temperature/humidity sensor."""
-    from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding temp/hum sensor: %s"), raw)
+    _LOGGER.debug("Decoding temp/hum sensor: %s", raw)
 
     result = {
         "type": "temphum",
@@ -1563,16 +1553,15 @@ def decode_temp_hum(raw: str) -> dict:
             result["raw_bytes"] = b
 
     except Exception:
-        _LOGGER.exception(debug_with_version("Error in temp/hum decoder"))
+        _LOGGER.exception("Error in temp/hum decoder")
 
     return result
 
 
 def decode_temp_hum_full(raw: str) -> dict:
     """Decode full temperature/humidity sensor."""
-    from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding full temp/hum sensor: %s"), raw)
+    _LOGGER.debug("Decoding full temp/hum sensor: %s", raw)
 
     result = {
         "type": "temphum_full",
@@ -1587,16 +1576,15 @@ def decode_temp_hum_full(raw: str) -> dict:
             result["raw_bytes"] = b
 
     except Exception:
-        _LOGGER.exception(debug_with_version("Error in full temp/hum decoder"))
+        _LOGGER.exception("Error in full temp/hum decoder")
 
     return result
 
 
 def decode_co2(raw: str) -> dict:
     """Decode CO2 sensor."""
-    from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding CO2 sensor: %s"), raw)
+    _LOGGER.debug("Decoding CO2 sensor: %s", raw)
 
     result = {
         "type": "co2",
@@ -1611,16 +1599,15 @@ def decode_co2(raw: str) -> dict:
             result["raw_bytes"] = b
 
     except Exception:
-        _LOGGER.exception(debug_with_version("Error in CO2 decoder"))
+        _LOGGER.exception("Error in CO2 decoder")
 
     return result
 
 
 def decode_display(raw: str) -> dict:
     """Decode display sensor."""
-    from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding display sensor: %s"), raw)
+    _LOGGER.debug("Decoding display sensor: %s", raw)
 
     result = {
         "type": "display",
@@ -1635,16 +1622,15 @@ def decode_display(raw: str) -> dict:
             result["raw_bytes"] = b
 
     except Exception:
-        _LOGGER.exception(debug_with_version("Error in display decoder"))
+        _LOGGER.exception("Error in display decoder")
 
     return result
 
 
 def decode_unknown(raw: str) -> dict:
     """Decode unknown device."""
-    from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding unknown device: %s"), raw)
+    _LOGGER.debug("Decoding unknown device: %s", raw)
 
     result = {
         "type": "unknown",
@@ -1659,7 +1645,7 @@ def decode_unknown(raw: str) -> dict:
             result["raw_bytes"] = b
 
     except Exception:
-        _LOGGER.exception(debug_with_version("Error in unknown decoder"))
+        _LOGGER.exception("Error in unknown decoder")
 
     return result
 
@@ -1667,9 +1653,8 @@ def decode_unknown(raw: str) -> dict:
 # Additional HCS decoders - basic implementations
 def decode_temphum(raw: str) -> dict:
     """Decode HCS014ARF (temperature/humidity) payload."""
-    from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding HCS014ARF: %s"), raw)
+    _LOGGER.debug("Decoding HCS014ARF: %s", raw)
 
     result = {
         "type": "temphum",
@@ -1684,7 +1669,7 @@ def decode_temphum(raw: str) -> dict:
             result["raw_bytes"] = b
 
     except Exception:
-        _LOGGER.exception(debug_with_version("Error in HCS014ARF decoder"))
+        _LOGGER.exception("Error in HCS014ARF decoder")
 
     return result
 
@@ -1704,9 +1689,8 @@ def decode_pool(raw: str) -> dict:
     STA_TREND is left undecoded. No capture pairs its value with a known
     direction, and the entities do not read it.
     """
-    from ..const import debug_with_version
 
-    _LOGGER.debug(debug_with_version("Decoding pool sensor: %s"), raw)
+    _LOGGER.debug("Decoding pool sensor: %s", raw)
 
     result = {
         "type": "pool",
@@ -1728,7 +1712,7 @@ def decode_pool(raw: str) -> dict:
             _attach_report_time(result, b)
 
     except Exception:
-        _LOGGER.exception(debug_with_version("Error in pool sensor decoder"))
+        _LOGGER.exception("Error in pool sensor decoder")
 
     return result
 

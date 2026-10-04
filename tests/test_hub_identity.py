@@ -531,9 +531,9 @@ class TestPushReachesTheHubItNamesThroughARealCoordinator:
         rainpoint_client = MagicMock()
         rainpoint_client.get_subscribe_status = AsyncMock(return_value={})
         return RainPointMqttClient(
-            hass,
+            hass.loop,
             rainpoint_client,
-            entry=MagicMock(),
+            executor_job=hass.async_add_executor_job,
             hub_device_name="hub-device",
             hub_product_key="hub-pk",
             coordinator=coordinator,

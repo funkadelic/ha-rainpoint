@@ -742,14 +742,14 @@ class TestAsyncSetupEntry:
             await async_setup_entry(hass, entry)
 
         mqtt_cls.assert_called_once_with(
-            hass,
+            hass.loop,
             mock_client,
-            entry,
             "hub-dev",
             "hub-pk",
             coordinator=mock_coordinator,
             hub_mid="mid-1",
             hub_hid="hid-1",
+            executor_job=hass.async_add_executor_job,
         )
 
     @pytest.mark.asyncio

@@ -2899,14 +2899,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hub_device_name, hub_product_key, hub_mid, hub_hid = _resolve_hub_identity(coordinator)
         if hub_device_name and hub_product_key:
             mqtt_client = RainPointMqttClient(
-                hass,
+                hass.loop,
                 client,
-                entry,
                 hub_device_name,
                 hub_product_key,
                 coordinator=coordinator,
                 hub_mid=hub_mid,
                 hub_hid=hub_hid,
+                executor_job=hass.async_add_executor_job,
             )
             hass.data[DOMAIN][entry.entry_id]["mqtt_client"] = mqtt_client
             # Registered immediately after construction so it fires even if a

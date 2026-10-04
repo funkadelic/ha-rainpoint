@@ -1260,6 +1260,16 @@ class TestTokenManagement:
         assert client._refresh_token == "r"
         assert client._token_expires_at is None
 
+    def test_export_tokens_keys_match_config_entry_keys(self):
+        """The client owns its token keys, so they must not drift from the stored entry's."""
+        from custom_components.rainpoint.const import (
+            CONF_REFRESH_TOKEN,
+            CONF_TOKEN,
+            CONF_TOKEN_EXPIRES_AT,
+        )
+
+        assert set(_make_client().export_tokens()) == {CONF_TOKEN, CONF_REFRESH_TOKEN, CONF_TOKEN_EXPIRES_AT}
+
     def test_export_tokens(self):
         """export_tokens returns dict with token, refresh_token, and int timestamp."""
         client = _make_client()

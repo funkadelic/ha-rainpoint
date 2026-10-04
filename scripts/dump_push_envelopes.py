@@ -155,7 +155,7 @@ def _split_sections(payload: bytes) -> tuple[str | None, list[str]]:
     """
     import json
 
-    from custom_components.rainpoint.const import (
+    from custom_components.rainpoint.api.mqtt import (
         MQTT_PUSH_METHOD,
         MQTT_PUSH_PARAMS_KEY,
         MQTT_PUSH_SECTION_DELIMITER,

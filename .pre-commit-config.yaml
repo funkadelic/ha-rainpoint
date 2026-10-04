@@ -10,9 +10,9 @@ repos:
       - id: trailing-whitespace
         # Vendored CA certificates are pinned byte-for-byte against the
         # publisher's MD5; whitespace normalization would break that guard.
-        exclude: ^custom_components/rainpoint/certs/
+        exclude: ^custom_components/rainpoint/api/certs/
       - id: end-of-file-fixer
-        exclude: ^custom_components/rainpoint/certs/
+        exclude: ^custom_components/rainpoint/api/certs/
       - id: check-yaml
       - id: check-json
       - id: check-ast

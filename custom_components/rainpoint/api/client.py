@@ -176,12 +176,10 @@ class RainPointClient:
         }
 
     def restore_tokens(self, data: dict) -> None:
-        """Restore tokens from config entry data."""
-        from ..const import CONF_REFRESH_TOKEN, CONF_TOKEN, CONF_TOKEN_EXPIRES_AT
-
-        self._token = data.get(CONF_TOKEN)
-        self._refresh_token = data.get(CONF_REFRESH_TOKEN)
-        ts = data.get(CONF_TOKEN_EXPIRES_AT)
+        """Restore tokens from a dict shaped like export_tokens() output."""
+        self._token = data.get("token")
+        self._refresh_token = data.get("refresh_token")
+        ts = data.get("token_expires_at")
         if ts is not None:
             try:
                 self._token_expires_at = datetime.fromtimestamp(ts, tz=UTC)
@@ -189,13 +187,11 @@ class RainPointClient:
                 self._token_expires_at = None
 
     def export_tokens(self) -> dict:
-        """Export current token state as a dict for config entry updates."""
-        from ..const import CONF_REFRESH_TOKEN, CONF_TOKEN, CONF_TOKEN_EXPIRES_AT
-
+        """Export token state; the keys are also the integration's CONF_TOKEN* config entry keys."""
         return {
-            CONF_TOKEN: self._token,
-            CONF_REFRESH_TOKEN: self._refresh_token,
-            CONF_TOKEN_EXPIRES_AT: int(self._token_expires_at.timestamp()) if self._token_expires_at else None,
+            "token": self._token,
+            "refresh_token": self._refresh_token,
+            "token_expires_at": int(self._token_expires_at.timestamp()) if self._token_expires_at else None,
         }
 
     def _token_valid(self) -> bool:
