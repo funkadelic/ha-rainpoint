@@ -7215,9 +7215,9 @@ class TestHubPushTracerEndToEnd:
         assert entity.is_on is True
 
         mqtt_client = RainPointMqttClient(
-            hass,
+            hass.loop,
             client,
-            entry=entry,
+            executor_job=hass.async_add_executor_job,
             hub_device_name="dev1",
             hub_product_key="pk1",
             coordinator=coordinator,

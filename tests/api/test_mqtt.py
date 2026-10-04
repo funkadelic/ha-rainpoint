@@ -51,9 +51,9 @@ def _make_mqtt_client(hass, paho_instance, creds=None, hub_mid=_DEFAULT_TEST_HUB
     factory = MagicMock(return_value=paho_instance)
 
     return RainPointMqttClient(
-        hass,
+        hass.loop,
         rainpoint_client,
-        entry=MagicMock(),
+        executor_job=hass.async_add_executor_job,
         hub_device_name="hub-device",
         hub_product_key="hub-pk",
         hub_mid=hub_mid,
@@ -116,11 +116,9 @@ class TestConstructorStoresArguments:
 
     def test_constructor_stores_device_name_product_key_and_hid(self):
         """hub_device_name, hub_product_key and hub_hid land unchanged on their own attributes."""
-        entry = object()
         client = RainPointMqttClient(
             MagicMock(),
             MagicMock(),
-            entry=entry,
             hub_device_name="dev-x",
             hub_product_key="pk-x",
             hub_hid=777,
@@ -336,7 +334,7 @@ class TestMessageReceiptLogging:
 
         # Replace call_soon_threadsafe with a plain mock so it never actually fires.
         hass.loop = MagicMock()
-        client._hass = hass
+        client._loop = hass.loop
 
         msg = SimpleNamespace(topic="/sys/pk123/name-A/thing/service/property/set", payload=b"hello")
         client._on_message(fake_paho, None, msg)
@@ -464,9 +462,9 @@ def _make_push_client(
     rainpoint_client.get_subscribe_status = AsyncMock(return_value=_fake_creds())
     factory = MagicMock(return_value=fake_paho)
     return RainPointMqttClient(
-        hass,
+        hass.loop,
         rainpoint_client,
-        entry=MagicMock(),
+        executor_job=hass.async_add_executor_job,
         hub_device_name="hub-device",
         hub_product_key="hub-pk",
         coordinator=coordinator,
@@ -1361,9 +1359,9 @@ class TestPahoAutoReconnectDisabled:
         factory = MagicMock(return_value=fake_paho)
 
         client = RainPointMqttClient(
-            hass,
+            hass.loop,
             rainpoint_client,
-            entry=MagicMock(),
+            executor_job=hass.async_add_executor_job,
             hub_device_name="hub-device",
             hub_product_key="hub-pk",
             paho_client_factory=factory,
@@ -1562,9 +1560,9 @@ def _make_mqtt_client_with_distinct_paho_instances(hass, get_subscribe_status_mo
 
     factory = MagicMock(side_effect=_factory)
     client = RainPointMqttClient(
-        hass,
+        hass.loop,
         rainpoint_client,
-        entry=MagicMock(),
+        executor_job=hass.async_add_executor_job,
         hub_device_name="hub-device",
         hub_product_key="hub-pk",
         paho_client_factory=factory,
@@ -1587,9 +1585,9 @@ class TestCredentialRenewal:
         rainpoint_client.get_subscribe_status = AsyncMock(return_value=_fake_creds())
         factory = MagicMock(return_value=fake_paho)
         client = RainPointMqttClient(
-            hass,
+            hass.loop,
             rainpoint_client,
-            entry=MagicMock(),
+            executor_job=hass.async_add_executor_job,
             hub_device_name="dev-x",
             hub_product_key="pk-x",
             hub_mid=555,
@@ -1738,7 +1736,6 @@ class TestRenewalDelayFormula:
         return RainPointMqttClient(
             MagicMock(),
             rainpoint_client,
-            entry=MagicMock(),
             hub_device_name="h",
             hub_product_key="p",
             paho_client_factory=MagicMock(return_value=_make_fake_paho()),
@@ -1799,9 +1796,9 @@ class TestProtocolTimestampUsesWallClock:
         factory = MagicMock(return_value=fake_paho)
 
         client = RainPointMqttClient(
-            hass,
+            hass.loop,
             rainpoint_client,
-            entry=MagicMock(),
+            executor_job=hass.async_add_executor_job,
             hub_device_name="hub-device",
             hub_product_key="hub-pk",
             paho_client_factory=factory,
@@ -2000,9 +1997,9 @@ class TestSupervisorTeardown:
         rainpoint_client.get_subscribe_status = AsyncMock(side_effect=_hang_forever)
         factory = MagicMock(return_value=_make_fake_paho())
         client = RainPointMqttClient(
-            hass,
+            hass.loop,
             rainpoint_client,
-            entry=MagicMock(),
+            executor_job=hass.async_add_executor_job,
             hub_device_name="hub-device",
             hub_product_key="hub-pk",
             paho_client_factory=factory,
@@ -2135,9 +2132,9 @@ class TestConnectCredentialFields:
         rainpoint_client.get_subscribe_status = AsyncMock(return_value=creds)
         factory = MagicMock(return_value=fake_paho)
         client = RainPointMqttClient(
-            hass,
+            hass.loop,
             rainpoint_client,
-            entry=MagicMock(),
+            executor_job=hass.async_add_executor_job,
             hub_device_name="hub-device",
             hub_product_key="hub-pk",
             paho_client_factory=factory,

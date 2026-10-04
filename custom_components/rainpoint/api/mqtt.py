@@ -14,8 +14,8 @@ Transport is TLS on port 8883, verified against a pinned private root CA
 ("Aliyun IoT Root CA") that is absent from public trust stores -- the broker's
 mqttHostUrl advertises the plaintext 1883 port, which is deliberately ignored.
 Every paho on_* callback runs on paho's own network thread and must never touch
-HA/integration state directly; each hops onto the HA event loop via
-hass.loop.call_soon_threadsafe into an @callback method before touching self.
+integration state directly; each hops onto the owning event loop via
+self._loop.call_soon_threadsafe into a _handle_* method before touching self.
 """
 
 import asyncio
@@ -26,35 +26,73 @@ import json
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import NamedTuple
 
 import paho.mqtt.client as paho_mqtt
-from homeassistant.core import HomeAssistant, callback
 
-from ..const import (
-    MQTT_BROKER_HOST_TEMPLATE,
-    MQTT_BROKER_PORT,
-    MQTT_KEEPALIVE,
-    MQTT_PUSH_FRAME_SECTION_ONE_WIDTH,
-    MQTT_PUSH_HUB_FRAME_MID_WIDTH,
-    MQTT_PUSH_HUB_FRAME_PREFIX,
-    MQTT_PUSH_HUB_FRAME_SECTIONS,
-    MQTT_PUSH_HUB_FRAME_TERMINATOR,
-    MQTT_PUSH_MAX_PAYLOAD_BYTES,
-    MQTT_PUSH_METHOD,
-    MQTT_PUSH_PARAMS_KEY,
-    MQTT_PUSH_SECTION_DELIMITER,
-    MQTT_PUSH_SUBDEVICE_PREFIX,
-    MQTT_PUSH_TIME_FIELD,
-    MQTT_PUSH_VALUE_FIELD,
-    MQTT_TLS_CA_CERT,
-    MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT,
-)
 from .client import RainPointClient
 from .utils import _redact_identifier, _redact_secret
 
 _LOGGER = logging.getLogger(__name__)
+
+# No subscribe topics: the observer's productKey policy forbids client
+# subscriptions (any SUBSCRIBE force-closes the connection), and the broker
+# auto-delivers the hub's thing/service/property/set downlink messages to the
+# connected device unsolicited. See _parse_push_envelope for the payload shape.
+MQTT_BROKER_HOST_TEMPLATE = "{product_key}.iot-as-mqtt.us-west-1.aliyuncs.com"
+# TLS port. The credential's mqttHostUrl advertises RainPoint's plaintext 1883,
+# but the same broker also serves TLS on 8883. We always connect over TLS and
+# ignore the advertised port, verifying the chain against the pinned root below.
+MQTT_BROKER_PORT = 8883
+MQTT_KEEPALIVE = 30
+# Pinned Aliyun IoT private root CA ("Aliyun IoT Root CA", self-signed, valid
+# until 2053). The broker's TLS leaf chains to this root, which is absent from
+# every public trust store, so it must be supplied explicitly for the handshake
+# to verify. Shipped in the package under certs/; its integrity is guarded by a
+# test against Aliyun's published MD5.
+MQTT_TLS_CA_CERT = str(Path(__file__).parent / "certs" / "ali_iot_ca.crt")
+
+# Push envelope layout (confirmed against live hardware).
+# The state-carrying message arrives as a standard AliCloud IoT payload whose
+# params.param value is a pipe-delimited string; one of its sections is an inner
+# JSON object keyed by sub-device id. Only "D"-prefixed keys are sub-device
+# status; each carries the same raw value string the poll-path decoders consume.
+MQTT_PUSH_METHOD = "thing.service.property.set"
+MQTT_PUSH_PARAMS_KEY = "param"
+MQTT_PUSH_SECTION_DELIMITER = "|"
+MQTT_PUSH_SUBDEVICE_PREFIX = "D"
+MQTT_PUSH_VALUE_FIELD = "value"
+MQTT_PUSH_TIME_FIELD = "time"
+
+# Upper bound on an inbound push payload. Real envelopes are ~425 bytes; anything
+# far larger is junk (or hostile) and is dropped before parsing. Generous so a
+# firmware that grows the envelope is not rejected, small enough to bound work.
+MQTT_PUSH_MAX_PAYLOAD_BYTES = 8192
+
+# Hub-level connectivity frame shape, confirmed against the 2026-07-31
+# UAT capture: "#P260731181730000016822282236547|0|1785521850011|112882164350#".
+# Section 1 decomposes as the "#P" prefix, a 12-digit YYMMDDHHMMSS stamp,
+# "0000", an 8-digit account id, and a 6-digit mid -- the mid is a fixed-width
+# tail, not an open-ended suffix, so _frame_mid reads it by slicing a known
+# slot rather than scanning for a substring.
+MQTT_PUSH_HUB_FRAME_PREFIX = "#P"
+MQTT_PUSH_HUB_FRAME_SECTIONS = 4
+MQTT_PUSH_HUB_FRAME_TERMINATOR = "#"
+MQTT_PUSH_HUB_FRAME_MID_WIDTH = 6
+# 2 prefix + 12 stamp + 4 fixed + 8 account + 6 mid. A section 1 of any other
+# length is a layout no capture has produced, so the mid slot cannot be read
+# from it by position and the frame is declined rather than guessed at.
+# Summed from its terms rather than written as 32, so widening the mid slot
+# cannot leave the total silently wrong and the slice reading the wrong
+# characters out of a section this width check then accepts.
+MQTT_PUSH_FRAME_SECTION_ONE_WIDTH = len(MQTT_PUSH_HUB_FRAME_PREFIX) + 12 + 4 + 8 + MQTT_PUSH_HUB_FRAME_MID_WIDTH
+
+# Hard cap on the per-client one-shot-per-shape unrecognised-downlink
+# bookkeeping. Keeps the set bounded against a hostile or chatty
+# downlink; a shape count past this logs at DEBUG instead of INFO.
+MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT = 32
 
 
 class RainPointMqttError(Exception):
@@ -421,9 +459,8 @@ class RainPointMqttClient:
 
     def __init__(
         self,
-        hass: HomeAssistant,
+        loop: asyncio.AbstractEventLoop,
         client: RainPointClient,
-        entry,
         hub_device_name: str,
         hub_product_key: str,
         *,
@@ -433,6 +470,7 @@ class RainPointMqttClient:
         paho_client_factory=paho_mqtt.Client,
         time_source=time.monotonic,
         wall_clock_source=time.time,
+        executor_job: Callable[[Callable[[], None]], Awaitable[None]] | None = None,
     ) -> None:
         """Build the client for one hub's observer credentials.
 
@@ -442,9 +480,10 @@ class RainPointMqttClient:
         test seams, and the two clocks are deliberately separate, one monotonic
         for renewal bookkeeping and one wall-clock for the protocol timestamp.
         """
-        self._hass = hass
+        self._loop = loop
+        # Blocking connect runs here; Home Assistant passes its own tracked executor.
+        self._executor_job = executor_job or (lambda func: loop.run_in_executor(None, func))
         self._client = client
-        self._entry = entry
         self._hub_device_name = hub_device_name
         self._hub_product_key = hub_product_key
         self._coordinator = coordinator
@@ -548,9 +587,8 @@ class RainPointMqttClient:
         with contextlib.suppress(ValueError):
             self._state_listeners.remove(listener)
 
-    @callback
     def _notify_state_listeners(self) -> None:
-        """Fire every registered state listener. Runs on the HA event loop.
+        """Fire every registered state listener. Runs on the event loop.
 
         Iterates a copy so a listener that unregisters itself mid-callback cannot
         mutate the list under iteration.
@@ -569,7 +607,7 @@ class RainPointMqttClient:
         """
         self._stopping = False
         self._stop_event.clear()
-        self._supervisor_task = self._hass.loop.create_task(self._run_supervisor())
+        self._supervisor_task = self._loop.create_task(self._run_supervisor())
 
     async def _run_supervisor(self) -> None:
         """Own connect -> run -> renew -> reconnect indefinitely.
@@ -732,7 +770,7 @@ class RainPointMqttClient:
         """Build the paho client from fresh creds and connect over TLS.
 
         paho's connect() is blocking (DNS resolution + a synchronous
-        socket.connect); calling it directly on the HA event loop would freeze
+        socket.connect); calling it directly on the event loop would freeze
         all of Home Assistant for the connection timeout on every initial
         connect, every renewal cycle, and every backoff retry against an
         unreachable broker. tls_set() is likewise blocking (it reads and parses
@@ -799,7 +837,7 @@ class RainPointMqttClient:
             paho_client.tls_set(ca_certs=MQTT_TLS_CA_CERT)
             paho_client.connect(host, port, MQTT_KEEPALIVE)
 
-        await self._hass.async_add_executor_job(_tls_and_connect)
+        await self._executor_job(_tls_and_connect)
         paho_client.loop_start()
 
         self._paho = paho_client
@@ -819,17 +857,17 @@ class RainPointMqttClient:
         finally:
             paho_client.loop_stop()
 
-    # --- paho callbacks: run on paho's network thread, never on the HA loop.
+    # --- paho callbacks: run on paho's network thread, never on the event loop.
     # Only cheap, pure reads are allowed here; everything else is dispatched
-    # via hass.loop.call_soon_threadsafe into an @callback method.
+    # via self._loop.call_soon_threadsafe into a _handle_* method.
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None) -> None:
         """Runs on paho's network thread."""
-        self._hass.loop.call_soon_threadsafe(self._handle_connect, reason_code)
+        self._loop.call_soon_threadsafe(self._handle_connect, reason_code)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None) -> None:
         """Runs on paho's network thread."""
-        self._hass.loop.call_soon_threadsafe(self._handle_disconnect, reason_code)
+        self._loop.call_soon_threadsafe(self._handle_disconnect, reason_code)
 
     def _on_message(self, client, userdata, msg) -> None:
         """Runs on paho's network thread. Reads only topic/payload -- no state mutation.
@@ -840,13 +878,12 @@ class RainPointMqttClient:
         """
         topic = msg.topic
         payload = msg.payload
-        self._hass.loop.call_soon_threadsafe(self._handle_message, topic, payload)
+        self._loop.call_soon_threadsafe(self._handle_message, topic, payload)
 
-    # --- @callback methods: run on the HA event loop only.
+    # --- _handle_* methods: run on the event loop only.
 
-    @callback
     def _handle_connect(self, reason_code) -> None:
-        """Runs on the HA event loop.
+        """Runs on the event loop.
 
         reason_code is 0 on success and a non-zero failure ReasonCode (e.g. "Not
         authorized") on rejection; only a zero code counts as connected.
@@ -858,9 +895,8 @@ class RainPointMqttClient:
             _LOGGER.warning("RainPoint MQTT connect rejected: reason_code=%s", reason_code)
         self._notify_state_listeners()
 
-    @callback
     def _handle_disconnect(self, reason_code) -> None:
-        """Runs on the HA event loop."""
+        """Runs on the event loop."""
         self._connected = False
         _LOGGER.debug("RainPoint MQTT disconnected: reason_code=%s", reason_code)
         self._notify_state_listeners()
@@ -870,9 +906,8 @@ class RainPointMqttClient:
         # signal, or a stop request, so an unexpected disconnect stays dark until
         # the next scheduled renewal rather than reconnecting immediately.
 
-    @callback
     def _handle_message(self, topic: str, payload: bytes) -> None:
-        """Runs on the HA event loop. Records liveness, logs receipt, and dispatches.
+        """Runs on the event loop. Records liveness, logs receipt, and dispatches.
 
         _last_message_at is stamped first, before any parse, so even a payload
         that fails to decode still proves the pipe is alive. The receipt line

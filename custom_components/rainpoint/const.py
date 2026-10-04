@@ -1,5 +1,3 @@
-from pathlib import Path
-
 # Display Hub model constant
 DOMAIN = "rainpoint"
 
@@ -158,63 +156,6 @@ LEFTOVER_ENTITIES_TRANSLATION_KEY = "leftover_device_entities"
 # the way HAND_WRITTEN_MODELS is -- a model string alone is not a unique
 # catalog key.
 GENERIC_CONTROL_OVERRIDE_DISABLED: frozenset[tuple[str, str]] = frozenset()
-# No subscribe topics: the observer's productKey policy forbids client
-# subscriptions (any SUBSCRIBE force-closes the connection), and the broker
-# auto-delivers the hub's thing/service/property/set downlink messages to the
-# connected device unsolicited. See _parse_push_envelope for the payload shape.
-MQTT_BROKER_HOST_TEMPLATE = "{product_key}.iot-as-mqtt.us-west-1.aliyuncs.com"
-# TLS port. The credential's mqttHostUrl advertises RainPoint's plaintext 1883,
-# but the same broker also serves TLS on 8883. We always connect over TLS and
-# ignore the advertised port, verifying the chain against the pinned root below.
-MQTT_BROKER_PORT = 8883
-MQTT_KEEPALIVE = 30
-# Pinned Aliyun IoT private root CA ("Aliyun IoT Root CA", self-signed, valid
-# until 2053). The broker's TLS leaf chains to this root, which is absent from
-# every public trust store, so it must be supplied explicitly for the handshake
-# to verify. Shipped in the package under certs/; its integrity is guarded by a
-# test against Aliyun's published MD5.
-MQTT_TLS_CA_CERT = str(Path(__file__).parent / "certs" / "ali_iot_ca.crt")
-
-# Push envelope layout (confirmed against live hardware).
-# The state-carrying message arrives as a standard AliCloud IoT payload whose
-# params.param value is a pipe-delimited string; one of its sections is an inner
-# JSON object keyed by sub-device id. Only "D"-prefixed keys are sub-device
-# status; each carries the same raw value string the poll-path decoders consume.
-MQTT_PUSH_METHOD = "thing.service.property.set"
-MQTT_PUSH_PARAMS_KEY = "param"
-MQTT_PUSH_SECTION_DELIMITER = "|"
-MQTT_PUSH_SUBDEVICE_PREFIX = "D"
-MQTT_PUSH_VALUE_FIELD = "value"
-MQTT_PUSH_TIME_FIELD = "time"
-
-# Upper bound on an inbound push payload. Real envelopes are ~425 bytes; anything
-# far larger is junk (or hostile) and is dropped before parsing. Generous so a
-# firmware that grows the envelope is not rejected, small enough to bound work.
-MQTT_PUSH_MAX_PAYLOAD_BYTES = 8192
-
-# Hub-level connectivity frame shape, confirmed against the 2026-07-31
-# UAT capture: "#P260731181730000016822282236547|0|1785521850011|112882164350#".
-# Section 1 decomposes as the "#P" prefix, a 12-digit YYMMDDHHMMSS stamp,
-# "0000", an 8-digit account id, and a 6-digit mid -- the mid is a fixed-width
-# tail, not an open-ended suffix, so _frame_mid reads it by slicing a known
-# slot rather than scanning for a substring.
-MQTT_PUSH_HUB_FRAME_PREFIX = "#P"
-MQTT_PUSH_HUB_FRAME_SECTIONS = 4
-MQTT_PUSH_HUB_FRAME_TERMINATOR = "#"
-MQTT_PUSH_HUB_FRAME_MID_WIDTH = 6
-# 2 prefix + 12 stamp + 4 fixed + 8 account + 6 mid. A section 1 of any other
-# length is a layout no capture has produced, so the mid slot cannot be read
-# from it by position and the frame is declined rather than guessed at.
-# Summed from its terms rather than written as 32, so widening the mid slot
-# cannot leave the total silently wrong and the slice reading the wrong
-# characters out of a section this width check then accepts.
-MQTT_PUSH_FRAME_SECTION_ONE_WIDTH = len(MQTT_PUSH_HUB_FRAME_PREFIX) + 12 + 4 + 8 + MQTT_PUSH_HUB_FRAME_MID_WIDTH
-
-# Hard cap on the per-client one-shot-per-shape unrecognised-downlink
-# bookkeeping. Keeps the set bounded against a hostile or chatty
-# downlink; a shape count past this logs at DEBUG instead of INFO.
-MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT = 32
-
 # Push observability: hub-level diagnostic entities that surface the live push
 # connection state and the age of the last received message. The unique_id is
 # built by appending these suffixes to the hub's base unique_id, so they stay
