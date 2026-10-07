@@ -11,10 +11,11 @@ on:
 
 permissions: {}
 
-# Cancel a superseded pull request run; runs on main always finish.
+# Cancel a superseded pull request run. Every other run gets its own group,
+# since a pending run in a shared group is replaced by the next one queued.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   validate-hacs:
