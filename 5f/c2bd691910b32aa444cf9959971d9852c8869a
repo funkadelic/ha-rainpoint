@@ -1,0 +1,23 @@
+custom_components/rainpoint/coordinator.py
+  s_d98cf4bc41b6ac::t_f9cb2eba82ef75 217,228
+tests/test_coordinator.py
+  s_d98cf4bc41b6ac::t_f9cb2eba82ef75 42,8205-8212,8215-8227,8229-8238
+  s_d98cf4bc41b6ac::t_9d24568d0e08cd 8228
+  s_d98cf4bc41b6ac::t_29cae1b64cae17 8213-8214
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5fc2bd691910b32aa444cf9959971d9852c8869a",
+  "prompts": {},
+  "sessions": {
+    "s_d98cf4bc41b6ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3a9d997-6287-4702-aea0-3ddcb563df0c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Norman Yee <155019+funkadelic@users.noreply.github.com>"
+    }
+  }
+}
