@@ -218,6 +218,7 @@ _VOLATILE_STATE_KEYS = frozenset(
         "device_timestamp",
         "event_time",
         "last_seen",
+        "raw",
         "raw_bytes",
         "raw_value",
         "report_time",

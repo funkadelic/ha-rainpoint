@@ -8219,9 +8219,21 @@ class TestStateSignatureAgainstCapturedPayloads:
         """The pairs above cover three models. A key that copies the payload (raw
         bytes, a TLV dump, a debug echo) puts RSSI and the report clock back into
         the signature, so this checks every committed payload against every decoder."""
-        payloads = [v for v in vars(_payload_samples).values() if isinstance(v, str) and ("#" in v or "," in v)]
+
+        def strings(value):
+            if isinstance(value, str):
+                yield value
+            elif isinstance(value, dict):
+                for v in value.values():
+                    yield from strings(v)
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    yield from strings(v)
+
+        constants = [v for k, v in vars(_payload_samples).items() if not k.startswith("_")]
+        payloads = {v for v in strings(constants) if "#" in v or "," in v}
         leaks = set()
-        for model in _coord_module.DECODER_REGISTRY:
+        for model in [*_coord_module.DECODER_REGISTRY, MODEL_DISPLAY_HUB]:
             for raw in payloads:
                 try:
                     decoded = _coord_module._decode_subdevice_payload(model, raw, None)
