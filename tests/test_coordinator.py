@@ -39,6 +39,7 @@ DECODER_REGISTRY = _coord_module.DECODER_REGISTRY
 SILENT_DATA_TYPE = _coord_module.SILENT_DATA_TYPE
 
 import custom_components.rainpoint.repairs as _repairs_module  # noqa: E402
+import tests.payload_samples as _payload_samples  # noqa: E402
 from custom_components.rainpoint.api import (  # noqa: E402
     RainPointApiError,
     decode_hcs0528arf,
@@ -8201,3 +8202,37 @@ class TestStateSignatureAgainstCapturedPayloads:
 
         assert first != second
         assert collapsed is same_state
+
+    @staticmethod
+    def _carries_payload(value, raw):
+        if isinstance(value, (bytes, bytearray)):
+            return True
+        if isinstance(value, str):
+            return raw in value
+        if isinstance(value, dict):
+            value = list(value.values())
+        if isinstance(value, (list, tuple, set)):
+            return any(TestStateSignatureAgainstCapturedPayloads._carries_payload(v, raw) for v in value)
+        return False
+
+    def test_no_signature_key_carries_the_payload_for_any_model(self):
+        """The pairs above cover three models. A key that copies the payload (raw
+        bytes, a TLV dump, a debug echo) puts RSSI and the report clock back into
+        the signature, so this checks every committed payload against every decoder."""
+        payloads = [v for v in vars(_payload_samples).values() if isinstance(v, str) and ("#" in v or "," in v)]
+        leaks = set()
+        for model in _coord_module.DECODER_REGISTRY:
+            for raw in payloads:
+                try:
+                    decoded = _coord_module._decode_subdevice_payload(model, raw, None)
+                except Exception:  # a model fed another model's payload
+                    continue
+                if not isinstance(decoded, dict) or decoded.get("type") == "unknown" or "error" in decoded:
+                    continue
+                leaks |= {
+                    (model, key)
+                    for key, value in decoded.items()
+                    if key not in _coord_module._VOLATILE_STATE_KEYS and self._carries_payload(value, raw)
+                }
+
+        assert leaks == set()
