@@ -214,9 +214,11 @@ PAYLOAD_HISTORY_MAX = 10
 # chattier, never wrong, so it fails safe where a redaction list would not.
 _VOLATILE_STATE_KEYS = frozenset(
     {
+        "debug_info",
         "device_timestamp",
         "event_time",
         "last_seen",
+        "raw",
         "raw_bytes",
         "raw_value",
         "report_time",
@@ -224,6 +226,7 @@ _VOLATILE_STATE_KEYS = frozenset(
         "rssi",
         "rssi_dbm",
         "timestamp_source",
+        "tlv_raw",
     }
 )
 
