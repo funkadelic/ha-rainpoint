@@ -1,13 +1,21 @@
 name: Validate
 
 on:
+  # main only: a branch push is already covered by its pull_request run.
   push:
+    branches: [main]
   pull_request:
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
 
 permissions: {}
+
+# Cancel a superseded pull request run. Every other run gets its own group,
+# since a pending run in a shared group is replaced by the next one queued.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   validate-hacs:
