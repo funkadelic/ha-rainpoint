@@ -8,6 +8,11 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel a superseded pull request run; runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Two jobs rather than one matrix, because "test" is a required status check
   # on main: a matrix would rename it to "test (3.14)" and the required check
