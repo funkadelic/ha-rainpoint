@@ -1,0 +1,19 @@
+tests/test_entity_naming_composition.py
+  s_e3cf1397615f7a::t_e49e96f6d6b255 71-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e66d407b1d24e1c5a981fec9348d40789e78404a",
+  "prompts": {},
+  "sessions": {
+    "s_e3cf1397615f7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2482a828-c3bb-4ca9-8557-6483d626ee37",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Norman Yee <155019+funkadelic@users.noreply.github.com>"
+    }
+  }
+}
