@@ -1,0 +1,25 @@
+.github/workflows/hassfest.yml
+  s_d98cf4bc41b6ac::t_4244032d05770a 6,8,13-17
+.github/workflows/lint-pr-title.yml
+  s_d98cf4bc41b6ac::t_6c6207e26172c2 12-13
+.github/workflows/tests.yml
+  s_d98cf4bc41b6ac::t_3c565ccb259af0 11-15
+.github/workflows/validate.yml
+  s_d98cf4bc41b6ac::t_312ef497286547 4,6,14-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3087b42aaa32577e7af7a7d35aff42af59d56222",
+  "prompts": {},
+  "sessions": {
+    "s_d98cf4bc41b6ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3a9d997-6287-4702-aea0-3ddcb563df0c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Norman Yee <155019+funkadelic@users.noreply.github.com>"
+    }
+  }
+}
