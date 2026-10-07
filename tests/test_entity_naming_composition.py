@@ -68,6 +68,10 @@ if "parts" in inspect.signature(er._async_get_full_entity_name).parameters:
         "parts": (er.EntityNamePart.DEVICE, er.EntityNamePart.ENTITY),
         "use_legacy_naming": True,
     }
+# 2026.10 made next_name_part required; DEVICE is what HA derives for a
+# device-bound entity with no area of its own.
+if "next_name_part" in inspect.signature(er._async_get_full_entity_name).parameters:
+    _FULL_NAME_EXTRA_KWARGS["next_name_part"] = er.NextNamePart.DEVICE
 
 # The one real CTL_SOCK candidate in the committed catalog with no
 # hand-written decoder, reused from tests/test_generic_control.py's own
