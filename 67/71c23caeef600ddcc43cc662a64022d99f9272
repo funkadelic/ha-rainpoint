@@ -1,0 +1,21 @@
+tests/test_generic_entities.py
+  s_2c1c3f74067f10::t_5f801387449fe1 1044
+tests/test_sensor.py
+  s_2c1c3f74067f10::t_5f801387449fe1 3910,3969
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6771c23caeef600ddcc43cc662a64022d99f9272",
+  "prompts": {},
+  "sessions": {
+    "s_2c1c3f74067f10": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a8b2f6d9-0c2b-48cb-b376-417c312a083b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Norman Yee <155019+funkadelic@users.noreply.github.com>"
+    }
+  }
+}
