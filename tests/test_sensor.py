@@ -3907,7 +3907,7 @@ class TestCatalogReadingsSensor:
         property, so the timeline is the test.
         """
         sensor = self._sensor(model="HTV245FRF", model_code="303", raw=SAMPLE_HTV245_FULL_IDLE_PAYLOAD)
-        assert sensor.native_value == 10
+        assert sensor.native_value == 11
 
         sensor.coordinator.data = {
             "sensors": {
@@ -3966,7 +3966,7 @@ class TestCatalogReadingsSensor:
         attrs = self._sensor(raw=SAMPLE_HTV245_FULL_IDLE_PAYLOAD).extra_state_attributes
 
         assert "STA_ALARM" in attrs["received_identities"]
-        assert attrs["declared_not_received"] == ["STA_EVTIME2", "STA_RSRP"]
+        assert attrs["declared_not_received"] == ["STA_EVTIME2", "STA_OTHER_TOTAL", "STA_RSRP"]
 
     @pytest.mark.parametrize(
         "raw",

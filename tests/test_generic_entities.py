@@ -1041,6 +1041,7 @@ class TestRealCatalogMultiReasonRegression:
             "STA_ALARM",
             "STA_EVTIME2",
             "STA_LASTUSAGE",
+            "STA_OTHER_TOTAL",
             "STA_RSRP",
         )
 

@@ -4200,6 +4200,13 @@
           "identity": "STA_RSSI"
         },
         {
+          "dpCode": 50,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_OTHER_TOTAL"
+        },
+        {
           "dpCode": 51,
           "dpDataType": "S8",
           "dpLen": 1,
@@ -5110,6 +5117,20 @@
           "identity": "STA_RSSI"
         },
         {
+          "dpCode": 50,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_OTHER_TOTAL"
+        },
+        {
+          "dpCode": 50,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 2,
+          "identity": "STA_OTHER_TOTAL"
+        },
+        {
           "dpCode": 51,
           "dpDataType": "S8",
           "dpLen": 1,
@@ -5293,6 +5314,27 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 50,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_OTHER_TOTAL"
+        },
+        {
+          "dpCode": 50,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 2,
+          "identity": "STA_OTHER_TOTAL"
+        },
+        {
+          "dpCode": 50,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 3,
+          "identity": "STA_OTHER_TOTAL"
         },
         {
           "dpCode": 51,
@@ -5740,6 +5782,34 @@
           "dpLen": 1,
           "dpPort": 0,
           "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 50,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_OTHER_TOTAL"
+        },
+        {
+          "dpCode": 50,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 2,
+          "identity": "STA_OTHER_TOTAL"
+        },
+        {
+          "dpCode": 50,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 3,
+          "identity": "STA_OTHER_TOTAL"
+        },
+        {
+          "dpCode": 50,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 4,
+          "identity": "STA_OTHER_TOTAL"
         },
         {
           "dpCode": 51,
