@@ -4,6 +4,20 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.25.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.2...v1.25.0) (2026-10-20)
 
+### What's new
+
+**Water usage on the HTV145FRF**
+
+The HTV145FRF timer now has a Zone 1 Water Used sensor that shows how many gallons its last run used. The conversion was checked against one run's reading in the RainPoint app.
+
+**Other fixes**
+
+A diagnostics download for a multi-zone valve now keeps its last 10 distinct states instead of its last 10 reports, so repeated identical reports no longer fill the history.
+
+### Thanks
+
+Thanks to **@bigk1999** for the HTV145FRF capture, the matching RainPoint app reading, and the patch, which made this release's water usage sensor possible.
+
 
 ### Added
 
