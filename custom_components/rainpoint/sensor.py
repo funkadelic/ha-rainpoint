@@ -263,10 +263,12 @@ def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
     capture from these models, and the Battery Low binary sensor is what carries
     it.
 
-    No water-usage entity, unlike that factory: these frames do carry
-    STA_LASTUSAGE, but no capture pairs it against a total the app displays,
-    so its unit is unknown between litres, gallons and raw pulses. An entity
-    would have to publish a number in some unit to publish it at all.
+    No water-usage entity here, unlike that factory: these frames carry
+    STA_LASTUSAGE, but only the HTV145FRF has a capture pairing it against a
+    total the app displays, so only _make_htv145frf_entities adds one. On the
+    other models its unit is still unknown between litres, gallons and raw
+    pulses, and an entity would have to publish a number in some unit to
+    publish it at all.
 
     The zone comes from the decoded payload rather than the model name, the
     same as every other valve factory here, so a frame that reported no
@@ -278,6 +280,27 @@ def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
     zones = (info.get("data") or {}).get("zones")
     if isinstance(zones, dict):
         entities.extend(RainPointZoneRunDurationSensor(coordinator, key, info, base_slug, zone_num) for zone_num in sorted(zones))
+    return entities
+
+
+def _make_htv145frf_entities(coordinator, key, info, base_slug):
+    """The single-outlet timer entities, plus the outlet's last-run water usage.
+
+    The HTV145FRF is the one single-outlet model whose STA_LASTUSAGE has been
+    calibrated against the RainPoint app (tenths of a litre; see
+    _SINGLE_OUTLET_GALLONS_PER_COUNT in api/decoders.py), so it is the only one
+    that gets a water-usage entity. The entity follows the decoded zone: an
+    outlet whose frame carries no 4-byte usage record grows none, rather than
+    an entity that can only ever read unknown.
+    """
+    entities = _make_single_outlet_timer_entities(coordinator, key, info, base_slug)
+    zones = (info.get("data") or {}).get("zones")
+    if isinstance(zones, dict):
+        entities.extend(
+            RainPointZoneWaterUsageSensor(coordinator, key, info, base_slug, zone_num)
+            for zone_num in sorted(zones)
+            if isinstance(zones[zone_num], dict) and "last_usage_counts" in zones[zone_num]
+        )
     return entities
 
 
@@ -406,7 +429,7 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     # other two datapoints are unproven and go unread.
     MODEL_HCS044FRF: _make_diagnostic_entities,
     MODEL_VALVE_113: _make_single_outlet_timer_entities,
-    MODEL_VALVE_145: _make_single_outlet_timer_entities,
+    MODEL_VALVE_145: _make_htv145frf_entities,
     MODEL_HTV157B: _make_single_outlet_timer_entities,
     MODEL_HTP160FRF: _make_single_outlet_timer_entities,
     MODEL_VALVE_213: _make_htv_valve_diagnostic_entities,
@@ -1687,7 +1710,10 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
 
     The value is a converted flow count, not a metered volume: the device
     reports a raw count and the gallons-per-count factor is calibrated from a
-    single RainPoint-app reading (see _USAGE_GALLONS_PER_COUNT in api/decoders.py).
+    single RainPoint-app reading per model family (_USAGE_GALLONS_PER_COUNT for
+    the HTV213 family, _SINGLE_OUTLET_GALLONS_PER_COUNT for the HTV145FRF, both
+    in api/decoders.py). The zone carries its own factor when it differs, and
+    the gallons_per_count attribute reports whichever one applied.
     Two consequences follow, and both are deliberate.
 
     There is no device_class. SensorDeviceClass.WATER accepts only the TOTAL
@@ -1734,7 +1760,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
         zone = self._zone_data or {}
         attrs["zone"] = self._zone_num
         attrs["last_usage_counts"] = zone.get("last_usage_counts")
-        attrs["gallons_per_count"] = _USAGE_GALLONS_PER_COUNT
+        attrs["gallons_per_count"] = zone.get("gallons_per_count", _USAGE_GALLONS_PER_COUNT)
         return attrs
 
 

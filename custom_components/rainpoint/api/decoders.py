@@ -87,6 +87,17 @@ _DP_BASE_USAGE = 0x28
 # usage entity deliberately stays out of long-term statistics.
 _USAGE_GALLONS_PER_COUNT = 1 / 500
 
+# US gallons per litre, for the single-outlet timer's litre-based usage count.
+_LITRES_PER_US_GALLON = 3.785411784
+
+# Gallons per raw STA_LASTUSAGE count on the single-outlet HTV145FRF. The count
+# is tenths of a litre, the same unit the HCS008FRF flow meter uses for its own
+# STA_LASTUSAGE (_FLOW_LITRES_PER_COUNT), not the HTV213 family's 1/500 gal.
+# Calibrated against a reporter's app reading paired with the frame sent after
+# the same run: a 10-minute run the app showed as 5.8 gal arrived as 219 counts
+# (21.9 L = 5.79 gal), where 1/500 gal would read 0.44 gal.
+_SINGLE_OUTLET_GALLONS_PER_COUNT = 0.1 / _LITRES_PER_US_GALLON
+
 # Year offset for the packed timestamps carried by the 4-byte 0xB7 records.
 _TIMESTAMP_YEAR_BASE = 2020
 
@@ -710,6 +721,24 @@ def decode_hic801w(raw: str) -> dict:
         return _hic801w_error_envelope(str(e))
 
 
+def _attach_single_outlet_usage(zone: dict, usage_bytes: bytes | None) -> None:
+    """Add the last run's water usage to a single-outlet timer's zone, when the frame carries it.
+
+    STA_LASTUSAGE is a 4-byte little-endian count of tenths of a litre (see
+    _SINGLE_OUTLET_GALLONS_PER_COUNT). The keys are left off entirely when the
+    frame has no 4-byte record, as on the HTP160FRF, whose catalog variant does
+    not declare the datapoint, so a consumer can tell "not reported" from a
+    zero-gallon run. The raw count and the factor travel with the converted
+    value so the conversion stays auditable against the app.
+    """
+    if usage_bytes is None or len(usage_bytes) != 4:
+        return
+    counts = int.from_bytes(usage_bytes, "little")
+    zone["last_usage_counts"] = counts
+    zone["last_usage_gallons"] = round(counts * _SINGLE_OUTLET_GALLONS_PER_COUNT, 3)
+    zone["gallons_per_count"] = _SINGLE_OUTLET_GALLONS_PER_COUNT
+
+
 def decode_htv145frf(raw: str) -> dict:
     """Decode a single-outlet water timer status frame (10# prefix).
 
@@ -725,7 +754,9 @@ def decode_htv145frf(raw: str) -> dict:
     gated valve availability on a charge reading.
 
     Output shape matches the other valve decoders (type "valve_hub" with a
-    zones dict) so valve.py and number.py consume it unchanged.
+    zones dict) so valve.py and number.py consume it unchanged. The zone also
+    carries the last run's water usage when the frame includes STA_LASTUSAGE
+    (see _attach_single_outlet_usage).
     """
     try:
         # 11# is the dp_id-prefixed framing. Walking it without the prefix
@@ -736,6 +767,8 @@ def decode_htv145frf(raw: str) -> dict:
         records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
 
         zone = _single_zone_from_records(records)
+        if zone is not None:
+            _attach_single_outlet_usage(zone, records.get(STA_LASTUSAGE_FIELD))
         zones = {1: zone} if zone is not None else {}
         bat_bytes = records.get(STA_BAT_FIELD)
         battery_flag = bat_bytes[0] if bat_bytes else None
