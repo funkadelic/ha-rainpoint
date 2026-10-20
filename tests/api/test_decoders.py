@@ -652,7 +652,6 @@ class TestDecodeHtv145frfLastUsage:
         assert zone["last_usage_counts"] == 219
         assert zone["last_usage_gallons"] == 5.785
         assert round(zone["last_usage_gallons"], 1) == 5.8
-        assert zone["gallons_per_count"] == _SINGLE_OUTLET_GALLONS_PER_COUNT
 
     def test_usage_is_read_from_its_own_record(self):
         """The count is the STA_LASTUSAGE record's little-endian value, in both existing captures."""
@@ -665,7 +664,6 @@ class TestDecodeHtv145frfLastUsage:
 
         assert "last_usage_counts" not in zone
         assert "last_usage_gallons" not in zone
-        assert "gallons_per_count" not in zone
 
     def test_truncated_usage_record_yields_no_zone_usage(self):
         """A usage record the frame ends inside is dropped, not read short."""

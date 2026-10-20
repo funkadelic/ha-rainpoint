@@ -97,8 +97,8 @@ _FLOW_LITRES_PER_COUNT = 0.1
 
 _LITRES_PER_US_GALLON = 3.785411784
 
-# HTV145FRF STA_LASTUSAGE counts in the HCS008FRF's unit. One app reading pins it:
-# 219 counts for a run the app showed as 5.8 gal.
+# HTV145FRF STA_LASTUSAGE, assumed to share the HCS008FRF's unit. Inferred from one
+# app reading (219 counts for a run shown as 5.8 gal), so good to about 1%.
 _SINGLE_OUTLET_GALLONS_PER_COUNT = _FLOW_LITRES_PER_COUNT / _LITRES_PER_US_GALLON
 
 # Year offset for the packed timestamps carried by the 4-byte 0xB7 records.
@@ -728,13 +728,13 @@ def _attach_single_outlet_usage(zone: dict, usage_bytes: bytes | None) -> None:
     """Add the last run's water usage to a single-outlet zone.
 
     Keys stay absent without a 4-byte record (HTP160FRF), so "not reported" differs from zero.
+    Model-agnostic: the factor is only verified on the HTV145FRF, the one model given an entity.
     """
     if usage_bytes is None or len(usage_bytes) != 4:
         return
     counts = int.from_bytes(usage_bytes, "little")
     zone["last_usage_counts"] = counts
     zone["last_usage_gallons"] = round(counts * _SINGLE_OUTLET_GALLONS_PER_COUNT, 3)
-    zone["gallons_per_count"] = _SINGLE_OUTLET_GALLONS_PER_COUNT
 
 
 def decode_htv145frf(raw: str) -> dict:

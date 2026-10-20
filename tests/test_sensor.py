@@ -1717,8 +1717,8 @@ class TestSingleOutletTimerDispatch:
         # The sub-device's own info, not a stand-in, reached both entities.
         assert rssi[0].device_info["manufacturer"] == "RainPoint"
         assert duration[0].device_info["manufacturer"] == "RainPoint"
-        # 1 RSSI + 1 run duration + 1 raw payload + 1 catalog coverage, nothing else.
-        assert len(captured) == 4
+        # 1 RSSI + 1 run duration + 1 raw payload + 1 catalog coverage, plus Water Used on the HTV145FRF.
+        assert len(captured) == (5 if model == MODEL_VALVE_145 else 4)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_HTV157B, MODEL_HTP160FRF])
@@ -1757,7 +1757,6 @@ class TestSingleOutletTimerDispatch:
                             "duration_seconds": 0,
                             "last_usage_counts": 219,
                             "last_usage_gallons": 5.785,
-                            "gallons_per_count": _SINGLE_OUTLET_GALLONS_PER_COUNT,
                         }
                     },
                     "rssi_dbm": -82,
@@ -1777,8 +1776,8 @@ class TestSingleOutletTimerDispatch:
         assert any(isinstance(e, RainPointZoneRunDurationSensor) for e in captured)
 
     @pytest.mark.asyncio
-    async def test_htv145frf_without_a_usage_record_grows_no_usage_entity(self):
-        """A frame that carried no 4-byte STA_LASTUSAGE gives the HTV145FRF no usage entity."""
+    async def test_htv145frf_without_a_usage_record_still_gets_a_usage_entity(self):
+        """A first frame without STA_LASTUSAGE must not lose the entity for the session; it reads unknown."""
         captured = await self._setup(
             self._timer_entry(
                 MODEL_VALVE_145,
@@ -1786,7 +1785,10 @@ class TestSingleOutletTimerDispatch:
             )
         )
 
-        assert [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)] == []
+        usage = [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)]
+        assert len(usage) == 1
+        assert usage[0].native_value is None
+        assert usage[0].extra_state_attributes["gallons_per_count"] == _SINGLE_OUTLET_GALLONS_PER_COUNT
 
     @pytest.mark.asyncio
     async def test_a_battery_flag_grows_no_sensor_entity(self):
