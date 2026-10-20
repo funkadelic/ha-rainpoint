@@ -87,16 +87,19 @@ _DP_BASE_USAGE = 0x28
 # usage entity deliberately stays out of long-term statistics.
 _USAGE_GALLONS_PER_COUNT = 1 / 500
 
-# US gallons per litre, for the single-outlet timer's litre-based usage count.
+# Litres per raw count on the HCS008FRF's volume datapoints. Confirmed against
+# a reporter's app screenshot taken alongside the frame the meter sent at the
+# same minute: STA_WATER_TOTAL 28693 read as 2869.3 L, STA_TOTAL_TODAY 5 as
+# 0.5 L and STA_LASTUSAGE 2 as 0.2 L. The meter carries its own flow-rate
+# calibration setting, so these counts are already calibrated device side and
+# need no per-install factor, unlike the HTV valve family's raw flow counts.
+_FLOW_LITRES_PER_COUNT = 0.1
+
 _LITRES_PER_US_GALLON = 3.785411784
 
-# Gallons per raw STA_LASTUSAGE count on the single-outlet HTV145FRF. The count
-# is tenths of a litre, the same unit the HCS008FRF flow meter uses for its own
-# STA_LASTUSAGE (_FLOW_LITRES_PER_COUNT), not the HTV213 family's 1/500 gal.
-# Calibrated against a reporter's app reading paired with the frame sent after
-# the same run: a 10-minute run the app showed as 5.8 gal arrived as 219 counts
-# (21.9 L = 5.79 gal), where 1/500 gal would read 0.44 gal.
-_SINGLE_OUTLET_GALLONS_PER_COUNT = 0.1 / _LITRES_PER_US_GALLON
+# HTV145FRF STA_LASTUSAGE counts in the HCS008FRF's unit. One app reading pins it:
+# 219 counts for a run the app showed as 5.8 gal.
+_SINGLE_OUTLET_GALLONS_PER_COUNT = _FLOW_LITRES_PER_COUNT / _LITRES_PER_US_GALLON
 
 # Year offset for the packed timestamps carried by the 4-byte 0xB7 records.
 _TIMESTAMP_YEAR_BASE = 2020
@@ -722,14 +725,9 @@ def decode_hic801w(raw: str) -> dict:
 
 
 def _attach_single_outlet_usage(zone: dict, usage_bytes: bytes | None) -> None:
-    """Add the last run's water usage to a single-outlet timer's zone, when the frame carries it.
+    """Add the last run's water usage to a single-outlet zone.
 
-    STA_LASTUSAGE is a 4-byte little-endian count of tenths of a litre (see
-    _SINGLE_OUTLET_GALLONS_PER_COUNT). The keys are left off entirely when the
-    frame has no 4-byte record, as on the HTP160FRF, whose catalog variant does
-    not declare the datapoint, so a consumer can tell "not reported" from a
-    zero-gallon run. The raw count and the factor travel with the converted
-    value so the conversion stays auditable against the app.
+    Keys stay absent without a 4-byte record (HTP160FRF), so "not reported" differs from zero.
     """
     if usage_bytes is None or len(usage_bytes) != 4:
         return
@@ -754,9 +752,7 @@ def decode_htv145frf(raw: str) -> dict:
     gated valve availability on a charge reading.
 
     Output shape matches the other valve decoders (type "valve_hub" with a
-    zones dict) so valve.py and number.py consume it unchanged. The zone also
-    carries the last run's water usage when the frame includes STA_LASTUSAGE
-    (see _attach_single_outlet_usage).
+    zones dict) so valve.py and number.py consume it unchanged.
     """
     try:
         # 11# is the dp_id-prefixed framing. Walking it without the prefix
@@ -1445,14 +1441,6 @@ def decode_moisture_simple(raw: str) -> dict:
     _attach_report_time(result, b)
     return result
 
-
-# Litres per raw count on the HCS008FRF's volume datapoints. Confirmed against
-# a reporter's app screenshot taken alongside the frame the meter sent at the
-# same minute: STA_WATER_TOTAL 28693 read as 2869.3 L, STA_TOTAL_TODAY 5 as
-# 0.5 L and STA_LASTUSAGE 2 as 0.2 L. The meter carries its own flow-rate
-# calibration setting, so these counts are already calibrated device side and
-# need no per-install factor, unlike the HTV valve family's raw flow counts.
-_FLOW_LITRES_PER_COUNT = 0.1
 
 # Litres per minute per raw STA_VFLOW count. The app renders the same value to
 # one decimal, which fixes the resolution at a tenth, and the one capture taken

@@ -263,12 +263,8 @@ def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
     capture from these models, and the Battery Low binary sensor is what carries
     it.
 
-    No water-usage entity here, unlike that factory: these frames carry
-    STA_LASTUSAGE, but only the HTV145FRF has a capture pairing it against a
-    total the app displays, so only _make_htv145frf_entities adds one. On the
-    other models its unit is still unknown between litres, gallons and raw
-    pulses, and an entity would have to publish a number in some unit to
-    publish it at all.
+    No water-usage entity here: STA_LASTUSAGE's unit is uncalibrated on these
+    models. The HTV145FRF gets one from _make_htv145frf_entities.
 
     The zone comes from the decoded payload rather than the model name, the
     same as every other valve factory here, so a frame that reported no
@@ -284,15 +280,7 @@ def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
 
 
 def _make_htv145frf_entities(coordinator, key, info, base_slug):
-    """The single-outlet timer entities, plus the outlet's last-run water usage.
-
-    The HTV145FRF is the one single-outlet model whose STA_LASTUSAGE has been
-    calibrated against the RainPoint app (tenths of a litre; see
-    _SINGLE_OUTLET_GALLONS_PER_COUNT in api/decoders.py), so it is the only one
-    that gets a water-usage entity. The entity follows the decoded zone: an
-    outlet whose frame carries no 4-byte usage record grows none, rather than
-    an entity that can only ever read unknown.
-    """
+    """Single-outlet timer entities plus Water Used, the one model with a calibrated STA_LASTUSAGE."""
     entities = _make_single_outlet_timer_entities(coordinator, key, info, base_slug)
     zones = (info.get("data") or {}).get("zones")
     if isinstance(zones, dict):
@@ -1710,10 +1698,8 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
 
     The value is a converted flow count, not a metered volume: the device
     reports a raw count and the gallons-per-count factor is calibrated from a
-    single RainPoint-app reading per model family (_USAGE_GALLONS_PER_COUNT for
-    the HTV213 family, _SINGLE_OUTLET_GALLONS_PER_COUNT for the HTV145FRF, both
-    in api/decoders.py). The zone carries its own factor when it differs, and
-    the gallons_per_count attribute reports whichever one applied.
+    single RainPoint-app reading per model family (see api/decoders.py); a zone
+    carrying its own gallons_per_count overrides _USAGE_GALLONS_PER_COUNT.
     Two consequences follow, and both are deliberate.
 
     There is no device_class. SensorDeviceClass.WATER accepts only the TOTAL
