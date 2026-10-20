@@ -2,6 +2,41 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.25.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.2...v1.25.0) (2026-10-20)
+
+
+### Added
+
+* show last-run water usage on the HTV145FRF ([#293](https://github.com/funkadelic/ha-rainpoint/issues/293)) ([d28f271](https://github.com/funkadelic/ha-rainpoint/commit/d28f27153ec1da6523f75eed6b327e1b81eeafba))
+
+
+### Fixed
+
+* accept newer paho-mqtt versions ([#279](https://github.com/funkadelic/ha-rainpoint/issues/279)) ([5b9d22a](https://github.com/funkadelic/ha-rainpoint/commit/5b9d22a72fa0fe4c43e69b57bf4f25c77f66b076))
+* keep only distinct device states in payload history for more valve models ([#284](https://github.com/funkadelic/ha-rainpoint/issues/284)) ([ebda9c9](https://github.com/funkadelic/ha-rainpoint/commit/ebda9c9c72326a2e7e361913532ddc82735e0400))
+
+
+### Changed
+
+* decouple the api package from Home Assistant ([#280](https://github.com/funkadelic/ha-rainpoint/issues/280)) ([5e8608f](https://github.com/funkadelic/ha-rainpoint/commit/5e8608f553f89ebe892b534f4e9bb050c3169a57))
+
+
+### Other Changes
+
+* bump pytest-homeassistant-custom-component ([#277](https://github.com/funkadelic/ha-rainpoint/issues/277)) ([5c2f66a](https://github.com/funkadelic/ha-rainpoint/commit/5c2f66a0d118218070e378019f1b169170c67e8b))
+* bump pytest-homeassistant-custom-component ([#282](https://github.com/funkadelic/ha-rainpoint/issues/282)) ([5123538](https://github.com/funkadelic/ha-rainpoint/commit/5123538b266bef35691d8091d24f38d81133a7a6))
+* bump pytest-homeassistant-custom-component ([#288](https://github.com/funkadelic/ha-rainpoint/issues/288)) ([9cf650c](https://github.com/funkadelic/ha-rainpoint/commit/9cf650c15703f23413f0628075c6344b9cdf2bfd))
+* bump pytest-homeassistant-custom-component ([#290](https://github.com/funkadelic/ha-rainpoint/issues/290)) ([f2d379e](https://github.com/funkadelic/ha-rainpoint/commit/f2d379ed5b6164590cb51e79db39d93ed61973b8))
+* bump SonarSource/sonarqube-scan-action ([#283](https://github.com/funkadelic/ha-rainpoint/issues/283)) ([303e829](https://github.com/funkadelic/ha-rainpoint/commit/303e829c20cc3a3f2f0cb895a2feede2e7006ec4))
+* bump the actions group across 1 directory with 2 updates ([#289](https://github.com/funkadelic/ha-rainpoint/issues/289)) ([b089b35](https://github.com/funkadelic/ha-rainpoint/commit/b089b35e963d067434a2dd5b3ae7f75a2107a25f))
+* bump the actions group across 1 directory with 2 updates ([#291](https://github.com/funkadelic/ha-rainpoint/issues/291)) ([be05558](https://github.com/funkadelic/ha-rainpoint/commit/be05558795e7a47f729fbe40ddb8d9c232ef9d5a))
+* bump the actions group with 2 updates ([#278](https://github.com/funkadelic/ha-rainpoint/issues/278)) ([5dcc040](https://github.com/funkadelic/ha-rainpoint/commit/5dcc04097e6818c973d89d90014b674017a4d468))
+* **catalog:** refresh the product catalog snapshot ([#287](https://github.com/funkadelic/ha-rainpoint/issues/287)) ([a6a5433](https://github.com/funkadelic/ha-rainpoint/commit/a6a543347d4d2ee34b260d4501b3c54c4b8969f8))
+* pass next_name_part to the HA 2026.10 naming helper ([#286](https://github.com/funkadelic/ha-rainpoint/issues/286)) ([73ac13b](https://github.com/funkadelic/ha-rainpoint/commit/73ac13b1520bd30da9a72e6e4411cb661957db7f))
+* pass the app token's client-id instead of the deprecated app-id ([#275](https://github.com/funkadelic/ha-rainpoint/issues/275)) ([78af289](https://github.com/funkadelic/ha-rainpoint/commit/78af2891403d50e49b378d5f9e0208b0b3fc1402))
+* pre-commit autoupdate ([#281](https://github.com/funkadelic/ha-rainpoint/issues/281)) ([9fb3e5a](https://github.com/funkadelic/ha-rainpoint/commit/9fb3e5a15c4116ee2ba10c8ca15302b206a6b501))
+* skip duplicate and superseded workflow runs ([#285](https://github.com/funkadelic/ha-rainpoint/issues/285)) ([7a4dba7](https://github.com/funkadelic/ha-rainpoint/commit/7a4dba77a825bacfcf424ed2adb16616cd4bc9f1))
+
 ## [1.24.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.1...v1.24.2) (2026-09-23)
 
 ### What's new

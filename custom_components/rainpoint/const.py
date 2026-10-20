@@ -2,7 +2,7 @@
 DOMAIN = "rainpoint"
 
 # Integration version
-VERSION = "1.24.2"  # x-release-please-version
+VERSION = "1.25.0"  # x-release-please-version
 
 # Issue tracker URL
 ISSUE_URL = "https://github.com/funkadelic/ha-rainpoint/issues"
