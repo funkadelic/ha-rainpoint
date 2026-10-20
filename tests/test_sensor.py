@@ -15,7 +15,12 @@ from homeassistant.helpers.entity import EntityCategory
 import custom_components.rainpoint.coordinator as _coord_module
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
-from custom_components.rainpoint.api import RainPointApiError, decode_hic801w, decode_htv213frf_valve
+from custom_components.rainpoint.api import (
+    _SINGLE_OUTLET_GALLONS_PER_COUNT,
+    RainPointApiError,
+    decode_hic801w,
+    decode_htv213frf_valve,
+)
 from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
@@ -1712,24 +1717,24 @@ class TestSingleOutletTimerDispatch:
         # The sub-device's own info, not a stand-in, reached both entities.
         assert rssi[0].device_info["manufacturer"] == "RainPoint"
         assert duration[0].device_info["manufacturer"] == "RainPoint"
-        # 1 RSSI + 1 run duration + 1 raw payload + 1 catalog coverage, nothing else.
-        assert len(captured) == 4
+        # 1 RSSI + 1 run duration + 1 raw payload + 1 catalog coverage, plus Water Used on the HTV145FRF.
+        assert len(captured) == (5 if model == MODEL_VALVE_145 else 4)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B, MODEL_HTP160FRF])
+    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_HTV157B, MODEL_HTP160FRF])
     async def test_no_water_usage_entity(self, model):
-        """STA_LASTUSAGE is in the frame but its unit is unknown, so no entity for it.
+        """STA_LASTUSAGE is uncalibrated on these models, so no entity for it even when decoded.
 
         Asserted per model rather than once, because the water-usage entity
-        would arrive from sharing the HTV213 factory, which is a per-model
-        registration.
+        is a per-model registration; only the HTV145FRF has an app-paired
+        calibration.
         """
         captured = await self._setup(
             self._timer_entry(
                 model,
                 {
                     "type": "valve_hub",
-                    "zones": {1: {"open": False, "duration_seconds": 0}},
+                    "zones": {1: {"open": False, "duration_seconds": 0, "last_usage_counts": 219, "last_usage_gallons": 5.785}},
                     "rssi_dbm": -62,
                     "battery_percent": 100,
                 },
@@ -1737,6 +1742,53 @@ class TestSingleOutletTimerDispatch:
         )
 
         assert [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)] == []
+
+    @pytest.mark.asyncio
+    async def test_htv145frf_gets_a_water_usage_entity(self):
+        """The HTV145FRF's calibrated last-run usage becomes the zone's Water Used entity."""
+        captured = await self._setup(
+            self._timer_entry(
+                MODEL_VALVE_145,
+                {
+                    "type": "valve_hub",
+                    "zones": {
+                        1: {
+                            "open": False,
+                            "duration_seconds": 0,
+                            "last_usage_counts": 219,
+                            "last_usage_gallons": 5.785,
+                        }
+                    },
+                    "rssi_dbm": -82,
+                    "battery_percent": 100,
+                },
+            )
+        )
+
+        usage = [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)]
+        assert len(usage) == 1
+        assert usage[0].native_value == 5.785
+        assert usage[0]._attr_unique_id == "rainpoint_100_200_1_zone1_water_used"
+        attrs = usage[0].extra_state_attributes
+        assert attrs["last_usage_counts"] == 219
+        assert attrs["gallons_per_count"] == _SINGLE_OUTLET_GALLONS_PER_COUNT
+        # The single-outlet entities are all still there alongside it.
+        assert any(isinstance(e, RainPointZoneRunDurationSensor) for e in captured)
+
+    @pytest.mark.asyncio
+    async def test_htv145frf_without_a_usage_record_still_gets_a_usage_entity(self):
+        """A first frame without STA_LASTUSAGE must not lose the entity for the session; it reads unknown."""
+        captured = await self._setup(
+            self._timer_entry(
+                MODEL_VALVE_145,
+                {"type": "valve_hub", "zones": {1: {"open": False, "duration_seconds": 0}}, "rssi_dbm": -62},
+            )
+        )
+
+        usage = [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)]
+        assert len(usage) == 1
+        assert usage[0].native_value is None
+        assert usage[0].extra_state_attributes["gallons_per_count"] == _SINGLE_OUTLET_GALLONS_PER_COUNT
 
     @pytest.mark.asyncio
     async def test_a_battery_flag_grows_no_sensor_entity(self):

@@ -7,6 +7,7 @@ underscore-prefixed helpers, so callers import all of them from one place.
 
 from .client import RainPointApiError, RainPointClient, RainPointThrottledError
 from .decoders import (
+    _SINGLE_OUTLET_GALLONS_PER_COUNT,
     _USAGE_GALLONS_PER_COUNT,
     _decode_packed_timestamp,
     decode_co2,
@@ -80,6 +81,7 @@ from .validators import (
 
 __all__ = [
     # Decoder constants
+    "_SINGLE_OUTLET_GALLONS_PER_COUNT",
     "_USAGE_GALLONS_PER_COUNT",
     # Client
     "RainPointApiError",

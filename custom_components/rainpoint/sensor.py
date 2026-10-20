@@ -22,7 +22,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .api import _USAGE_GALLONS_PER_COUNT, _is_ascii_payload, _parse_entries, _split_prefix
+from .api import _SINGLE_OUTLET_GALLONS_PER_COUNT, _USAGE_GALLONS_PER_COUNT, _is_ascii_payload, _parse_entries, _split_prefix
 from .api.product_catalog import get_catalog_entry, get_catalog_variant_codes
 from .const import (
     CONF_GENERIC_ENTITIES_ENABLED,
@@ -263,10 +263,8 @@ def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
     capture from these models, and the Battery Low binary sensor is what carries
     it.
 
-    No water-usage entity, unlike that factory: these frames do carry
-    STA_LASTUSAGE, but no capture pairs it against a total the app displays,
-    so its unit is unknown between litres, gallons and raw pulses. An entity
-    would have to publish a number in some unit to publish it at all.
+    No water-usage entity here: STA_LASTUSAGE's unit is uncalibrated on these
+    models. The HTV145FRF gets one from _make_htv145frf_entities.
 
     The zone comes from the decoded payload rather than the model name, the
     same as every other valve factory here, so a frame that reported no
@@ -278,6 +276,21 @@ def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
     zones = (info.get("data") or {}).get("zones")
     if isinstance(zones, dict):
         entities.extend(RainPointZoneRunDurationSensor(coordinator, key, info, base_slug, zone_num) for zone_num in sorted(zones))
+    return entities
+
+
+def _make_htv145frf_entities(coordinator, key, info, base_slug):
+    """Single-outlet timer entities plus Water Used, the one model with a calibrated STA_LASTUSAGE.
+
+    Built per reported zone, reading unknown until a frame carries usage, as the HTV213 factory does.
+    """
+    entities = _make_single_outlet_timer_entities(coordinator, key, info, base_slug)
+    zones = (info.get("data") or {}).get("zones")
+    if isinstance(zones, dict):
+        entities.extend(
+            RainPointZoneWaterUsageSensor(coordinator, key, info, base_slug, zone_num, _SINGLE_OUTLET_GALLONS_PER_COUNT)
+            for zone_num in sorted(zones)
+        )
     return entities
 
 
@@ -406,7 +419,7 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     # other two datapoints are unproven and go unread.
     MODEL_HCS044FRF: _make_diagnostic_entities,
     MODEL_VALVE_113: _make_single_outlet_timer_entities,
-    MODEL_VALVE_145: _make_single_outlet_timer_entities,
+    MODEL_VALVE_145: _make_htv145frf_entities,
     MODEL_HTV157B: _make_single_outlet_timer_entities,
     MODEL_HTP160FRF: _make_single_outlet_timer_entities,
     MODEL_VALVE_213: _make_htv_valve_diagnostic_entities,
@@ -1687,7 +1700,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
 
     The value is a converted flow count, not a metered volume: the device
     reports a raw count and the gallons-per-count factor is calibrated from a
-    single RainPoint-app reading (see _USAGE_GALLONS_PER_COUNT in api/decoders.py).
+    single RainPoint-app reading per model family (see api/decoders.py).
     Two consequences follow, and both are deliberate.
 
     There is no device_class. SensorDeviceClass.WATER accepts only the TOTAL
@@ -1714,9 +1727,11 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
         sensor_info: dict,
         base_slug: str,
         zone_num: int,
+        gallons_per_count: float = _USAGE_GALLONS_PER_COUNT,
     ) -> None:
         """Name and key the water-usage sensor for one zone."""
         super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
+        self._gallons_per_count = gallons_per_count
         self._attr_unique_id = f"rainpoint_{base_slug}_zone{zone_num}_water_used"
         self._attr_name = f"Zone {zone_num} Water Used"
 
@@ -1734,7 +1749,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
         zone = self._zone_data or {}
         attrs["zone"] = self._zone_num
         attrs["last_usage_counts"] = zone.get("last_usage_counts")
-        attrs["gallons_per_count"] = _USAGE_GALLONS_PER_COUNT
+        attrs["gallons_per_count"] = self._gallons_per_count
         return attrs
 
 

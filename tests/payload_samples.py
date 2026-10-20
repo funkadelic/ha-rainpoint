@@ -77,6 +77,11 @@ SAMPLE_HTV145_CLOSED_PAYLOAD = "10#E1BC00DC01D80020B700000000AD00009F95110000FF0
 # Report time 19:58:46 plus that duration lands on the 20:18:46 event time,
 # which is what pins the event-time semantics on this family.
 SAMPLE_HTV145_OPEN_PAYLOAD = "10#E1C200DC01D82120B7AE44E319ADB0049FA8020000FF0FAE3EE319"
+# HTV145FRF after a completed run, paired with the RainPoint app: zone 1 closed,
+# RSSI -82 dBm, STA_BAT 1, STA_LASTUSAGE 0x000000DB = 219 counts. The app showed
+# 5.8 gal for that 10-minute run, which pins the count at tenths of a litre
+# (21.9 L = 5.79 gal).
+SAMPLE_HTV145_AFTER_RUN_PAYLOAD = "10#E1AE00DC01D80020B700000000AD00009FDB000000FF0F7212A71A"
 
 # HTV113FRF idle sample (issue #64): zone 1 closed, duration 0s, RSSI -63 dBm,
 # STA_BAT 3 -- a flag no capture pairs with a charge level, so it yields no

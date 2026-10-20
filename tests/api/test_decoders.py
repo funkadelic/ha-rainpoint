@@ -6,6 +6,7 @@ import traceback
 import pytest
 
 from custom_components.rainpoint.api import (
+    _SINGLE_OUTLET_GALLONS_PER_COUNT,
     decode_co2,
     decode_display,
     decode_flow_meter,
@@ -63,6 +64,7 @@ from tests.payload_samples import (
     SAMPLE_HIC801W_STATION3_PAYLOAD,
     SAMPLE_HTP160_IDLE_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
+    SAMPLE_HTV145_AFTER_RUN_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
     SAMPLE_HTV157B_IDLE_PAYLOAD,
@@ -635,6 +637,40 @@ class TestDecodeHtv145frf:
         assert result["decoder"] == "htv145frf_error"
         assert result["zones"] == {}
         assert result.get("hub_online") is not True
+
+
+class TestDecodeHtv145frfLastUsage:
+    """STA_LASTUSAGE on the single-outlet timers: tenths of a litre, converted to gallons."""
+
+    def test_factor_is_a_tenth_of_a_litre_in_us_gallons(self):
+        assert pytest.approx(0.1 / 3.785411784) == _SINGLE_OUTLET_GALLONS_PER_COUNT
+
+    def test_after_run_payload_matches_the_app_reading(self):
+        """The app showed 5.8 gal for the run this frame reports as 219 counts."""
+        zone = decode_htv145frf(SAMPLE_HTV145_AFTER_RUN_PAYLOAD)["zones"][1]
+
+        assert zone["last_usage_counts"] == 219
+        assert zone["last_usage_gallons"] == 5.785
+        assert round(zone["last_usage_gallons"], 1) == 5.8
+
+    def test_usage_is_read_from_its_own_record(self):
+        """The count is the STA_LASTUSAGE record's little-endian value, in both existing captures."""
+        assert decode_htv145frf(SAMPLE_HTV145_CLOSED_PAYLOAD)["zones"][1]["last_usage_counts"] == 0x1195
+        assert decode_htv145frf(SAMPLE_HTV145_OPEN_PAYLOAD)["zones"][1]["last_usage_counts"] == 0x02A8
+
+    def test_frame_without_the_record_carries_no_usage_keys(self):
+        """The HTP160FRF frame has no STA_LASTUSAGE, so the zone reports none rather than zero."""
+        zone = decode_htv145frf(SAMPLE_HTP160_IDLE_PAYLOAD)["zones"][1]
+
+        assert "last_usage_counts" not in zone
+        assert "last_usage_gallons" not in zone
+
+    def test_truncated_usage_record_yields_no_zone_usage(self):
+        """A usage record the frame ends inside is dropped, not read short."""
+        result = decode_htv145frf("10#D8009F9511")
+
+        assert set(result["zones"]) == {1}
+        assert "last_usage_counts" not in result["zones"][1]
 
 
 class TestDecodeHtv113frf:

@@ -87,6 +87,20 @@ _DP_BASE_USAGE = 0x28
 # usage entity deliberately stays out of long-term statistics.
 _USAGE_GALLONS_PER_COUNT = 1 / 500
 
+# Litres per raw count on the HCS008FRF's volume datapoints. Confirmed against
+# a reporter's app screenshot taken alongside the frame the meter sent at the
+# same minute: STA_WATER_TOTAL 28693 read as 2869.3 L, STA_TOTAL_TODAY 5 as
+# 0.5 L and STA_LASTUSAGE 2 as 0.2 L. The meter carries its own flow-rate
+# calibration setting, so these counts are already calibrated device side and
+# need no per-install factor, unlike the HTV valve family's raw flow counts.
+_FLOW_LITRES_PER_COUNT = 0.1
+
+_LITRES_PER_US_GALLON = 3.785411784
+
+# HTV145FRF STA_LASTUSAGE, assumed to share the HCS008FRF's unit. Inferred from one
+# app reading (219 counts for a run shown as 5.8 gal), so good to about 1%.
+_SINGLE_OUTLET_GALLONS_PER_COUNT = _FLOW_LITRES_PER_COUNT / _LITRES_PER_US_GALLON
+
 # Year offset for the packed timestamps carried by the 4-byte 0xB7 records.
 _TIMESTAMP_YEAR_BASE = 2020
 
@@ -710,6 +724,19 @@ def decode_hic801w(raw: str) -> dict:
         return _hic801w_error_envelope(str(e))
 
 
+def _attach_single_outlet_usage(zone: dict, usage_bytes: bytes | None) -> None:
+    """Add the last run's water usage to a single-outlet zone.
+
+    Keys stay absent without a 4-byte record (HTP160FRF), so "not reported" differs from zero.
+    Model-agnostic: the factor is only verified on the HTV145FRF, the one model given an entity.
+    """
+    if usage_bytes is None or len(usage_bytes) != 4:
+        return
+    counts = int.from_bytes(usage_bytes, "little")
+    zone["last_usage_counts"] = counts
+    zone["last_usage_gallons"] = round(counts * _SINGLE_OUTLET_GALLONS_PER_COUNT, 3)
+
+
 def decode_htv145frf(raw: str) -> dict:
     """Decode a single-outlet water timer status frame (10# prefix).
 
@@ -736,6 +763,8 @@ def decode_htv145frf(raw: str) -> dict:
         records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
 
         zone = _single_zone_from_records(records)
+        if zone is not None:
+            _attach_single_outlet_usage(zone, records.get(STA_LASTUSAGE_FIELD))
         zones = {1: zone} if zone is not None else {}
         bat_bytes = records.get(STA_BAT_FIELD)
         battery_flag = bat_bytes[0] if bat_bytes else None
@@ -1412,14 +1441,6 @@ def decode_moisture_simple(raw: str) -> dict:
     _attach_report_time(result, b)
     return result
 
-
-# Litres per raw count on the HCS008FRF's volume datapoints. Confirmed against
-# a reporter's app screenshot taken alongside the frame the meter sent at the
-# same minute: STA_WATER_TOTAL 28693 read as 2869.3 L, STA_TOTAL_TODAY 5 as
-# 0.5 L and STA_LASTUSAGE 2 as 0.2 L. The meter carries its own flow-rate
-# calibration setting, so these counts are already calibrated device side and
-# need no per-install factor, unlike the HTV valve family's raw flow counts.
-_FLOW_LITRES_PER_COUNT = 0.1
 
 # Litres per minute per raw STA_VFLOW count. The app renders the same value to
 # one decimal, which fixes the resolution at a tenth, and the one capture taken
