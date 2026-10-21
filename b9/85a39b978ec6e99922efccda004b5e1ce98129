@@ -21,6 +21,8 @@ custom_components/rainpoint/api/utils.py
 custom_components/rainpoint/api/client.py
   s_c5589c86aea981::t_0a0acb8f7e28f8 12,179
   s_c5589c86aea981::t_9c0e498ce2b990 14
+tests/api/test_generic_decoder.py
+  s_c5589c86aea981::t_a30df798eea770 29
 ---
 {
   "schema_version": "authorship/3.0.0",
