@@ -12,7 +12,7 @@ from custom_components.rainpoint.diagnostic_sensors import (
     RainPointLastUpdatedSensor,
     RainPointRSSISensor,
 )
-from tests.helpers import make_sensor_coordinator
+from tests.helpers import make_sensor_coordinator, platform_with_hub, registered_parent_id
 
 _SENTINEL = object()
 
@@ -87,11 +87,13 @@ class TestRainPointRSSISensor:
         sensor = self._make()
         assert sensor.device_info["manufacturer"] == "RainPoint"
 
-    def test_device_info_carries_identity_and_hub_link(self):
+    async def test_device_info_carries_identity_and_hub_link(self, hass):
         """Diagnostic entities resolve to the same device card as the sensors."""
-        info = self._make().device_info
+        entity = self._make()
+        entity.platform, hub_id = platform_with_hub(hass)
+        info = entity.device_info
         assert info["serial_number"] == "200_1"
-        assert info["via_device"] == (DOMAIN, "hub_100_200")
+        assert registered_parent_id(entity.platform, info) == hub_id
 
 
 class TestDiagnosticSensorsAgainstASilentEntry:

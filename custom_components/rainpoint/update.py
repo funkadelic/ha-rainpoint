@@ -206,7 +206,7 @@ class RainPointSubFirmwareUpdate(RainPointFirmwareUpdate):
     @property
     def device_info(self) -> DeviceInfo:
         """Put this entity on the sub-device's own page, not its hub's."""
-        return build_sub_device_info(self._sensor_info)
+        return build_sub_device_info(self._sensor_info, self.platform)
 
     async def _fetch_firmware_info(self) -> dict:
         """Check this sub-device's firmware, addressed by its current sid.

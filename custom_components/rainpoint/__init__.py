@@ -33,7 +33,7 @@ from .const import (
     UNIQUE_ID_PREFIX,
 )
 from .coordinator import ORPHANED_KEY_DEBOUNCE_POLLS, SILENT_DATA_TYPE, first_hub_record, is_hub_record
-from .device import hub_display_name, sub_device_display_name
+from .device import build_hub_device_info, hub_display_name, sub_device_display_name
 from .entity import late_adders
 from .repairs import (
     OrphanedEntitiesRecord,
@@ -599,6 +599,20 @@ def _reconcile_sub_device_parents(hass: HomeAssistant, entry: ConfigEntry, coord
         except Exception as exc:
             _LOGGER.debug("Could not reconcile device registry row %s: %s", getattr(row, "id", None), exc)
             continue
+
+
+def _register_hub_devices(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
+    """Register every real hub's device row ahead of the platforms. Never raises."""
+    for hub in _read_current_hubs(coordinator) or []:
+        try:
+            if is_hub_record(hub):
+                dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, **build_hub_device_info(hub))
+        except Exception as exc:
+            # Type only: the hub's device info carries its MAC, which an error message could echo.
+            _LOGGER.warning(
+                "Could not register a hub device row, so its sub-devices stay unlinked until the next setup: %s",
+                type(exc).__name__,
+            )
 
 
 def _reconcile_sub_device_parents_on_updates(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
@@ -2956,6 +2970,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Set up services
     await async_setup_services(hass)
 
+    # Sub-devices link to their hub by registry id, so the hub rows must exist first.
+    _register_hub_devices(hass, entry, coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True

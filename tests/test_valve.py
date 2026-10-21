@@ -46,6 +46,8 @@ from tests.helpers import (
     make_sensor_entry,
     make_valve_zone_status,
     mock_json_response,
+    platform_with_hub,
+    registered_parent_id,
 )
 from tests.payload_samples import (
     SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1,
@@ -112,13 +114,14 @@ def _make_valve(zone_data=None, hub_online=True, model="HTV245FRF"):
 
 
 class TestValveProperties:
-    def test_device_info_carries_firmware_and_identity(self):
+    async def test_device_info_carries_firmware_and_identity(self, hass):
         """The valve's device page shows firmware and a stable device id."""
         valve = _make_valve()
+        valve.platform, hub_id = platform_with_hub(hass)
         info = valve.device_info
         assert info["sw_version"] == "1.0"
         assert info["serial_number"] == "200_1"
-        assert info["via_device"] == (DOMAIN, "hub_100_200")
+        assert registered_parent_id(valve.platform, info) == hub_id
 
     """Tests for RainPointValveEntity properties."""
 
@@ -2259,12 +2262,13 @@ class TestHicStationValveAvailability:
         valve = _make_station_valve(data={"type": SILENT_DATA_TYPE, "silent_state": "stopped_reporting"})
         assert valve.available is False
 
-    def test_device_info_parents_the_valve_under_its_hub(self):
+    async def test_device_info_parents_the_valve_under_its_hub(self, hass):
         """The valve sits on its sub-device page under the hub."""
         valve = _make_station_valve()
+        valve.platform, hub_id = platform_with_hub(hass)
         info = valve.device_info
         assert info["serial_number"] == "200_3"
-        assert info["via_device"] == (DOMAIN, "hub_100_200")
+        assert registered_parent_id(valve.platform, info) == hub_id
 
 
 class TestHicStationValveAttributes:

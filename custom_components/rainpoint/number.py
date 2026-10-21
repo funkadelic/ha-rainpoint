@@ -319,7 +319,7 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
     @property
     def device_info(self) -> DeviceInfo:
         """Return the sub-device page this setpoint sits under."""
-        return build_sub_device_info(self._sensor_info)
+        return build_sub_device_info(self._sensor_info, self.platform)
 
 
 class RainPointZoneDurationNumber(_RainPointDurationNumberBase):

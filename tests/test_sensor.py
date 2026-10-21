@@ -127,7 +127,14 @@ from custom_components.rainpoint.sensor import (
     _slugify,
     async_setup_entry,
 )
-from tests.helpers import make_coordinator_data, make_hub_info, make_sensor_entry, make_silent_wrapper_hub_record
+from tests.helpers import (
+    make_coordinator_data,
+    make_hub_info,
+    make_sensor_entry,
+    make_silent_wrapper_hub_record,
+    platform_with_hub,
+    registered_parent_id,
+)
 from tests.payload_samples import (
     HWS019WRF_V2_PAYLOAD,
     SAMPLE_HIC801W_IDLE_PAYLOAD,
@@ -872,11 +879,11 @@ class TestSensorBaseProperties:
         assert info["sw_version"] == "1.0.0"
         assert info["serial_number"] == "200_1"
 
-    def test_device_info_via_device(self):
-        """Device info via device."""
+    async def test_device_info_links_to_the_hub(self, hass):
+        """The device row links to the hub row by registry id."""
         sensor = self._make_base()
-        via = sensor.device_info["via_device"]
-        assert via == (DOMAIN, "hub_100_200")
+        sensor.platform, hub_id = platform_with_hub(hass)
+        assert registered_parent_id(sensor.platform, sensor.device_info) == hub_id
 
     def test_extra_state_attributes_rssi(self):
         """Extra state attributes rssi."""

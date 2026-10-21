@@ -21,6 +21,7 @@ from custom_components.rainpoint import (
     _reconcile_sub_device_parents_on_updates,
     _refresh_device_registry_fields,
     _refresh_device_registry_fields_on_updates,
+    _register_hub_devices,
     _remove_stale_generic_entities,
     _remove_withdrawn_probe_entities,
     async_reload_integration,
@@ -4501,3 +4502,71 @@ class TestDeviceRegistryFieldRefresh:
         assert len(matching) == 1
         assert "sw_version" in matching[0]
         assert "name" in matching[0]
+
+
+class TestRegisterHubDevices:
+    """Hub rows are registered before the platforms so sub-devices can link to them by id."""
+
+    @pytest.mark.asyncio
+    async def test_runs_after_the_rekey_and_before_the_platforms(self):
+        """Ahead of the re-key it could create a second row under the new identifier."""
+        hass = _make_hass()
+        entry = _make_entry()
+        order: list[str] = []
+        mock_coordinator = MagicMock()
+        mock_coordinator.async_config_entry_first_refresh = AsyncMock()
+
+        async def _forward_setups(entry_arg, platforms):
+            order.append("forward_setups")
+
+        hass.config_entries.async_forward_entry_setups = AsyncMock(side_effect=_forward_setups)
+
+        with (
+            patch("custom_components.rainpoint.RainPointClient", return_value=MagicMock()),
+            patch("custom_components.rainpoint.coordinator.RainPointCoordinator", return_value=mock_coordinator),
+            patch(
+                "custom_components.rainpoint._complete_hub_identity_rekey_on_updates",
+                side_effect=lambda *a: order.append("rekey"),
+            ),
+            patch(
+                "custom_components.rainpoint._register_hub_devices",
+                side_effect=lambda *a: order.append("register_hubs"),
+            ) as mock_register,
+        ):
+            await async_setup_entry(hass, entry)
+
+        mock_register.assert_called_once_with(hass, entry, mock_coordinator)
+        assert order == ["rekey", "register_hubs", "forward_setups"]
+
+    @pytest.mark.asyncio
+    async def test_registers_real_hubs_only(self, hass):
+        """The Bluetooth wrapper record gets no row, matching the hub entity platforms."""
+        from homeassistant.helpers import device_registry as dr
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+        entry = MockConfigEntry(domain=DOMAIN)
+        entry.add_to_hass(hass)
+        real = {"hid": 100, "mid": 200, "did": "d", "mac": "", "productKey": "pk", "model": "HWG023WBRF-V2"}
+        wrapper = {"hid": 100, "mid": 201, "did": "", "mac": "", "productKey": "", "model": ""}
+        coordinator = SimpleNamespace(data={"hubs": [real, wrapper]})
+
+        _register_hub_devices(hass, entry, coordinator)
+
+        rows = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+        assert [row.identifiers for row in rows] == [{(DOMAIN, "hub_100_200")}]
+
+    def test_one_failing_hub_neither_raises_nor_skips_the_rest(self, caplog):
+        """A registry error is logged and the next hub is still registered."""
+        registry = MagicMock()
+        registry.async_get_or_create.side_effect = [RuntimeError("boom"), MagicMock()]
+        hub = {"did": "d", "productKey": "pk", "model": "m", "hid": 100}
+        coordinator = SimpleNamespace(data={"hubs": [{**hub, "mid": 200}, {**hub, "mid": 201}]})
+
+        with patch("custom_components.rainpoint.dr.async_get", return_value=registry):
+            _register_hub_devices(MagicMock(), _make_entry(), coordinator)
+
+        assert registry.async_get_or_create.call_count == 2
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert warnings == [
+            "Could not register a hub device row, so its sub-devices stay unlinked until the next setup: RuntimeError"
+        ]

@@ -10,10 +10,14 @@ tests that need to assert on the exact JSON body a real client method builds
 rather than on a mocked call.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from homeassistant.helpers import device_registry as dr
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.rainpoint.api import RainPointClient
-from custom_components.rainpoint.const import MODEL_HTV210B
+from custom_components.rainpoint.const import DOMAIN, HUB_IDENTIFIER_PREFIX, MODEL_HTV210B
 from tests.payload_samples import SAMPLE_HTV210B_TLV_PAYLOAD
 
 _SENTINEL = object()
@@ -256,3 +260,19 @@ def htv210b_silent_status(mid=20):
     sub-device stops answering while its hub keeps polling fine.
     """
     return [{"mid": mid, "subDeviceStatus": []}]
+
+
+def platform_with_hub(hass, hid=100, mid=200):
+    """Return (platform stand-in, hub row id) for an entry whose hub row is registered."""
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    hub = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{hid}_{mid}")}
+    )
+    return SimpleNamespace(hass=hass, config_entry=entry), hub.id
+
+
+def registered_parent_id(platform, info):
+    """Register info the way Home Assistant's entity platform does and return its via_device_id."""
+    registry = dr.async_get(platform.hass)
+    return registry.async_get_or_create(config_entry_id=platform.config_entry.entry_id, **info).via_device_id

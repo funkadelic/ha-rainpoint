@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
+from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo, format_mac
 from homeassistant.helpers.entity import Entity
+
+if TYPE_CHECKING:
+    from homeassistant.helpers.entity_platform import EntityPlatform
 
 from .const import DOMAIN, HUB_IDENTIFIER_PREFIX, HUB_UNIQUE_ID_PREFIX
 
@@ -25,6 +31,9 @@ _ZERO_MAC = "00:00:00:00:00:00"
 # administered address, which a real interface can legitimately carry and
 # which stays acceptable.
 _MULTICAST_BIT = 0b1
+
+# Home Assistant 2026.9 replaced the via_device identifier with a via_device_id registry id.
+_VIA_DEVICE_ID_SUPPORTED = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 9)
 
 
 def _identifies_one_hub(mac: str) -> bool:
@@ -70,7 +79,16 @@ def hub_display_name(hub_info: dict) -> str:
     return hub_info.get("name") or "RainPoint Hub"
 
 
-def build_sub_device_info(sensor_info: dict) -> DeviceInfo:
+def _hub_device_id(platform: EntityPlatform | None, identifier: tuple[str, str]) -> str | None:
+    """Return the registry id of this entry's hub row, or None if it is not registered."""
+    if platform is None or platform.config_entry is None:
+        return None
+    registry = dr.async_get(platform.hass)
+    rows = dr.async_entries_for_config_entry(registry, platform.config_entry.entry_id)
+    return next((row.id for row in rows if identifier in row.identifiers), None)
+
+
+def build_sub_device_info(sensor_info: dict, platform: EntityPlatform | None = None) -> DeviceInfo:
     """Return the device registry entry for one sub-device.
 
     Every module that owns sub-device entities routes through here, so the
@@ -118,7 +136,7 @@ def build_sub_device_info(sensor_info: dict) -> DeviceInfo:
     inherited from it, which is how the inline copies drifted in the first
     place.
 
-    The hub link is conditional. via_device is included only when
+    The hub link is conditional. A parent link is included only when
     sensor_info's stamped "hub_paired" field is truthy: the link is to the
     top-level record that actually carries this sub-device, and a record that
     is not a real hub yields a parentless top-level device, because the
@@ -129,13 +147,18 @@ def build_sub_device_info(sensor_info: dict) -> DeviceInfo:
     hub-linked, so a caller that omits the key gets today's behaviour rather
     than a silently orphaned device.
 
-    via_device is omitted rather than passed as None. Both spellings resolve
+    The link names the hub row's registry id, looked up through the entity's
+    platform; async_setup_entry registers hub rows before any platform runs.
+    With no platform or no hub row the link is omitted. Home Assistant before
+    2026.9 is given the via_device identifier instead.
+
+    The link is omitted rather than passed as None. Both spellings resolve
     identically inside Home Assistant's device registry, so this is not a
     correctness distinction; the reason to prefer omission is readability at
     the call site, a key that is never constructed states "this device has no
     parent" more plainly than a key carrying None, and it is what lets a test
     assert by key membership rather than by equality against None, which would
-    pass for either construction. via_device is the first and only
+    pass for either construction. The link is the first and only
     conditionally-constructed key in this function; every other key is always
     present.
     """
@@ -149,7 +172,13 @@ def build_sub_device_info(sensor_info: dict) -> DeviceInfo:
         # hub's, because the sensor key is {hid}_{mid}_{addr}. Both sides of
         # this link read mid through a direct index, so neither can degrade to
         # a spelling the other does not produce.
-        optional["via_device"] = (DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{hid}_{mid}")
+        hub_identifier = (DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{hid}_{mid}")
+        hub_id = _hub_device_id(platform, hub_identifier)
+        if hub_id is not None:
+            if _VIA_DEVICE_ID_SUPPORTED:
+                optional["via_device_id"] = hub_id
+            else:  # pragma: no cover - Home Assistant before 2026.9
+                optional["via_device"] = hub_identifier
     return DeviceInfo(
         identifiers={(DOMAIN, f"{hid}_{mid}_{addr}")},
         name=sub_device_display_name(sensor_info),
@@ -188,7 +217,7 @@ class RainPointHubDevice(Entity):
         Home Assistant resolves by dropping the loser's entities silently.
 
         mid is direct-indexed rather than defaulted, and that is deliberate.
-        The sub-device via_device tuple direct-indexes the same value, so a
+        The sub-device hub link direct-indexes the same value, so a
         placeholder on this side alone would emit a parent identifier no device
         row carries and orphan every sub-device. A hub record with no mid
         raises here instead, which no live poll can reach: the coordinator
@@ -200,53 +229,61 @@ class RainPointHubDevice(Entity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device registry information for this hub.
-
-        The hub's MAC is reported through connections rather than as a
-        serial_number. It used to fill serial_number, which put a MAC address
-        behind a "Serial number:" label on the device page while the MAC
-        diagnostic sensor displayed the identical value one card away. The
-        cloud carries no manufacturer serial for a hub, so no value replaces
-        it and the field is simply absent.
-
-        Only identifiers keys the device registry entry here, and it is
-        unchanged, so an install upgrading into this keeps its device row,
-        its entities and their history. connections is an additional matching
-        key rather than a replacement one: Home Assistant merges a device that
-        another integration registers under the same MAC into this row, which
-        is what the field is for.
-
-        connections is omitted rather than passed empty when the record has no
-        usable mac, following via_device in build_sub_device_info. format_mac
-        normalises to the lowercase colon-separated spelling the registry
-        compares on, so a cloud record's uppercase mac still matches another
-        integration's lowercase one.
-
-        The result is then put through _identifies_one_hub rather than merely
-        tested for truthiness, because format_mac returns its input unchanged
-        for anything it does not recognise. A record carrying "", "   " or
-        "N/A" would otherwise register a connection to that literal string,
-        and every hub whose record carries the same placeholder would share
-        one connection tuple, which is Home Assistant's instruction to merge
-        them all into a single device row. The same is true of the well formed
-        placeholders, the all-zero and broadcast addresses, which is why
-        matching the syntax is not on its own enough to qualify. A junk mac
-        must produce no connection at all, exactly as a missing one does.
-        """
-        optional: dict = {}
-        mac = format_mac(self._hub_info.get("mac") or "")
-        if _identifies_one_hub(mac):
-            optional["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{self._hub_info['hid']}_{self._hub_info['mid']}")},
-            name=hub_display_name(self._hub_info),
-            manufacturer="RainPoint",  # RainPoint is the actual device manufacturer
-            model=self._hub_info.get("model") or "Unknown",
-            sw_version=self._hub_info.get("softVer"),
-            hw_version=self._hub_info.get("hardwareVersion"),
-            **optional,
-        )
+        """Return device registry information for this hub."""
+        return build_hub_device_info(self._hub_info)
 
     @property
     def available(self) -> bool:
         return True  # Hub is always available if config exists
+
+
+def build_hub_device_info(hub_info: dict) -> DeviceInfo:
+    """Return the device registry entry for one hub.
+
+    A function so async_setup_entry can register the hub row before any
+    platform adds a sub-device that links to it.
+
+    The hub's MAC is reported through connections rather than as a
+    serial_number. It used to fill serial_number, which put a MAC address
+    behind a "Serial number:" label on the device page while the MAC
+    diagnostic sensor displayed the identical value one card away. The
+    cloud carries no manufacturer serial for a hub, so no value replaces
+    it and the field is simply absent.
+
+    Only identifiers keys the device registry entry here, and it is
+    unchanged, so an install upgrading into this keeps its device row,
+    its entities and their history. connections is an additional matching
+    key rather than a replacement one: Home Assistant merges a device that
+    another integration registers under the same MAC into this row, which
+    is what the field is for.
+
+    connections is omitted rather than passed empty when the record has no
+    usable mac, following the hub link in build_sub_device_info. format_mac
+    normalises to the lowercase colon-separated spelling the registry
+    compares on, so a cloud record's uppercase mac still matches another
+    integration's lowercase one.
+
+    The result is then put through _identifies_one_hub rather than merely
+    tested for truthiness, because format_mac returns its input unchanged
+    for anything it does not recognise. A record carrying "", "   " or
+    "N/A" would otherwise register a connection to that literal string,
+    and every hub whose record carries the same placeholder would share
+    one connection tuple, which is Home Assistant's instruction to merge
+    them all into a single device row. The same is true of the well formed
+    placeholders, the all-zero and broadcast addresses, which is why
+    matching the syntax is not on its own enough to qualify. A junk mac
+    must produce no connection at all, exactly as a missing one does.
+    """
+    optional: dict = {}
+    mac = format_mac(hub_info.get("mac") or "")
+    if _identifies_one_hub(mac):
+        optional["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"{HUB_IDENTIFIER_PREFIX}{hub_info['hid']}_{hub_info['mid']}")},
+        name=hub_display_name(hub_info),
+        manufacturer="RainPoint",  # RainPoint is the actual device manufacturer
+        model=hub_info.get("model") or "Unknown",
+        sw_version=hub_info.get("softVer"),
+        hw_version=hub_info.get("hardwareVersion"),
+        **optional,
+    )
