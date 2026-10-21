@@ -81,6 +81,11 @@ jobs:
           report_type: test_results
           token: ${{ secrets.CODECOV_TOKEN }}
 
+      # Runs even when pytest fails, so both results report.
+      - name: Type-check with mypy
+        if: ${{ !cancelled() }}
+        run: mypy
+
       # The test-count badge in README.md reads its number from a gist rather
       # than from the repository, so publishing a new count costs no commit and
       # no push to main. Only pushes to main update it, so an open pull request
