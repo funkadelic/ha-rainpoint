@@ -81,11 +81,6 @@ jobs:
           report_type: test_results
           token: ${{ secrets.CODECOV_TOKEN }}
 
-      # Runs even when pytest fails, so both results report.
-      - name: Type-check with mypy
-        if: ${{ !cancelled() }}
-        run: mypy
-
       # The test-count badge in README.md reads its number from a gist rather
       # than from the repository, so publishing a new count costs no commit and
       # no push to main. Only pushes to main update it, so an open pull request
@@ -160,6 +155,11 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      # Last, so a type error never skips the badge or Sonar; still runs when pytest fails.
+      - name: Type-check with mypy
+        if: ${{ !cancelled() }}
+        run: mypy
 
   # The floor declared in hacs.json: Home Assistant 2026.2.0, which runs Python
   # 3.13. Runs the suite only. Coverage, the badge and Sonar all belong to the
