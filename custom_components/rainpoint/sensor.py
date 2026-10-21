@@ -507,6 +507,7 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
     return entities
 
 
+# Not LateEntityAdder: that admits new ids under a known key on any later poll, this freezes a key's set at first emission.
 class _LateSensorEntityAdder:
     """Add a sub-device's entities the first time its key is worth entities.
 
