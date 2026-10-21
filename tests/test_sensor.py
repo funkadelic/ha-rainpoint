@@ -3834,8 +3834,8 @@ class TestEveryDecodableModelIsServed:
     # Empty is the goal; an entry is a known gap, not a licence to add more.
     KNOWN_UNSERVED: ClassVar[frozenset] = frozenset(
         {
-            # Decodes, but builds only the unconditional diagnostics. Not a
-            # one-line fix, and no HTV0540FRF on the account to check against.
+            # Its frame carries no signal record, and nothing confirms its zone
+            # durations behave like the other hubs' run duration.
             MODEL_VALVE_HUB,
         }
     )

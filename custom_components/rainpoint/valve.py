@@ -256,7 +256,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
     @property
     def _zone_data(self) -> dict | None:
         """Return this entity's own zone dict, or None when the key has no reading."""
-        sensors = self.coordinator.data.get("sensors", {})
+        sensors = (self.coordinator.data or {}).get("sensors", {})
         info = sensors.get(self._sensor_key)
         if not info:
             return None
@@ -278,7 +278,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
         controllable against a hub the cloud has already reported as gone is
         the specific lie this check exists to stop.
         """
-        sensors = self.coordinator.data.get("sensors", {})
+        sensors = (self.coordinator.data or {}).get("sensors", {})
         info = sensors.get(self._sensor_key)
         if not info:
             return False
