@@ -1,0 +1,22 @@
+custom_components/rainpoint/__init__.py
+  s_c5589c86aea981::t_2fbd67d5734f86 9,3084
+tests/test_init.py
+  s_c5589c86aea981::t_6f49a7d9a9193f 1532
+  s_c5589c86aea981::t_2fbd67d5734f86 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "33597e3935e595f133d6533a918c9fee38bc0c59",
+  "prompts": {},
+  "sessions": {
+    "s_c5589c86aea981": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f87d70a2-dc17-43db-b91e-a8ea3dc67332",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Norman Yee <155019+funkadelic@users.noreply.github.com>"
+    }
+  }
+}
