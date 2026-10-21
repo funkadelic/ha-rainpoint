@@ -330,7 +330,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
     @property
     def device_info(self) -> DeviceInfo:
         """Return the sub-device page this zone's entities sit under."""
-        return build_sub_device_info(self._sensor_info)
+        return build_sub_device_info(self._sensor_info, self.platform)
 
     # ------------------------------------------------------------------
     # Control
@@ -715,7 +715,7 @@ class RainPointHicStationValveEntity(CoordinatorEntity[RainPointCoordinator], Va
     @property
     def device_info(self) -> DeviceInfo:
         """Return the sub-device page this station's entities sit under."""
-        return build_sub_device_info(self._sensor_info)
+        return build_sub_device_info(self._sensor_info, self.platform)
 
     # ------------------------------------------------------------------
     # Control

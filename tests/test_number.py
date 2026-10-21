@@ -43,6 +43,8 @@ from tests.helpers import (
     make_sensor_entry,
     make_valve_zone_status,
     make_valve_zone_status_open,
+    platform_with_hub,
+    registered_parent_id,
 )
 from tests.payload_samples import (
     SAMPLE_HIC801W_COMMAND_RESPONSE_START_STATION1,
@@ -147,12 +149,13 @@ def _make_number(current_value=10.0, firmware_version="1.0"):
 class TestNumberEntity:
     """Tests for RainPointZoneDurationNumber."""
 
-    def test_device_info_carries_identity_and_hub_link(self):
+    async def test_device_info_carries_identity_and_hub_link(self, hass):
         """The duration entity resolves to the same device card as its valve."""
         number = _make_number()
+        number.platform, hub_id = platform_with_hub(hass)
         info = number.device_info
         assert info["serial_number"] == "200_1"
-        assert info["via_device"] == (DOMAIN, "hub_100_200")
+        assert registered_parent_id(number.platform, info) == hub_id
 
     def test_native_value_returns_current(self):
         """native_value should return _current_value."""
@@ -2037,7 +2040,8 @@ class TestHicStationDurationAttributes:
         number = _make_station_duration()
         assert number.extra_state_attributes["firmware_version"] == "1.0.0"
 
-    def test_device_info_parents_the_setpoint_under_its_hub(self):
+    async def test_device_info_parents_the_setpoint_under_its_hub(self, hass):
         """The setpoint sits on the same device page as the valve it configures."""
         number = _make_station_duration()
-        assert number.device_info["via_device"] == (DOMAIN, "hub_100_200")
+        number.platform, hub_id = platform_with_hub(hass)
+        assert registered_parent_id(number.platform, number.device_info) == hub_id

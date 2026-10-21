@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.helpers import device_registry as dr
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.rainpoint import _register_hub_devices
 from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_VALVE_245
-from custom_components.rainpoint.device import RainPointHubDevice, build_sub_device_info, hub_display_name
-from tests.helpers import VALVE_ZONES_TLV_PAYLOAD
+from custom_components.rainpoint.device import (
+    _VIA_DEVICE_ID_SUPPORTED,
+    RainPointHubDevice,
+    build_sub_device_info,
+    hub_display_name,
+)
+from tests.helpers import VALVE_ZONES_TLV_PAYLOAD, platform_with_hub, registered_parent_id
+
+_LINK_KEYS = {"via_device", "via_device_id"}
 
 
 class TestRainPointHubDevice:
@@ -259,41 +270,68 @@ class TestBuildSubDeviceInfo:
         info = build_sub_device_info(self._info(mid=200, addr=7))
         assert info["serial_number"] == "200_7"
 
-    def test_links_to_the_parent_hub_when_hub_paired(self):
-        """A sub-device carried by a real hub keeps its via_device link."""
-        info = build_sub_device_info(self._info(hid=100, hub_paired=True))
-        assert info["via_device"] == (DOMAIN, "hub_100_200")
+    async def test_links_to_the_parent_hub_when_hub_paired(self, hass):
+        """A sub-device carried by a real hub links to the hub's registry row."""
+        platform, hub_id = platform_with_hub(hass)
+        info = build_sub_device_info(self._info(hid=100, hub_paired=True), platform)
+        assert registered_parent_id(platform, info) == hub_id
 
-    def test_no_via_device_when_not_hub_paired(self):
+    @pytest.mark.skipif(not _VIA_DEVICE_ID_SUPPORTED, reason="Home Assistant before 2026.9 has no via_device_id")
+    async def test_the_link_is_the_registry_id_not_the_deprecated_identifier(self, hass):
+        """The hub is named by device id, so Home Assistant has nothing to deprecate."""
+        platform, hub_id = platform_with_hub(hass)
+        info = build_sub_device_info(self._info(), platform)
+        assert info["via_device_id"] == hub_id
+        assert "via_device" not in info
+
+    def test_no_link_without_a_platform(self):
+        """An entity not yet added has no registry to resolve the hub in."""
+        assert not _LINK_KEYS & build_sub_device_info(self._info()).keys()
+
+    async def test_no_link_when_the_platform_has_no_config_entry(self, hass):
+        """A platform outside a config entry cannot own the hub row."""
+        platform = SimpleNamespace(hass=hass, config_entry=None)
+        assert not _LINK_KEYS & build_sub_device_info(self._info(), platform).keys()
+
+    async def test_no_link_while_the_hub_row_is_unregistered(self, hass):
+        """A hub this entry has not registered yet leaves the device parentless, not broken."""
+        platform, _ = platform_with_hub(hass, mid=999)
+        info = build_sub_device_info(self._info(), platform)
+        assert not _LINK_KEYS & info.keys()
+        assert registered_parent_id(platform, info) is None
+
+    async def test_no_via_device_when_not_hub_paired(self, hass):
         """A sub-device carried by the Bluetooth wrapper record gets no parent.
 
         Both product_key and device_name are populated here to prove the
         builder reads only the stamped hub_paired field and never re-derives
         the verdict from the raw hub fields it supersedes.
         """
+        platform, _ = platform_with_hub(hass)
         info = build_sub_device_info(
             self._info(hub_paired=False, product_key="pk", device_name="dev"),
+            platform,
         )
-        assert "via_device" not in info
+        assert not _LINK_KEYS & info.keys()
 
-    def test_via_device_present_when_hub_paired_key_absent(self):
+    async def test_via_device_present_when_hub_paired_key_absent(self, hass):
         """A sensor_info with no hub_paired key defaults to hub-linked."""
+        platform, hub_id = platform_with_hub(hass)
         info = self._info()
         del info["hub_paired"]
-        result = build_sub_device_info(info)
-        assert result["via_device"] == (DOMAIN, "hub_100_200")
+        result = build_sub_device_info(info, platform)
+        assert registered_parent_id(platform, result) == hub_id
 
-    def test_only_via_device_differs_between_the_two_polarities(self):
+    async def test_only_via_device_differs_between_the_two_polarities(self, hass):
         """Parenting is the only thing that changes; every other field agrees."""
-        linked = build_sub_device_info(self._info(hub_paired=True))
-        parentless = build_sub_device_info(self._info(hub_paired=False))
-        linked_without_parent = dict(linked)
-        linked_without_parent.pop("via_device", None)
-        parentless_without_parent = dict(parentless)
-        parentless_without_parent.pop("via_device", None)
+        platform, _ = platform_with_hub(hass)
+        linked = build_sub_device_info(self._info(hub_paired=True), platform)
+        parentless = build_sub_device_info(self._info(hub_paired=False), platform)
+        linked_without_parent = {k: v for k, v in linked.items() if k not in _LINK_KEYS}
+        parentless_without_parent = {k: v for k, v in parentless.items() if k not in _LINK_KEYS}
         assert linked_without_parent == parentless_without_parent
-        assert "via_device" not in parentless
-        assert "via_device" in linked
+        assert not _LINK_KEYS & parentless.keys()
+        assert _LINK_KEYS & linked.keys()
 
     def test_identifiers_are_unchanged(self):
         """The registry key keeps its existing shape so no migration is needed."""
@@ -394,11 +432,13 @@ class TestSubDeviceParentingRealTimeline:
         """The shared captured TLV zone fixture, rather than a second copy."""
         return VALVE_ZONES_TLV_PAYLOAD
 
-    async def _build(self) -> dict:
-        """Construct, first-refresh, then run valve.async_setup_entry over a
-        two-record poll: a real hub at mid 200 and the Bluetooth wrapper
-        record at mid 201, each carrying one valve sub-device at addr 1.
-        Returns captured entities keyed by their _sensor_key."""
+    async def _build(self, hass, entry=None, *, register_hubs=True) -> tuple[dict, MockConfigEntry]:
+        """Construct, first-refresh, register the hub rows, then run
+        valve.async_setup_entry over a two-record poll: a real hub at mid 200
+        and the Bluetooth wrapper record at mid 201, each carrying one valve
+        sub-device at addr 1. Each entity is then registered the way Home
+        Assistant's entity platform does it. Returns the device rows keyed by
+        _sensor_key, plus the entry."""
         from custom_components.rainpoint.coordinator import RainPointCoordinator
         from custom_components.rainpoint.valve import async_setup_entry
 
@@ -431,36 +471,80 @@ class TestSubDeviceParentingRealTimeline:
             {"mid": 201, "subDeviceStatus": [{"id": "D01", "value": zone_value, "time": 1785420002247}]},
         ]
 
-        entry = MagicMock()
-        entry.entry_id = "e1"
-        entry.data = {CONF_HIDS: [100]}
-        entry.options = {}
-        hass = MagicMock()
-        hass.data = {DOMAIN: {"e1": {}}}
+        if entry is None:
+            entry = MockConfigEntry(domain=DOMAIN, data={CONF_HIDS: [100]}, options={})
+            entry.add_to_hass(hass)
+        hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {}
 
         coordinator = RainPointCoordinator(hass, client, entry)
-        hass.data[DOMAIN]["e1"]["coordinator"] = coordinator
+        hass.data[DOMAIN][entry.entry_id]["coordinator"] = coordinator
 
         await coordinator.async_config_entry_first_refresh()
+        if register_hubs:
+            _register_hub_devices(hass, entry, coordinator)
 
         captured = []
         async_add_entities = MagicMock(side_effect=lambda ents, **kw: captured.extend(ents))
         await async_setup_entry(hass, entry, async_add_entities)
 
-        return {entity._sensor_key: entity for entity in captured}
+        return self._register(hass, entry, captured), entry
+
+    @staticmethod
+    def _register(hass, entry, entities) -> dict:
+        """Attach the platform and register each entity's device, as EntityPlatform does."""
+        registry = dr.async_get(hass)
+        platform = SimpleNamespace(hass=hass, config_entry=entry)
+        rows = {}
+        for entity in entities:
+            entity.platform = platform
+            rows[entity._sensor_key] = registry.async_get_or_create(config_entry_id=entry.entry_id, **entity.device_info)
+        return rows
+
+    @staticmethod
+    def _hub_row(hass, entry, mid=200):
+        rows = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+        return next(row for row in rows if (DOMAIN, f"hub_100_{mid}") in row.identifiers)
 
     @pytest.mark.asyncio
-    async def test_hub_paired_child_keeps_its_link_and_wrapper_child_has_none(self):
-        """Parenting asserted on the entity the valve platform's own
-        async_setup_entry built off a real coordinator refresh, not on a
-        DeviceInfo assembled by the test."""
-        by_key = await self._build()
+    async def test_hub_paired_child_keeps_its_link_and_wrapper_child_has_none(self, hass, caplog):
+        """Parenting asserted on the device rows the registry built from the
+        entities the valve platform's own async_setup_entry produced off a real
+        coordinator refresh, not on a DeviceInfo assembled by the test."""
+        rows, entry = await self._build(hass)
 
-        assert by_key["100_200_1"].device_info["via_device"] == (DOMAIN, "hub_100_200")
-        assert "via_device" not in by_key["100_201_1"].device_info
+        assert rows["100_200_1"].via_device_id == self._hub_row(hass, entry).id
+        assert rows["100_201_1"].via_device_id is None
+        assert not [record for record in caplog.records if "via_device" in record.getMessage()]
 
     @pytest.mark.asyncio
-    async def test_parenting_is_a_per_record_property_not_a_per_home_one(self):
+    async def test_a_hub_registered_late_is_linked_on_the_next_setup(self, hass, caplog):
+        """With no hub row yet the child is added parentless rather than
+        dropped; once the hub row exists, the next setup links the same row."""
+        rows, entry = await self._build(hass, register_hubs=False)
+        child = rows["100_200_1"]
+        assert child.via_device_id is None
+
+        hub = RainPointHubDevice({"hid": 100, "mid": 200, "name": "Hub A"})
+        hub_row = dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, **hub.device_info)
+        relinked = await self._build(hass, entry)
+        assert relinked[0]["100_200_1"].id == child.id
+        assert relinked[0]["100_200_1"].via_device_id == hub_row.id
+        assert not [record for record in caplog.records if "via_device" in record.getMessage()]
+
+    @pytest.mark.asyncio
+    async def test_an_existing_install_keeps_its_rows_and_link(self, hass):
+        """A registry already holding the hub and its linked child is reused
+        as is: same row ids, same link, no second device."""
+        first, entry = await self._build(hass)
+        hub_id = self._hub_row(hass, entry).id
+        second = await self._build(hass, entry)
+
+        assert second[0]["100_200_1"].id == first["100_200_1"].id
+        assert second[0]["100_200_1"].via_device_id == hub_id
+        assert self._hub_row(hass, entry).id == hub_id
+
+    @pytest.mark.asyncio
+    async def test_parenting_is_a_per_record_property_not_a_per_home_one(self, hass):
         """Guards the assumption-delta decision this plan is built on: within
         a single home, the parenting outcome is a property of the top-level
         record that carries a sub-device, not of the home itself. Asserts
@@ -477,16 +561,16 @@ class TestSubDeviceParentingRealTimeline:
         sibling assertions on hub identity live in tests/test_hub_identity.py;
         this test stays scoped to sub-device parenting.
         """
-        by_key = await self._build()
+        rows, _ = await self._build(hass)
 
-        linked = by_key["100_200_1"].device_info
-        parentless = by_key["100_201_1"].device_info
+        linked = rows["100_200_1"]
+        parentless = rows["100_201_1"]
 
-        assert "via_device" in linked
-        assert "via_device" not in parentless
+        assert linked.via_device_id is not None
+        assert parentless.via_device_id is None
 
-        linked_id = next(t for t in linked["identifiers"] if t[0] == DOMAIN)
-        parentless_id = next(t for t in parentless["identifiers"] if t[0] == DOMAIN)
+        linked_id = next(t for t in linked.identifiers if t[0] == DOMAIN)
+        parentless_id = next(t for t in parentless.identifiers if t[0] == DOMAIN)
         linked_hid, linked_mid, linked_addr = linked_id[1].split("_")
         parentless_hid, parentless_mid, parentless_addr = parentless_id[1].split("_")
         assert linked_hid == parentless_hid
@@ -497,7 +581,7 @@ class TestSubDeviceParentingRealTimeline:
 class TestHubAndSubDeviceReadMidTheSameWay:
     """The two sides of the hub link must be structurally unable to disagree."""
 
-    def test_both_sides_direct_index_mid(self):
+    async def test_both_sides_direct_index_mid(self, hass):
         """A hub record with no mid raises here rather than emitting a parent
         identifier that no device row carries.
 
@@ -507,15 +591,18 @@ class TestHubAndSubDeviceReadMidTheSameWay:
         build_sub_device_info kept its direct index, every sub-device would
         point at a parent that does not exist and Home Assistant would orphan
         the lot. Both sides read mid the same way instead, so the sub-device's
-        via_device value below is exactly what a hub built from the same record
-        would identify itself as.
+        hub link below resolves to exactly the row a hub built from the same
+        record registers.
         """
         hub_info = {"hid": 100, "name": "Hub", "model": "HTV0540FRF"}
         with pytest.raises(KeyError):
             RainPointHubDevice(hub_info)
 
-        sub_info = {"hid": 100, "mid": 200, "addr": 1, "sub_name": "Valve", "model": MODEL_VALVE_245}
-        assert build_sub_device_info(sub_info)["via_device"] == (DOMAIN, "hub_100_200")
-
+        entry = MockConfigEntry(domain=DOMAIN)
+        entry.add_to_hass(hass)
         hub = RainPointHubDevice({**hub_info, "mid": 200})
-        assert (DOMAIN, "hub_100_200") in hub.device_info["identifiers"]
+        hub_row = dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, **hub.device_info)
+
+        platform = SimpleNamespace(hass=hass, config_entry=entry)
+        sub_info = {"hid": 100, "mid": 200, "addr": 1, "sub_name": "Valve", "model": MODEL_VALVE_245}
+        assert registered_parent_id(platform, build_sub_device_info(sub_info, platform)) == hub_row.id

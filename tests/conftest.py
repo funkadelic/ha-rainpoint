@@ -304,6 +304,8 @@ class _HABaseEntity:
     """Lightweight stand-in for homeassistant.helpers.entity.Entity."""
 
     _attr_should_poll = False
+    # Entity's own class default; Home Assistant sets it when the entity is added.
+    platform = None
     _attr_entity_category = None
     _attr_unique_id = None
     _attr_name = None

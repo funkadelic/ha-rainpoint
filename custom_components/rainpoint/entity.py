@@ -384,4 +384,4 @@ class RainPointSubDeviceEntity(CoordinatorEntity[RainPointCoordinator]):
     @property
     def device_info(self) -> DeviceInfo:
         """Represent each subDevice as its own HA device, child of hub."""
-        return build_sub_device_info(self._sensor_info)
+        return build_sub_device_info(self._sensor_info, self.platform)

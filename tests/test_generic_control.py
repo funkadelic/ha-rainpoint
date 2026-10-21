@@ -44,7 +44,7 @@ from custom_components.rainpoint.generic_control import (
 )
 from custom_components.rainpoint.number import RainPointZoneDurationNumber, build_generic_duration_entities
 from custom_components.rainpoint.valve import RainPointValveEntity
-from tests.helpers import make_coordinator_data, make_sensor_entry
+from tests.helpers import make_coordinator_data, make_sensor_entry, platform_with_hub, registered_parent_id
 from tests.payload_samples import SAMPLE_HTV245_ASCII_PAYLOAD
 
 ANCHOR_MODEL = "HTV103FRF"
@@ -893,15 +893,16 @@ class TestRainPointGenericValveConstruction:
         names = sorted(e._attr_name for e in entities)
         assert names == ["Zone 1 CTL_WATER (unverified)", "Zone 2 CTL_WATER (unverified)"]
 
-    def test_device_info_matches_the_sub_device_card(self):
+    async def test_device_info_matches_the_sub_device_card(self, hass):
         entity, _, _ = _build_anchor_valve()
+        entity.platform, hub_id = platform_with_hub(hass)
 
         info = entity.device_info
         assert info["identifiers"] == {(DOMAIN, "100_200_1")}
         assert info["manufacturer"] == "RainPoint"
         assert info["model"] == ANCHOR_MODEL
         assert info["serial_number"] == "200_1"
-        assert info["via_device"] == (DOMAIN, "hub_100_200")
+        assert registered_parent_id(entity.platform, info) == hub_id
 
     def test_icon_is_the_control_marker_icon(self):
         entity, _, _ = _build_anchor_valve()

@@ -700,7 +700,7 @@ class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
 
     @property
     def device_info(self) -> DeviceInfo:
-        return build_sub_device_info(self._sensor_info)
+        return build_sub_device_info(self._sensor_info, self.platform)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
