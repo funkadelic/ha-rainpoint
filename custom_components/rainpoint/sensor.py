@@ -105,6 +105,7 @@ def _slugify(text: str) -> str:
 
 
 def _make_display_hub_entities(coordinator, key, info, base_slug):
+    """One sensor per key in the display hub's decoded readings, so the set follows the payload."""
     data = info.get("data", {})
     readings = data.get("readings", {}) if data else {}
     return [DisplayHubReadingSensor(coordinator, key, info, base_slug, reading_key) for reading_key in readings]
@@ -120,6 +121,7 @@ def _make_diagnostic_entities(coordinator, key, info, base_slug):
 
 
 def _make_moisture_simple_entities(coordinator, key, info, base_slug):
+    """Moisture plus the generic diagnostic set."""
     return [
         RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True),
         *_make_diagnostic_entities(coordinator, key, info, base_slug),
@@ -127,6 +129,7 @@ def _make_moisture_simple_entities(coordinator, key, info, base_slug):
 
 
 def _make_moisture_full_entities(coordinator, key, info, base_slug):
+    """Moisture, temperature and illuminance plus the generic diagnostic set."""
     return [
         RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=False),
         RainPointTemperatureSensor(coordinator, key, info, base_slug),
@@ -136,6 +139,7 @@ def _make_moisture_full_entities(coordinator, key, info, base_slug):
 
 
 def _make_rain_entities(coordinator, key, info, base_slug):
+    """The four rainfall windows, without the generic diagnostic set."""
     rain_specs = (
         ("rain_last_hour_mm", "rain last hour"),
         ("rain_last_24h_mm", "rain last 24h"),
@@ -146,6 +150,7 @@ def _make_rain_entities(coordinator, key, info, base_slug):
 
 
 def _make_temphum_entities(coordinator, key, info, base_slug):
+    """Temperature and humidity, each current, high and low, without the generic diagnostic set."""
     return [
         RainPointTempHumCurrentSensor(coordinator, key, info, base_slug),
         RainPointTempHumHighSensor(coordinator, key, info, base_slug),
@@ -184,6 +189,7 @@ def _make_flowmeter_entities(coordinator, key, info, base_slug):
 
 
 def _make_co2_entities(coordinator, key, info, base_slug):
+    """CO2 with its low and high, plus temperature and humidity, without the generic diagnostic set."""
     return [
         RainPointCO2Sensor(coordinator, key, info, base_slug),
         RainPointCO2LowSensor(coordinator, key, info, base_slug),
@@ -208,6 +214,7 @@ def _make_pool_entities(coordinator, key, info, base_slug):
 
 
 def _make_pool_plus_entities(coordinator, key, info, base_slug):
+    """Pool and air temperature, each current, high and low, plus air humidity."""
     return [
         RainPointPoolPlusPoolCurrentTempSensor(coordinator, key, info, base_slug),
         RainPointPoolPlusPoolHighTempSensor(coordinator, key, info, base_slug),
@@ -376,6 +383,7 @@ def _make_hic801w_entities(coordinator, key, info, base_slug):
 
 
 def _make_hcs_moisture_only_entities(coordinator, key, info, base_slug):
+    """Moisture alone, without the generic diagnostic set the simple moisture model gets."""
     return [RainPointMoisturePercentSensor(coordinator, key, info, base_slug, simple=True)]
 
 
@@ -669,6 +677,7 @@ class RainPointSensorBase(RainPointSubDeviceEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        """Signal, battery and report time from the decoded record, plus sub-device attributes and a fallback last_updated."""
         data = self._sensor_data or {}
         attrs: dict[str, Any] = {}
         if "rssi_dbm" in data:
@@ -843,6 +852,7 @@ class DisplayHubReadingSensor(RainPointSensorBase):
 
     @property
     def native_value(self):
+        """The reading as a float, or the raw value when it is not numeric."""
         data = self._sensor_data
         if not data:
             return None
@@ -856,6 +866,8 @@ class DisplayHubReadingSensor(RainPointSensorBase):
 
 # HCS014ARF (Temperature/Humidity)
 class RainPointTempHumCurrentSensor(RainPointSensorBase):
+    """Current temperature, from the decoded tempcurrent field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -872,6 +884,8 @@ class RainPointTempHumCurrentSensor(RainPointSensorBase):
 
 
 class RainPointTempHumHighSensor(RainPointSensorBase):
+    """High temperature, from the decoded temphigh field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -888,6 +902,8 @@ class RainPointTempHumHighSensor(RainPointSensorBase):
 
 
 class RainPointTempHumLowSensor(RainPointSensorBase):
+    """Low temperature, from the decoded templow field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -904,6 +920,8 @@ class RainPointTempHumLowSensor(RainPointSensorBase):
 
 
 class RainPointTempHumHumidityCurrentSensor(RainPointSensorBase):
+    """Current relative humidity, from the decoded humiditycurrent field."""
+
     _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -920,6 +938,8 @@ class RainPointTempHumHumidityCurrentSensor(RainPointSensorBase):
 
 
 class RainPointTempHumHumidityHighSensor(RainPointSensorBase):
+    """High relative humidity, from the decoded humidityhigh field."""
+
     _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -936,6 +956,8 @@ class RainPointTempHumHumidityHighSensor(RainPointSensorBase):
 
 
 class RainPointTempHumHumidityLowSensor(RainPointSensorBase):
+    """Low relative humidity, from the decoded humiditylow field."""
+
     _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1114,6 +1136,8 @@ class RainPointFlowTotalSensor(RainPointSensorBase):
 
 # HCS0530THO (CO2/Temp/Humidity)
 class RainPointCO2Sensor(RainPointSensorBase):
+    """Current CO2 concentration, from the decoded co2 field."""
+
     _attr_device_class = SensorDeviceClass.CO2
     _attr_native_unit_of_measurement = "ppm"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1130,6 +1154,8 @@ class RainPointCO2Sensor(RainPointSensorBase):
 
 
 class RainPointCO2LowSensor(RainPointSensorBase):
+    """Low CO2 concentration, from the decoded co2low field."""
+
     _attr_device_class = SensorDeviceClass.CO2
     _attr_native_unit_of_measurement = "ppm"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1146,6 +1172,8 @@ class RainPointCO2LowSensor(RainPointSensorBase):
 
 
 class RainPointCO2HighSensor(RainPointSensorBase):
+    """High CO2 concentration, from the decoded co2high field."""
+
     _attr_device_class = SensorDeviceClass.CO2
     _attr_native_unit_of_measurement = "ppm"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1162,6 +1190,8 @@ class RainPointCO2HighSensor(RainPointSensorBase):
 
 
 class RainPointCO2TempSensor(RainPointSensorBase):
+    """The CO2 monitor's temperature, from the decoded co2temp field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1178,6 +1208,8 @@ class RainPointCO2TempSensor(RainPointSensorBase):
 
 
 class RainPointCO2HumiditySensor(RainPointSensorBase):
+    """The CO2 monitor's relative humidity, from the decoded co2humidity field."""
+
     _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1195,6 +1227,8 @@ class RainPointCO2HumiditySensor(RainPointSensorBase):
 
 # HCS0528ARF (Pool/Temperature)
 class RainPointPoolCurrentTempSensor(RainPointSensorBase):
+    """Pool water temperature, from the decoded tempcurrent field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1212,6 +1246,8 @@ class RainPointPoolCurrentTempSensor(RainPointSensorBase):
 
 # HCS015ARF+ (Pool + Ambient temp/humidity)
 class RainPointPoolPlusPoolCurrentTempSensor(RainPointSensorBase):
+    """Pool water temperature, from the decoded pool_tempcurrent field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1228,6 +1264,8 @@ class RainPointPoolPlusPoolCurrentTempSensor(RainPointSensorBase):
 
 
 class RainPointPoolPlusPoolHighTempSensor(RainPointSensorBase):
+    """Pool high temperature, from the decoded pool_temphigh field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1244,6 +1282,8 @@ class RainPointPoolPlusPoolHighTempSensor(RainPointSensorBase):
 
 
 class RainPointPoolPlusPoolLowTempSensor(RainPointSensorBase):
+    """Pool low temperature, from the decoded pool_templow field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1260,6 +1300,8 @@ class RainPointPoolPlusPoolLowTempSensor(RainPointSensorBase):
 
 
 class RainPointPoolPlusAmbientCurrentTempSensor(RainPointSensorBase):
+    """Air temperature at the unit, from the decoded ambient_tempcurrent field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1276,6 +1318,8 @@ class RainPointPoolPlusAmbientCurrentTempSensor(RainPointSensorBase):
 
 
 class RainPointPoolPlusAmbientHighTempSensor(RainPointSensorBase):
+    """Air high temperature, from the decoded ambient_temphigh field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1292,6 +1336,8 @@ class RainPointPoolPlusAmbientHighTempSensor(RainPointSensorBase):
 
 
 class RainPointPoolPlusAmbientLowTempSensor(RainPointSensorBase):
+    """Air low temperature, from the decoded ambient_templow field."""
+
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = "°C"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1308,6 +1354,8 @@ class RainPointPoolPlusAmbientLowTempSensor(RainPointSensorBase):
 
 
 class RainPointPoolPlusHumidityCurrentSensor(RainPointSensorBase):
+    """Relative humidity at the unit, from the decoded humidity_current field."""
+
     _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1324,6 +1372,8 @@ class RainPointPoolPlusHumidityCurrentSensor(RainPointSensorBase):
 
 
 class RainPointPoolPlusHumidityHighSensor(RainPointSensorBase):
+    """High relative humidity, from the decoded humidity_high field."""
+
     _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1340,6 +1390,8 @@ class RainPointPoolPlusHumidityHighSensor(RainPointSensorBase):
 
 
 class RainPointPoolPlusHumidityLowSensor(RainPointSensorBase):
+    """Low relative humidity, from the decoded humidity_low field."""
+
     _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
