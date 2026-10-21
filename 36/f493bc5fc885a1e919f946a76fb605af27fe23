@@ -1,0 +1,19 @@
+.github/workflows/lint-pr-title.yml
+  s_c5589c86aea981::t_4dc45500c92fcf 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "36f493bc5fc885a1e919f946a76fb605af27fe23",
+  "prompts": {},
+  "sessions": {
+    "s_c5589c86aea981": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f87d70a2-dc17-43db-b91e-a8ea3dc67332",
+        "model": "unknown"
+      },
+      "human_author": "Norman Yee <155019+funkadelic@users.noreply.github.com>"
+    }
+  }
+}
