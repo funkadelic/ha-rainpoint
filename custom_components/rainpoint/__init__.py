@@ -1775,7 +1775,7 @@ def _sync_orphaned_entity_issues_on_updates(hass: HomeAssistant, entry: ConfigEn
         On the departed-key shape the snapshot is the scope, with no
         re-derivation to intersect against, because a card restored from the
         issue registry has no ledger behind it to re-derive from. That is what
-        the persisted card trades: Phase 21's guarantee was "no row this
+        the persisted card trades: the original guarantee was "no row this
         session's adders did not emit", and it is now "no row this card did not
         name". Both are exact-pair lists and neither reasons about what a
         unique_id looks like; the second is simply anchored to what the user was
