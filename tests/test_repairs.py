@@ -454,7 +454,7 @@ class TestWatchdogConstructorAndInternals:
 
 
 class TestSanitizePlaceholder:
-    """T-15-05: cloud-supplied text must not carry Markdown/HTML into a Repairs card."""
+    """Cloud-supplied text must not carry Markdown/HTML into a Repairs card."""
 
     def test_neutralises_markdown_link(self):
         """Bracketed link syntax must not survive into the card."""
@@ -782,7 +782,7 @@ class TestRainPointSilentDeviceIssues:
         assert issue_id == silent_device_issue_id(100, 200, 1)
 
     def test_omitting_a_previously_active_record_still_clears_it(self, issue_mocks):
-        """A device that disappears from subDevices entirely (D-03) is not in the
+        """A device that disappears from subDevices entirely is not in the
         next poll's records at all; its issue must still be cleared."""
         create, delete = issue_mocks
         manager = RainPointSilentDeviceIssues(MagicMock())
@@ -1044,7 +1044,7 @@ class TestRainPointHubConnectivityIssues:
         assert create.call_args.kwargs["translation_placeholders"]["model"] == "unknown"
 
     def test_hub_name_reaches_the_placeholder_sanitized(self, issue_mocks):
-        """T-16-04: a hostile hub name must not survive into the card.
+        """A hostile hub name must not survive into the card.
 
         Feeds inputs an attacker would actually construct, not an
         already-clean specimen: a separator embedded inside a bare host

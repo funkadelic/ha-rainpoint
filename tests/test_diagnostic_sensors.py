@@ -95,7 +95,7 @@ class TestRainPointRSSISensor:
 
 
 class TestDiagnosticSensorsAgainstASilentEntry:
-    """D-11/D-12: a diagnostic sensor bound to a key that turns silent must
+    """A diagnostic sensor bound to a key that turns silent must
     return None from native_value and read as unavailable, not raise."""
 
     def _make(self, cls):

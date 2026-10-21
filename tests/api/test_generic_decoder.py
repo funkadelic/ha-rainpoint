@@ -752,7 +752,7 @@ class TestDecodeGenericAscii:
         }
 
     def test_empty_hex_body_error_wording_is_untouched(self):
-        """The hex branch's own error message is not touched by this phase."""
+        """The hex branch's own error message is not touched by the ASCII-framing branch."""
         assert decode_generic("11#")["error"] == "empty or odd-length hex body"
 
 

@@ -955,7 +955,7 @@ class TestSensorBaseProperties:
         assert "last_updated" not in attrs
 
     def test_extra_state_attributes_does_not_raise_for_a_silent_entry(self):
-        """D-11/D-12: a battery/RSSI/generic sensor already bound to a key that
+        """A battery/RSSI/generic sensor already bound to a key that
         turns silent must not raise while reading its attributes, and the
         legacy last_updated fallback (raw_status.get("time")) must be omitted
         since raw_status is {}."""
@@ -2400,7 +2400,7 @@ class TestTheStubsFailedPollContract:
         entity shows its last reading as available through a poll failure
         rather than flipping to unavailable. This test records that current
         behaviour; whether it is right is a separate backlog question, and
-        this phase deliberately does not change it.
+        it is deliberately left unchanged.
         """
         coordinator, hass, entry, client = self._build()
         await coordinator.async_config_entry_first_refresh()
@@ -2470,7 +2470,7 @@ class TestRunDurationUniqueIdDisjointness:
         ]
         assert len(all_ids) == len(set(all_ids)), "a unique_id was offered by more than one entity"
 
-        # Written explicitly, not derived, so a rename of any pre-phase id
+        # Written explicitly, not derived, so a rename of any pre-existing id
         # (in particular the number-platform duration and the sensor-platform
         # water-used id) fails this assertion rather than silently passing.
         expected = {
@@ -3000,7 +3000,7 @@ class TestSilentSensorDispatch:
     async def test_htv210b_silent_entry_yields_not_reporting_not_the_factory_pair(self):
         """MODEL_HTV210B has a factory (_make_htv210b_entities), but a silent entry
         must never reach it: the silent dispatch runs first, so no battery/RSSI
-        pair, no zone sensors, and no Raw Payload sensor appear (D-02/D-14)."""
+        pair, no zone sensors, and no Raw Payload sensor appear."""
         captured = await self._setup(self._silent_entry(MODEL_HTV210B))
 
         assert len(captured) == 1
@@ -3042,7 +3042,7 @@ class TestNotReportingSensor:
     def test_always_available(self):
         """The absence of a reading is exactly what this entity reports, so it
         is never itself unavailable, unlike every other entity bound to the
-        same silent sensor key (D-02/D-12)."""
+        same silent sensor key."""
         sensor = _make_not_reporting_sensor(None)
         assert sensor.available is True
 
@@ -3100,7 +3100,7 @@ class TestNotReportingSensor:
 
     def test_report_url_carries_model_and_no_status_marker(self):
         """report_url is the same one-click report path an unsupported payload gets,
-        except the payload field states plainly there is no payload (D-15)."""
+        except the payload field states plainly there is no payload."""
         sensor = _make_not_reporting_sensor({"type": SILENT_DATA_TYPE, "silent_state": "never_reported"})
         attrs = sensor.extra_state_attributes
 

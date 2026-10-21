@@ -1345,9 +1345,8 @@ class TestCatalogEligibilityIsPinned:
 
 
 class TestSilentEntryRejectedByGenericSensorGate:
-    """D-10: a status-less sub-device must never become eligible for the opt-in
-    generic sensor path, closing the T-15-01 mitigation with a test against the
-    real gate function rather than a proxy.
+    """A status-less sub-device must never become eligible for the opt-in
+    generic sensor path, checked against the real gate function rather than a proxy.
     """
 
     # HWG004WRF/34 is a real catalog variant the sensor gate admits (see
@@ -1803,7 +1802,7 @@ class TestCountGenericEligibleDevices:
         assert count_generic_eligible_devices(data) == (0, 0)
 
     def test_a_silent_device_is_not_counted_as_unsupported(self):
-        """A device with no status at all is not an unsupported model (D-10/D-12);
+        """A device with no status at all is not an unsupported model;
         counting it here would misstate the toggle's real effect in the options copy."""
         from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 

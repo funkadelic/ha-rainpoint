@@ -642,7 +642,7 @@ class TestCoordinatorUpdate:
         assert "not+in+the+product+catalog" in url
 
     def test_build_new_device_issue_url_payload_note_fills_primary_payload(self):
-        """payload_note lands in primary_payload verbatim, not left blank (D-15)."""
+        """payload_note lands in primary_payload verbatim, not left blank."""
         url = _coord_module._build_new_device_issue_url("HTV210B", None, 360, payload_note=_coord_module.NO_STATUS_PAYLOAD_MARKER)
 
         primary_payload_value = url.split("primary_payload=")[1].split("&")[0]
@@ -1766,11 +1766,11 @@ class TestCoordinatorEdgeBranches:
 
 
 class TestSilentSubDeviceEndToEnd:
-    """Full-pipeline coverage for the status-less sub-device path (D-04..D-11)."""
+    """Full-pipeline coverage for the status-less sub-device path."""
 
     @pytest.mark.asyncio
     async def test_one_and_two_omitted_polls_yield_no_entry(self):
-        """An addr omitted from an arrived status for fewer than 3 polls contributes nothing (D-04/D-07)."""
+        """An addr omitted from an arrived status for fewer than 3 polls contributes nothing."""
         coord, client = _make_coord()
         client.get_devices_by_hid.return_value = [_make_hub(mid=200)]
         client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
@@ -1784,7 +1784,7 @@ class TestSilentSubDeviceEndToEnd:
 
     @pytest.mark.asyncio
     async def test_third_consecutive_omission_yields_silent_entry(self):
-        """The third consecutive arrived-but-omitted poll surfaces a "silent" entry (D-07/D-09)."""
+        """The third consecutive arrived-but-omitted poll surfaces a "silent" entry."""
         coord, client = _make_coord()
         client.get_devices_by_hid.return_value = [_make_hub(mid=200)]
         client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
@@ -1801,7 +1801,7 @@ class TestSilentSubDeviceEndToEnd:
 
     @pytest.mark.asyncio
     async def test_a_reading_resets_the_counter_so_a_later_omission_restarts_at_one(self):
-        """Any reading for an addr resets its debounce counter to zero (D-07)."""
+        """Any reading for an addr resets its debounce counter to zero."""
         coord, client = _make_coord()
         client.get_devices_by_hid.return_value = [_make_hub(mid=200)]
         client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": []}]
@@ -1823,7 +1823,7 @@ class TestSilentSubDeviceEndToEnd:
     async def test_hub_status_absent_yields_no_silent_entries_while_sibling_hub_decodes(self):
         """A hub whose status could not be obtained contributes zero silent entries
         for any of its children, while a sibling hub in the same poll still decodes
-        its healthy children normally (D-06)."""
+        its healthy children normally."""
         coord, client = _make_coord()
         outage_hub = _make_hub(mid=301, model=MODEL_MOISTURE_SIMPLE)
         healthy_hub = _make_hub(mid=302, model=MODEL_MOISTURE_SIMPLE)
@@ -1895,7 +1895,7 @@ class TestSilentSubDeviceEndToEnd:
     async def test_mid_omitted_from_successful_multi_status_is_filled_arrived_empty(self):
         """A mid the multipleDeviceStatus response simply did not mention is filled
         with an arrived-but-empty status, not treated as an outage, so its
-        children still reach the silent debounce (D-05)."""
+        children still reach the silent debounce."""
         coord, client = _make_coord()
         client.get_devices_by_hid.return_value = [_make_hub(mid=301)]
         # The response array is non-empty (truthy) but never mentions mid 301.
@@ -1908,18 +1908,18 @@ class TestSilentSubDeviceEndToEnd:
         assert result["sensors"]["100_301_1"]["data"]["type"] == SILENT_DATA_TYPE
 
     def test_silent_data_type_is_not_unknown(self):
-        """Trust boundary (D-10): the two type strings must never collapse into one.
+        """Trust boundary: the two type strings must never collapse into one.
 
         type == "unknown" is the admission ticket for build_generic_entities and
         generic_control._build_generic_entities; if "silent" ever equalled
         "unknown" a device the cloud reports nothing about would become eligible
-        for a generic valve entity. The full gate-call assertion lands in plan 15-03.
+        for a generic valve entity. The gate-call assertions live in the generic entity and control tests.
         """
         assert SILENT_DATA_TYPE != "unknown"
 
     def test_silent_entry_raw_status_empty_dict_does_not_raise_sub_device_attributes(self):
         """A silent entry's raw_status={} is tolerated by the shared attribute
-        reader; only the firmware attribute is returned, without raising (D-11)."""
+        reader; only the firmware attribute is returned, without raising."""
         coordinator = types.SimpleNamespace(
             data={
                 "sensors": {
@@ -2013,7 +2013,7 @@ class TestBuildSilentSubdevice:
 
     def test_notify_unknown_model_not_called_on_silent_path(self):
         """The silent path bypasses _decode_one_subdevice entirely, so the
-        unknown-model notification is never reachable from it (D-17)."""
+        unknown-model notification is never reachable from it."""
         coord, _ = _make_coord()
         hub, sub = self._hub_and_sub()
         coord._silent_poll_counts["100_200_1"] = 2
@@ -2286,7 +2286,7 @@ class TestHubConnectivityIntegration:
 
 
 class TestPruneSilentState:
-    """Direct-call tests for _prune_silent_state (T-15-03)."""
+    """Direct-call tests for _prune_silent_state."""
 
     def test_drops_counter_for_a_device_no_longer_listed(self):
         """A device that leaves the hub must not keep a debounce counter alive."""
@@ -2785,7 +2785,7 @@ class TestSyncSilentDeviceIssues:
         coord._silent_issues.async_sync.assert_called_once_with([], unreachable_ids=set())
 
     def test_does_not_call_notify_unknown_model(self):
-        """D-17: the silent path adds no call site for the unknown-model notification."""
+        """The silent path adds no call site for the unknown-model notification."""
         coord, _ = _make_coord()
         decoded_sensors = {
             "100_200_1": {
@@ -4660,8 +4660,8 @@ class TestHubConnectivityDebounceRealTimeline:
     refresh sequence with an injected clock advanced between the steps,
     asserting between every one, rather than proving the debounce from an
     injected already-past-threshold coordinator.data snapshot -- the specific
-    pattern that shipped two critical defects under 100% branch coverage in a
-    prior phase.
+    pattern that shipped two critical defects under 100% branch coverage in an
+    earlier change.
 
     Both window-start paths are driven here: the cloud-timestamp one, where
     the window is measured from the moment the cloud itself recorded the
@@ -5005,7 +5005,7 @@ class TestHubConnectivityDebounceRealTimeline:
 
 class TestPollOnlyHubConnectivityParity:
     """With the push channel down and no pushed edge ever applied,
-    hub connectivity behaves exactly as Phase 16 shipped it. This class
+    hub connectivity behaves exactly as it did before the push channel existed. This class
     does not duplicate TestHubConnectivityDebounceRealTimeline,
     TestHubConnectivityIntegration or TestHubConnectivitySurvivesDeviceListOutage
     (the per-behaviour proofs); it is the composed proof that the
@@ -6464,7 +6464,7 @@ class TestApplyHubPushUpdateOrderingGuard:
     (None, absent, or unparseable) always falls through to apply."""
 
     def test_strictly_older_pushed_edge_is_dropped_without_merging_or_notifying(self):
-        """The example from the plan: held changed_at is the 18:37:42
+        """Held changed_at is the 18:37:42
         reconnect moment; the 18:17:30 disconnect frame arrives late."""
         hub = _push_hub()
         coord = _seed_push_coord(hub, sensors={})
@@ -6568,7 +6568,7 @@ class TestGuardHubConnectivityOrder:
     the latest polled value regardless of whether the guard fired."""
 
     def test_older_poll_is_held_off_by_a_newer_held_record(self):
-        """The example from the plan: held changed_at is the 18:37:42
+        """Held changed_at is the 18:37:42
         reconnect moment and stays connected; the 18:17:30 disconnect poll
         arrives late and only state_raw comes from it."""
         polled = _coord_module._read_hub_connectivity(
@@ -6661,7 +6661,7 @@ class TestGuardHubConnectivityOrder:
         assert result is polled
 
     def test_absent_status_wins_whole_even_over_a_newer_held_record(self):
-        """The unknown record from an absent status wins whole -- Phase 16's
+        """The unknown record from an absent status wins whole -- the
         absent-never-disconnected rule is not something this guard may
         quietly change."""
         polled = _coord_module._read_hub_connectivity(_coord_module._absent_status())
@@ -7168,8 +7168,8 @@ class TestPollTailHasNoSuspensionPoint:
 
 class TestHubPushTracerEndToEnd:
     """Drives construct -> first refresh -> platform setup -> one push
-    dispatch in real order, proving the pushed disconnect reaches the Phase
-    16 connectivity entity with no intervening poll."""
+    dispatch in real order, proving the pushed disconnect reaches the hub
+    connectivity entity with no intervening poll."""
 
     @pytest.mark.asyncio
     async def test_pushed_disconnect_reaches_the_connectivity_entity_with_no_poll_between(self):
@@ -7459,7 +7459,7 @@ class TestMalformedCloudRecordsAreSkipped:
         client.get_devices_by_hid.return_value = [hub]
         client.get_multiple_device_status.return_value = status
 
-    # -- Task 1: the decode walk tolerates a malformed record ---------------
+    # -- The decode walk tolerates a malformed record ---------------
 
     @pytest.mark.asyncio
     async def test_a_sub_device_entry_missing_addr_is_skipped_others_decode(self):
@@ -7585,7 +7585,7 @@ class TestMalformedCloudRecordsAreSkipped:
         assert set(result["sensors"]) == {"100_200_1"}
         assert result["sensors"]["100_200_1"]["data"]["type"] == "moisture_simple"
 
-    # -- Task 2: the WARNING gate --------------------------------------------
+    # -- The WARNING gate --------------------------------------------
 
     @pytest.mark.asyncio
     async def test_gate_fires_exactly_one_warning_at_the_degradation_edge(self, caplog):
@@ -7721,7 +7721,7 @@ class TestMalformedCloudRecordsAreSkipped:
         assert "100_200" in message
         assert "0 unusable status record(s)" in message
 
-    # -- Task 3: the debounce consequence is pinned --------------------------
+    # -- The debounce consequence is pinned --------------------------
 
     @pytest.mark.asyncio
     async def test_a_key_that_turns_malformed_advances_the_orphan_counter_and_ages_out(self):

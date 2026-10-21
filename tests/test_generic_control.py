@@ -630,7 +630,7 @@ class TestCountGenericControlEligibleDevices:
         assert count_generic_control_eligible_devices(data) == (1, 1)
 
     def test_a_silent_device_is_not_counted_as_unsupported(self):
-        """A device with no status at all is not an unsupported model (D-10/D-12);
+        """A device with no status at all is not an unsupported model;
         counting it here would misstate the control toggle's real effect in the options copy."""
         data = {"sensors": {"a": {"model": ANCHOR_MODEL, "model_code": ANCHOR_MODEL_CODE, "data": {"type": SILENT_DATA_TYPE}}}}
 
@@ -689,10 +689,10 @@ class TestBuildGenericValveEntities:
         assert isinstance(entities[0], RainPointGenericValve)
 
     def test_silent_entry_yields_no_valve_even_for_the_anchor_the_gate_otherwise_admits(self):
-        """D-10: proves the type-string gate rejects a silent entry rather than an
+        """Proves the type-string gate rejects a silent entry rather than an
         unrelated gate failing first, since ANCHOR_MODEL/ANCHOR_MODEL_CODE is the
         real catalog variant the control gate otherwise passes (see
-        test_fully_eligible_anchor_yields_one_valve above). Closes T-15-01.
+        test_fully_eligible_anchor_yields_one_valve above).
         """
         sensor_info = _anchor_sensor_info()
         sensor_info["data"] = {"type": SILENT_DATA_TYPE}
@@ -768,7 +768,7 @@ class TestGenericControlGateUnaffectedByHubConnectivity:
         assert len(disconnected) == 1
 
     def test_admitted_valve_still_reads_its_run_state_on_a_disconnected_hub(self):
-        """The read-back path this control entity relies on is untouched by this phase."""
+        """The read-back path this control entity relies on is unchanged for a disconnected hub."""
         entities = self._entities(hub_connectivity={200: {"state": "disconnected", "changed_at": None, "state_raw": None}})
         valve = entities[0]
         assert valve.is_closed is False  # the default anchor fields (see _run_state_field(1, 1)) decode to open
@@ -804,10 +804,10 @@ class TestBuildGenericSwitchEntities:
         assert isinstance(entities[0], RainPointGenericSwitch)
 
     def test_silent_entry_yields_no_switch_even_for_the_anchor_the_gate_otherwise_admits(self):
-        """D-10: SOCKET_MODEL/SOCKET_MODEL_CODE is the real catalog variant the
+        """SOCKET_MODEL/SOCKET_MODEL_CODE is the real catalog variant the
         control gate otherwise passes for a switch (see
         test_fully_eligible_anchor_yields_one_switch above); this proves the
-        type-string gate, not an unrelated one, rejects a silent entry. Closes T-15-01.
+        type-string gate, not an unrelated one, rejects a silent entry.
         """
         sensor_info = _socket_sensor_info()
         sensor_info["data"] = {"type": SILENT_DATA_TYPE}
@@ -1370,7 +1370,7 @@ class TestGenericValveConfiguredDuration:
 
 
 # ---------------------------------------------------------------------------
-# Timeline: a device discovered after setup (CONFIRM-01)
+# Timeline: a device discovered after setup
 # ---------------------------------------------------------------------------
 
 
@@ -1714,7 +1714,7 @@ class TestRainPointGenericSwitchConstruction:
 
 
 # ---------------------------------------------------------------------------
-# Provenance attributes (PROV-01)
+# Provenance attributes
 # ---------------------------------------------------------------------------
 
 
@@ -1792,7 +1792,7 @@ class TestControlProvenanceAttributes:
 
 
 # ---------------------------------------------------------------------------
-# New-controls notice (CONFIRM-01)
+# New-controls notice
 # ---------------------------------------------------------------------------
 
 
@@ -2197,7 +2197,7 @@ class TestGenericControlCommandFailedRepairIssue:
 
         model comes from the cloud catalog and the error text can quote a
         cloud response body, so both get the same treatment the not-reporting
-        card's placeholders get (T-15-05).
+        card's placeholders get.
         """
         with patch.object(generic_control_module.ir, "async_create_issue") as create:
             generic_control_module._create_command_failed_issue(
@@ -2316,7 +2316,7 @@ class TestGenericControlCommandFailedRepairIssue:
 
 
 # ---------------------------------------------------------------------------
-# Phase-wide trust boundary re-verification (Task 3): every hand-written
+# Trust boundary re-verification: every hand-written
 # model is refused across every catalog variant, the trusted entity sets are
 # unaffected by the control option, and the generic and hand-written
 # unique_id namespaces cannot collide.
