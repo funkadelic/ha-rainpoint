@@ -97,8 +97,8 @@ _FLOW_LITRES_PER_COUNT = 0.1
 
 _LITRES_PER_US_GALLON = 3.785411784
 
-# HTV145FRF STA_LASTUSAGE, assumed to share the HCS008FRF's unit. Inferred from one
-# app reading (219 counts for a run shown as 5.8 gal), so good to about 1%.
+# HTV145FRF STA_LASTUSAGE, sharing the HCS008FRF's unit. Confirmed against two app
+# readings (219 counts as 5.8 gal, 3111 counts as 82.2 gal), so good to about 0.1%.
 _SINGLE_OUTLET_GALLONS_PER_COUNT = _FLOW_LITRES_PER_COUNT / _LITRES_PER_US_GALLON
 
 # Year offset for the packed timestamps carried by the 4-byte 0xB7 records.
