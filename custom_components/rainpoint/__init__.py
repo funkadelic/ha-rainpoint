@@ -608,7 +608,11 @@ def _register_hub_devices(hass: HomeAssistant, entry: ConfigEntry, coordinator) 
             if is_hub_record(hub):
                 dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, **build_hub_device_info(hub))
         except Exception as exc:
-            _LOGGER.debug("Could not register hub device row: %s", exc)
+            # Type only: the hub's device info carries its MAC, which an error message could echo.
+            _LOGGER.warning(
+                "Could not register a hub device row, so its sub-devices stay unlinked until the next setup: %s",
+                type(exc).__name__,
+            )
 
 
 def _reconcile_sub_device_parents_on_updates(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:

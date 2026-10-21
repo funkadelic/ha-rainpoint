@@ -4555,7 +4555,7 @@ class TestRegisterHubDevices:
         rows = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
         assert [row.identifiers for row in rows] == [{(DOMAIN, "hub_100_200")}]
 
-    def test_one_failing_hub_neither_raises_nor_skips_the_rest(self):
+    def test_one_failing_hub_neither_raises_nor_skips_the_rest(self, caplog):
         """A registry error is logged and the next hub is still registered."""
         registry = MagicMock()
         registry.async_get_or_create.side_effect = [RuntimeError("boom"), MagicMock()]
@@ -4566,3 +4566,7 @@ class TestRegisterHubDevices:
             _register_hub_devices(MagicMock(), _make_entry(), coordinator)
 
         assert registry.async_get_or_create.call_count == 2
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert warnings == [
+            "Could not register a hub device row, so its sub-devices stay unlinked until the next setup: RuntimeError"
+        ]
