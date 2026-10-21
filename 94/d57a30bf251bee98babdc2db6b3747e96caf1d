@@ -1,0 +1,21 @@
+custom_components/rainpoint/sensor.py
+  s_c5589c86aea981::t_92db717eefe375 109,125,133,218,862,876-877,895,913,930-931,949,967,1146-1147,1165,1183,1200-1201,1218-1219,1237-1238,1256-1257,1275,1293,1310-1311,1329,1347,1364-1365,1383,1401
+  s_c5589c86aea981::t_bd15fb3f999f77 143,154,193,392,894,912,948,966,1164,1182,1274,1292,1328,1346,1382,1400
+  s_c5589c86aea981::t_27528f9ae40238 687
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "94d57a30bf251bee98babdc2db6b3747e96caf1d",
+  "prompts": {},
+  "sessions": {
+    "s_c5589c86aea981": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f87d70a2-dc17-43db-b91e-a8ea3dc67332",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Norman Yee <155019+funkadelic@users.noreply.github.com>"
+    }
+  }
+}
