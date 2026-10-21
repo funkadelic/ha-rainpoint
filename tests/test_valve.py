@@ -1192,6 +1192,13 @@ class TestValveZoneDataEdges:
         valve._sensor_key = "missing"
         assert valve.available is False
 
+    def test_empty_coordinator_data_reads_as_no_reading(self):
+        """A None coordinator.data yields no zone and an unavailable valve rather than raising."""
+        valve = _make_valve()
+        valve.coordinator.data = None
+        assert valve._zone_data is None
+        assert valve.available is False
+
 
 class TestValveEntitiesAppearWithinTheSession:
     """A valve reporting no zones at setup still gains them later.
