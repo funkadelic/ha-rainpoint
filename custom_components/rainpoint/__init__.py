@@ -1,7 +1,8 @@
 import logging
 import re
 from collections.abc import Collection, Mapping
-from typing import Any, Literal
+from collections.abc import Set as AbstractSet
+from typing import Any, Literal, cast
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -1061,7 +1062,7 @@ def _build_leftover_row_pairs(
         try:
             candidate_key = _domain_sensor_key(row)
             if candidate_key in candidate_keys:
-                key_by_device_id[row.id] = candidate_key
+                key_by_device_id[row.id] = cast(str, candidate_key)
         except Exception as exc:
             _LOGGER.debug("Could not read identifiers on device row %s: %s", getattr(row, "id", None), exc)
 
@@ -2117,7 +2118,7 @@ def _take_doomed_rows(registry, rows, doomed) -> tuple[int, set[tuple[str, str]]
             registry.async_remove(row.entity_id)
             removed += 1
         except Exception as exc:
-            failed.add(row_key)
+            failed.add(cast(tuple[str, str], row_key))
             _LOGGER.debug("Failed to remove orphaned entity %s: %s", getattr(row, "entity_id", None), exc)
     return removed, failed
 
@@ -2261,6 +2262,8 @@ def _remove_orphaned_key_rows(
         return 0
 
     doomed = frozenset(offered_pairs or ())
+    ledger_pairs: AbstractSet[tuple[str, str]]
+    resolved: list
     if leftover_shape:
         # `resolved` is empty on purpose and is what leaves the forget loop
         # below a no-op: not one of these pairs is in any adder's bookkeeping,
@@ -3080,7 +3083,8 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         DOMAIN,
         "reload",
         reload_service,
-        schema=vol.Schema({vol.Optional("entry_id"): vol.All(cv.string, vol.Length(min=1))}),
+        # HA 2026.10 types schemas as probatio; voluptuous stays for the HA 2026.2 floor.
+        schema=vol.Schema({vol.Optional("entry_id"): vol.All(cv.string, vol.Length(min=1))}),  # type: ignore[arg-type]
         supports_response=SupportsResponse.OPTIONAL,
     )
 

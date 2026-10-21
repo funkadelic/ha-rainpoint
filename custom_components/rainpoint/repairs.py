@@ -68,7 +68,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_time_interval
 
@@ -122,7 +122,7 @@ class RainPointPushWatchdog:
         self._dead_since: float | None = None
         # Dedup flag so the issue fires once per dead->alive transition.
         self._issue_active = False
-        self._cancel_timer = None
+        self._cancel_timer: CALLBACK_TYPE | None = None
 
     @callback
     def start(self) -> None:
@@ -1221,7 +1221,7 @@ class RainPointOrphanedEntityIssues:
         # Everything the registry is asked to render, assembled before the
         # dedup rather than after it, because the dedup's question is whether
         # any of it has moved since this card was last published.
-        published = {
+        published: dict[str, Any] = {
             "translation_key": LEFTOVER_ENTITIES_TRANSLATION_KEY if record.leftover else ORPHANED_ENTITIES_ISSUE_ID_PREFIX,
             "data": data,
             # The threat, stated where the values are: Home Assistant renders
@@ -1564,7 +1564,7 @@ class RainPointOrphanedEntitiesRepairFlow(RepairsFlow):
         self._offered_pairs = _snapshot_offered_pairs(issue, leftover_shape=self._leftover_shape)
         return self.async_show_form(
             step_id="confirm",
-            data_schema=vol.Schema({}),
+            data_schema=vol.Schema({}),  # type: ignore[arg-type]
             description_placeholders=self._description_placeholders(issue),
         )
 

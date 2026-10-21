@@ -28,7 +28,7 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 import paho.mqtt.client as paho_mqtt
 
@@ -1128,7 +1128,7 @@ class RainPointMqttClient:
                 # CancelledError is expected and absorbed here. But if
                 # async_disconnect itself is being cancelled, we must not
                 # swallow that -- re-raise so our own cancellation propagates.
-                if asyncio.current_task().cancelling() > 0:
+                if cast(asyncio.Task, asyncio.current_task()).cancelling() > 0:
                     raise
             except Exception:
                 _LOGGER.exception("RainPoint MQTT supervisor task raised during teardown")

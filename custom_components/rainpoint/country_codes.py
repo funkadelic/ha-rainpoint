@@ -14,6 +14,8 @@ print(chr(10).join(f'    \"{r}\": \"{phonenumbers.country_code_for_region(r)}\",
 for r in sorted(phonenumbers.SUPPORTED_REGIONS) if re.fullmatch(r'[A-Z]{2}', r)))"
 """
 
+from collections.abc import Iterable
+
 # ISO 3166-1 alpha-2 -> E.164 phone country (dial) code.
 # Generated from libphonenumber; see the module docstring to regenerate.
 COUNTRY_TO_PHONE_CODE = {
@@ -279,7 +281,7 @@ def get_supported_countries(valid_iso_codes=None) -> list[str]:
     choice that would fail validation. When ``valid_iso_codes`` is None the full
     table is returned unfiltered.
     """
-    codes = COUNTRY_TO_PHONE_CODE.keys()
+    codes: Iterable[str] = COUNTRY_TO_PHONE_CODE.keys()
     if valid_iso_codes is not None:
         codes = [iso for iso in codes if iso in valid_iso_codes]
     return sorted(codes)
