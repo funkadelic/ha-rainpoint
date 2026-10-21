@@ -4,6 +4,22 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.25.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.0...v1.25.1) (2026-10-21)
 
+### What's new
+
+**Hubs and their devices stay grouped**
+
+Each valve, sensor and timer stays listed under its hub on the device page after Home Assistant 2027.8, which drops the older linking method this integration used. Nothing changes on your side, and no device is re-created.
+
+**Other fixes**
+
+The automation editor now shows the RainPoint reload action's response as optional rather than required.
+
+The HTV145FRF water usage conversion now matches a second, two-hour run (82.2 gal in the RainPoint app) to the app's rounding.
+
+### Thanks
+
+Thanks to **@AutomagicWorks** for the second HTV145FRF calibration run.
+
 
 ### Fixed
 
@@ -35,7 +51,7 @@ A diagnostics download for a multi-zone valve now keeps its last 10 distinct sta
 
 ### Thanks
 
-Thanks to **@bigk1999** for the HTV145FRF capture, the matching RainPoint app reading, and the patch, which made this release's water usage sensor possible.
+Thanks to **@AutomagicWorks** for the HTV145FRF capture, the matching RainPoint app reading, and the patch, which made this release's water usage sensor possible.
 
 
 ### Added
