@@ -1,0 +1,40 @@
+custom_components/rainpoint/api/mqtt.py
+  s_c5589c86aea981::t_0a0acb8f7e28f8 31,1131
+custom_components/rainpoint/__init__.py
+  s_c5589c86aea981::t_610704b41add83 3087
+  s_c5589c86aea981::t_9ea8f5e05dc675 4-5,1065,2121,2265-2266,3086
+custom_components/rainpoint/repairs.py
+  s_c5589c86aea981::t_0ffdeddff71bfb 71,125,1224,1567
+custom_components/rainpoint/country_codes.py
+  s_c5589c86aea981::t_17a6dde5a41bd2 17-18,284
+custom_components/rainpoint/coordinator.py
+  s_c5589c86aea981::t_49f78f50b98d12 7,749-750,998,2036
+  s_c5589c86aea981::t_1504aac45615b5 297-298
+  s_c5589c86aea981::t_d4f8fcf3f683fa 811
+custom_components/rainpoint/api/generic_decoder.py
+  s_c5589c86aea981::t_14b52bd34ddba7 17,233,394,426
+custom_components/rainpoint/api/decoders.py
+  s_c5589c86aea981::t_1ea64ec82948db 11,1513,1542,1565,1588,1611,1634,1657,1681,1717
+custom_components/rainpoint/api/utils.py
+  s_c5589c86aea981::t_14b52bd34ddba7 10
+  s_c5589c86aea981::t_fc11509db3ce45 390,426,463,511
+custom_components/rainpoint/api/client.py
+  s_c5589c86aea981::t_0a0acb8f7e28f8 12,179
+  s_c5589c86aea981::t_9c0e498ce2b990 14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b985a39b978ec6e99922efccda004b5e1ce98129",
+  "prompts": {},
+  "sessions": {
+    "s_c5589c86aea981": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f87d70a2-dc17-43db-b91e-a8ea3dc67332",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Norman Yee <155019+funkadelic@users.noreply.github.com>"
+    }
+  }
+}

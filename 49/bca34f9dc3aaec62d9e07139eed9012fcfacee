@@ -1,0 +1,47 @@
+tests/api/test_generic_decoder.py
+  s_c5589c86aea981::t_a62b1fdd510692 755
+tests/test_repairs.py
+  s_c5589c86aea981::t_a62b1fdd510692 457,785,1047
+tests/test_generic_entities.py
+  s_c5589c86aea981::t_a62b1fdd510692 1348-1349,1805
+tests/test_number.py
+  s_c5589c86aea981::t_a62b1fdd510692 563
+tests/test_hub_identity.py
+  s_c5589c86aea981::t_a62b1fdd510692 3
+tests/test_valve.py
+  s_c5589c86aea981::t_a62b1fdd510692 163,817
+tests/api/test_utils.py
+  s_c5589c86aea981::t_a62b1fdd510692 622
+tests/test_coordinator.py
+  s_c5589c86aea981::t_a62b1fdd510692 645,1769,1773,1787,1804,1826,1898,1911,1916,1922,2016,2289,2788,4663-4664,5008,6467,6571,6664,7171-7172,7462,7588,7724
+tests/test_migration.py
+  s_c5589c86aea981::t_a62b1fdd510692 99
+tests/test_sensor.py
+  s_c5589c86aea981::t_a62b1fdd510692 958,2403,2473,3003,3045,3103
+tests/test_generic_control.py
+  s_c5589c86aea981::t_a62b1fdd510692 633,692,695,771,807,810,1373,1717,1795,2200,2319
+tests/test_hub_entities.py
+  s_c5589c86aea981::t_a62b1fdd510692 1137
+tests/test_entity.py
+  s_c5589c86aea981::t_a62b1fdd510692 126,286
+tests/test_diagnostic_sensors.py
+  s_c5589c86aea981::t_a62b1fdd510692 98
+tests/api/test_trust.py
+  s_c5589c86aea981::t_a62b1fdd510692 191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "49bca34f9dc3aaec62d9e07139eed9012fcfacee",
+  "prompts": {},
+  "sessions": {
+    "s_c5589c86aea981": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f87d70a2-dc17-43db-b91e-a8ea3dc67332",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Norman Yee <155019+funkadelic@users.noreply.github.com>"
+    }
+  }
+}
