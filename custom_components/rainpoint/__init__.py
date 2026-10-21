@@ -6,7 +6,7 @@ from typing import Any, Literal
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_RESTORED
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, SupportsResponse, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -3081,7 +3081,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         "reload",
         reload_service,
         schema=vol.Schema({vol.Optional("entry_id"): vol.All(cv.string, vol.Length(min=1))}),
-        supports_response=True,
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
 

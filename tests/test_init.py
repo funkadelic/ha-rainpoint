@@ -8,6 +8,7 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.core import SupportsResponse
 from homeassistant.helpers import issue_registry as ir
 
 from custom_components.rainpoint import (
@@ -1528,7 +1529,7 @@ class TestReloadService:
         args, kwargs = hass.services.async_register.call_args
         assert args[0] == DOMAIN
         assert args[1] == "reload"
-        assert kwargs["supports_response"] is True
+        assert kwargs["supports_response"] is SupportsResponse.OPTIONAL
 
     @pytest.mark.asyncio
     async def test_reload_service_no_entry_id_no_entries_errors(self):
