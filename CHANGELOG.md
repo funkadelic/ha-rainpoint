@@ -2,6 +2,41 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.25.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.0...v1.25.1) (2026-10-21)
+
+### What's new
+
+**Hubs and their devices stay grouped**
+
+Each valve, sensor and timer stays listed under its hub on the device page after Home Assistant 2027.8, which drops the older linking method this integration used. Nothing changes on your side, and no device is re-created.
+
+**Other fixes**
+
+The automation editor now shows the RainPoint reload action's response as optional rather than required.
+
+The HTV145FRF water usage conversion now matches a second, two-hour run (82.2 gal in the RainPoint app) to the app's rounding.
+
+### Thanks
+
+Thanks to **@AutomagicWorks** for the second HTV145FRF calibration run.
+
+
+### Fixed
+
+* correct the reload action's response flag and add mypy to CI ([#295](https://github.com/funkadelic/ha-rainpoint/issues/295)) ([3b97cee](https://github.com/funkadelic/ha-rainpoint/commit/3b97cee7cac6be5e9087df8dc0ac4332d4ab15c1))
+* keep sub-devices linked to their hub after Home Assistant 2027.8 ([#297](https://github.com/funkadelic/ha-rainpoint/issues/297)) ([83faab1](https://github.com/funkadelic/ha-rainpoint/commit/83faab17e5398f6b7503d4fc7d8d7efaf8d3d1a2))
+
+
+### Changed
+
+* guard valve reads and document the sensor platform ([#296](https://github.com/funkadelic/ha-rainpoint/issues/296)) ([0394c85](https://github.com/funkadelic/ha-rainpoint/commit/0394c85ef187d0dd2cfeb8d0823b833b62d8c4ef))
+
+
+### Other Changes
+
+* lint PR titles on pull_request instead of pull_request_target ([#299](https://github.com/funkadelic/ha-rainpoint/issues/299)) ([6dad743](https://github.com/funkadelic/ha-rainpoint/commit/6dad7435993706da1b40cb1e468c2a2d7780f90d))
+* note the second HTV145FRF water usage calibration point ([#294](https://github.com/funkadelic/ha-rainpoint/issues/294)) ([01a30bd](https://github.com/funkadelic/ha-rainpoint/commit/01a30bdba32fd4d9d20bce5cb29420d575c47798))
+
 ## [1.25.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.24.2...v1.25.0) (2026-10-20)
 
 ### What's new
@@ -16,7 +51,7 @@ A diagnostics download for a multi-zone valve now keeps its last 10 distinct sta
 
 ### Thanks
 
-Thanks to **@bigk1999** for the HTV145FRF capture, the matching RainPoint app reading, and the patch, which made this release's water usage sensor possible.
+Thanks to **@AutomagicWorks** for the HTV145FRF capture, the matching RainPoint app reading, and the patch, which made this release's water usage sensor possible.
 
 
 ### Added
