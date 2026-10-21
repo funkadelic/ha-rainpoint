@@ -4,7 +4,7 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from collections.abc import Set as AbstractSet
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
@@ -744,10 +744,10 @@ def _guard_hub_connectivity_order(polled: dict, prior: dict | None) -> dict:
     """
     prior_moment = _changed_at_datetime(prior)
     polled_moment = _changed_at_datetime(polled)
-    if prior_moment is not None and polled_moment is not None and polled_moment < prior_moment:
+    if prior is not None and prior_moment is not None and polled_moment is not None and polled_moment < prior_moment:
         return {
-            "state": cast(dict, prior)["state"],
-            "changed_at": cast(dict, prior)["changed_at"],
+            "state": prior["state"],
+            "changed_at": prior["changed_at"],
             "state_raw": polled.get("state_raw"),
         }
     return polled
@@ -808,7 +808,7 @@ def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int
     """
     if model == MODEL_DISPLAY_HUB:
         return decode_hws019wrf_v2(raw_value)
-    decoder_func = DECODER_REGISTRY.get(cast(str, model))  # a None model just misses
+    decoder_func = DECODER_REGISTRY.get(model) if model is not None else None
     if decoder_func:
         return decoder_func(raw_value)
     # No per-model decoder: fall back to a model-agnostic structural decode so
