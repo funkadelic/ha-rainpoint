@@ -619,7 +619,7 @@ class TestSpliceHubBroadcastParamFieldPreservation:
 
     Proven against param shapes no observed hub has produced -- five fields
     with non-empty trailing fields, and fields carrying non-ASCII code
-    points -- which is the phase's own success criterion.
+    points -- which is the point of the test.
     """
 
     def test_five_field_param_preserves_every_other_index(self):

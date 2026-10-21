@@ -156,6 +156,11 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+      # Last, so a type error never skips the badge or Sonar; still runs when pytest fails.
+      - name: Type-check with mypy
+        if: ${{ !cancelled() }}
+        run: mypy
+
   # The floor declared in hacs.json: Home Assistant 2026.2.0, which runs Python
   # 3.13. Runs the suite only. Coverage, the badge and Sonar all belong to the
   # job above, so they report once rather than racing each other.

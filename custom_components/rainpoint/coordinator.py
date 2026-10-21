@@ -294,7 +294,8 @@ def _format_generic_fields(generic: dict | None) -> str:
     error key: a hex parse failure also carries error, and rendering that
     would change the shape of every hex bug report.
     """
-    fields = (generic or {}).get("fields") or []
+    generic = generic or {}
+    fields = generic.get("fields") or []
     lines = []
     if is_ascii_declined(generic):
         lines.append(f"Decoder: {generic.get('error', '')}")
@@ -743,7 +744,7 @@ def _guard_hub_connectivity_order(polled: dict, prior: dict | None) -> dict:
     """
     prior_moment = _changed_at_datetime(prior)
     polled_moment = _changed_at_datetime(polled)
-    if prior_moment is not None and polled_moment is not None and polled_moment < prior_moment:
+    if prior is not None and prior_moment is not None and polled_moment is not None and polled_moment < prior_moment:
         return {
             "state": prior["state"],
             "changed_at": prior["changed_at"],
@@ -807,7 +808,7 @@ def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int
     """
     if model == MODEL_DISPLAY_HUB:
         return decode_hws019wrf_v2(raw_value)
-    decoder_func = DECODER_REGISTRY.get(model)
+    decoder_func = DECODER_REGISTRY.get(model) if model is not None else None
     if decoder_func:
         return decoder_func(raw_value)
     # No per-model decoder: fall back to a model-agnostic structural decode so
@@ -994,7 +995,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         self._entry = entry
         self._hids = entry.data.get(CONF_HIDS, [])
         self._time_source = time_source
-        self._notified_unknown_models: set[tuple[str | None, int | None]] = set()
+        self._notified_unknown_models: set[tuple[str | None, int | str | None]] = set()
         # Unlike the poll-counted windows below, a push writes this too: both
         # paths run through _decode_one_subdevice. Safe because it feeds no verdict.
         self._payload_history: dict[str, deque[dict]] = {}
@@ -2032,6 +2033,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         addr_map = _sub_devices_by_addr(hub)
 
         decoded_sensors: dict[str, dict] = {}
+        sensor_entry: dict | None
         for addr, sub in addr_map.items():
             sensor_key = _sensor_key(hub["hid"], mid, addr)
             s = status_by_addr.get(addr)

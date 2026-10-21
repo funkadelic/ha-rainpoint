@@ -1134,7 +1134,7 @@ class TestEveryHubUniqueIdCarriesTheMid:
         )
 
     def test_two_hubs_in_one_home_share_no_id(self):
-        """The defect this phase exists to fix, asserted directly.
+        """The duplicate-id defect, asserted directly.
 
         Both hubs carry the same hid, so before the re-key every one of these
         pairs was equal and Home Assistant dropped the second hub's entities.

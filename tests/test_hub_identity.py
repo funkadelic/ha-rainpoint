@@ -1,6 +1,6 @@
 """Hub identity as a contract: two hubs in one home, and the shape that keeps them apart.
 
-The defect this phase fixes is that a second real hub in one home produced
+The defect these tests guard against is that a second real hub in one home produced
 duplicate unique ids, which Home Assistant resolves by dropping the loser's
 entities. Nothing in the migration's own tests exercises that, because the
 migration is about installs that already exist. This module supplies the other

@@ -188,7 +188,7 @@ class TestHasBluetoothControlIdentity:
 
 
 class TestBluetoothControlIdentityRoutingInvariant:
-    """The claim this phase's endpoint selection rests on: every CTL_BT_WATER
+    """The claim the endpoint selection rests on: every CTL_BT_WATER
     variant in the committed catalog routes to the DP endpoint, proven over
     the catalog itself rather than asserted in prose. If a future catalog
     refresh adds a sixth model carrying the identity, this test covers it by

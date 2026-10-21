@@ -560,7 +560,7 @@ class TestNumberSetupEntry:
 
     @pytest.mark.asyncio
     async def test_setup_entry_creates_no_number_for_a_silent_entry(self):
-        """A valve model with no status at all (raw_status={}, D-11/D-12) has no
+        """A valve model with no status at all (raw_status={}) has no
         zones to walk, so it produces no duration number entity."""
         from custom_components.rainpoint.number import async_setup_entry
 

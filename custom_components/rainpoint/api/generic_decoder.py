@@ -14,6 +14,7 @@ nothing in the entity or control path consumes them.
 
 import logging
 import re
+from typing import cast
 
 from .product_catalog import get_catalog_entry, get_catalog_port_number
 from .utils import _is_ascii_payload, _parse_ascii_rssi, _parse_entries, _split_prefix
@@ -229,7 +230,7 @@ def _pair_group_by_dp_id_and_port(group_fields: list[dict], candidates: list[dic
     if len(group_fields) > 1 and not all(_usable_dp_port(dp.get("dpPort")) for dp in candidates):
         return []
     ordered_fields = sorted(group_fields, key=lambda f: f["dp_id"])
-    ordered_candidates = sorted(candidates, key=lambda dp: dp.get("dpPort"))
+    ordered_candidates = sorted(candidates, key=lambda dp: cast(int, dp.get("dpPort")))
     if len(ordered_fields) > 1:
         # A group of one has nothing to disambiguate. A group of more than
         # one is paired purely by position (ascending dp_id zipped against
@@ -390,7 +391,7 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
 
     if ascii_framed:
         rssi = _parse_ascii_rssi(raw)
-        fields = (
+        fields: list[dict] = (
             [
                 {
                     "name": "STA_RSSI",
@@ -422,7 +423,7 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
         result["error"] = str(exc)
         return result
 
-    fields: list[dict] = []
+    fields = []
     for e in entries:
         index = e["field"]
         value_bytes = e["value_bytes"]

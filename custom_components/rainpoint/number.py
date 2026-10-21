@@ -113,6 +113,9 @@ class _RainPointDurationNumberBase(CoordinatorEntity[RainPointCoordinator], Numb
     _attr_native_step = DURATION_STEP_MINUTES
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_mode = NumberMode.BOX
+    # Assigned by each subclass constructor.
+    _sensor_key: str
+    _sensor_info: dict[str, Any]
 
     async def async_added_to_hass(self) -> None:
         """Restore the value this setpoint last held, when it is still within bounds."""

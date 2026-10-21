@@ -9,8 +9,9 @@ import asyncio
 import hashlib
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import aiohttp
 
@@ -175,7 +176,7 @@ class RainPointClient:
             "User-Agent": _USER_AGENT,
         }
 
-    def restore_tokens(self, data: dict) -> None:
+    def restore_tokens(self, data: Mapping[str, Any]) -> None:
         """Restore tokens from a dict shaped like export_tokens() output."""
         self._token = data.get("token")
         self._refresh_token = data.get("refresh_token")

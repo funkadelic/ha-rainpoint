@@ -235,7 +235,7 @@ async def async_setup_entry(
     coordinator: RainPointCoordinator = data["coordinator"]
     mqtt_client = data.get("mqtt_client")
 
-    entities = [
+    entities: list[BinarySensorEntity] = [
         RainPointHubConnectivityBinarySensor(coordinator, hub_info) for hub_info in resolve_connectivity_hubs(coordinator)
     ]
     if mqtt_client is not None:

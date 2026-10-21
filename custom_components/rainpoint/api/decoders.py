@@ -8,6 +8,7 @@ RainPoint device types.
 import logging
 import re
 from datetime import datetime
+from typing import Any
 
 from .utils import (
     STA_BAT_FIELD,
@@ -1509,7 +1510,7 @@ def decode_pool_plus(raw: str) -> dict:
 
     _LOGGER.debug("Decoding HCS0530THO: %s", raw)
 
-    result = {
+    result: dict[str, Any] = {
         "type": "co2",
         "device_model": "HCS0530THO",
         "co2": None,
@@ -1538,7 +1539,7 @@ def decode_soil(raw: str) -> dict:
 
     _LOGGER.debug("Decoding soil sensor: %s", raw)
 
-    result = {
+    result: dict[str, Any] = {
         "type": "soil",
         "rssi": None,
         "decoder": "basic",
@@ -1561,7 +1562,7 @@ def decode_temp_hum(raw: str) -> dict:
 
     _LOGGER.debug("Decoding temp/hum sensor: %s", raw)
 
-    result = {
+    result: dict[str, Any] = {
         "type": "temphum",
         "rssi": None,
         "decoder": "basic",
@@ -1584,7 +1585,7 @@ def decode_temp_hum_full(raw: str) -> dict:
 
     _LOGGER.debug("Decoding full temp/hum sensor: %s", raw)
 
-    result = {
+    result: dict[str, Any] = {
         "type": "temphum_full",
         "rssi": None,
         "decoder": "basic",
@@ -1607,7 +1608,7 @@ def decode_co2(raw: str) -> dict:
 
     _LOGGER.debug("Decoding CO2 sensor: %s", raw)
 
-    result = {
+    result: dict[str, Any] = {
         "type": "co2",
         "rssi": None,
         "decoder": "basic",
@@ -1630,7 +1631,7 @@ def decode_display(raw: str) -> dict:
 
     _LOGGER.debug("Decoding display sensor: %s", raw)
 
-    result = {
+    result: dict[str, Any] = {
         "type": "display",
         "rssi": None,
         "decoder": "basic",
@@ -1653,7 +1654,7 @@ def decode_unknown(raw: str) -> dict:
 
     _LOGGER.debug("Decoding unknown device: %s", raw)
 
-    result = {
+    result: dict[str, Any] = {
         "type": "unknown",
         "rssi": None,
         "decoder": "basic",
@@ -1677,7 +1678,7 @@ def decode_temphum(raw: str) -> dict:
 
     _LOGGER.debug("Decoding HCS014ARF: %s", raw)
 
-    result = {
+    result: dict[str, Any] = {
         "type": "temphum",
         "rssi": None,
         "decoder": "basic",
@@ -1713,7 +1714,7 @@ def decode_pool(raw: str) -> dict:
 
     _LOGGER.debug("Decoding pool sensor: %s", raw)
 
-    result = {
+    result: dict[str, Any] = {
         "type": "pool",
         "decoder": "pool",
         "tempcurrent": None,

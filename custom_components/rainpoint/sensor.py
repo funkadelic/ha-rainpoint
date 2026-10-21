@@ -4,7 +4,7 @@ import logging
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Any, cast
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -639,7 +639,7 @@ async def async_setup_entry(
     # adder what it created for a key that later vanishes.
     register_late_adder(data, adder)
 
-    entities: list[RainPointSensorBase] = []
+    entities: list[SensorEntity] = []
     entities.extend(_create_hub_entities(coordinator, hubs_cfg))
     for key, info in sensors_cfg.items():
         # Routed through the adder so the setup snapshot seeds the same
@@ -752,7 +752,8 @@ class RainPointTemperatureSensor(RainPointSensorBase):
     @property
     def native_value(self) -> float | None:
         data = self._sensor_data
-        value = round(data.get("temperature_c"), 1) if data and data.get("temperature_c") is not None else None
+        temperature = data.get("temperature_c") if data else None
+        value = round(temperature, 1) if temperature is not None else None
         _LOGGER.debug("native_value for %s (temperature_c): %s", self._sensor_key, value)
         return value
 
@@ -1457,7 +1458,7 @@ class RainPointNotReportingSensor(RainPointSensorBase):
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options: ClassVar[list[str]] = ["never_reported", "stopped_reporting"]
+    _attr_options: list[str] = ["never_reported", "stopped_reporting"]  # noqa: RUF012
     _attr_icon = "mdi:message-off-outline"
 
     # The report link's inputs (model, modelCode) are fixed once this entity is
@@ -1537,7 +1538,7 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
 
     # Resolved once per (model, modelCode). Re-keying a sub-device to another
     # model must not leave a stale declared side to compare a live frame against.
-    _catalog: tuple[str, tuple[str, ...], dict[int, set[str]]] | None = None
+    _catalog: tuple[str, tuple[str, ...], dict[int | None, set[str]]] | None = None
     _catalog_key: tuple[Any, Any] | None = None
 
     def __init__(self, coordinator, sensor_key, sensor_info, base_slug) -> None:
@@ -1551,7 +1552,7 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
         model it used to carry."""
         return (self.coordinator.data or {}).get("sensors", {}).get(self._sensor_key) or self._sensor_info
 
-    def _resolve_catalog(self) -> tuple[str, tuple[str, ...], dict[int, set[str]]]:
+    def _resolve_catalog(self) -> tuple[str, tuple[str, ...], dict[int | None, set[str]]]:
         """Return (status, declared status identities, {dpCode: identities}).
 
         The three zero cases stay apart: absent model, unidentified variant, and a
@@ -1569,16 +1570,16 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
                 status = "variant_not_identified" if get_catalog_variant_codes(key[0]) else "model_not_in_catalog"
                 self._catalog = (status, (), {})
             else:
-                by_code: dict[int, set[str]] = {}
+                by_code: dict[int | None, set[str]] = {}
                 for entry in entries:
                     if isinstance(entry, dict) and str(entry.get("identity", "")).startswith("STA_"):
                         by_code.setdefault(entry.get("dpCode"), set()).add(entry["identity"])
                 identities = {identity for group in by_code.values() for identity in group}
                 self._catalog = ("resolved", tuple(sorted(identities)), by_code)
             self._catalog_key = key
-        return self._catalog
+        return cast(tuple[str, tuple[str, ...], dict[int | None, set[str]]], self._catalog)
 
-    def _received_identities(self, by_code: dict[int, set[str]]) -> list[str] | None:
+    def _received_identities(self, by_code: dict[int | None, set[str]]) -> list[str] | None:
         """Return the declared identities this frame carries, or None if it cannot say.
 
         A record's structural index is the catalog's dpCode on both the flat and
@@ -1833,7 +1834,7 @@ class RainPointZoneStateSensor(RainPointZoneSensorBase):
     """
 
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options: ClassVar[list[str]] = ["closed", "open"]
+    _attr_options: list[str] = ["closed", "open"]  # noqa: RUF012
     _attr_icon = "mdi:valve"
 
     def __init__(
@@ -1900,7 +1901,7 @@ class RainPointHicCurrentStationSensor(RainPointHic801wSensorBase):
     """
 
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options: ClassVar[list[str]] = ["none", "1", "2", "3", "4", "5", "6", "7", "8"]
+    _attr_options: list[str] = ["none", "1", "2", "3", "4", "5", "6", "7", "8"]  # noqa: RUF012
     _attr_icon = "mdi:sprinkler"
 
     def __init__(

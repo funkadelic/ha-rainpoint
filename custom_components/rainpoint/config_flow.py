@@ -4,10 +4,12 @@ import logging
 from typing import Any
 
 import aiohttp
+
+# HA 2026.10 types data_schema as probatio; voluptuous stays for the HA 2026.2 floor.
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
 from homeassistant.generated.countries import COUNTRIES
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
@@ -62,7 +64,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Return the options flow handler."""
         return RainPointOptionsFlow()
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -123,11 +125,11 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=data_schema,
+            data_schema=data_schema,  # type: ignore[arg-type]
             errors=errors,
         )
 
-    async def async_step_select_homes(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_select_homes(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
 
         home_options = {str(h["hid"]): h["homeName"] for h in self._homes}
@@ -169,11 +171,11 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="select_homes",
-            data_schema=data_schema,
+            data_schema=data_schema,  # type: ignore[arg-type]
             errors=errors,
         )
 
-    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle reconfiguration of the integration."""
         self._reconfigure = True
 
@@ -217,28 +219,28 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.warning("RainPoint login is rate-limited during reconfigure; asking the user to retry later")
                 return self.async_show_form(
                     step_id="reconfigure",
-                    data_schema=data_schema,
+                    data_schema=data_schema,  # type: ignore[arg-type]
                     errors={"base": "rate_limited"},
                 )
             except RainPointApiError:
                 _LOGGER.exception("Error logging in to RainPoint during reconfigure")
                 return self.async_show_form(
                     step_id="reconfigure",
-                    data_schema=data_schema,
+                    data_schema=data_schema,  # type: ignore[arg-type]
                     errors={"base": "auth_failed"},
                 )
             except (TimeoutError, aiohttp.ClientError):
                 _LOGGER.exception("Network error during reconfigure")
                 return self.async_show_form(
                     step_id="reconfigure",
-                    data_schema=data_schema,
+                    data_schema=data_schema,  # type: ignore[arg-type]
                     errors={"base": "cannot_connect"},
                 )
             else:
                 if not homes:
                     return self.async_show_form(
                         step_id="reconfigure",
-                        data_schema=data_schema,
+                        data_schema=data_schema,  # type: ignore[arg-type]
                         errors={"base": "no_homes"},
                     )
                 else:
@@ -257,10 +259,10 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=data_schema,
+            data_schema=data_schema,  # type: ignore[arg-type]
         )
 
-    async def async_step_select_homes_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_select_homes_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle home selection during reconfiguration."""
         errors: dict[str, str] = {}
 
@@ -300,7 +302,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="select_homes_reconfigure",
-            data_schema=data_schema,
+            data_schema=data_schema,  # type: ignore[arg-type]
             errors=errors,
         )
 
@@ -308,7 +310,7 @@ class RainPointConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class RainPointOptionsFlow(config_entries.OptionsFlow):
     """Handle the RainPoint options flow -- push, generic-sensor, and generic-control toggles."""
 
-    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show/handle the single form carrying all three toggles."""
         if user_input is not None:
             return self.async_create_entry(title="", data=self._with_control_consent(user_input))
@@ -333,7 +335,7 @@ class RainPointOptionsFlow(config_entries.OptionsFlow):
         control_eligible, control_unsupported = self._generic_control_eligibility()
         return self.async_show_form(
             step_id="init",
-            data_schema=data_schema,
+            data_schema=data_schema,  # type: ignore[arg-type]
             description_placeholders={
                 "generic_eligible": str(eligible),
                 "generic_unsupported": str(unsupported),

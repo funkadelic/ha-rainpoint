@@ -7,6 +7,7 @@ and common operations used across the API.
 
 import logging
 from datetime import datetime
+from typing import cast
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -386,7 +387,7 @@ def _parse_hub_broadcast_flag(param: object) -> bool | None:
     """
     if not isinstance(param, str):
         return None
-    fields = param.split(_HUB_PARAM_DELIMITER)
+    fields = cast(str, param).split(_HUB_PARAM_DELIMITER)
     if len(fields) <= _HUB_BROADCAST_FIELD_INDEX:
         return None
     token = fields[_HUB_BROADCAST_FIELD_INDEX]
@@ -422,7 +423,7 @@ def _splice_hub_broadcast_param(param: object, enabled: bool) -> str | None:
         return None
     # param is guaranteed a str with a recoverable index 1 at this point --
     # the gate above already proved it.
-    fields = param.split(_HUB_PARAM_DELIMITER)
+    fields = cast(str, param).split(_HUB_PARAM_DELIMITER)
     fields[_HUB_BROADCAST_FIELD_INDEX] = "1" if enabled else "0"
     return _HUB_PARAM_DELIMITER.join(fields)
 
@@ -459,7 +460,7 @@ def _parse_sub_power_mode(param: object) -> str | None:
         return None
     seen_keys: set[str] = set()
     mode: str | None = None
-    for token in param.split(_SUB_PARAM_DELIMITER):
+    for token in cast(str, param).split(_SUB_PARAM_DELIMITER):
         parts = token.split(_SUB_PARAM_ASSIGNMENT)
         if len(parts) != 2:
             return None
@@ -507,7 +508,7 @@ def _splice_sub_power_mode(param: object, mode: str) -> str | None:
     # and a recoverable key-5 value at this point -- the gate above already
     # proved it.
     spliced_tokens = []
-    for token in param.split(_SUB_PARAM_DELIMITER):
+    for token in cast(str, param).split(_SUB_PARAM_DELIMITER):
         key, sep, value = token.partition(_SUB_PARAM_ASSIGNMENT)
         if key == _SUB_POWER_MODE_KEY:
             spliced_tokens.append(f"{key}{sep}{mode.rjust(len(value), '0')}")

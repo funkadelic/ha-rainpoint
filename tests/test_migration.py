@@ -96,7 +96,7 @@ class TestHubIdentityMigration:
         Asserted against a registry the migration actually wrote, not against a
         return value or an injected snapshot. The hub device row keeps its
         device.id, which is what lets the already-parented sub-device keep
-        resolving without any via_device sweep anywhere in this phase.
+        resolving without any via_device sweep anywhere in the migration.
         """
         entry = _make_entry(hass)
         hub, child, rows = _seed_old_shape_install(entry, entity_registry, device_registry)

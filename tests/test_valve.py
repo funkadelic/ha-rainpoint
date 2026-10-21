@@ -160,7 +160,7 @@ class TestValveProperties:
         assert valve.available is False
 
     def test_unavailable_when_sensor_entry_turns_silent(self):
-        """A valve already bound to a key that goes silent (D-11/D-12) reports
+        """A valve already bound to a key that goes silent reports
         unavailable rather than raising: raw_status={} carries no hub_online."""
         valve = _make_valve()
         valve.coordinator.data["sensors"]["100_200_1"]["raw_status"] = {}
@@ -814,7 +814,7 @@ class TestValveSetupEntry:
 
     @pytest.mark.asyncio
     async def test_setup_entry_creates_no_valve_for_a_silent_entry(self):
-        """A valve model with no status at all (raw_status={}, D-11/D-12) has no
+        """A valve model with no status at all (raw_status={}) has no
         zones to walk, so it produces no valve entity rather than raising."""
         from custom_components.rainpoint.valve import async_setup_entry
 

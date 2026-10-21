@@ -123,7 +123,7 @@ class TestSubDeviceAttributes:
         assert sub_device_attributes(coordinator, "k")["timestamp_source"] == "sentinel"
 
     def test_silent_entry_yields_firmware_alone(self):
-        """A silent entry (D-09/D-11) carries neither a device nor a server
+        """A silent entry carries neither a device nor a server
         timestamp key, so it must not raise and must yield the firmware
         attribute alone, same as a bare None reading."""
         from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
@@ -283,7 +283,7 @@ class TestSubDeviceEntity:
     def test_silent_entry_reads_as_unavailable(self):
         """A silent entry's data is truthy, but must still read as unavailable:
         a battery/RSSI/generic entity bound to this key must not look wired up
-        while reading nothing (D-02/D-12)."""
+        while reading nothing."""
         from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
 
         entity = self._entity({"sensors": {"k": {"data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"}}}})
