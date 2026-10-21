@@ -2,6 +2,7 @@
 
 import logging
 
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -22,7 +23,7 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: RainPointCoordinator = data["coordinator"]
 
-    entities = []
+    entities: list[SwitchEntity] = []
 
     # Hub broadcast switches
     hubs_cfg = coordinator.data.get("hubs", [])

@@ -1,6 +1,7 @@
 """Select entities for RainPoint integration."""
 
 import logging
+from typing import cast
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -213,7 +214,7 @@ class RainPointSubDevicePowerSelect(RainPointSubDeviceEntity, SelectEntity):
         if mode is None:
             raise HomeAssistantError(f"Unknown transmission power option: {option}")
         client = self.coordinator._client
-        hub_records = await client.get_devices_by_hid(self._sensor_info.get("hid"))
+        hub_records = await client.get_devices_by_hid(cast(int, self._sensor_info.get("hid")))
         record = _sub_device_record(hub_records, self._sensor_info.get("mid"), self._sensor_info.get("addr"))
         sid = record.get("sid")
         if sid is None:

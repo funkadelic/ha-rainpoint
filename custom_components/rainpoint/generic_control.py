@@ -36,10 +36,11 @@ import logging
 import math
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.valve import ValveEntity, ValveEntityFeature
+from homeassistant.core import CALLBACK_TYPE
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -316,8 +317,8 @@ def _resolve_datapoint(entry: dict, run_state_entries: list[dict], port_number: 
     # above both reject a dpPort that is not a usable int. Left unguarded for the
     # same reason the sensor path leaves its own port unguarded.
     return ControlDatapoint(
-        identity=identity,
-        dp_port=dp_port,
+        identity=cast(str, identity),
+        dp_port=cast(int, dp_port),
         command_port=command_port,
         dp_code=entry.get("dpCode"),
         dp_data_type=entry.get("dpDataType"),
@@ -679,7 +680,7 @@ class RainPointGenericControlBase(CoordinatorEntity[RainPointCoordinator]):
         self._base_slug = base_slug
         self._datapoint = datapoint
         self._port_number = port_number
-        self._refresh_cancel = None
+        self._refresh_cancel: CALLBACK_TYPE | None = None
 
         identity = datapoint.identity
         # Built from the allowlist member, never from the raw catalog

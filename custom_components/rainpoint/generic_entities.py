@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from homeassistant.components.sensor import SensorDeviceClass
 
@@ -590,7 +590,7 @@ def _duplicate_port_reason(dp_entries: list[dict]) -> str | None:
         dp_port = entry.get("dpPort")
         if not _usable_port(dp_port):
             continue
-        key = (entry.get("identity"), dp_port)
+        key = (entry.get("identity"), cast(int, dp_port))
         if key in seen:
             duplicates.add(key)
         seen.add(key)
@@ -758,7 +758,7 @@ def _evaluate_generic_gate(model: str | None, model_code: int | str | None) -> G
             port_number=port_number,
         )
 
-    uncurated = {entry.get("identity") for entry in dp_entries if entry.get("identity") not in _IDENTITY_SPECS}
+    uncurated = {cast(str, entry.get("identity")) for entry in dp_entries if entry.get("identity") not in _IDENTITY_SPECS}
     unmapped_identities = tuple(sorted(uncurated))
 
     # Every rule is evaluated; none short-circuits another. A variant failing
@@ -901,7 +901,7 @@ class RainPointGenericSensor(RainPointSensorBase):
         port_number: int | None,
     ) -> None:
         super().__init__(coordinator, sensor_key, sensor_info, base_slug)
-        identity = dp_entry.get("identity")
+        identity = cast(str, dp_entry.get("identity"))
         spec = _IDENTITY_SPECS[identity]
         self._spec = spec
         self._identity = identity
@@ -912,7 +912,7 @@ class RainPointGenericSensor(RainPointSensorBase):
         # anything. Deliberately unguarded here -- a defensive branch would
         # pin behaviour for a state the factory cannot produce, and read as
         # though the gate might not hold.
-        self._dp_port: int = dp_entry.get("dpPort")
+        self._dp_port: int = cast(int, dp_entry.get("dpPort"))
         self._dp_code = dp_entry.get("dpCode")
         self._dp_data_type = dp_entry.get("dpDataType")
 

@@ -7,6 +7,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -95,14 +96,9 @@ def resolve_connectivity_hubs(coordinator: RainPointCoordinator) -> list[dict]:
     return [hub for hub in _hub_records(coordinator) if is_hub_record(hub)]
 
 
-# The four hub classes below deliberately leave CoordinatorEntity
-# unparameterized, unlike the sub-device bases in entity.py, valve.py, number.py
-# and generic_control.py. Each initializes every base in its inheritance chain
-# explicitly rather than cooperatively, through the unbound
-# CoordinatorEntity.__init__(self, coordinator), and a subscripted base makes
-# that call's self parameter unsatisfiable. They read nothing off the
-# coordinator that the narrower type would have caught.
-class RainPointHubSensorBase(CoordinatorEntity, SensorEntity, RainPointHubDevice):
+# The hub classes initialize each base explicitly (unbound
+# CoordinatorEntity.__init__(self, coordinator)) rather than cooperatively.
+class RainPointHubSensorBase(CoordinatorEntity[RainPointCoordinator], SensorEntity, RainPointHubDevice):
     """Base class for RainPoint hub sensors."""
 
     _attr_should_poll = False
@@ -233,7 +229,7 @@ class RainPointHubMACSensor(RainPointHubSensorBase):
         return self._hub_info.get("mac")
 
 
-class RainPointHubConnectivityBinarySensor(CoordinatorEntity, BinarySensorEntity, RainPointHubDevice):
+class RainPointHubConnectivityBinarySensor(CoordinatorEntity[RainPointCoordinator], BinarySensorEntity, RainPointHubDevice):
     """Hub-level cloud connectivity: on while the RainPoint cloud reports this hub connected.
 
     Reads the coordinator's already-shaped `hub_connectivity` field rather
@@ -383,7 +379,7 @@ def _hub_rf_channel_options(hub_info: dict) -> list[str]:
     return [str(channel) for channel in sorted(channels)]
 
 
-class RainPointHubChannelSelect(CoordinatorEntity, SelectEntity, RainPointHubDevice):
+class RainPointHubChannelSelect(CoordinatorEntity[RainPointCoordinator], SelectEntity, RainPointHubDevice):
     """RF Channel selector for RainPoint hub."""
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -538,7 +534,7 @@ class RainPointPushLastMessageSensor(_RainPointPushDiagnosticBase, SensorEntity)
         return datetime.now(UTC) - timedelta(seconds=age)
 
 
-class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubDevice):
+class RainPointHubBroadcastSwitch(CoordinatorEntity[RainPointCoordinator], SwitchEntity, RainPointHubDevice):
     """Automatic Broadcast Time switch for RainPoint hub.
 
     is_on is read live off coordinator.data["hubs"] on every access rather
@@ -646,16 +642,16 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity, SwitchEntity, RainPointHubD
         self._optimistic = enabled
         self.async_write_ha_state()
 
-    async def async_turn_on(self) -> None:
+    async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on automatic broadcast."""
         await self._async_set_broadcast(True)
 
-    async def async_turn_off(self) -> None:
+    async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off automatic broadcast."""
         await self._async_set_broadcast(False)
 
 
-class RainPointHubBroadcastButton(CoordinatorEntity, ButtonEntity, RainPointHubDevice):
+class RainPointHubBroadcastButton(CoordinatorEntity[RainPointCoordinator], ButtonEntity, RainPointHubDevice):
     """The hub's one-shot time broadcast action.
 
     Stateless by Home Assistant's own design: ButtonEntity.async_press
