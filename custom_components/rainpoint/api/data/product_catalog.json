@@ -6320,5 +6320,92 @@
       "isMainDevice": true,
       "portNumber": 1
     }
+  },
+  "HWS765WRF": {
+    "408": {
+      "accessoryFlag": false,
+      "dp": [
+        {
+          "dpCode": 9,
+          "dpDataType": "S16",
+          "dpLen": 2,
+          "dpPort": 0,
+          "identity": "STA_TEM"
+        },
+        {
+          "dpCode": 9,
+          "dpDataType": "S16",
+          "dpLen": 2,
+          "dpPort": 2,
+          "identity": "STA_TEM"
+        },
+        {
+          "dpCode": 10,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "STA_RH"
+        },
+        {
+          "dpCode": 10,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 2,
+          "identity": "STA_RH"
+        },
+        {
+          "dpCode": 12,
+          "dpDataType": "TD2",
+          "dpLen": 2,
+          "dpPort": 0,
+          "identity": "STA_ATMOS"
+        },
+        {
+          "dpCode": 21,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 2,
+          "identity": "STA_EVTIME"
+        },
+        {
+          "dpCode": 22,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "STA_TREND"
+        },
+        {
+          "dpCode": 22,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 2,
+          "identity": "STA_TREND"
+        },
+        {
+          "dpCode": 32,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 2,
+          "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 51,
+          "dpDataType": "S8",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "STA_RSRP"
+        },
+        {
+          "dpCode": 62,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "STA_FORCAST"
+        }
+      ],
+      "hasDistribution": false,
+      "isMainDevice": true,
+      "portNumber": 2
+    }
   }
 }
