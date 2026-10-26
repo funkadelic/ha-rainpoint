@@ -862,7 +862,7 @@ class TestEvaluateGenericGate:
         # A repeated dpCode is expected when one identity repeats across distinct
         # ports (multi-zone). Any other repeat is a new catalog shape: add it here
         # deliberately. HTP159W/354 carries STA_CHG and CTL_CMD on one port.
-        known_collisions = {("HTP159W", "354")}
+        known_collisions = {("HTP159W", "354", 0, ("CTL_CMD", "STA_CHG"))}
         odd = set()
         for model, variants in product_catalog_module._CATALOG.items():
             for model_code, record in variants.items():
@@ -870,10 +870,11 @@ class TestEvaluateGenericGate:
                 for entry in record["dp"]:
                     if isinstance(entry, dict):
                         by_code[entry.get("dpCode")].append((entry.get("identity"), entry.get("dpPort")))
-                for entries in by_code.values():
+                for dp_code, entries in by_code.items():
                     ports = [port for _, port in entries]
                     if len(entries) > 1 and (len({identity for identity, _ in entries}) > 1 or len(set(ports)) < len(ports)):
-                        odd.add((model, model_code))
+                        identities = tuple(sorted({identity for identity, _ in entries}))
+                        odd.add((model, model_code, dp_code, identities))
         assert odd == known_collisions
 
 
