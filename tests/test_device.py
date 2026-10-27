@@ -267,6 +267,16 @@ class TestBuildSubDeviceInfoIdentity:
         )
         assert info["name"] == "HCS0565ARF 1"
 
+    def test_registry_sweep_reports_the_retail_model(self):
+        """The poll-time sweep writes the same model, model_id and name the DeviceInfo did."""
+        from custom_components.rainpoint import _reported_device_fields
+
+        record = {"hid": 100, "mid": 200, "addr": 1, "model": "HCS0528ARF", "display_model": "HCS0565ARF"}
+        fields = _reported_device_fields("100_200_1", {"100_200_1": record}, {})
+        assert fields["model"] == "HCS0565ARF"
+        assert fields["model_id"] == "HCS0528ARF"
+        assert fields["name"] == "HCS0565ARF 1"
+
     def test_display_model_without_model_is_ignored(self):
         """No reported model means nothing to keep as model_id, so the fallback stands."""
         info = build_sub_device_info({"hid": 100, "mid": 200, "addr": 1, "display_model": "HCS0565ARF"})

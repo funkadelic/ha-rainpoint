@@ -31,7 +31,7 @@ from .coordinator import (
     hub_connected_flag,
     hub_connectivity_record,
 )
-from .device import build_sub_device_info
+from .device import build_sub_device_info, shown_model
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ class EmittedEntityLedger:
             return
         self._descriptors[key] = {
             "addr": info.get("addr"),
-            "model": info.get("model"),
+            "model": shown_model(info)[0],
             "sub_name": info.get("sub_name"),
             "hub_name": info.get("hub_name"),
             # Carried for the card's hub line alone, which reads "none" rather

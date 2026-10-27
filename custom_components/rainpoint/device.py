@@ -64,11 +64,11 @@ def sub_device_display_name(sensor_info: dict) -> str:
     and the address instead.
     """
     addr = sensor_info["addr"]
-    model = _shown_model(sensor_info)[0]
+    model = shown_model(sensor_info)[0]
     return sensor_info.get("sub_name") or (f"{model} {addr}" if model else f"Device {addr}")
 
 
-def _shown_model(sensor_info: dict) -> tuple[str | None, str | None]:
+def shown_model(sensor_info: dict) -> tuple[str | None, str | None]:
     """Return the (model, model_id) a sub-device's page shows.
 
     The retail name can differ from the model the device reports (an HCS0565ARF
@@ -177,7 +177,7 @@ def build_sub_device_info(sensor_info: dict, platform: EntityPlatform | None = N
     mid = sensor_info["mid"]
     addr = sensor_info["addr"]
     # model_id is always passed: None clears a stale value the registry would otherwise keep.
-    model, model_id = _shown_model(sensor_info)
+    model, model_id = shown_model(sensor_info)
     optional: dict = {}
     if sensor_info.get("hub_paired", True):
         # The mid here is the carrying top-level record's, which is exactly the

@@ -4094,7 +4094,13 @@ class TestDeviceRegistryFieldRefresh:
         """
         return [
             SimpleNamespace(id="hub-row", identifiers={(DOMAIN, cls.HUB_ROW)}, sw_version=hub_version, name=hub_name),
-            SimpleNamespace(id="sub-row", identifiers={(DOMAIN, cls.SUB_ROW)}, sw_version=sub_version, name=sub_name),
+            SimpleNamespace(
+                id="sub-row",
+                identifiers={(DOMAIN, cls.SUB_ROW)},
+                sw_version=sub_version,
+                name=sub_name,
+                model="HTV245FRF",
+            ),
         ]
 
     @pytest.mark.asyncio
