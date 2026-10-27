@@ -4,6 +4,16 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.25.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.1...v1.25.2) (2026-10-27)
 
+### What's new
+
+**Retail model names on device pages**
+
+A sensor that RainPoint sells under a different name from the one it reports now shows the name on the box on its device page. For example, the HCS0565ARF pool sensor reports itself as an HCS0528ARF, and its page now says HCS0565ARF. The reported model is still listed as the model ID, and entity IDs don't change.
+
+### Thanks
+
+Thanks to **@jpjupiter** for reporting the HCS0565ARF and sending diagnostics.
+
 
 ### Fixed
 
