@@ -260,12 +260,12 @@ class TestBuildSubDeviceInfoIdentity:
         assert info["model"] == "HCS026FRF"
         assert info["model_id"] is None
 
-    def test_unnamed_device_is_named_from_the_retail_name(self):
-        """The fallback name matches the model line rather than the reported model."""
+    def test_unnamed_device_keeps_the_reported_model_in_its_name(self):
+        """The fallback name stays on the reported model so existing entity ids keep one prefix."""
         info = build_sub_device_info(
             {"hid": 100, "mid": 200, "addr": 1, "model": "HCS0528ARF", "display_model": "HCS0565ARF"},
         )
-        assert info["name"] == "HCS0565ARF 1"
+        assert info["name"] == "HCS0528ARF 1"
 
     def test_registry_sweep_reports_the_retail_model(self):
         """The poll-time sweep writes the same model, model_id and name the DeviceInfo did."""
@@ -275,7 +275,7 @@ class TestBuildSubDeviceInfoIdentity:
         fields = _reported_device_fields("100_200_1", {"100_200_1": record}, {})
         assert fields["model"] == "HCS0565ARF"
         assert fields["model_id"] == "HCS0528ARF"
-        assert fields["name"] == "HCS0565ARF 1"
+        assert fields["name"] == "HCS0528ARF 1"
 
     def test_non_string_display_model_is_ignored(self):
         """A cloud value of the wrong type must not raise inside entity setup."""

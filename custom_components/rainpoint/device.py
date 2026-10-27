@@ -64,7 +64,9 @@ def sub_device_display_name(sensor_info: dict) -> str:
     and the address instead.
     """
     addr = sensor_info["addr"]
-    model = shown_model(sensor_info)[0]
+    # The reported model, not the retail one: entity ids are built from this name,
+    # and switching it would split an existing device's entities across two prefixes.
+    model = sensor_info.get("model")
     return sensor_info.get("sub_name") or (f"{model} {addr}" if model else f"Device {addr}")
 
 
