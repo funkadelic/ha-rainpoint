@@ -2,6 +2,21 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.25.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.1...v1.25.2) (2026-10-27)
+
+
+### Fixed
+
+* show the retail model name on sub-device pages ([#306](https://github.com/funkadelic/ha-rainpoint/issues/306)) ([2c11044](https://github.com/funkadelic/ha-rainpoint/commit/2c110446d03228eb7010d69286b0484878cfd58d))
+
+
+### Other Changes
+
+* bump pytest-homeassistant-custom-component ([#304](https://github.com/funkadelic/ha-rainpoint/issues/304)) ([1fa18ab](https://github.com/funkadelic/ha-rainpoint/commit/1fa18ab40f37e4640257bfa85396acc9f5e8c741))
+* bump the actions group across 1 directory with 3 updates ([#305](https://github.com/funkadelic/ha-rainpoint/issues/305)) ([82d7e5b](https://github.com/funkadelic/ha-rainpoint/commit/82d7e5b32155e43b5547018fa750c19ef1253b67))
+* **catalog:** refresh the product catalog snapshot ([#301](https://github.com/funkadelic/ha-rainpoint/issues/301)) ([b384dc6](https://github.com/funkadelic/ha-rainpoint/commit/b384dc68f333863de9c1334bd9177d019e5776f7))
+* check catalog shape instead of fixed counts ([#302](https://github.com/funkadelic/ha-rainpoint/issues/302)) ([b849eb2](https://github.com/funkadelic/ha-rainpoint/commit/b849eb26599cf29a8cec3e2025b6602c076c82c0))
+
 ## [1.25.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.0...v1.25.1) (2026-10-21)
 
 ### What's new
