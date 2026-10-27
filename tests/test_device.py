@@ -242,7 +242,7 @@ class TestBuildSubDeviceInfoIdentity:
             {"hid": 100, "mid": 200, "addr": 1, "sub_name": "Soil Sensor", "model": "HCS026FRF"},
         )
         assert info["model"] == "HCS026FRF"
-        assert "model_id" not in info
+        assert info["model_id"] is None
 
     def test_retail_name_shown_with_reported_model_as_model_id(self):
         """An HCS0565ARF reports as HCS0528ARF; the page shows the name on the box."""
@@ -258,7 +258,14 @@ class TestBuildSubDeviceInfoIdentity:
             {"hid": 100, "mid": 200, "addr": 1, "model": "HCS026FRF", "display_model": "HCS026"},
         )
         assert info["model"] == "HCS026FRF"
-        assert "model_id" not in info
+        assert info["model_id"] is None
+
+    def test_unnamed_device_is_named_from_the_retail_name(self):
+        """The fallback name matches the model line rather than the reported model."""
+        info = build_sub_device_info(
+            {"hid": 100, "mid": 200, "addr": 1, "model": "HCS0528ARF", "display_model": "HCS0565ARF"},
+        )
+        assert info["name"] == "HCS0565ARF 1"
 
     def test_display_model_without_model_is_ignored(self):
         """No reported model means nothing to keep as model_id, so the fallback stands."""
