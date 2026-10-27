@@ -158,15 +158,19 @@ def build_sub_device_info(sensor_info: dict, platform: EntityPlatform | None = N
     the call site, a key that is never constructed states "this device has no
     parent" more plainly than a key carrying None, and it is what lets a test
     assert by key membership rather than by equality against None, which would
-    pass for either construction. The link is the first and only
-    conditionally-constructed key in this function; every other key is always
-    present.
+    pass for either construction.
     """
     hid = sensor_info["hid"]
     mid = sensor_info["mid"]
     addr = sensor_info["addr"]
     model = sensor_info.get("model")
     optional: dict = {}
+    # The retail name can differ from the model the device reports (an HCS0565ARF
+    # reports as HCS0528ARF). A displayModel that only truncates model adds nothing.
+    display_model = sensor_info.get("display_model")
+    if display_model and model and not model.startswith(display_model):
+        optional["model_id"] = model
+        model = display_model
     if sensor_info.get("hub_paired", True):
         # The mid here is the carrying top-level record's, which is exactly the
         # hub's, because the sensor key is {hid}_{mid}_{addr}. Both sides of

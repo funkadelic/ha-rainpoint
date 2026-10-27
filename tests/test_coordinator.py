@@ -5711,7 +5711,7 @@ class TestPureHelpers:
     def test_build_sensor_entry_returns_all_fields(self):
         """The returned dict carries every required metadata key."""
         hub = {"hid": 100, "name": "MyHub", "homeName": "Home", "deviceName": "dev1", "productKey": "pk1"}
-        sub = {"name": "Sensor1", "model": "MODEL_X", "softVer": "1.0"}
+        sub = {"name": "Sensor1", "model": "MODEL_X", "displayModel": "MODEL_Y", "softVer": "1.0"}
         s = {"id": "D1", "value": "10#AB"}
         entry = _coord_module._build_sensor_entry(hub, sub, mid=200, addr=1, status_entry=s, decoded={"type": "x"})
         for key in (
@@ -5734,6 +5734,7 @@ class TestPureHelpers:
         assert entry["device_name"] == "dev1"
         assert entry["product_key"] == "pk1"
         assert entry["data"] == {"type": "x"}
+        assert entry["display_model"] == "MODEL_Y"
 
     def test_build_sensor_entry_hub_name_defaults_to_Hub(self):
         """When hub has no 'name' key, hub_name falls back to 'Hub'."""

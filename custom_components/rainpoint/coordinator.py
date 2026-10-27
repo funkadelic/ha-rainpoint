@@ -943,6 +943,7 @@ def _build_sensor_entry(
         "hub_name": hub.get("name", "Hub"),
         "sub_name": sub.get("name"),
         "model": sub.get("model"),
+        "display_model": sub.get("displayModel"),
         "model_code": sub.get("modelCode"),
         "firmware_version": sub.get("softVer"),
         # The cloud's own sub-device id, a different addressing scheme from

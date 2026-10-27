@@ -206,6 +206,7 @@ _SENSOR_ENTRY_FIELDS = frozenset(
         "addr",
         "data",
         "device_name",
+        "display_model",
         "firmware_version",
         "hid",
         "home_name",

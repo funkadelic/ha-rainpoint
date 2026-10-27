@@ -242,6 +242,28 @@ class TestBuildSubDeviceInfoIdentity:
             {"hid": 100, "mid": 200, "addr": 1, "sub_name": "Soil Sensor", "model": "HCS026FRF"},
         )
         assert info["model"] == "HCS026FRF"
+        assert "model_id" not in info
+
+    def test_retail_name_shown_with_reported_model_as_model_id(self):
+        """An HCS0565ARF reports as HCS0528ARF; the page shows the name on the box."""
+        info = build_sub_device_info(
+            {"hid": 100, "mid": 200, "addr": 1, "model": "HCS0528ARF", "display_model": "HCS0565ARF"},
+        )
+        assert info["model"] == "HCS0565ARF"
+        assert info["model_id"] == "HCS0528ARF"
+
+    def test_truncated_display_model_is_ignored(self):
+        """A displayModel that only drops the suffix leaves the page unchanged."""
+        info = build_sub_device_info(
+            {"hid": 100, "mid": 200, "addr": 1, "model": "HCS026FRF", "display_model": "HCS026"},
+        )
+        assert info["model"] == "HCS026FRF"
+        assert "model_id" not in info
+
+    def test_display_model_without_model_is_ignored(self):
+        """No reported model means nothing to keep as model_id, so the fallback stands."""
+        info = build_sub_device_info({"hid": 100, "mid": 200, "addr": 1, "display_model": "HCS0565ARF"})
+        assert info["model"] == "Unknown"
 
 
 class TestBuildSubDeviceInfo:
