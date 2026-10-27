@@ -33,7 +33,7 @@ from .const import (
     UNIQUE_ID_PREFIX,
 )
 from .coordinator import ORPHANED_KEY_DEBOUNCE_POLLS, SILENT_DATA_TYPE, first_hub_record, is_hub_record
-from .device import build_hub_device_info, hub_display_name, sub_device_display_name
+from .device import build_hub_device_info, hub_display_name, shown_model, sub_device_display_name
 from .entity import late_adders
 from .repairs import (
     OrphanedEntitiesRecord,
@@ -716,14 +716,15 @@ def _reported_device_fields(key: str, sensors: Mapping, hub_records: Mapping) ->
     record = sensors.get(key)
     if not isinstance(record, dict):
         return {}
-    fields: dict[str, Any] = {"sw_version": record.get("firmware_version")}
+    model, model_id = shown_model(record)
+    fields: dict[str, Any] = {"sw_version": record.get("firmware_version"), "model": model, "model_id": model_id}
     if record.get("addr") is not None:
         fields["name"] = sub_device_display_name(record)
     return fields
 
 
 def _refresh_device_registry_fields(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
-    """Write the firmware version and name the cloud now reports onto the device row.
+    """Write the firmware version, name and model the cloud now reports onto the device row.
 
     A DeviceInfo is read once, while an entity is being added, and never
     again: nothing in Home Assistant re-reads the property, so making it
@@ -735,9 +736,8 @@ def _refresh_device_registry_fields(hass: HomeAssistant, entry: ConfigEntry, coo
     update entity and the Firmware Version sensor beside it both move, so the
     same install shows two versions at once and the stale one is the headline.
 
-    sw_version and name are swept, and nothing else. model and hw_version can
-    move only if RainPoint replaces the hardware behind an identity, which is
-    a different device rather than a stale field.
+    sw_version and name are swept, plus a sub-device's model and model_id, which
+    follow the cloud's retail name. hw_version is not swept.
 
     Writing name does not overwrite an owner who renamed the device in Home
     Assistant, and that is Home Assistant's arbitration rather than a check
@@ -795,11 +795,12 @@ def _refresh_device_registry_fields(hass: HomeAssistant, entry: ConfigEntry, coo
             # Truthiness rather than "is not None" on purpose, and it is the
             # same gate both fields already needed: a poll that omits a field
             # and a payload the coordinator could not read both arrive here as
-            # a false value, and neither may blank a row.
+            # a false value, and neither may blank a row. model_id is the exception:
+            # it comes only from a readable record, and None there clears a retail name the cloud dropped.
             changed = {
                 field: value
                 for field, value in _reported_device_fields(key, sensors, hub_records).items()
-                if value and value != getattr(row, field, None)
+                if (value or field == "model_id") and value != getattr(row, field, None)
             }
             if not changed:
                 continue

@@ -4094,7 +4094,13 @@ class TestDeviceRegistryFieldRefresh:
         """
         return [
             SimpleNamespace(id="hub-row", identifiers={(DOMAIN, cls.HUB_ROW)}, sw_version=hub_version, name=hub_name),
-            SimpleNamespace(id="sub-row", identifiers={(DOMAIN, cls.SUB_ROW)}, sw_version=sub_version, name=sub_name),
+            SimpleNamespace(
+                id="sub-row",
+                identifiers={(DOMAIN, cls.SUB_ROW)},
+                sw_version=sub_version,
+                name=sub_name,
+                model="HTV245FRF",
+            ),
         ]
 
     @pytest.mark.asyncio
@@ -4244,6 +4250,24 @@ class TestDeviceRegistryFieldRefresh:
 
         assert writes == []
         assert [row.sw_version for row in rows] == ["1.1.1041", "127"]
+
+    @pytest.mark.asyncio
+    async def test_a_retail_name_the_cloud_dropped_clears_model_id(self):
+        """None clears model_id, unlike the other fields, so a stale reported model does not linger."""
+        coordinator, hass, entry = self._build_coordinator(["1.1.1041", "127"])
+        rows = self._rows()
+        rows[1].model_id = "HCS0528ARF"
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_registry_fields(hass, entry, coordinator)
+
+        assert writes == [("sub-row", {"model_id": None})]
 
     @pytest.mark.asyncio
     async def test_rows_this_sweep_cannot_resolve_are_skipped(self):

@@ -242,6 +242,51 @@ class TestBuildSubDeviceInfoIdentity:
             {"hid": 100, "mid": 200, "addr": 1, "sub_name": "Soil Sensor", "model": "HCS026FRF"},
         )
         assert info["model"] == "HCS026FRF"
+        assert info["model_id"] is None
+
+    def test_retail_name_shown_with_reported_model_as_model_id(self):
+        """An HCS0565ARF reports as HCS0528ARF; the page shows the name on the box."""
+        info = build_sub_device_info(
+            {"hid": 100, "mid": 200, "addr": 1, "model": "HCS0528ARF", "display_model": "HCS0565ARF"},
+        )
+        assert info["model"] == "HCS0565ARF"
+        assert info["model_id"] == "HCS0528ARF"
+
+    def test_truncated_display_model_is_ignored(self):
+        """A displayModel that only drops the suffix leaves the page unchanged."""
+        info = build_sub_device_info(
+            {"hid": 100, "mid": 200, "addr": 1, "model": "HCS026FRF", "display_model": "HCS026"},
+        )
+        assert info["model"] == "HCS026FRF"
+        assert info["model_id"] is None
+
+    def test_unnamed_device_keeps_the_reported_model_in_its_name(self):
+        """The fallback name stays on the reported model so existing entity ids keep one prefix."""
+        info = build_sub_device_info(
+            {"hid": 100, "mid": 200, "addr": 1, "model": "HCS0528ARF", "display_model": "HCS0565ARF"},
+        )
+        assert info["name"] == "HCS0528ARF 1"
+
+    def test_registry_sweep_reports_the_retail_model(self):
+        """The poll-time sweep writes the same model, model_id and name the DeviceInfo did."""
+        from custom_components.rainpoint import _reported_device_fields
+
+        record = {"hid": 100, "mid": 200, "addr": 1, "model": "HCS0528ARF", "display_model": "HCS0565ARF"}
+        fields = _reported_device_fields("100_200_1", {"100_200_1": record}, {})
+        assert fields["model"] == "HCS0565ARF"
+        assert fields["model_id"] == "HCS0528ARF"
+        assert fields["name"] == "HCS0528ARF 1"
+
+    def test_non_string_display_model_is_ignored(self):
+        """A cloud value of the wrong type must not raise inside entity setup."""
+        info = build_sub_device_info({"hid": 100, "mid": 200, "addr": 1, "model": "HCS0528ARF", "display_model": 565})
+        assert info["model"] == "HCS0528ARF"
+        assert info["model_id"] is None
+
+    def test_display_model_without_model_is_ignored(self):
+        """No reported model means nothing to keep as model_id, so the fallback stands."""
+        info = build_sub_device_info({"hid": 100, "mid": 200, "addr": 1, "display_model": "HCS0565ARF"})
+        assert info["model"] == "Unknown"
 
 
 class TestBuildSubDeviceInfo:

@@ -64,8 +64,23 @@ def sub_device_display_name(sensor_info: dict) -> str:
     and the address instead.
     """
     addr = sensor_info["addr"]
+    # The reported model, not the retail one: entity ids are built from this name,
+    # and switching it would split an existing device's entities across two prefixes.
     model = sensor_info.get("model")
     return sensor_info.get("sub_name") or (f"{model} {addr}" if model else f"Device {addr}")
+
+
+def shown_model(sensor_info: dict) -> tuple[str | None, str | None]:
+    """Return the (model, model_id) a sub-device's page shows.
+
+    The retail name can differ from the model the device reports (an HCS0565ARF
+    reports as HCS0528ARF). A displayModel that only truncates model adds nothing.
+    """
+    model = sensor_info.get("model")
+    display_model = sensor_info.get("display_model")
+    if isinstance(model, str) and isinstance(display_model, str) and display_model and not model.startswith(display_model):
+        return display_model, model
+    return model, None
 
 
 def hub_display_name(hub_info: dict) -> str:
@@ -158,14 +173,13 @@ def build_sub_device_info(sensor_info: dict, platform: EntityPlatform | None = N
     the call site, a key that is never constructed states "this device has no
     parent" more plainly than a key carrying None, and it is what lets a test
     assert by key membership rather than by equality against None, which would
-    pass for either construction. The link is the first and only
-    conditionally-constructed key in this function; every other key is always
-    present.
+    pass for either construction.
     """
     hid = sensor_info["hid"]
     mid = sensor_info["mid"]
     addr = sensor_info["addr"]
-    model = sensor_info.get("model")
+    # model_id is always passed: None clears a stale value the registry would otherwise keep.
+    model, model_id = shown_model(sensor_info)
     optional: dict = {}
     if sensor_info.get("hub_paired", True):
         # The mid here is the carrying top-level record's, which is exactly the
@@ -184,6 +198,7 @@ def build_sub_device_info(sensor_info: dict, platform: EntityPlatform | None = N
         name=sub_device_display_name(sensor_info),
         manufacturer="RainPoint",  # RainPoint is the actual device manufacturer
         model=model or "Unknown",
+        model_id=model_id,
         sw_version=sensor_info.get("firmware_version"),
         serial_number=f"{mid}_{addr}",
         **optional,

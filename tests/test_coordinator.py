@@ -2666,6 +2666,25 @@ class TestSyncSilentDeviceIssues:
         assert reporting_record.silent is False
         assert reporting_record.missed_polls == 0
 
+    def test_silent_record_carries_the_retail_model(self):
+        """The not-reporting card names the device the way its device page does."""
+        coord, _ = _make_coord()
+        decoded_sensors = {
+            "100_200_1": {
+                "hid": 100,
+                "mid": 200,
+                "addr": 1,
+                "model": "HCS0528ARF",
+                "display_model": "HCS0565ARF",
+                "data": {"type": SILENT_DATA_TYPE, "missed_polls": 3},
+            },
+        }
+
+        _coord_module.RainPointCoordinator._sync_silent_device_issues(coord, decoded_sensors, [])
+
+        (records,) = coord._silent_issues.async_sync.call_args.args
+        assert records[0].model == "HCS0565ARF"
+
     def test_hub_paired_is_false_only_for_the_placeholder_parent_record(self):
         """The record must say whether a hub exists, not just what it is called.
 
@@ -5711,7 +5730,7 @@ class TestPureHelpers:
     def test_build_sensor_entry_returns_all_fields(self):
         """The returned dict carries every required metadata key."""
         hub = {"hid": 100, "name": "MyHub", "homeName": "Home", "deviceName": "dev1", "productKey": "pk1"}
-        sub = {"name": "Sensor1", "model": "MODEL_X", "softVer": "1.0"}
+        sub = {"name": "Sensor1", "model": "MODEL_X", "displayModel": "MODEL_Y", "softVer": "1.0"}
         s = {"id": "D1", "value": "10#AB"}
         entry = _coord_module._build_sensor_entry(hub, sub, mid=200, addr=1, status_entry=s, decoded={"type": "x"})
         for key in (
@@ -5734,6 +5753,7 @@ class TestPureHelpers:
         assert entry["device_name"] == "dev1"
         assert entry["product_key"] == "pk1"
         assert entry["data"] == {"type": "x"}
+        assert entry["display_model"] == "MODEL_Y"
 
     def test_build_sensor_entry_hub_name_defaults_to_Hub(self):
         """When hub has no 'name' key, hub_name falls back to 'Hub'."""
