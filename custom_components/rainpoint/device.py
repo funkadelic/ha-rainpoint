@@ -76,7 +76,7 @@ def shown_model(sensor_info: dict) -> tuple[str | None, str | None]:
     """
     model = sensor_info.get("model")
     display_model = sensor_info.get("display_model")
-    if display_model and model and not model.startswith(display_model):
+    if isinstance(model, str) and isinstance(display_model, str) and display_model and not model.startswith(display_model):
         return display_model, model
     return model, None
 

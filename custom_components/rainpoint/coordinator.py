@@ -74,6 +74,7 @@ from .const import (
     VALVE_MODELS,
     debug_with_version,
 )
+from .device import shown_model
 from .repairs import (
     HubConnectivityRecord,
     RainPointHubConnectivityIssues,
@@ -2538,7 +2539,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 hid=entry["hid"],
                 mid=entry["mid"],
                 addr=entry["addr"],
-                model=entry.get("model"),
+                model=shown_model(entry)[0],
                 hub_name=entry.get("hub_name"),
                 missed_polls=(entry.get("data") or {}).get("missed_polls", 0),
                 silent=(entry.get("data") or {}).get("type") == SILENT_DATA_TYPE,

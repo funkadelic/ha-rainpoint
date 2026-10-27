@@ -795,11 +795,12 @@ def _refresh_device_registry_fields(hass: HomeAssistant, entry: ConfigEntry, coo
             # Truthiness rather than "is not None" on purpose, and it is the
             # same gate both fields already needed: a poll that omits a field
             # and a payload the coordinator could not read both arrive here as
-            # a false value, and neither may blank a row.
+            # a false value, and neither may blank a row. model_id is the exception:
+            # it comes only from a readable record, and None there clears a retail name the cloud dropped.
             changed = {
                 field: value
                 for field, value in _reported_device_fields(key, sensors, hub_records).items()
-                if value and value != getattr(row, field, None)
+                if (value or field == "model_id") and value != getattr(row, field, None)
             }
             if not changed:
                 continue

@@ -277,6 +277,12 @@ class TestBuildSubDeviceInfoIdentity:
         assert fields["model_id"] == "HCS0528ARF"
         assert fields["name"] == "HCS0565ARF 1"
 
+    def test_non_string_display_model_is_ignored(self):
+        """A cloud value of the wrong type must not raise inside entity setup."""
+        info = build_sub_device_info({"hid": 100, "mid": 200, "addr": 1, "model": "HCS0528ARF", "display_model": 565})
+        assert info["model"] == "HCS0528ARF"
+        assert info["model_id"] is None
+
     def test_display_model_without_model_is_ignored(self):
         """No reported model means nothing to keep as model_id, so the fallback stands."""
         info = build_sub_device_info({"hid": 100, "mid": 200, "addr": 1, "display_model": "HCS0565ARF"})
