@@ -62,7 +62,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Rain detectors | HCS044FRF* | Rain detected, battery low, signal strength |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
-| Pool sensors | HCS0528ARF*, HCS0565ARF, HCS015ARF | Pool temperature, battery low |
+| Pool sensors | HCS0528ARF*, HCS0565ARF*, HCS015ARF | Pool temperature, battery low |
 | Pool + ambient sensors | HCS015ARF+ | Pool temperature, ambient temperature, humidity |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
 | Flow meters | HCS008FRF* | Live flow rate, water used and run length for the current and last run, water used today and in total, battery low, signal strength |
