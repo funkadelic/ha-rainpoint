@@ -71,13 +71,12 @@ This integration supports RainPoint Smart+ device families, including:
 
 \* A model marked with an asterisk has been validated against the hardware itself, by one of three routes: on the maintainer's own devices, by an owner who ran the release and confirmed the readings and controls matched what the device was doing, or by an owner whose diagnostics file let a decoded reading be checked against the value the RainPoint app showed for the same device. Every other model is supported from captured payloads alone, which is enough to decode a reading but not to confirm it against the hardware.
 
-The **HTV210B** only reports to the cloud while paired through a hub. Used over Bluetooth alone, RainPoint still lists it under the hub, but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. No valve entity is created for it in that state either, so a control that provably cannot reach the hardware is never offered.
+**Model notes**
 
-The **HIC801W** irrigation controller can start and stop any of its eight stations, alongside everything it already reported. Both halves were confirmed against the hardware by an owner. The controller runs one station at a time and decides that for itself: starting a second station while one is watering sends the command and shows whatever the controller does with it. Run lengths are whole minutes on this model, which is what the controller accepts.
-
-The **HCS044FRF** detects rain rather than measuring it, so it reports a wet/dry sensor and no rainfall totals. RainPoint's own product data lists none for it either. Its alarm and event-time datapoints are left unread until a capture settles what they mean.
-
-The **HCS008FRF** flow meter reports in liters, matching the RainPoint app. Its lifetime total is the entity to point Home Assistant's water dashboard at, since the meter calibrates that figure itself rather than leaving a pulse count to be converted. The current-run pair reads zero between runs, which is the state the app shows as "--".
+- **HTV210B**: reports only while paired through a hub. Over Bluetooth alone it shows as a not-reporting device, with no valve entity.
+- **HIC801W**: start and stop any of its eight stations. It runs one station at a time and decides that itself. Run lengths are whole minutes.
+- **HCS044FRF**: a wet/dry rain sensor with no rainfall totals.
+- **HCS008FRF**: reports in liters. Point the water dashboard at the lifetime total. The current-run readings show zero between runs.
 
 If a controller or valve you own is missing here, or is listed without the control you want, see [My device isn't listed](#my-device-isnt-listed).
 
