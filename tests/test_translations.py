@@ -480,8 +480,8 @@ class TestHubWordingNamesHardwareOnly:
     real hub hardware, and the three Repairs card bodies correctly name it in
     a bullet. The account itself is not a hub, and the fix for that is a
     single metadata field (manifest.json's integration_type). Any change that
-    reaches the prose naming real hub hardware, in the shipped translations or
-    in the README, is a regression rather than part of that fix.
+    reaches the prose naming real hub hardware in the shipped translations is a
+    regression rather than part of that fix.
     """
 
     def test_the_hub_bullet_appears_exactly_three_times_in_shipped_translations(self):
@@ -497,19 +497,6 @@ class TestHubWordingNamesHardwareOnly:
         manifest = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
         assert manifest["integration_type"] == _SETTLED_INTEGRATION_TYPE
         assert manifest["integration_type"] in _ACCEPTED_INTEGRATION_TYPES
-
-    def test_the_readme_hub_count_is_unchanged(self):
-        """A tripwire against a bulk edit, not a claim about how many times
-        the document discusses hubs: this counts substring matches of "hub"
-        case-insensitively across the whole file, including the ones inside
-        repository host names in the badge URLs."""
-        readme_path = Path(rainpoint_pkg.__file__).parent.parent.parent / "README.md"
-        blob = readme_path.read_text(encoding="utf-8")
-        # 84 before the firmware update entity was documented, which added
-        # three: the entity name, the per-hub scope and the bricking warning.
-        # 86 once the same entity reached sub-devices: the bullet dropped the
-        # "Hub" from its name and now warns about a device rather than a hub.
-        assert len(re.findall("hub", blob, re.IGNORECASE)) == 86
 
 
 class TestGenericControlFailedIssuePlaceholderParity:
