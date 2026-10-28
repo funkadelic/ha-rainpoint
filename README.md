@@ -62,7 +62,7 @@ This integration supports RainPoint Smart+ device families, including:
 | Rain detectors | HCS044FRF* | Rain detected, battery low, signal strength |
 | Temperature & humidity | HCS014ARF | Temperature, humidity |
 | Weather stations | HWS019WRF-V2 | Display hub diagnostics |
-| Pool sensors | HCS0528ARF*, HCS015ARF | Pool temperature, battery low |
+| Pool sensors | HCS0528ARF*, HCS0565ARF*, HCS015ARF | Pool temperature, battery low |
 | Pool + ambient sensors | HCS015ARF+ | Pool temperature, ambient temperature, humidity |
 | CO2 / env sensors | HCS0530THO | CO2, temperature, humidity |
 | Flow meters | HCS008FRF* | Live flow rate, water used and run length for the current and last run, water used today and in total, battery low, signal strength |
@@ -71,13 +71,12 @@ This integration supports RainPoint Smart+ device families, including:
 
 \* A model marked with an asterisk has been validated against the hardware itself, by one of three routes: on the maintainer's own devices, by an owner who ran the release and confirmed the readings and controls matched what the device was doing, or by an owner whose diagnostics file let a decoded reading be checked against the value the RainPoint app showed for the same device. Every other model is supported from captured payloads alone, which is enough to decode a reading but not to confirm it against the hardware.
 
-The **HTV210B** only reports to the cloud while paired through a hub. Used over Bluetooth alone, RainPoint still lists it under the hub, but the integration surfaces it as a not-reporting device rather than dropping it silently, since no readings and no control are available in that state. No valve entity is created for it in that state either, so a control that provably cannot reach the hardware is never offered.
+**Model notes**
 
-The **HIC801W** irrigation controller can start and stop any of its eight stations, alongside everything it already reported. Both halves were confirmed against the hardware by an owner. The controller runs one station at a time and decides that for itself: starting a second station while one is watering sends the command and shows whatever the controller does with it. Run lengths are whole minutes on this model, which is what the controller accepts.
-
-The **HCS044FRF** detects rain rather than measuring it, so it reports a wet/dry sensor and no rainfall totals. RainPoint's own product data lists none for it either. Its alarm and event-time datapoints are left unread until a capture settles what they mean.
-
-The **HCS008FRF** flow meter reports in liters, matching the RainPoint app. Its lifetime total is the entity to point Home Assistant's water dashboard at, since the meter calibrates that figure itself rather than leaving a pulse count to be converted. The current-run pair reads zero between runs, which is the state the app shows as "--".
+- **HTV210B**: reports only while paired through a hub. Over Bluetooth alone it shows as a not-reporting device, with no valve entity.
+- **HIC801W**: start and stop any of its eight stations. It runs one station at a time and decides that itself. Run lengths are whole minutes.
+- **HCS044FRF**: a wet/dry rain sensor with no rainfall totals.
+- **HCS008FRF**: reports in liters. Point the water dashboard at the lifetime total. The current-run readings show zero between runs.
 
 If a controller or valve you own is missing here, or is listed without the control you want, see [My device isn't listed](#my-device-isnt-listed).
 
@@ -170,19 +169,24 @@ You can still reach every device and zone the original account can. Invited memb
 
 For each device the coordinator discovers, the integration creates:
 
-- **Sensor entities**: one per measurement (moisture, temperature, rain, CO2, etc.) plus a disabled-by-default **Raw Payload** diagnostic sensor showing the raw hex data from the API. Devices of a supported model also get a disabled-by-default **Catalog Readings** sensor. It lists every reading RainPoint's product data says that model can send, and which of those the device's latest report actually contained. A reading the hardware never sends is then easy to tell apart from one that arrives and is not decoded yet. A device that returns no readings at all gets a single **Not Reporting** diagnostic entity instead, and none of the others, because there is no payload to show.
-- **Station watering sensors**: one per station on the HIC801W irrigation controller, showing whether that station is currently watering. See [Supported devices](#supported-devices) for the rest of what it reports.
-- **Rain Detected**: one binary sensor per HCS044FRF rain detector, on while the sensor is wet.
-- **Battery Low**: one binary sensor for each device that reports a battery condition, on while RainPoint says that device's cells are low. It answers low or not rather than how much is left, because the reading behind it is a condition rather than a charge level on every device this integration has seen a payload from. Not every battery device sends it: the temperature and humidity sensor and the CO2 sensor report no battery condition at all, so they get no entity here. This replaces the battery percentage entities earlier versions built, which could only ever read 100% or nothing at all, and a repair card offers to remove the ones left in your registry. It is a new entity with its own ID rather than a rename of the old one, so an automation, script or dashboard that refers to a battery percentage entity needs pointing at Battery Low instead. One watching the old entity for a low reading could never have fired anyway. The opt-in entities for unsupported devices are the exception and still carry a battery percentage, since a low-battery reading is not available on that path yet.
-- **Valve entities**: one per irrigation zone, for the valve models listed in the table above, including the HTV210B while it is hub-paired, and one per station on the HIC801W irrigation controller. A device the integration cannot currently reach gets no valve entity, as described under [Supported devices](#supported-devices).
-- **Number entities**: one per zone, or per station on the HIC801W, for configuring run duration (1 to 60 minutes), on those same models. The duration applies to the next run: changing it while that zone is already watering is refused with an explanation, and the value you typed is not saved, so set it again once the run ends. A refused change can leave the number box showing what you typed until you reload the page; the saved duration and the run in progress are both unaffected.
-- **Hub diagnostic sensors**: RSSI, firmware version, last-data-change timestamp.
-  **Last Data Change** is the same value the RainPoint app calls "last acquisition time", and it means what the app says it means: it moves only when the device's readings change or the device restarts. A sensor reporting a steady value produces no change and so no new timestamp, sometimes for many hours, while being perfectly healthy. An unchanged timestamp does not mean the device is offline, and this entity should not be used to decide whether one is. The entity was called **Last Updated** before version 1.21.0; the name changed because it read as "last heard from", which is not what it is. Display only, no entity ID changed and no history was affected.
-- **Firmware Update**: one per hub and one per sub-device, showing the firmware it is running and whether RainPoint is offering a newer one. The check runs when Home Assistant starts and every six hours after that. Installing is done in the RainPoint app rather than here: the cloud accepts an upgrade request, but it gives no way to choose which version you get and no way to tell a failure from a success, and a firmware update that goes wrong leaves a device that no longer works. RainPoint's changelog is not shown either, because it comes back in Chinese whatever language is asked for. The app offers this check on hubs and on the HTV210B only, while the cloud answers for every sub-device, so a model RainPoint has never published new firmware for will simply always read as up to date.
-- **Hub Cloud Connection**: one binary sensor per hub, on when RainPoint's cloud currently reports that hub as reachable. It exists whether or not [push](#real-time-push-updates) is enabled.
-- **Hub Automatic Broadcast Time**: one switch per hub, mirroring the same setting in the RainPoint app.
-- **Hub Broadcast Time Now**: one button per hub, sending the same one-shot time broadcast the app's button sends. A press only confirms the cloud accepted the command; there is nothing in the API response to confirm a sub-device actually acted on it.
-- **Transmission Power**: one select entity per hub-paired HTV210B. See [Transmission power control](#transmission-power-control) below for what it does and what it cannot confirm.
+| Entity | What it does |
+| --- | --- |
+| **Sensors** | One per measurement (moisture, temperature, rain, CO2, etc.). |
+| **Raw Payload** | Diagnostic, disabled by default. Shows the raw hex data from the API. |
+| **Catalog Readings** | Diagnostic, disabled by default, supported models only. Lists every reading RainPoint says the model can send and which ones the latest report contained. |
+| **Not Reporting** | Diagnostic. Created instead of the entities above when a device returns no readings at all. |
+| **Station watering** | One binary sensor per HIC801W station, on while that station is watering. |
+| **Rain Detected** | One binary sensor per HCS044FRF, on while the sensor is wet. |
+| **Battery Low** | One binary sensor per device that reports a battery condition, on while its cells are low. The temperature/humidity and CO2 sensors report no battery condition, so they get none. This replaces the old battery percentage entities under a new ID, so repoint any automation that used one. |
+| **Valve** | One per zone on the listed valve models (including a hub-paired HTV210B) and one per HIC801W station. |
+| **Run duration** | One number per zone or station, 1 to 60 minutes, applied to the next run. A change made while that zone is watering is refused. |
+| **RSSI, Firmware Version** | Hub diagnostic sensors. |
+| **Last Data Change** | Hub diagnostic. Moves only when readings change or the device restarts, so a steady timestamp does not mean the device is offline. Called **Last Updated** before 1.21.0. |
+| **Firmware Update** | One per hub and sub-device, checked at startup and every six hours. Install updates from the RainPoint app, because the cloud can't report whether an install succeeded. |
+| **Hub Cloud Connection** | One binary sensor per hub, on while RainPoint's cloud reports the hub as reachable. |
+| **Hub Automatic Broadcast Time** | One switch per hub, mirroring the app setting. |
+| **Hub Broadcast Time Now** | One button per hub. A press confirms only that the cloud accepted the command. |
+| **Transmission Power** | One select per hub-paired HTV210B. See [Transmission power control](#transmission-power-control). |
 
 All entities are grouped under their parent hub device in the Home Assistant device registry.
 
