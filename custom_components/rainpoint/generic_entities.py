@@ -378,8 +378,8 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         widths=frozenset({1, 2}),
         # Width: 1 on most models and 2 on the Bluetooth-capable ones, both
         # covered by the low-byte mask the transform applies.
-        # Evidence: api/validators.py:42-45 (_extract_rssi) reinterprets the
-        # raw byte as a signed int8, and api/decoders.py:95 discards
+        # Evidence: _extract_rssi in api/validators.py reinterprets the raw
+        # byte as a signed int8, and the decoders in api/decoders.py discard
         # non-negative values rather than reporting them.
     ),
     "STA_TEM": GenericSensorSpec(
@@ -393,9 +393,9 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         widths=frozenset({2}),
         # Width: 2 bytes, the width the cited decoders read through _le16
         # before scaling.
-        # Evidence: api/utils.py:93-95 (f10_to_c) treats the raw value as
-        # Fahrenheit times ten, and api/decoders.py:582 and api/decoders.py:734
-        # both show that scaling against real captured values.
+        # Evidence: f10_to_c in api/utils.py treats the raw value as
+        # Fahrenheit times ten, and _decode_moisture_full_hex and decode_pool
+        # in api/decoders.py both show that scaling against real captured values.
     ),
     "STA_WKSTATE": GenericSensorSpec(
         label="Run State",
