@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant.components.valve import ValveDeviceClass, ValveEntityFeature
 
-from custom_components.rainpoint.api import _encode_dp_duration_param, decode_hic801w
+from custom_components.rainpoint.api import decode_hic801w, encode_dp_duration_param
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
@@ -1969,7 +1969,7 @@ class TestEncodeDpDurationParam:
     )
     def test_known_values(self, seconds, expected):
         """Established encoding checkpoints from the capture."""
-        assert _encode_dp_duration_param(seconds) == expected
+        assert encode_dp_duration_param(seconds) == expected
 
     def test_repeated_calls_return_identical_string(self):
         """The encoder holds no state, so an interleaved call cannot disturb a repeat.
@@ -1982,9 +1982,9 @@ class TestEncodeDpDurationParam:
         """
         expected = "58020000"
 
-        assert _encode_dp_duration_param(600) == expected
-        _encode_dp_duration_param(120)
-        assert _encode_dp_duration_param(600) == expected
+        assert encode_dp_duration_param(600) == expected
+        encode_dp_duration_param(120)
+        assert encode_dp_duration_param(600) == expected
 
     @pytest.mark.parametrize(
         ("seconds", "expected"),
@@ -2005,7 +2005,7 @@ class TestEncodeDpDurationParam:
         as a valve command that failed with no indication that the duration was
         the problem. Clamping keeps the command well formed.
         """
-        assert _encode_dp_duration_param(seconds) == expected
+        assert encode_dp_duration_param(seconds) == expected
 
     def test_every_output_is_eight_hex_characters(self):
         """The wire format is fixed width, so no input may shorten or lengthen it.
@@ -2014,7 +2014,7 @@ class TestEncodeDpDurationParam:
         after it.
         """
         for seconds in (-1, 0, 1, 59, 60, 3600, 86400, 0xFFFFFFFF, 0x100000000):
-            encoded = _encode_dp_duration_param(seconds)
+            encoded = encode_dp_duration_param(seconds)
             assert len(encoded) == 8
             assert encoded == encoded.upper()
             int(encoded, 16)
@@ -2025,7 +2025,7 @@ class TestEncodeDpDurationParam:
         Pinned because the coercion is silent: this records what the encoder
         does today rather than endorsing a caller that passes one.
         """
-        assert _encode_dp_duration_param(True) == _encode_dp_duration_param(1)
+        assert encode_dp_duration_param(True) == encode_dp_duration_param(1)
 
 
 class TestDpClassDispatch:

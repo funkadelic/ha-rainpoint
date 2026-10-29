@@ -8,7 +8,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import _battery_flag_is_low
+from .api import battery_flag_is_low
 from .const import DOMAIN, HIC801W_STATION_COUNT, MODEL_HCS044FRF, MODEL_HIC801W
 from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .entity import LateEntityAdder, RainPointSubDeviceEntity, hic801w_station_is_running, register_late_adder
@@ -145,7 +145,7 @@ class RainPointBatteryLowBinarySensor(RainPointSubDeviceEntity, BinarySensorEnti
     def is_on(self) -> bool | None:
         """Return True when the flag reads low, None when it is unmapped."""
         data = self._sensor_data
-        return _battery_flag_is_low(data.get("battery_flag")) if data else None
+        return battery_flag_is_low(data.get("battery_flag")) if data else None
 
 
 def _build_battery_low_entities(coordinator: RainPointCoordinator, key: str, info: dict) -> list:

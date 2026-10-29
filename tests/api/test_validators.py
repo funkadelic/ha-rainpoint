@@ -3,12 +3,12 @@
 import pytest
 
 from custom_components.rainpoint.api import (
-    _battery_flag_is_low,
-    _battery_flag_to_percent,
     _extract_battery_flag,
     _extract_rssi,
     _validate_payload,
     _validate_tag,
+    battery_flag_is_low,
+    battery_flag_to_percent,
 )
 
 
@@ -142,50 +142,50 @@ class TestExtractBatteryFlag:
 
 
 class TestBatteryFlagToPercent:
-    """Tests for _battery_flag_to_percent."""
+    """Tests for battery_flag_to_percent."""
 
     def test_the_proven_healthy_flag_maps_to_full(self):
         """1 is the only reading ever paired with a healthy cell."""
-        assert _battery_flag_to_percent(1) == 100
+        assert battery_flag_to_percent(1) == 100
 
     @pytest.mark.parametrize("flag", [0, 2, 3, 4, 255])
     def test_unproven_flags_map_to_none(self, flag):
         """No capture pairs these with a charge level, so none is invented.
 
         0 is in here rather than with the healthy flag above, and it is the
-        pair with _battery_flag_is_low that makes it belong there: the two
+        pair with battery_flag_is_low that makes it belong there: the two
         functions read one byte and may not disagree about an unobserved value.
         """
-        assert _battery_flag_to_percent(flag) is None
+        assert battery_flag_to_percent(flag) is None
 
     def test_missing_flag_maps_to_none(self):
         """A frame with no STA_BAT record yields no percentage."""
-        assert _battery_flag_to_percent(None) is None
+        assert battery_flag_to_percent(None) is None
 
 
 class TestBatteryFlagIsLow:
-    """Tests for _battery_flag_is_low."""
+    """Tests for battery_flag_is_low."""
 
     def test_flag_one_reads_as_not_low(self):
         """1 is the only value ever paired with a healthy cell."""
-        assert _battery_flag_is_low(1) is False
+        assert battery_flag_is_low(1) is False
 
     def test_flag_two_reads_as_low(self):
         """Every low-battery event the cloud raised landed on a poll reading 2."""
-        assert _battery_flag_is_low(2) is True
+        assert battery_flag_is_low(2) is True
 
     @pytest.mark.parametrize("flag", [0, 3, 4, 255])
     def test_unproven_flags_read_as_unknown(self, flag):
         """Nothing places these on the scale, 0 included, so neither state is asserted.
 
-        _battery_flag_to_percent gives 0 no percentage either: the two read one
+        battery_flag_to_percent gives 0 no percentage either: the two read one
         byte and may not disagree about an unobserved value.
         """
-        assert _battery_flag_is_low(flag) is None
+        assert battery_flag_is_low(flag) is None
 
     def test_missing_flag_reads_as_unknown(self):
         """A frame with no STA_BAT record yields no low-battery state."""
-        assert _battery_flag_is_low(None) is None
+        assert battery_flag_is_low(None) is None
 
 
 class TestValidateTag:

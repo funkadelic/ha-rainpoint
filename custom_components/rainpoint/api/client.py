@@ -850,7 +850,7 @@ class RainPointClient:
             mode: 1 = open, 0 = close.
             param: The pre-encoded 4-byte little-endian hex duration string this
                 endpoint reads in place of a ``duration`` field. Callers build it
-                with ``_encode_dp_duration_param``; this method sends no
+                with ``encode_dp_duration_param``; this method sends no
                 ``duration`` key at all.
             dp_code: The datapoint this command addresses. Defaults to the
                 Bluetooth valve code every current caller wants, so the valve path

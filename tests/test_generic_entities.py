@@ -16,7 +16,6 @@ from custom_components.rainpoint import generic_entities as generic_entities_mod
 from custom_components.rainpoint.api import get_catalog_fingerprint, get_catalog_variant_codes
 from custom_components.rainpoint.api import product_catalog as product_catalog_module
 from custom_components.rainpoint.api.decoders import (
-    _decode_packed_timestamp,
     decode_co2,
     decode_flow_meter,
     decode_hcs005frf,
@@ -27,14 +26,15 @@ from custom_components.rainpoint.api.decoders import (
     decode_hws019wrf_v2,
     decode_moisture_full,
     decode_moisture_simple,
+    decode_packed_timestamp,
     decode_pool_plus,
     decode_rain,
     decode_temphum,
 )
 from custom_components.rainpoint.api.generic_decoder import _STATUS_FIELDS, decode_generic
 from custom_components.rainpoint.api.trust import is_hand_written_model
-from custom_components.rainpoint.api.utils import _decode_packed_report_time
-from custom_components.rainpoint.api.validators import _battery_flag_to_percent
+from custom_components.rainpoint.api.utils import decode_packed_report_time
+from custom_components.rainpoint.api.validators import battery_flag_to_percent
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
@@ -1464,7 +1464,7 @@ class TestDurationRow:
 
         # STA_REPTIME is frame-level, and carries its own unpacking.
         report_raw = next(iter(by_name["STA_REPTIME"].values()))
-        report = datetime.fromisoformat(_decode_packed_report_time(report_raw))
+        report = datetime.fromisoformat(decode_packed_report_time(report_raw))
 
         # Zone records are emitted in ascending dp_id per datapoint kind, so
         # the Nth duration belongs with the Nth event time.
@@ -1476,7 +1476,7 @@ class TestDurationRow:
         assert len(running) == 1, "exactly one zone is mid-run in this capture"
         duration, event_raw = running[0]
 
-        event = datetime.fromisoformat(_decode_packed_timestamp(event_raw))
+        event = datetime.fromisoformat(decode_packed_timestamp(event_raw))
         assert (event - report).total_seconds() == duration
         assert self.SPEC.transform(duration) == 2940.0
         assert self.SPEC.unit == "s"
@@ -1516,7 +1516,7 @@ class TestReportTimeRow:
         """Reads the stamp off a real captured frame, not a constructed word."""
         decoded = decode_generic(SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD)
         raw = next(f["value"] for f in decoded["fields"] if f["name"] == "STA_REPTIME")
-        assert self.SPEC.transform(raw) == _decode_packed_report_time(raw)
+        assert self.SPEC.transform(raw) == decode_packed_report_time(raw)
         assert self.SPEC.transform(raw) == "2026-07-04T17:40:51"
 
     def test_it_claims_no_device_class_or_numeric_guards(self):
@@ -1584,7 +1584,7 @@ class TestEventTimeRow:
     def test_the_row_agrees_with_the_hand_written_unpacking(self):
         """The row must not restate the bit layout, only delegate to it."""
         spec = _IDENTITY_SPECS["STA_EVTIME"]
-        assert spec.transform(self.PACKED_STAMP) == _decode_packed_timestamp(self.PACKED_STAMP)
+        assert spec.transform(self.PACKED_STAMP) == decode_packed_timestamp(self.PACKED_STAMP)
         assert spec.transform(self.PACKED_STAMP) == "2026-07-30T14:05:00"
 
     def test_the_state_is_the_wall_clock_string(self):
@@ -1923,7 +1923,7 @@ class TestBatteryTransform:
     def test_the_row_agrees_with_the_hand_written_mapping_across_every_byte(self):
         """No byte value may read differently here than on the trusted path."""
         for raw in range(256):
-            expected = _battery_flag_to_percent(raw)
+            expected = battery_flag_to_percent(raw)
             assert self.SPEC.transform(raw) == (None if expected is None else float(expected))
 
 

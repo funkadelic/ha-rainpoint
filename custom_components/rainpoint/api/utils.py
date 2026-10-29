@@ -293,7 +293,7 @@ def _parse_tlv_payload(raw: str) -> dict:
     return tlv
 
 
-def _split_prefix(raw: str) -> tuple[str, bool]:
+def split_prefix(raw: str) -> tuple[str, bool]:
     """Return (hex_body, dp_id_prefixed) from a ``NN#...`` payload.
 
     ``dp_id_prefixed`` is true for the ``11#`` framing, where each entry starts
@@ -311,12 +311,12 @@ def _split_prefix(raw: str) -> tuple[str, bool]:
     return body.strip().upper(), dp_id_prefixed
 
 
-def _is_ascii_payload(raw: str) -> bool:
+def is_ascii_payload(raw: str) -> bool:
     """True when raw is the comma-and-semicolon ASCII framing, not a hex body.
 
     Three clauses, all required: ``"#"`` is absent (a ``NN#`` prefix always
     wins and routes to the hex path first -- every payload
-    ``_split_prefix``'s tail-truncation branch was written for carries that
+    ``split_prefix``'s tail-truncation branch was written for carries that
     prefix, so it is routed away before this test is ever reached); ``";"``
     is present, separating the header from the body;
     and a ``","`` appears in the pre-semicolon header, matching the
@@ -362,7 +362,7 @@ def _parse_ascii_rssi(raw: str) -> int | None:
     return rssi if rssi < 0 else None
 
 
-def _parse_hub_broadcast_flag(param: object) -> bool | None:
+def parse_hub_broadcast_flag(param: object) -> bool | None:
     """Read the hub record's `param` index-1 broadcast flag, or None when it
     cannot be trusted.
 
@@ -398,11 +398,11 @@ def _parse_hub_broadcast_flag(param: object) -> bool | None:
     return None
 
 
-def _splice_hub_broadcast_param(param: object, enabled: bool) -> str | None:
+def splice_hub_broadcast_param(param: object, enabled: bool) -> str | None:
     """Return `param` with only index 1 replaced by `enabled`, or
     None when the same gate that blocks the read blocks the write.
 
-    Calls `_parse_hub_broadcast_flag` itself as the gate -- not a
+    Calls `parse_hub_broadcast_flag` itself as the gate -- not a
     re-implementation of it -- so the two functions cannot drift apart on
     what counts as readable: a `param` this module could not itself parse to
     a `bool` (wrong type, too few fields, or an index-1 token that is neither
@@ -417,9 +417,9 @@ def _splice_hub_broadcast_param(param: object, enabled: bool) -> str | None:
     replacement token is always one of these two local literals; it is never
     derived from the input, so no cloud-supplied text can reach the field
     this function writes. Never raises, never logs at any level, for the same
-    reason `_parse_hub_broadcast_flag` does not.
+    reason `parse_hub_broadcast_flag` does not.
     """
-    if _parse_hub_broadcast_flag(param) is None:
+    if parse_hub_broadcast_flag(param) is None:
         return None
     # param is guaranteed a str with a recoverable index 1 at this point --
     # the gate above already proved it.
@@ -428,12 +428,12 @@ def _splice_hub_broadcast_param(param: object, enabled: bool) -> str | None:
     return _HUB_PARAM_DELIMITER.join(fields)
 
 
-def _parse_sub_power_mode(param: object) -> str | None:
+def parse_sub_power_mode(param: object) -> str | None:
     """Read a sub-device record's `param` key-5 transmission-power mode, or None.
 
     `param` arrives from a cloud JSON document with no guaranteed type, so
     anything other than a `str` is rejected outright -- `bool` is included in
-    that rejection deliberately, for the same reason `_parse_hub_broadcast_flag`
+    that rejection deliberately, for the same reason `parse_hub_broadcast_flag`
     excludes it.
 
     The blob is split on the comma delimiter into an ordered list of raw
@@ -451,7 +451,7 @@ def _parse_sub_power_mode(param: object) -> str | None:
     tighten this to an exact key set.
 
     Returns the canonical one-character mode digit ("0", "1", or "2") on
-    success, None on any failure. Like `_parse_hub_broadcast_flag`, this never
+    success, None on any failure. Like `parse_hub_broadcast_flag`, this never
     raises and never logs at any level: it runs on every poll for an affected
     sub-device, so a log line here would be per-poll spam rather than a
     one-off diagnostic.
@@ -477,11 +477,11 @@ def _parse_sub_power_mode(param: object) -> str | None:
     return mode
 
 
-def _splice_sub_power_mode(param: object, mode: str) -> str | None:
+def splice_sub_power_mode(param: object, mode: str) -> str | None:
     """Return `param` with only key 5's value token replaced, or None when the
     same gate that blocks the read blocks the write.
 
-    Calls `_parse_sub_power_mode` itself as the gate -- not a re-implementation
+    Calls `parse_sub_power_mode` itself as the gate -- not a re-implementation
     of it -- so the two functions cannot drift apart on what counts as
     readable: a `param` this module could not itself parse (wrong type, a
     malformed token, a duplicate key, an absent key 5, or an unrecognised
@@ -498,9 +498,9 @@ def _splice_sub_power_mode(param: object, mode: str) -> str | None:
     position. This never rebuilds the string from parsed keys and never
     routes it through a dict, so a duplicate key cannot silently coalesce.
     Never raises, never logs at any level, for the same reason
-    `_parse_sub_power_mode` does not.
+    `parse_sub_power_mode` does not.
     """
-    if _parse_sub_power_mode(param) is None:
+    if parse_sub_power_mode(param) is None:
         return None
     if mode not in ("0", "1", "2"):
         return None
@@ -545,7 +545,7 @@ def _parse_wide_entry(data: list[int], i: int) -> tuple[int, list[int], int] | N
     return field, chunk[1:], i + span
 
 
-def _parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
+def parse_entries(data: list[int], dp_id_prefixed: bool) -> list[dict]:
     """Walk the self-describing byte stream into structural entries.
 
     Header byte layout, derived from our captured payloads:
@@ -598,7 +598,7 @@ def _find_field_value(b: bytes, field: int, *, dp_id_prefixed: bool = False) -> 
     datapoints at fixed offsets is what made the previous battery extraction
     land on the trailing report-time header instead.
     """
-    for entry in _parse_entries(list(b), dp_id_prefixed):
+    for entry in parse_entries(list(b), dp_id_prefixed):
         if entry["field"] == field:
             return entry["value_bytes"]
     return None
@@ -620,7 +620,7 @@ def _find_field_int(b: bytes, field: int, *, dp_id_prefixed: bool = False, signe
     return int.from_bytes(bytes(value_bytes), "little", signed=signed)
 
 
-def _decode_packed_report_time(raw: int) -> str | None:
+def decode_packed_report_time(raw: int) -> str | None:
     """Unpack a 32-bit STA_REPTIME word into an ISO-8601 local wall-clock string.
 
     Bit layout, most significant first: 6 bits year (from
@@ -648,11 +648,11 @@ def _extract_report_time(b: bytes, *, dp_id_prefixed: bool = False) -> tuple[str
     if not value_bytes or len(value_bytes) != 4:
         return None
     raw = int.from_bytes(bytes(value_bytes), "little")
-    iso = _decode_packed_report_time(raw)
+    iso = decode_packed_report_time(raw)
     return None if iso is None else (iso, raw)
 
 
-def _encode_dp_duration_param(seconds: int) -> str:
+def encode_dp_duration_param(seconds: int) -> str:
     """Encode a duration in seconds as the ``param`` string ``controlWorkModeDP`` reads.
 
     The endpoint carries the run duration as an unsigned 4-byte little-endian
@@ -672,12 +672,12 @@ def _le16(b: bytes, offset: int) -> int:
     return int.from_bytes(b[offset : offset + 2], "little")
 
 
-def _f10_to_c(temp_raw_f10: int) -> float:
+def f10_to_c(temp_raw_f10: int) -> float:
     """Convert temperature from F*10 to Celsius."""
     return (temp_raw_f10 / 10.0 - 32.0) * 5.0 / 9.0
 
 
-def _valid_rssi_dbm(value) -> int | None:
+def valid_rssi_dbm(value) -> int | None:
     """Return a signal reading only when it is one, else None.
 
     A dBm reading off these radios is negative. Zero or a positive number
@@ -700,6 +700,6 @@ def _base_decoder_dict(device_type: str, rssi: int | None, raw_bytes: bytes) -> 
     """Create base decoder dictionary with common fields."""
     return {
         "type": device_type,
-        "rssi_dbm": _valid_rssi_dbm(rssi),
+        "rssi_dbm": valid_rssi_dbm(rssi),
         "raw_bytes": raw_bytes,
     }

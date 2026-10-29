@@ -15,12 +15,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import (
-    _encode_dp_duration_param,
     decode_hic801w,
     decode_htv145frf,
     decode_htv210b_dp_state,
     decode_htv213frf_valve,
     decode_valve_hub,
+    encode_dp_duration_param,
     has_bluetooth_control_identity,
 )
 from .const import (
@@ -474,7 +474,7 @@ class RainPointDpValveEntity(RainPointValveEntity):
         addr = self._sensor_info["addr"]
         device_name = self._sensor_info.get("device_name") or ""
         product_key = self._sensor_info.get("product_key") or ""
-        param = _encode_dp_duration_param(duration)
+        param = encode_dp_duration_param(duration)
 
         _LOGGER.debug(
             "Opening DP valve mid=%s addr=%s zone=%s duration=%ss",
@@ -505,7 +505,7 @@ class RainPointDpValveEntity(RainPointValveEntity):
         product_key = self._sensor_info.get("product_key") or ""
         # Called through the encoder rather than hardcoded, so the open and
         # close paths cannot drift from each other's zero-duration encoding.
-        param = _encode_dp_duration_param(0)
+        param = encode_dp_duration_param(0)
 
         _LOGGER.debug(
             "Closing DP valve mid=%s addr=%s zone=%s",

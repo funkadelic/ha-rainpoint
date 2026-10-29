@@ -22,7 +22,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .api import _SINGLE_OUTLET_GALLONS_PER_COUNT, _USAGE_GALLONS_PER_COUNT, _is_ascii_payload, _parse_entries, _split_prefix
+from .api import SINGLE_OUTLET_GALLONS_PER_COUNT, USAGE_GALLONS_PER_COUNT, is_ascii_payload, parse_entries, split_prefix
 from .api.product_catalog import get_catalog_entry, get_catalog_variant_codes
 from .const import (
     CONF_GENERIC_ENTITIES_ENABLED,
@@ -295,7 +295,7 @@ def _make_htv145frf_entities(coordinator, key, info, base_slug):
     zones = (info.get("data") or {}).get("zones")
     if isinstance(zones, dict):
         entities.extend(
-            RainPointZoneWaterUsageSensor(coordinator, key, info, base_slug, zone_num, _SINGLE_OUTLET_GALLONS_PER_COUNT)
+            RainPointZoneWaterUsageSensor(coordinator, key, info, base_slug, zone_num, SINGLE_OUTLET_GALLONS_PER_COUNT)
             for zone_num in sorted(zones)
         )
     return entities
@@ -1644,12 +1644,12 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
         goes hunting for a decoder that was never owed.
         """
         raw = (self._live_info.get("raw_status") or {}).get("value")
-        if not by_code or not isinstance(raw, str) or _is_ascii_payload(raw):
+        if not by_code or not isinstance(raw, str) or is_ascii_payload(raw):
             # The ASCII framing is routed out by name rather than left to fail
             # the hex parse: its header token is decimal, and a two-digit one
             # parses as hex and walks into records the device never sent.
             return None
-        body, dp_id_prefixed = _split_prefix(raw)
+        body, dp_id_prefixed = split_prefix(raw)
         try:
             data = list(bytes.fromhex(body))
         except ValueError:
@@ -1657,7 +1657,7 @@ class RainPointCatalogReadingsSensor(RainPointSensorBase):
         if not data:
             return None
         received: set[str] = set()
-        for entry in _parse_entries(data, dp_id_prefixed):
+        for entry in parse_entries(data, dp_id_prefixed):
             received |= by_code.get(entry["field"], set())
         return sorted(received)
 
@@ -1781,7 +1781,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
         sensor_info: dict,
         base_slug: str,
         zone_num: int,
-        gallons_per_count: float = _USAGE_GALLONS_PER_COUNT,
+        gallons_per_count: float = USAGE_GALLONS_PER_COUNT,
     ) -> None:
         """Name and key the water-usage sensor for one zone."""
         super().__init__(coordinator, sensor_key, sensor_info, base_slug, zone_num)
@@ -2035,7 +2035,7 @@ class RainPointHicRunEndsAtSensor(RainPointHic801wSensorBase):
 
     STA_EVTIME is the run's END time, not its start. Every station in the
     reporter's 2026-08-10 sweep decodes to that frame's own log timestamp
-    plus its 60 second duration, and _decode_packed_timestamp's docstring
+    plus its 60 second duration, and decode_packed_timestamp's docstring
     already records the same meaning for the HTV213 and HTV210B families.
     Remaining run time is therefore this entity's value minus now, not this
     entity's value minus STA_DURATION.
@@ -2046,7 +2046,7 @@ class RainPointHicRunEndsAtSensor(RainPointHic801wSensorBase):
     ways and must never be arithmetic on each other's terms.
 
     The decoder's run_ends_at is a deliberately naive local wall-clock ISO
-    string (api/decoders.py's _decode_packed_timestamp docstring), and Home
+    string (api/decoders.py's decode_packed_timestamp docstring), and Home
     Assistant raises ValueError on a naive datetime for a TIMESTAMP sensor
     (homeassistant/components/sensor/__init__.py:620-624). dt_util.as_local
     attaches Home Assistant's own configured timezone to a naive input

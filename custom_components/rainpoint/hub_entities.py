@@ -22,7 +22,7 @@ from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import _parse_hub_broadcast_flag, _splice_hub_broadcast_param, _valid_rssi_dbm
+from .api import parse_hub_broadcast_flag, splice_hub_broadcast_param, valid_rssi_dbm
 from .const import (
     HUB_UNIQUE_ID_PREFIX,
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
@@ -323,7 +323,7 @@ def _parse_hub_rssi(state_value) -> int | None:
     if len(parts) < 2:
         return None
     try:
-        return _valid_rssi_dbm(int(parts[1]))
+        return valid_rssi_dbm(int(parts[1]))
     except ValueError:
         return None
 
@@ -589,7 +589,7 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity[RainPointCoordinator], Switc
         """
         if self._optimistic is not None:
             return self._optimistic
-        return _parse_hub_broadcast_flag(self._record.get("param"))
+        return parse_hub_broadcast_flag(self._record.get("param"))
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -629,7 +629,7 @@ class RainPointHubBroadcastSwitch(CoordinatorEntity[RainPointCoordinator], Switc
         client's write returns successfully, so a raised write leaves no
         optimistic state behind.
         """
-        spliced = _splice_hub_broadcast_param(self._record.get("param"), enabled)
+        spliced = splice_hub_broadcast_param(self._record.get("param"), enabled)
         if spliced is None:
             raise HomeAssistantError("The hub's settings could not be read, so this setting cannot be changed")
         client = self.coordinator._client
