@@ -1,4 +1,3 @@
-# isort: off
 from .api.models import (
     HAND_WRITTEN_MODELS as HAND_WRITTEN_MODELS,
     MODEL_CO2 as MODEL_CO2,
@@ -44,7 +43,6 @@ from .api.models import (
     MODEL_VALVE_445 as MODEL_VALVE_445,
     MODEL_VALVE_HUB as MODEL_VALVE_HUB,
 )
-# isort: on
 
 # Display Hub model constant
 DOMAIN = "rainpoint"

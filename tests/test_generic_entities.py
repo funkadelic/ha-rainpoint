@@ -11,10 +11,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.rainpoint import generic_control as generic_control_module
-from custom_components.rainpoint import generic_entities as generic_entities_module
-from custom_components.rainpoint.api import get_catalog_fingerprint, get_catalog_variant_codes
-from custom_components.rainpoint.api import product_catalog as product_catalog_module
+from custom_components.rainpoint import generic_control as generic_control_module, generic_entities as generic_entities_module
+from custom_components.rainpoint.api import (
+    get_catalog_fingerprint,
+    get_catalog_variant_codes,
+    product_catalog as product_catalog_module,
+)
 from custom_components.rainpoint.api.decoders import (
     decode_co2,
     decode_flow_meter,

@@ -34,9 +34,9 @@ from custom_components.rainpoint import (
     _sync_orphaned_entity_issues,
     _sync_orphaned_entity_issues_on_updates,
     async_remove_entry,
+    coordinator as coordinator_module,
     repairs,
 )
-from custom_components.rainpoint import coordinator as coordinator_module
 from custom_components.rainpoint.const import (
     CONF_HIDS,
     DOMAIN,

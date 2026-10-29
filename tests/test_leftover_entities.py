@@ -43,8 +43,8 @@ from custom_components.rainpoint import (
     _settled_leftover_pairs,
     _sync_orphaned_entity_issues_on_updates,
     _take_doomed_rows,
+    dr as rainpoint_dr,
 )
-from custom_components.rainpoint import dr as rainpoint_dr
 from custom_components.rainpoint.const import (
     DOMAIN,
     GENERIC_CONTROL_UNIQUE_ID_MARKER,

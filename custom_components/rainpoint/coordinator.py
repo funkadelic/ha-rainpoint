@@ -1,8 +1,7 @@
 import logging
 import re
 from collections import deque
-from collections.abc import Callable, Iterable
-from collections.abc import Set as AbstractSet
+from collections.abc import Callable, Iterable, Set as AbstractSet
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
