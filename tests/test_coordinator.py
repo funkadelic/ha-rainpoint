@@ -350,7 +350,7 @@ class TestCoordinatorUpdate:
     async def test_raw_hub_record_not_summarised_above_debug(self, caplog):
         """Above DEBUG the summary is never built, not merely never emitted.
 
-        Asserting that _summarize_record never runs is what proves the guard
+        Asserting that summarize_record never runs is what proves the guard
         skipped the work; an absent log record alone would also be satisfied by
         the logger filtering a record whose arguments had already been built.
         """
@@ -359,7 +359,7 @@ class TestCoordinatorUpdate:
         client.get_multiple_device_status.return_value = _make_status()
 
         with (
-            patch.object(_coord_module, "_summarize_record", wraps=_coord_module._summarize_record) as summarize,
+            patch.object(_coord_module, "summarize_record", wraps=_coord_module.summarize_record) as summarize,
             caplog.at_level(logging.INFO, logger="custom_components.rainpoint.coordinator"),
         ):
             await _run(coord)

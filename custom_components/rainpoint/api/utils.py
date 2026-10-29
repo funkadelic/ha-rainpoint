@@ -135,7 +135,7 @@ def _safe_key(key: object) -> str:
     return cleaned or _EMPTY_MARKER
 
 
-def _summarize_record(record: object) -> str:
+def summarize_record(record: object) -> str:
     """Render a cloud record as its shape and key names, never its values.
 
     This is the shape every log line on a cloud-record path uses instead of
@@ -181,15 +181,15 @@ def _render_keys(keys) -> str:
 
 
 class _RecordSummary:
-    """A _summarize_record call deferred until something actually formats it.
+    """A summarize_record call deferred until something actually formats it.
 
     Log call arguments are evaluated whether or not the record survives level
-    filtering, so a bare _summarize_record(...) inside a _LOGGER.debug(...) does
+    filtering, so a bare summarize_record(...) inside a _LOGGER.debug(...) does
     its work on every poll even with debug logging off. Wrapping it means the
     string is built only when a handler formats the record, which is the whole
     difference between a debug aid and a cost every user pays.
 
-    Use this at log call sites. Call _summarize_record directly only when the
+    Use this at log call sites. Call summarize_record directly only when the
     string is wanted right now.
     """
 
@@ -200,11 +200,11 @@ class _RecordSummary:
 
     def __str__(self) -> str:
         """Render the summary, at format time rather than at call time."""
-        return _summarize_record(self._record)
+        return summarize_record(self._record)
 
     def __repr__(self) -> str:
         """Match __str__ so %r and %s agree in a log line."""
-        return _summarize_record(self._record)
+        return summarize_record(self._record)
 
 
 # The second digit selects the framing and the first does not change it: one

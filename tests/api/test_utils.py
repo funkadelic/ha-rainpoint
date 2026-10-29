@@ -28,7 +28,7 @@ from custom_components.rainpoint.api.utils import (
     _redact_secret,
     _safe_key,
     _split_prefix,
-    _summarize_record,
+    summarize_record,
 )
 from tests.payload_samples import (
     HWS019WRF_V2_PAYLOAD,
@@ -864,7 +864,7 @@ class TestSummarizeRecord:
 
     def test_dict_reports_count_and_sorted_keys_without_values(self):
         """The identifiers this integration was found leaking do not survive the summary."""
-        rendered = _summarize_record({"mid": 236547, "deviceName": "MAC-A84674BB91F0", "productKey": "a3QrDxYPTM2"})
+        rendered = summarize_record({"mid": 236547, "deviceName": "MAC-A84674BB91F0", "productKey": "a3QrDxYPTM2"})
         assert rendered == "dict(n=3) keys=[deviceName,mid,productKey]"
         assert "MAC-A84674BB91F0" not in rendered
         assert "a3QrDxYPTM2" not in rendered
@@ -872,38 +872,38 @@ class TestSummarizeRecord:
 
     def test_list_reports_length_and_the_union_of_item_keys(self):
         """A status response reads as a count plus a field set, not as its records."""
-        rendered = _summarize_record([{"mid": 1, "status": []}, {"mid": 2, "iotId": "jDQNeV92iFixCU42"}])
+        rendered = summarize_record([{"mid": 1, "status": []}, {"mid": 2, "iotId": "jDQNeV92iFixCU42"}])
         assert rendered == "list(n=2) keys=[iotId,mid,status]"
         assert "jDQNeV92iFixCU42" not in rendered
 
     def test_nested_values_are_counted_rather_than_walked(self):
         """A nested payload contributes its parent key only, never its own contents."""
-        rendered = _summarize_record({"data": {"param": "SECRET-BLOB", "sid": "D1"}})
+        rendered = summarize_record({"data": {"param": "SECRET-BLOB", "sid": "D1"}})
         assert rendered == "dict(n=1) keys=[data]"
         assert "SECRET-BLOB" not in rendered
 
     def test_list_of_non_dicts_reports_its_length_with_no_keys(self):
         """A bare list still yields a count, which is the useful half."""
-        assert _summarize_record([1, 2, 3]) == "list(n=3) keys=[]"
+        assert summarize_record([1, 2, 3]) == "list(n=3) keys=[]"
 
     def test_tuple_is_summarised_like_a_list(self):
         """Tuples arrive from internal callers and must not fall through to <tuple>."""
-        assert _summarize_record(({"a": 1},)) == "list(n=1) keys=[a]"
+        assert summarize_record(({"a": 1},)) == "list(n=1) keys=[a]"
 
     def test_none_and_scalars_render_as_markers_never_as_their_value(self):
         """A scalar body is named by type, so a raw token can never be the summary."""
-        assert _summarize_record(None) == "<none>"
-        assert _summarize_record("a-raw-token") == "<str>"
-        assert _summarize_record(7) == "<int>"
+        assert summarize_record(None) == "<none>"
+        assert summarize_record("a-raw-token") == "<str>"
+        assert summarize_record(7) == "<int>"
 
     def test_key_sanitising_applies_inside_the_summary(self):
         """The key bound is enforced through the summary, not only when called directly."""
-        assert _summarize_record({"bad\nkey": 1}) == "dict(n=1) keys=[bad?key]"
+        assert summarize_record({"bad\nkey": 1}) == "dict(n=1) keys=[bad?key]"
 
     def test_empty_dict_and_empty_list_are_distinguishable(self):
         """An empty body still says which shape it was."""
-        assert _summarize_record({}) == "dict(n=0) keys=[]"
-        assert _summarize_record([]) == "list(n=0) keys=[]"
+        assert summarize_record({}) == "dict(n=0) keys=[]"
+        assert summarize_record([]) == "list(n=0) keys=[]"
 
 
 class TestRedactSecret:
@@ -952,7 +952,7 @@ class TestSummaryIsBounded:
     def test_key_count_is_capped_and_the_omission_is_stated(self):
         """A wide record renders a capped key list plus a count of what was dropped."""
         record = {f"field{i:03d}": i for i in range(100)}
-        rendered = _summarize_record(record)
+        rendered = summarize_record(record)
         # The true width is still reported, so the cap never disguises the size.
         assert rendered.startswith("dict(n=100) keys=[")
         assert rendered.endswith(",+68 more]")
@@ -961,20 +961,20 @@ class TestSummaryIsBounded:
     def test_list_items_walked_are_capped_and_the_scan_is_stated(self):
         """A long list is not walked in full, and says so rather than implying it was."""
         record = [{f"key{i}": i} for i in range(500)]
-        rendered = _summarize_record(record)
+        rendered = summarize_record(record)
         assert rendered.startswith("list(n=500) keys=[")
         assert rendered.endswith(" scanned=50")
 
     def test_a_short_list_carries_no_scanned_marker(self):
         """The marker appears only when it is true, so ordinary output stays clean."""
-        rendered = _summarize_record([{"a": 1}, {"b": 2}])
+        rendered = summarize_record([{"a": 1}, {"b": 2}])
         assert rendered == "list(n=2) keys=[a,b]"
         assert "scanned" not in rendered
 
     def test_a_record_at_exactly_the_cap_is_not_marked(self):
         """Off-by-one guard on both caps."""
-        assert ",+" not in _summarize_record({f"f{i:02d}": i for i in range(32)})
-        assert "scanned" not in _summarize_record([{"a": 1}] * 50)
+        assert ",+" not in summarize_record({f"f{i:02d}": i for i in range(32)})
+        assert "scanned" not in summarize_record([{"a": 1}] * 50)
 
     def test_kept_keys_are_joined_by_a_plain_comma(self):
         """The rendered key list is comma-joined, not by some other separator.
@@ -984,13 +984,13 @@ class TestSummaryIsBounded:
         somewhere in it, so this pins the exact rendered string instead.
         """
         record = {f"k{i:02d}": i for i in range(34)}
-        rendered = _summarize_record(record)
+        rendered = summarize_record(record)
         expected_keys = ",".join(f"k{i:02d}" for i in range(32))
         assert rendered == f"dict(n=34) keys=[{expected_keys},+2 more]"
 
     def test_duplicate_sanitised_keys_collapse_rather_than_repeating(self):
         """Two keys that sanitise to the same token render once, not twice."""
-        assert _summarize_record({"a\nb": 1, "a\tb": 2}) == "dict(n=2) keys=[a?b]"
+        assert summarize_record({"a\nb": 1, "a\tb": 2}) == "dict(n=2) keys=[a?b]"
 
 
 class TestRecordSummaryIsLazy:
@@ -1009,7 +1009,7 @@ class TestRecordSummaryIsLazy:
             calls.append(record)
             return "summary"
 
-        monkeypatch.setattr("custom_components.rainpoint.api.utils._summarize_record", _spy)
+        monkeypatch.setattr("custom_components.rainpoint.api.utils.summarize_record", _spy)
         wrapper = _RecordSummary({"deviceName": "MAC-A84674BB91F0"})
         assert calls == []
         assert str(wrapper) == "summary"
@@ -1018,12 +1018,12 @@ class TestRecordSummaryIsLazy:
     def test_it_renders_the_same_string_summarize_record_would(self):
         """The wrapper is a deferral, not a different format."""
         record = {"mid": 1, "deviceName": "MAC-A84674BB91F0"}
-        assert str(_RecordSummary(record)) == _summarize_record(record)
+        assert str(_RecordSummary(record)) == summarize_record(record)
 
     def test_repr_matches_str_so_a_percent_r_line_is_safe_too(self):
         """A log line written with %r must not fall back to the object repr."""
         record = {"productKey": "a3QrDxYPTM2"}
-        assert repr(_RecordSummary(record)) == _summarize_record(record)
+        assert repr(_RecordSummary(record)) == summarize_record(record)
         assert "a3QrDxYPTM2" not in repr(_RecordSummary(record))
 
     def test_a_debug_call_with_debug_off_never_builds_the_summary(self, caplog):
