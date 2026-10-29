@@ -63,7 +63,7 @@ Scope it to a module while you work on that module. A whole-tree `mutmut run` co
 
 Pass `--max-children`, and pick a number below your core count. It defaults to one worker per core, and every worker is a forked copy of a process that has already imported Home Assistant and the whole test suite, so a default run saturates the machine and costs a few hundred MB per worker. That is enough to leave a laptop, or a WSL session, unresponsive until the run finishes. Half your cores is a reasonable ceiling, and prefixing the command with `nice -n 19` keeps the rest of your shell usable.
 
-Even with `--max-children`, a whole-tree run can hang WSL. Some mutants of `_parse_entries` in `api/utils.py` break its loop so it never ends, and the worker running one grows by a few hundred MB a second until mutmut's timeout stops it, several GB later. Two or three of those running side by side can exhaust memory. On Linux or WSL with systemd, cap the run so the kernel kills the runaway worker instead:
+Even with `--max-children`, a whole-tree run can hang WSL. Some mutants of `parse_entries` in `api/utils.py` break its loop so it never ends, and the worker running one grows by a few hundred MB a second until mutmut's timeout stops it, several GB later. Two or three of those running side by side can exhaust memory. On Linux or WSL with systemd, cap the run so the kernel kills the runaway worker instead:
 
 ```bash
 systemd-run --user --scope -p MemoryMax=10G -p MemorySwapMax=0 -p OOMPolicy=continue nice -n 19 mutmut run --max-children 4

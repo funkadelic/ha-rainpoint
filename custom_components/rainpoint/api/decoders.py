@@ -26,22 +26,22 @@ from .utils import (
     STA_WKSTATE_FIELD,
     _base_decoder_dict,
     _extract_report_time,
-    _f10_to_c,
     _find_field_int,
     _find_field_value,
     _is_dp_id_framed,
     _le16,
-    _parse_entries,
     _parse_rainpoint_payload,
     _parse_tlv_payload,
-    _valid_rssi_dbm,
+    f10_to_c,
+    parse_entries,
+    valid_rssi_dbm,
 )
 from .validators import (
-    _battery_flag_to_percent,
     _extract_battery_flag,
     _extract_rssi,
     _validate_payload,
     _validate_tag,
+    battery_flag_to_percent,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ _DP_BASE_USAGE = 0x28
 # a finer calibration from a larger run can be applied later without
 # re-capturing anything, and without invalidating stored history, since the
 # usage entity deliberately stays out of long-term statistics.
-_USAGE_GALLONS_PER_COUNT = 1 / 500
+USAGE_GALLONS_PER_COUNT = 1 / 500
 
 # Litres per raw count on the HCS008FRF's volume datapoints. Confirmed against
 # a reporter's app screenshot taken alongside the frame the meter sent at the
@@ -100,7 +100,7 @@ _LITRES_PER_US_GALLON = 3.785411784
 
 # HTV145FRF STA_LASTUSAGE, sharing the HCS008FRF's unit. Confirmed against two app
 # readings (219 counts as 5.8 gal, 3111 counts as 82.2 gal), so good to about 0.1%.
-_SINGLE_OUTLET_GALLONS_PER_COUNT = _FLOW_LITRES_PER_COUNT / _LITRES_PER_US_GALLON
+SINGLE_OUTLET_GALLONS_PER_COUNT = _FLOW_LITRES_PER_COUNT / _LITRES_PER_US_GALLON
 
 # Year offset for the packed timestamps carried by the 4-byte 0xB7 records.
 _TIMESTAMP_YEAR_BASE = 2020
@@ -258,10 +258,10 @@ def _extract_dp_battery(b: bytes) -> tuple[int | None, int | None]:
     that same comment described.
     """
     flag = _extract_battery_flag(b, dp_id_prefixed=True)
-    return flag, _battery_flag_to_percent(flag)
+    return flag, battery_flag_to_percent(flag)
 
 
-def _decode_packed_timestamp(value: int) -> str | None:
+def decode_packed_timestamp(value: int) -> str | None:
     """Decode a packed wall-clock stamp into an ISO string, or None if unusable.
 
     The 4-byte 0xB7 records hold a little-endian word whose bit fields are,
@@ -392,7 +392,7 @@ def _zone_from_reads(state_bytes: bytes | None, dur_bytes: bytes | None, ev_byte
 
     event_time = None
     if ev_bytes is not None and len(ev_bytes) == 4:
-        event_time = _decode_packed_timestamp(int.from_bytes(ev_bytes, "little"))
+        event_time = decode_packed_timestamp(int.from_bytes(ev_bytes, "little"))
 
     return {
         "open": bool(state_bytes[0] & 0x01),
@@ -414,7 +414,7 @@ def _map_dp_records(b: bytes) -> dict[tuple[int, int], bytes]:
     the record's own structural field index; a record that belongs to another
     datapoint can never satisfy a lookup. Duplicate pairs are last-write-wins.
     """
-    return {(e["dp_id"], e["field"]): bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=True)}
+    return {(e["dp_id"], e["field"]): bytes(e["value_bytes"]) for e in parse_entries(list(b), dp_id_prefixed=True)}
 
 
 def _extract_dp_zones(records: dict[tuple[int, int], bytes], *, with_usage: bool) -> dict[int, dict]:
@@ -443,7 +443,7 @@ def _extract_dp_zones(records: dict[tuple[int, int], bytes], *, with_usage: bool
             if usage_bytes is not None and len(usage_bytes) == 4:
                 usage_counts = int.from_bytes(usage_bytes, "little")
             zone["last_usage_counts"] = usage_counts
-            zone["last_usage_gallons"] = None if usage_counts is None else round(usage_counts * _USAGE_GALLONS_PER_COUNT, 3)
+            zone["last_usage_gallons"] = None if usage_counts is None else round(usage_counts * USAGE_GALLONS_PER_COUNT, 3)
         zones[zone_num] = zone
     return zones
 
@@ -509,7 +509,7 @@ def decode_htv210b_dp_state(raw: str) -> dict | None:
     The response carries a leading mode digit, a comma, then the same
     self-describing record stream ``decode_htv210b`` walks -- but with no
     per-record dp_id, since the response describes exactly one zone rather
-    than the whole hub. ``_parse_entries`` is therefore called with
+    than the whole hub. ``parse_entries`` is therefore called with
     ``dp_id_prefixed=False`` here, not True as in the poll-path decoder.
 
     Returns a single zone dict with exactly the four keys
@@ -530,7 +530,7 @@ def decode_htv210b_dp_state(raw: str) -> dict | None:
         if not hex_body or len(hex_body) % 2 != 0:
             raise ValueError(f"DP state hex body is empty or odd-length: {len(hex_body)} chars")
         b = bytes.fromhex(hex_body)
-        records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
+        records = {e["field"]: bytes(e["value_bytes"]) for e in parse_entries(list(b), dp_id_prefixed=False)}
 
         zone = _single_zone_from_records(records)
         if zone is None:
@@ -560,7 +560,7 @@ _HIC801W_FIELD_EVTIME = 21
 _HIC801W_FIELD_WATER_ZONES = 37
 
 # The little-endian STA_EVTIME word every idle HIC801W frame carries.
-# _decode_packed_timestamp renders it as the naive ISO string
+# decode_packed_timestamp renders it as the naive ISO string
 # "2020-01-01T02:00:00", a real-looking date, so it is suppressed
 # deliberately rather than filtered by accident: a 2020 timestamp in a
 # TIMESTAMP entity is wrong state, not absent state, so decode_hic801w
@@ -620,7 +620,7 @@ def _hic801w_error_envelope(message: str) -> dict:
 def decode_hic801w(raw: str) -> dict:
     """Decode an HIC801W 8-station irrigation controller status frame (10# prefix).
 
-    Fields are located structurally with _parse_entries, the same primitive
+    Fields are located structurally with parse_entries, the same primitive
     the model-agnostic decoder itself calls, rather than a hand-rolled
     byte-offset walk: registering this model in HAND_WRITTEN_MODELS locks it
     out of the model-agnostic path by construction, so reaching for that
@@ -662,7 +662,7 @@ def decode_hic801w(raw: str) -> dict:
             # put the payload on the log line by the back door.
             raise ValueError(f"Unexpected payload format: {len(raw)}-character payload without a 10# prefix")
         b = _parse_rainpoint_payload(raw)
-        fields = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), False)}
+        fields = {e["field"]: bytes(e["value_bytes"]) for e in parse_entries(list(b), False)}
 
         duration_bytes = fields.get(_HIC801W_FIELD_DURATION)
         evtime_bytes = fields.get(_HIC801W_FIELD_EVTIME)
@@ -697,7 +697,7 @@ def decode_hic801w(raw: str) -> dict:
             # somehow non-idle while still carrying the sentinel.
             run_ends_at = None
         else:
-            run_ends_at = _decode_packed_timestamp(evtime_word)
+            run_ends_at = decode_packed_timestamp(evtime_word)
 
         return {
             "type": "irrigation_controller",
@@ -735,7 +735,7 @@ def _attach_single_outlet_usage(zone: dict, usage_bytes: bytes | None) -> None:
         return
     counts = int.from_bytes(usage_bytes, "little")
     zone["last_usage_counts"] = counts
-    zone["last_usage_gallons"] = round(counts * _SINGLE_OUTLET_GALLONS_PER_COUNT, 3)
+    zone["last_usage_gallons"] = round(counts * SINGLE_OUTLET_GALLONS_PER_COUNT, 3)
 
 
 def decode_htv145frf(raw: str) -> dict:
@@ -743,7 +743,7 @@ def decode_htv145frf(raw: str) -> dict:
 
     Covers the HTV113FRF, HTV145FRF and HTV157B: one outlet, one record of
     each datapoint, and no per-record dp_id, so records key on the structural
-    field index alone. Read through _parse_entries rather than a fixed-width
+    field index alone. Read through parse_entries rather than a fixed-width
     marker table, because the HTV157B writes a 4-byte duration where the other
     two write 2 and a width table mis-frames it.
 
@@ -761,7 +761,7 @@ def decode_htv145frf(raw: str) -> dict:
         if not raw.startswith("10#"):
             raise ValueError("single-outlet timer payload must use the 10# format")
         b = _parse_rainpoint_payload(raw)
-        records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
+        records = {e["field"]: bytes(e["value_bytes"]) for e in parse_entries(list(b), dp_id_prefixed=False)}
 
         zone = _single_zone_from_records(records)
         if zone is not None:
@@ -780,7 +780,7 @@ def decode_htv145frf(raw: str) -> dict:
             "battery_flag": battery_flag,
             "decoder": "htv145frf_hex",
         }
-        battery_percent = _battery_flag_to_percent(battery_flag)
+        battery_percent = battery_flag_to_percent(battery_flag)
         if battery_percent is not None:
             result["battery_percent"] = battery_percent
         _attach_report_time(result, b)
@@ -973,7 +973,7 @@ def _decode_moisture_full_hex(raw: str) -> dict:
 
     rssi = _extract_rssi(b)
     temp_raw_f10 = _le16(b, 6)
-    temp_c = _f10_to_c(temp_raw_f10)
+    temp_c = f10_to_c(temp_raw_f10)
 
     _validate_tag(b, 8, 0x88, "HCS021FRF")
     moisture = b[9]
@@ -993,7 +993,7 @@ def _decode_moisture_full_hex(raw: str) -> dict:
             "illuminance_lux": lux,
             "illuminance_raw10": lux_raw10,
             "battery_flag": battery_flag,
-            "battery_percent": _battery_flag_to_percent(battery_flag),
+            "battery_percent": battery_flag_to_percent(battery_flag),
             "decoder": "hcs021frf_hex",
         }
     )
@@ -1263,7 +1263,7 @@ def decode_valve_hub(raw: str) -> dict:
             "battery_flag": battery_flag,
             "decoder": "valve_hub_tlv",
         }
-        battery_percent = _battery_flag_to_percent(battery_flag)
+        battery_percent = battery_flag_to_percent(battery_flag)
         if battery_percent is not None:
             result["battery_percent"] = battery_percent
 
@@ -1335,7 +1335,7 @@ def decode_rain(raw: str) -> dict:
             "rain_last_7d_raw10": last_7d_raw10,
             "rain_total_raw10": total_raw10,
             "battery_flag": battery_flag,
-            "battery_percent": _battery_flag_to_percent(battery_flag),
+            "battery_percent": battery_flag_to_percent(battery_flag),
         }
     )
     _attach_report_time(result, b)
@@ -1392,7 +1392,7 @@ def decode_hcs044frf(raw: str) -> dict:
         {
             "rain_detected": _extract_hcs044_rain(b),
             "battery_flag": battery_flag,
-            "battery_percent": _battery_flag_to_percent(battery_flag),
+            "battery_percent": battery_flag_to_percent(battery_flag),
         }
     )
     _attach_report_time(result, b)
@@ -1436,7 +1436,7 @@ def decode_moisture_simple(raw: str) -> dict:
         {
             "moisture_percent": moisture,
             "battery_flag": battery_flag,
-            "battery_percent": _battery_flag_to_percent(battery_flag),
+            "battery_percent": battery_flag_to_percent(battery_flag),
         }
     )
     _attach_report_time(result, b)
@@ -1491,9 +1491,9 @@ def decode_flow_meter(raw: str) -> dict:
             "flowlastusedduration": _find_field_int(b, STA_LAST_DURATION_FIELD),
             "flowtotaltoday": _scaled_field(b, STA_TOTAL_TODAY_FIELD, _FLOW_LITRES_PER_COUNT, 1),
             "flowtotal": _scaled_field(b, STA_WATER_TOTAL_FIELD, _FLOW_LITRES_PER_COUNT, 1),
-            "flowbatt": _battery_flag_to_percent(battery_flag),
+            "flowbatt": battery_flag_to_percent(battery_flag),
             "battery_flag": battery_flag,
-            "battery_percent": _battery_flag_to_percent(battery_flag),
+            "battery_percent": battery_flag_to_percent(battery_flag),
             "decoder": "flowmeter",
         }
     )
@@ -1523,7 +1523,7 @@ def decode_pool_plus(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
+            result["rssi"] = valid_rssi_dbm(_extract_rssi(b))
 
         # Basic CO2 parsing - can be enhanced with exact RainPoint logic later
         _LOGGER.debug("HCS0530THO basic parsing completed")
@@ -1548,7 +1548,7 @@ def decode_soil(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
+            result["rssi"] = valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1571,7 +1571,7 @@ def decode_temp_hum(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
+            result["rssi"] = valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1594,7 +1594,7 @@ def decode_temp_hum_full(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
+            result["rssi"] = valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1617,7 +1617,7 @@ def decode_co2(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
+            result["rssi"] = valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1640,7 +1640,7 @@ def decode_display(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
+            result["rssi"] = valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1663,7 +1663,7 @@ def decode_unknown(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
+            result["rssi"] = valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1687,7 +1687,7 @@ def decode_temphum(raw: str) -> dict:
     try:
         b = _parse_rainpoint_payload(raw)
         if b and len(b) > 1:
-            result["rssi"] = _valid_rssi_dbm(_extract_rssi(b))
+            result["rssi"] = valid_rssi_dbm(_extract_rssi(b))
             result["raw_bytes"] = b
 
     except Exception:
@@ -1727,10 +1727,10 @@ def decode_pool(raw: str) -> dict:
             result["raw_bytes"] = b
             temp_f10 = _find_field_int(b, STA_TEM_FIELD, signed=True)
             if temp_f10 is not None:
-                result["tempcurrent"] = _f10_to_c(temp_f10)
+                result["tempcurrent"] = f10_to_c(temp_f10)
             battery_flag = _extract_battery_flag(b)
             result["battery_flag"] = battery_flag
-            result["battery_percent"] = _battery_flag_to_percent(battery_flag)
+            result["battery_percent"] = battery_flag_to_percent(battery_flag)
             _attach_report_time(result, b)
 
     except Exception:

@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import _parse_sub_power_mode, _splice_sub_power_mode
+from .api import parse_sub_power_mode, splice_sub_power_mode
 from .const import DOMAIN, MODEL_HTV210B, UNIQUE_ID_PREFIX
 from .coordinator import (
     SILENT_DATA_TYPE,
@@ -178,7 +178,7 @@ class RainPointSubDevicePowerSelect(RainPointSubDeviceEntity, SelectEntity):
         """Return the optimistic label if one is pending, else the live poll value."""
         if self._optimistic is not None:
             return POWER_MODE_LABELS.get(self._optimistic)
-        mode = _parse_sub_power_mode(self._record.get("param"))
+        mode = parse_sub_power_mode(self._record.get("param"))
         return POWER_MODE_LABELS.get(mode) if mode is not None else None
 
     @callback
@@ -219,7 +219,7 @@ class RainPointSubDevicePowerSelect(RainPointSubDeviceEntity, SelectEntity):
         sid = record.get("sid")
         if sid is None:
             raise HomeAssistantError("The device could not be addressed, so this setting cannot be changed")
-        spliced = _splice_sub_power_mode(record.get("param"), mode)
+        spliced = splice_sub_power_mode(record.get("param"), mode)
         if spliced is None:
             raise HomeAssistantError("The device's settings could not be read, so this setting cannot be changed")
         # mid goes over the wire as a string here, matching the captured

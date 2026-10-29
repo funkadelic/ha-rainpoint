@@ -47,10 +47,10 @@ from typing import Any, cast
 from homeassistant.components.sensor import SensorDeviceClass
 
 from .api import (
-    _battery_flag_to_percent,
-    _decode_packed_report_time,
-    _decode_packed_timestamp,
-    _f10_to_c,
+    battery_flag_to_percent,
+    decode_packed_report_time,
+    decode_packed_timestamp,
+    f10_to_c,
     get_catalog_entry,
     get_catalog_fingerprint,
     get_catalog_port_number,
@@ -158,13 +158,13 @@ def _battery_percent(raw: int) -> float | None:
     first byte of a wider record without complaint, but no capture shows one,
     and accepting a width nothing has demonstrated is what this table avoids.
     """
-    percent = _battery_flag_to_percent(raw & 0xFF)
+    percent = battery_flag_to_percent(raw & 0xFF)
     return None if percent is None else float(percent)
 
 
 def _temperature_c(raw: int) -> float | None:
     """Convert a raw Fahrenheit-times-ten reading to Celsius."""
-    return _f10_to_c(raw)
+    return f10_to_c(raw)
 
 
 def _percent_byte(raw: int) -> float | None:
@@ -201,7 +201,7 @@ def _packed_report_wall_clock(raw: int) -> str | None:
     Naive and without a device class for the same reason the event-time row
     is; see that transform.
     """
-    return _decode_packed_report_time(raw)
+    return decode_packed_report_time(raw)
 
 
 def _packed_wall_clock(raw: int) -> str | None:
@@ -220,7 +220,7 @@ def _packed_wall_clock(raw: int) -> str | None:
     therefore a plain string state, the same naive ISO form the hand-written
     valve decoders already expose as a zone attribute.
     """
-    return _decode_packed_timestamp(raw)
+    return decode_packed_timestamp(raw)
 
 
 def _wkstate_open(raw: int) -> float | None:
@@ -266,7 +266,7 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         # Evidence: api/validators.py (_extract_battery_flag) locates STA_BAT
         # structurally and reads its first value byte, on the same record walk
         # the generic decode path uses, and api/validators.py
-        # (_battery_flag_to_percent) is the percentage mapping every
+        # (battery_flag_to_percent) is the percentage mapping every
         # hand-written decoder that reports a battery level already applies to
         # that byte. This row calls that same function, so the unit and the
         # scaling are the trusted path's own, not a reading of the catalog's
@@ -314,7 +314,7 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         widths=frozenset({4}),
         # Width: exactly 4, the width api/decoders.py requires before it will
         # unpack an event time, and the only width any capture shows.
-        # Evidence: api/decoders.py (_decode_packed_timestamp) unpacks this
+        # Evidence: api/decoders.py (decode_packed_timestamp) unpacks this
         # word, and its docstring records the two independent captures that
         # confirm the bit layout: one frame's trailing stamp decodes to the day
         # that capture was taken, and a mid-run frame's zone event time is
@@ -333,7 +333,7 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         widths=frozenset({4}),
         # Width: exactly 4, the width api/utils.py (_extract_report_time)
         # requires before unpacking, and the only width any capture shows.
-        # Evidence: api/utils.py (_decode_packed_report_time) unpacks this
+        # Evidence: api/utils.py (decode_packed_report_time) unpacks this
         # identity's word, and its year base is confirmed against captures
         # whose decoded stamp matched the moment they were pulled, where a base
         # of 2000 would have placed those same frames in 2006. api/utils.py
@@ -378,8 +378,8 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         widths=frozenset({1, 2}),
         # Width: 1 on most models and 2 on the Bluetooth-capable ones, both
         # covered by the low-byte mask the transform applies.
-        # Evidence: api/validators.py:42-45 (_extract_rssi) reinterprets the
-        # raw byte as a signed int8, and api/decoders.py:95 discards
+        # Evidence: _extract_rssi in api/validators.py reinterprets the raw
+        # byte as a signed int8, and the decoders in api/decoders.py discard
         # non-negative values rather than reporting them.
     ),
     "STA_TEM": GenericSensorSpec(
@@ -393,9 +393,9 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         widths=frozenset({2}),
         # Width: 2 bytes, the width the cited decoders read through _le16
         # before scaling.
-        # Evidence: api/utils.py:93-95 (_f10_to_c) treats the raw value as
-        # Fahrenheit times ten, and api/decoders.py:582 and api/decoders.py:734
-        # both show that scaling against real captured values.
+        # Evidence: f10_to_c in api/utils.py treats the raw value as
+        # Fahrenheit times ten, and _decode_moisture_full_hex and decode_pool
+        # in api/decoders.py both show that scaling against real captured values.
     ),
     "STA_WKSTATE": GenericSensorSpec(
         label="Run State",

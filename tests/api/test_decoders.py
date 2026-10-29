@@ -6,7 +6,7 @@ import traceback
 import pytest
 
 from custom_components.rainpoint.api import (
-    _SINGLE_OUTLET_GALLONS_PER_COUNT,
+    SINGLE_OUTLET_GALLONS_PER_COUNT,
     decode_co2,
     decode_display,
     decode_flow_meter,
@@ -39,8 +39,8 @@ from custom_components.rainpoint.api.decoders import _hic801w_stations_from_mask
 from custom_components.rainpoint.api.utils import (
     STA_DURATION_FIELD,
     STA_LASTUSAGE_FIELD,
-    _parse_entries,
     _parse_rainpoint_payload,
+    parse_entries,
 )
 from tests.payload_samples import (
     BASIC_HEX_PAYLOAD,
@@ -643,7 +643,7 @@ class TestDecodeHtv145frfLastUsage:
     """STA_LASTUSAGE on the single-outlet timers: tenths of a litre, converted to gallons."""
 
     def test_factor_is_a_tenth_of_a_litre_in_us_gallons(self):
-        assert pytest.approx(0.1 / 3.785411784) == _SINGLE_OUTLET_GALLONS_PER_COUNT
+        assert pytest.approx(0.1 / 3.785411784) == SINGLE_OUTLET_GALLONS_PER_COUNT
 
     def test_after_run_payload_matches_the_app_reading(self):
         """The app showed 5.8 gal for the run this frame reports as 219 counts."""
@@ -738,7 +738,7 @@ class TestDecodeHtv157b:
         the rest of the frame, which is what leaves the zone uncreated.
         """
         b = _parse_rainpoint_payload(SAMPLE_HTV157B_IDLE_PAYLOAD)
-        records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
+        records = {e["field"]: bytes(e["value_bytes"]) for e in parse_entries(list(b), dp_id_prefixed=False)}
 
         assert len(records[STA_DURATION_FIELD]) == 4
         assert decode_htv145frf(SAMPLE_HTV157B_IDLE_PAYLOAD)["zones"][1]["duration_seconds"] == 0
@@ -799,7 +799,7 @@ class TestDecodeHtp160frf:
         the missing record as a framing error would lose the zone with it.
         """
         b = _parse_rainpoint_payload(SAMPLE_HTP160_IDLE_PAYLOAD)
-        records = {e["field"]: bytes(e["value_bytes"]) for e in _parse_entries(list(b), dp_id_prefixed=False)}
+        records = {e["field"]: bytes(e["value_bytes"]) for e in parse_entries(list(b), dp_id_prefixed=False)}
 
         assert STA_LASTUSAGE_FIELD not in records
         assert decode_htv145frf(SAMPLE_HTP160_IDLE_PAYLOAD)["zones"][1]["duration_seconds"] == 0
@@ -2156,18 +2156,18 @@ class TestHtv213ZoneUsageAndEventTime:
 
     def test_impossible_packed_date_yields_none(self):
         """A word whose fields are not a real date is dropped, not clamped into one."""
-        from custom_components.rainpoint.api.decoders import _decode_packed_timestamp
+        from custom_components.rainpoint.api.decoders import decode_packed_timestamp
 
         # Month field 0 and day field 0: structurally parseable, not a date.
-        assert _decode_packed_timestamp(0x18000000) is None
+        assert decode_packed_timestamp(0x18000000) is None
 
     def test_packed_timestamp_covers_the_full_field_range(self):
         """Each bit field lands in its own component rather than bleeding into a neighbour."""
-        from custom_components.rainpoint.api.decoders import _decode_packed_timestamp
+        from custom_components.rainpoint.api.decoders import decode_packed_timestamp
 
         # year 5 (2025), month 12, day 31, hour 23, minute 59, second 59.
         packed = (5 << 26) | (12 << 22) | (31 << 17) | (23 << 12) | (59 << 6) | 59
-        assert _decode_packed_timestamp(packed) == "2025-12-31T23:59:59"
+        assert decode_packed_timestamp(packed) == "2025-12-31T23:59:59"
 
 
 class TestHtv213ZoneRangeAndLoopBoundaries:
@@ -2510,7 +2510,7 @@ class TestDecodeHtv210bDpState:
 
 # Expected decode for every one of the 22 committed HIC801W frames, keyed by
 # the same capture label as tests.payload_samples.SAMPLE_HIC801W_ALL_FRAMES.
-# Derived by hand-walking each committed frame through _parse_entries and
+# Derived by hand-walking each committed frame through parse_entries and
 # cross-checking the result against both capture corpora; do not re-derive
 # from the raw hex without redoing that cross-check.
 _HIC801W_EXPECTED_DECODE = {
@@ -2942,7 +2942,7 @@ class TestDecodeHic801w:
         that mismatch, because doing so would reject every real frame."""
         for label, raw in SAMPLE_HIC801W_ALL_FRAMES.items():
             b = _parse_rainpoint_payload(raw)
-            fields = {e["field"]: e["value_bytes"] for e in _parse_entries(list(b), False)}
+            fields = {e["field"]: e["value_bytes"] for e in parse_entries(list(b), False)}
             ts_det = fields.get(38)
             assert ts_det is not None, label
             assert len(ts_det) == 2, label
@@ -3040,7 +3040,7 @@ class TestHic801wWidthToleranceProperty:
 
         for label, raw in SAMPLE_HIC801W_ALL_FRAMES.items():
             b = _parse_rainpoint_payload(raw)
-            fields = {e["field"]: e["value_bytes"] for e in _parse_entries(list(b), False)}
+            fields = {e["field"]: e["value_bytes"] for e in parse_entries(list(b), False)}
             actual_len = len(fields[38])
             assert actual_len != declared_len, label
             assert actual_len == 2, label

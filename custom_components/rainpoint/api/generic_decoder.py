@@ -17,7 +17,7 @@ import re
 from typing import cast
 
 from .product_catalog import get_catalog_entry, get_catalog_port_number
-from .utils import _is_ascii_payload, _parse_ascii_rssi, _parse_entries, _split_prefix
+from .utils import _parse_ascii_rssi, is_ascii_payload, parse_entries, split_prefix
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -383,7 +383,7 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
     result: dict = {"decoder": "generic-tlv"}
 
     try:
-        ascii_framed = _is_ascii_payload(raw)
+        ascii_framed = is_ascii_payload(raw)
     except Exception as exc:  # diagnostics must not break polling
         _LOGGER.debug("decode_generic failed for a %s payload: %s", type(raw).__name__, exc)
         result["error"] = str(exc)
@@ -412,12 +412,12 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
         return result
 
     try:
-        body, dp_id_prefixed = _split_prefix(raw)
+        body, dp_id_prefixed = split_prefix(raw)
         if not body or len(body) % 2 != 0:
             result["error"] = "empty or odd-length hex body"
             return result
         data = _hex_to_bytes(body)
-        entries = _parse_entries(data, dp_id_prefixed)
+        entries = parse_entries(data, dp_id_prefixed)
     except Exception as exc:  # diagnostics must not break polling
         _LOGGER.debug("decode_generic failed for %r: %s", raw, exc)
         result["error"] = str(exc)

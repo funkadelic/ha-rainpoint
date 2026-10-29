@@ -79,19 +79,19 @@ _BATTERY_FLAG_NOT_LOW = 1
 _BATTERY_FLAG_LOW = 2
 
 
-def _battery_flag_to_percent(flag: int | None) -> int | None:
+def battery_flag_to_percent(flag: int | None) -> int | None:
     """Map a raw STA_BAT flag to a percentage, or None when unproven.
 
     No capture pairs a flag with a charge level, so no flag earns a measured
     percentage: a wrong number would be indistinguishable from a real one.
     Only the proven-healthy flag reads as full, which is the same value
-    _battery_flag_is_low answers not-low on: the two read one byte and may not
+    battery_flag_is_low answers not-low on: the two read one byte and may not
     disagree about it.
     """
     return 100 if flag == _BATTERY_FLAG_NOT_LOW else None
 
 
-def _battery_flag_is_low(flag: int | None) -> bool | None:
+def battery_flag_is_low(flag: int | None) -> bool | None:
     """Map a raw STA_BAT flag to low/normal, or None when unproven."""
     if flag == _BATTERY_FLAG_NOT_LOW:
         return False

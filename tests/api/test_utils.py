@@ -7,28 +7,28 @@ import pytest
 from custom_components.rainpoint.api import (
     _base_decoder_dict,
     _extract_report_time,
-    _f10_to_c,
     _is_dp_id_framed,
     _le16,
-    _parse_hub_broadcast_flag,
     _parse_rainpoint_payload,
-    _parse_sub_power_mode,
     _parse_tlv_payload,
-    _splice_hub_broadcast_param,
-    _splice_sub_power_mode,
-    _valid_rssi_dbm,
+    f10_to_c,
+    parse_hub_broadcast_flag,
+    parse_sub_power_mode,
+    splice_hub_broadcast_param,
+    splice_sub_power_mode,
+    valid_rssi_dbm,
 )
 from custom_components.rainpoint.api.utils import (
     _find_field_int,
     _find_field_value,
-    _is_ascii_payload,
     _parse_ascii_rssi,
     _RecordSummary,
     _redact_identifier,
     _redact_secret,
     _safe_key,
-    _split_prefix,
-    _summarize_record,
+    is_ascii_payload,
+    split_prefix,
+    summarize_record,
 )
 from tests.payload_samples import (
     HWS019WRF_V2_PAYLOAD,
@@ -245,22 +245,22 @@ class TestLe16:
 
 
 class TestF10ToC:
-    """Tests for _f10_to_c (Fahrenheit*10 to Celsius)."""
+    """Tests for f10_to_c (Fahrenheit*10 to Celsius)."""
 
     def test_freezing(self):
         """Freezing."""
         # 32F = 0C; 32*10 = 320
-        assert abs(_f10_to_c(320) - 0.0) < 0.01
+        assert abs(f10_to_c(320) - 0.0) < 0.01
 
     def test_boiling(self):
         """Boiling."""
         # 212F = 100C; 212*10 = 2120
-        assert abs(_f10_to_c(2120) - 100.0) < 0.01
+        assert abs(f10_to_c(2120) - 100.0) < 0.01
 
     def test_room_temp(self):
         """Room temp."""
         # 72F ~ 22.22C; 72*10 = 720
-        assert abs(_f10_to_c(720) - 22.22) < 0.1
+        assert abs(f10_to_c(720) - 22.22) < 0.1
 
 
 class TestValidRssiDbm:
@@ -273,28 +273,28 @@ class TestValidRssiDbm:
     @pytest.mark.parametrize("value", [-1, -37, -84, -120])
     def test_a_negative_reading_passes_through_unchanged(self, value):
         """The ordinary case, and the only one that yields a number."""
-        assert _valid_rssi_dbm(value) == value
+        assert valid_rssi_dbm(value) == value
 
     @pytest.mark.parametrize("value", [0, 1, 2, 74, 100])
     def test_a_non_negative_value_is_not_a_reading(self, value):
         """0 is the placeholder a failed decode used to publish, and 1, 2 and 74
         are what a fixed-offset read returns off a frame that does not lead
         with the signal header."""
-        assert _valid_rssi_dbm(value) is None
+        assert valid_rssi_dbm(value) is None
 
     def test_absent_stays_absent(self):
         """A decoder with no reading to offer is not handed one."""
-        assert _valid_rssi_dbm(None) is None
+        assert valid_rssi_dbm(None) is None
 
     @pytest.mark.parametrize("value", [True, False])
     def test_a_bool_is_never_a_reading(self, value):
         """bool is an int in Python, and True would otherwise pass the sign
         test as 1 rather than being rejected as the wrong type entirely."""
-        assert _valid_rssi_dbm(value) is None
+        assert valid_rssi_dbm(value) is None
 
     def test_a_non_numeric_value_is_rejected_rather_than_compared(self):
         """A string reaching here is a decoder bug, and comparing it would raise."""
-        assert _valid_rssi_dbm("-84") is None
+        assert valid_rssi_dbm("-84") is None
 
 
 class TestBaseDecoderDict:
@@ -353,27 +353,27 @@ class TestExtractReportTime:
 
 
 class TestIsAsciiPayload:
-    """Tests for _is_ascii_payload, the ASCII/hex discrimination predicate."""
+    """Tests for is_ascii_payload, the ASCII/hex discrimination predicate."""
 
     def test_htv245_sample_is_ascii(self):
         """The committed HTV245 ASCII sample is recognised."""
-        assert _is_ascii_payload(SAMPLE_HTV245_ASCII_PAYLOAD) is True
+        assert is_ascii_payload(SAMPLE_HTV245_ASCII_PAYLOAD) is True
 
     def test_moisture_full_sample_is_ascii(self):
         """The committed HCS021FRF ASCII sample is recognised."""
-        assert _is_ascii_payload(MOISTURE_FULL_ASCII_PAYLOAD) is True
+        assert is_ascii_payload(MOISTURE_FULL_ASCII_PAYLOAD) is True
 
     def test_hws019wrf_v2_sample_is_ascii(self):
         """The committed HWS019WRF-V2 ASCII sample is recognised."""
-        assert _is_ascii_payload(HWS019WRF_V2_PAYLOAD) is True
+        assert is_ascii_payload(HWS019WRF_V2_PAYLOAD) is True
 
     def test_11_hash_prefix_is_not_ascii(self):
         """A '#' prefix routes to the hex path before the ASCII test is reached."""
-        assert _is_ascii_payload("11#1FD801") is False
+        assert is_ascii_payload("11#1FD801") is False
 
     def test_10_hash_prefix_with_ascii_tail_is_not_ascii(self):
         """A hex payload carrying a comma tail still routes to hex, not ASCII."""
-        assert _is_ascii_payload("10#AABBCC,1,2") is False
+        assert is_ascii_payload("10#AABBCC,1,2") is False
 
     def test_a_hash_elsewhere_in_the_payload_still_declines_the_ascii_path(self):
         """The '#' guard checks for the character itself, not a specific marker string.
@@ -382,7 +382,7 @@ class TestIsAsciiPayload:
         shaped like one below (comma before the semicolon, which would
         otherwise read as ASCII) must still decline here.
         """
-        assert _is_ascii_payload("1,2;3#4") is False
+        assert is_ascii_payload("1,2;3#4") is False
 
     def test_corrupted_header_extraction_does_not_pick_up_a_later_comma(self):
         """The header is only the text before the FIRST ';', taken from the left.
@@ -392,11 +392,11 @@ class TestIsAsciiPayload:
         would pick up a comma that belongs to the body and misreport this as
         ASCII-framed.
         """
-        assert _is_ascii_payload("1;2,-50,1;tail2") is False
+        assert is_ascii_payload("1;2,-50,1;tail2") is False
 
     def test_no_semicolon_no_hash_is_not_ascii(self):
         """A bare hex-looking string with neither marker is not ASCII-shaped."""
-        assert _is_ascii_payload("AABBCC") is False
+        assert is_ascii_payload("AABBCC") is False
 
 
 class TestParseAsciiRssi:
@@ -434,7 +434,7 @@ class TestParseAsciiRssi:
 
 
 class TestSplitPrefixCommaTruncation:
-    """Characterization tests for _split_prefix's existing tail-truncation behaviour.
+    """Characterization tests for split_prefix's existing tail-truncation behaviour.
 
     This behaviour must survive unchanged; these pin it behaviourally as
     well as by the source-identity check in tests/api/test_generic_decoder.py.
@@ -442,20 +442,20 @@ class TestSplitPrefixCommaTruncation:
 
     def test_hex_body_with_no_comma_tail_is_returned_whole(self):
         """A hex body with no ASCII tail passes through unchanged (uppercased)."""
-        assert _split_prefix("10#aabbcc") == ("AABBCC", False)
+        assert split_prefix("10#aabbcc") == ("AABBCC", False)
 
     def test_hex_body_with_ascii_tail_truncates_at_first_comma(self):
         """The comma-separated ASCII tail is dropped, keeping only the hex block."""
-        assert _split_prefix("10#AABBCC,1,2") == ("AABBCC", False)
+        assert split_prefix("10#AABBCC,1,2") == ("AABBCC", False)
 
     def test_11_prefix_marks_dp_id_prefixed(self):
         """An 11# prefix sets dp_id_prefixed True; 10# leaves it False."""
-        assert _split_prefix("11#AABB")[1] is True
-        assert _split_prefix("10#AABB")[1] is False
+        assert split_prefix("11#AABB")[1] is True
+        assert split_prefix("10#AABB")[1] is False
 
     def test_no_hash_prefix_returns_raw_body_uppercased(self):
         """A payload with no '#' is returned as-is (uppercased, comma-truncated)."""
-        assert _split_prefix("aabb") == ("AABB", False)
+        assert split_prefix("aabb") == ("AABB", False)
 
 
 class TestParseEntriesTruncation:
@@ -515,11 +515,11 @@ class TestParseHubBroadcastFlag:
 
     def test_flag_on(self):
         """Index 1 == '1' reads as True."""
-        assert _parse_hub_broadcast_flag("0|1||") is True
+        assert parse_hub_broadcast_flag("0|1||") is True
 
     def test_flag_off(self):
         """Index 1 == '0' reads as False."""
-        assert _parse_hub_broadcast_flag("0|0||") is False
+        assert parse_hub_broadcast_flag("0|0||") is False
 
 
 class TestSpliceHubBroadcastParam:
@@ -527,11 +527,11 @@ class TestSpliceHubBroadcastParam:
 
     def test_splice_to_on(self):
         """Splicing True into an off param flips only index 1."""
-        assert _splice_hub_broadcast_param("0|0||", True) == "0|1||"
+        assert splice_hub_broadcast_param("0|0||", True) == "0|1||"
 
     def test_splice_to_off(self):
         """Splicing False into an on param flips only index 1."""
-        assert _splice_hub_broadcast_param("0|1||", False) == "0|0||"
+        assert splice_hub_broadcast_param("0|1||", False) == "0|0||"
 
 
 # Every input in this matrix is a param this module must not trust, whether it
@@ -569,11 +569,11 @@ class TestParseHubBroadcastFlagMalformedMatrix:
     @pytest.mark.parametrize("param", _MALFORMED_HUB_PARAMS)
     def test_returns_none_and_does_not_raise(self, param):
         """Every malformed shape in the matrix returns None."""
-        assert _parse_hub_broadcast_flag(param) is None
+        assert parse_hub_broadcast_flag(param) is None
 
     def test_two_field_param_parses(self):
         """A two-field param still has a recoverable index 1."""
-        assert _parse_hub_broadcast_flag("0|1") is True
+        assert parse_hub_broadcast_flag("0|1") is True
 
     def test_five_field_param_parses(self):
         """A five-field param still has a recoverable index 1.
@@ -581,13 +581,13 @@ class TestParseHubBroadcastFlagMalformedMatrix:
         The one observed hub produces four fields; this is not that hub, and
         the gate must not have been narrowed to require its exact shape.
         """
-        assert _parse_hub_broadcast_flag("0|1|2|3|4") is True
+        assert parse_hub_broadcast_flag("0|1|2|3|4") is True
 
     def test_no_log_record_emitted_for_any_matrix_input(self, caplog):
         """No log record at any level for any input in the malformed matrix."""
         with caplog.at_level(logging.DEBUG):
             for param in [p.values[0] for p in _MALFORMED_HUB_PARAMS]:
-                _parse_hub_broadcast_flag(param)
+                parse_hub_broadcast_flag(param)
         assert caplog.records == []
 
 
@@ -603,14 +603,14 @@ class TestSpliceHubBroadcastParamMalformedMatrix:
     @pytest.mark.parametrize("param", _MALFORMED_HUB_PARAMS)
     def test_returns_none_and_does_not_raise(self, param):
         """Every malformed shape in the matrix refuses to build a write."""
-        assert _splice_hub_broadcast_param(param, True) is None
-        assert _splice_hub_broadcast_param(param, False) is None
+        assert splice_hub_broadcast_param(param, True) is None
+        assert splice_hub_broadcast_param(param, False) is None
 
     def test_no_log_record_emitted_for_any_matrix_input(self, caplog):
         """No log record at any level for any input in the malformed matrix."""
         with caplog.at_level(logging.DEBUG):
             for param in [p.values[0] for p in _MALFORMED_HUB_PARAMS]:
-                _splice_hub_broadcast_param(param, True)
+                splice_hub_broadcast_param(param, True)
         assert caplog.records == []
 
 
@@ -625,7 +625,7 @@ class TestSpliceHubBroadcastParamFieldPreservation:
     def test_five_field_param_preserves_every_other_index(self):
         """A five-field param with non-empty trailing fields round-trips."""
         original = "9|0|abc|def|xyz"
-        result = _splice_hub_broadcast_param(original, True)
+        result = splice_hub_broadcast_param(original, True)
         assert result == "9|1|abc|def|xyz"
 
         original_fields = original.split("|")
@@ -639,7 +639,7 @@ class TestSpliceHubBroadcastParamFieldPreservation:
     def test_non_ascii_fields_are_not_reencoded_or_normalised(self):
         """Fields carrying non-ASCII code points compare equal before and after."""
         original = "0|0|éè|中文"
-        result = _splice_hub_broadcast_param(original, True)
+        result = splice_hub_broadcast_param(original, True)
 
         original_fields = original.split("|")
         result_fields = result.split("|")
@@ -650,11 +650,11 @@ class TestSpliceHubBroadcastParamFieldPreservation:
     def test_adjacent_delimiters_survive_as_empty_fields(self):
         """Splicing '0|0||' yields '0|1||': the two trailing empty fields
         are neither collapsed nor trimmed."""
-        assert _splice_hub_broadcast_param("0|0||", True) == "0|1||"
+        assert splice_hub_broadcast_param("0|0||", True) == "0|1||"
 
     def test_resplicing_an_already_set_value_is_a_string_no_op(self):
         """Re-splicing a param whose flag already matches the request changes nothing."""
-        assert _splice_hub_broadcast_param("0|1||", True) == "0|1||"
+        assert splice_hub_broadcast_param("0|1||", True) == "0|1||"
 
     @pytest.mark.parametrize(
         "param",
@@ -662,7 +662,7 @@ class TestSpliceHubBroadcastParamFieldPreservation:
     )
     def test_output_field_count_always_equals_input_field_count(self, param):
         """len(splice(x).split('|')) == len(x.split('|')) for every parseable x."""
-        result = _splice_hub_broadcast_param(param, True)
+        result = splice_hub_broadcast_param(param, True)
         assert len(result.split("|")) == len(param.split("|"))
 
 
@@ -690,19 +690,19 @@ class TestParseSubPowerMode:
     )
     def test_recognised_wire_values(self, param, expected):
         """Both the unpadded literal set and the captured zero-padded set parse."""
-        assert _parse_sub_power_mode(param) == expected
+        assert parse_sub_power_mode(param) == expected
 
     def test_only_key_five_present_parses(self):
         """A blob carrying exactly key 5 and nothing else still parses."""
-        assert _parse_sub_power_mode("5=01") == "1"
+        assert parse_sub_power_mode("5=01") == "1"
 
     def test_unidentified_key_alongside_a_valid_key_five_still_parses(self):
         """A key nobody has identified does not block an otherwise-valid blob."""
-        assert _parse_sub_power_mode("5=01,99=whatever-this-is") == "1"
+        assert parse_sub_power_mode("5=01,99=whatever-this-is") == "1"
 
     def test_captured_htv210b_blob_parses_as_standard(self):
         """The captured HTV210B blob's key 5 (01) reads as Standard."""
-        assert _parse_sub_power_mode(_HTV210B_CAPTURED_PARAM) == "1"
+        assert parse_sub_power_mode(_HTV210B_CAPTURED_PARAM) == "1"
 
 
 # Every input in this matrix is a param neither the parse gate nor the splice
@@ -745,13 +745,13 @@ class TestParseSubPowerModeMalformedMatrix:
     @pytest.mark.parametrize("param", _MALFORMED_SUB_PARAMS)
     def test_returns_none_and_does_not_raise(self, param):
         """Every malformed shape in the matrix returns None."""
-        assert _parse_sub_power_mode(param) is None
+        assert parse_sub_power_mode(param) is None
 
     def test_no_log_record_emitted_for_any_matrix_input(self, caplog):
         """No log record at any level for any input in the malformed matrix."""
         with caplog.at_level(logging.DEBUG):
             for param in [p.values[0] for p in _MALFORMED_SUB_PARAMS]:
-                _parse_sub_power_mode(param)
+                parse_sub_power_mode(param)
         assert caplog.records == []
 
 
@@ -764,7 +764,7 @@ class TestSpliceSubPowerMode:
         Keys 11, 12, 50 and 51 compare equal to the captured literals
         character for character.
         """
-        result = _splice_sub_power_mode(_HTV210B_CAPTURED_PARAM, "2")
+        result = splice_sub_power_mode(_HTV210B_CAPTURED_PARAM, "2")
         assert result == (
             "5=02,11=58020a001e000000000000000000,12=58020a001e000000000000000000,"
             "50=646464646464646464646464,51=646464646464646464646464"
@@ -775,30 +775,30 @@ class TestSpliceSubPowerMode:
 
         The replacement keeps the character width of the value it replaced.
         """
-        assert _splice_sub_power_mode("5=1,11=a", "2") == "5=2,11=a"
+        assert splice_sub_power_mode("5=1,11=a", "2") == "5=2,11=a"
 
     def test_token_order_survives_a_deliberately_unordered_blob(self):
         """Token order in the output equals token order in the input."""
         original = "51=z,5=01,11=a,50=y,12=b"
-        result = _splice_sub_power_mode(original, "2")
+        result = splice_sub_power_mode(original, "2")
         assert result == "51=z,5=02,11=a,50=y,12=b"
 
     def test_resplicing_an_already_set_value_is_a_string_no_op(self):
         """Re-splicing a param whose mode already matches the request changes nothing."""
-        assert _splice_sub_power_mode("5=02", "2") == "5=02"
+        assert splice_sub_power_mode("5=02", "2") == "5=02"
 
     def test_splices_to_power_saving(self):
         """'0' (Power Saving) is one of the three canonical write targets, not just a refusal."""
-        assert _splice_sub_power_mode("5=01,11=a", "0") == "5=00,11=a"
+        assert splice_sub_power_mode("5=01,11=a", "0") == "5=00,11=a"
 
     def test_splices_to_standard(self):
         """'1' (Standard) is one of the three canonical write targets, not just a refusal."""
-        assert _splice_sub_power_mode("5=02,11=a", "1") == "5=01,11=a"
+        assert splice_sub_power_mode("5=02,11=a", "1") == "5=01,11=a"
 
     @pytest.mark.parametrize("mode", ["3", "x", "", "01", None])
     def test_non_canonical_mode_returns_none(self, mode):
         """A mode that is not one of the three canonical digits refuses the write."""
-        assert _splice_sub_power_mode("5=01,11=a", mode) is None
+        assert splice_sub_power_mode("5=01,11=a", mode) is None
 
 
 class TestSpliceSubPowerModeMalformedMatrix:
@@ -814,15 +814,15 @@ class TestSpliceSubPowerModeMalformedMatrix:
     @pytest.mark.parametrize("param", _MALFORMED_SUB_PARAMS)
     def test_returns_none_and_does_not_raise(self, param):
         """Every malformed shape in the matrix refuses to build a write."""
-        assert _splice_sub_power_mode(param, "0") is None
-        assert _splice_sub_power_mode(param, "1") is None
-        assert _splice_sub_power_mode(param, "2") is None
+        assert splice_sub_power_mode(param, "0") is None
+        assert splice_sub_power_mode(param, "1") is None
+        assert splice_sub_power_mode(param, "2") is None
 
     def test_no_log_record_emitted_for_any_matrix_input(self, caplog):
         """No log record at any level for any input in the malformed matrix."""
         with caplog.at_level(logging.DEBUG):
             for param in [p.values[0] for p in _MALFORMED_SUB_PARAMS]:
-                _splice_sub_power_mode(param, "1")
+                splice_sub_power_mode(param, "1")
         assert caplog.records == []
 
 
@@ -864,7 +864,7 @@ class TestSummarizeRecord:
 
     def test_dict_reports_count_and_sorted_keys_without_values(self):
         """The identifiers this integration was found leaking do not survive the summary."""
-        rendered = _summarize_record({"mid": 236547, "deviceName": "MAC-A84674BB91F0", "productKey": "a3QrDxYPTM2"})
+        rendered = summarize_record({"mid": 236547, "deviceName": "MAC-A84674BB91F0", "productKey": "a3QrDxYPTM2"})
         assert rendered == "dict(n=3) keys=[deviceName,mid,productKey]"
         assert "MAC-A84674BB91F0" not in rendered
         assert "a3QrDxYPTM2" not in rendered
@@ -872,38 +872,38 @@ class TestSummarizeRecord:
 
     def test_list_reports_length_and_the_union_of_item_keys(self):
         """A status response reads as a count plus a field set, not as its records."""
-        rendered = _summarize_record([{"mid": 1, "status": []}, {"mid": 2, "iotId": "jDQNeV92iFixCU42"}])
+        rendered = summarize_record([{"mid": 1, "status": []}, {"mid": 2, "iotId": "jDQNeV92iFixCU42"}])
         assert rendered == "list(n=2) keys=[iotId,mid,status]"
         assert "jDQNeV92iFixCU42" not in rendered
 
     def test_nested_values_are_counted_rather_than_walked(self):
         """A nested payload contributes its parent key only, never its own contents."""
-        rendered = _summarize_record({"data": {"param": "SECRET-BLOB", "sid": "D1"}})
+        rendered = summarize_record({"data": {"param": "SECRET-BLOB", "sid": "D1"}})
         assert rendered == "dict(n=1) keys=[data]"
         assert "SECRET-BLOB" not in rendered
 
     def test_list_of_non_dicts_reports_its_length_with_no_keys(self):
         """A bare list still yields a count, which is the useful half."""
-        assert _summarize_record([1, 2, 3]) == "list(n=3) keys=[]"
+        assert summarize_record([1, 2, 3]) == "list(n=3) keys=[]"
 
     def test_tuple_is_summarised_like_a_list(self):
         """Tuples arrive from internal callers and must not fall through to <tuple>."""
-        assert _summarize_record(({"a": 1},)) == "list(n=1) keys=[a]"
+        assert summarize_record(({"a": 1},)) == "list(n=1) keys=[a]"
 
     def test_none_and_scalars_render_as_markers_never_as_their_value(self):
         """A scalar body is named by type, so a raw token can never be the summary."""
-        assert _summarize_record(None) == "<none>"
-        assert _summarize_record("a-raw-token") == "<str>"
-        assert _summarize_record(7) == "<int>"
+        assert summarize_record(None) == "<none>"
+        assert summarize_record("a-raw-token") == "<str>"
+        assert summarize_record(7) == "<int>"
 
     def test_key_sanitising_applies_inside_the_summary(self):
         """The key bound is enforced through the summary, not only when called directly."""
-        assert _summarize_record({"bad\nkey": 1}) == "dict(n=1) keys=[bad?key]"
+        assert summarize_record({"bad\nkey": 1}) == "dict(n=1) keys=[bad?key]"
 
     def test_empty_dict_and_empty_list_are_distinguishable(self):
         """An empty body still says which shape it was."""
-        assert _summarize_record({}) == "dict(n=0) keys=[]"
-        assert _summarize_record([]) == "list(n=0) keys=[]"
+        assert summarize_record({}) == "dict(n=0) keys=[]"
+        assert summarize_record([]) == "list(n=0) keys=[]"
 
 
 class TestRedactSecret:
@@ -952,7 +952,7 @@ class TestSummaryIsBounded:
     def test_key_count_is_capped_and_the_omission_is_stated(self):
         """A wide record renders a capped key list plus a count of what was dropped."""
         record = {f"field{i:03d}": i for i in range(100)}
-        rendered = _summarize_record(record)
+        rendered = summarize_record(record)
         # The true width is still reported, so the cap never disguises the size.
         assert rendered.startswith("dict(n=100) keys=[")
         assert rendered.endswith(",+68 more]")
@@ -961,20 +961,20 @@ class TestSummaryIsBounded:
     def test_list_items_walked_are_capped_and_the_scan_is_stated(self):
         """A long list is not walked in full, and says so rather than implying it was."""
         record = [{f"key{i}": i} for i in range(500)]
-        rendered = _summarize_record(record)
+        rendered = summarize_record(record)
         assert rendered.startswith("list(n=500) keys=[")
         assert rendered.endswith(" scanned=50")
 
     def test_a_short_list_carries_no_scanned_marker(self):
         """The marker appears only when it is true, so ordinary output stays clean."""
-        rendered = _summarize_record([{"a": 1}, {"b": 2}])
+        rendered = summarize_record([{"a": 1}, {"b": 2}])
         assert rendered == "list(n=2) keys=[a,b]"
         assert "scanned" not in rendered
 
     def test_a_record_at_exactly_the_cap_is_not_marked(self):
         """Off-by-one guard on both caps."""
-        assert ",+" not in _summarize_record({f"f{i:02d}": i for i in range(32)})
-        assert "scanned" not in _summarize_record([{"a": 1}] * 50)
+        assert ",+" not in summarize_record({f"f{i:02d}": i for i in range(32)})
+        assert "scanned" not in summarize_record([{"a": 1}] * 50)
 
     def test_kept_keys_are_joined_by_a_plain_comma(self):
         """The rendered key list is comma-joined, not by some other separator.
@@ -984,13 +984,13 @@ class TestSummaryIsBounded:
         somewhere in it, so this pins the exact rendered string instead.
         """
         record = {f"k{i:02d}": i for i in range(34)}
-        rendered = _summarize_record(record)
+        rendered = summarize_record(record)
         expected_keys = ",".join(f"k{i:02d}" for i in range(32))
         assert rendered == f"dict(n=34) keys=[{expected_keys},+2 more]"
 
     def test_duplicate_sanitised_keys_collapse_rather_than_repeating(self):
         """Two keys that sanitise to the same token render once, not twice."""
-        assert _summarize_record({"a\nb": 1, "a\tb": 2}) == "dict(n=2) keys=[a?b]"
+        assert summarize_record({"a\nb": 1, "a\tb": 2}) == "dict(n=2) keys=[a?b]"
 
 
 class TestRecordSummaryIsLazy:
@@ -1009,7 +1009,7 @@ class TestRecordSummaryIsLazy:
             calls.append(record)
             return "summary"
 
-        monkeypatch.setattr("custom_components.rainpoint.api.utils._summarize_record", _spy)
+        monkeypatch.setattr("custom_components.rainpoint.api.utils.summarize_record", _spy)
         wrapper = _RecordSummary({"deviceName": "MAC-A84674BB91F0"})
         assert calls == []
         assert str(wrapper) == "summary"
@@ -1018,12 +1018,12 @@ class TestRecordSummaryIsLazy:
     def test_it_renders_the_same_string_summarize_record_would(self):
         """The wrapper is a deferral, not a different format."""
         record = {"mid": 1, "deviceName": "MAC-A84674BB91F0"}
-        assert str(_RecordSummary(record)) == _summarize_record(record)
+        assert str(_RecordSummary(record)) == summarize_record(record)
 
     def test_repr_matches_str_so_a_percent_r_line_is_safe_too(self):
         """A log line written with %r must not fall back to the object repr."""
         record = {"productKey": "a3QrDxYPTM2"}
-        assert repr(_RecordSummary(record)) == _summarize_record(record)
+        assert repr(_RecordSummary(record)) == summarize_record(record)
         assert "a3QrDxYPTM2" not in repr(_RecordSummary(record))
 
     def test_a_debug_call_with_debug_off_never_builds_the_summary(self, caplog):

@@ -16,7 +16,7 @@ import custom_components.rainpoint.coordinator as _coord_module
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint import generic_entities as generic_entities_module
 from custom_components.rainpoint.api import (
-    _SINGLE_OUTLET_GALLONS_PER_COUNT,
+    SINGLE_OUTLET_GALLONS_PER_COUNT,
     RainPointApiError,
     decode_hic801w,
     decode_htv213frf_valve,
@@ -1778,7 +1778,7 @@ class TestSingleOutletTimerDispatch:
         assert usage[0]._attr_unique_id == "rainpoint_100_200_1_zone1_water_used"
         attrs = usage[0].extra_state_attributes
         assert attrs["last_usage_counts"] == 219
-        assert attrs["gallons_per_count"] == _SINGLE_OUTLET_GALLONS_PER_COUNT
+        assert attrs["gallons_per_count"] == SINGLE_OUTLET_GALLONS_PER_COUNT
         # The single-outlet entities are all still there alongside it.
         assert any(isinstance(e, RainPointZoneRunDurationSensor) for e in captured)
 
@@ -1795,7 +1795,7 @@ class TestSingleOutletTimerDispatch:
         usage = [e for e in captured if isinstance(e, RainPointZoneWaterUsageSensor)]
         assert len(usage) == 1
         assert usage[0].native_value is None
-        assert usage[0].extra_state_attributes["gallons_per_count"] == _SINGLE_OUTLET_GALLONS_PER_COUNT
+        assert usage[0].extra_state_attributes["gallons_per_count"] == SINGLE_OUTLET_GALLONS_PER_COUNT
 
     @pytest.mark.asyncio
     async def test_a_battery_flag_grows_no_sensor_entity(self):

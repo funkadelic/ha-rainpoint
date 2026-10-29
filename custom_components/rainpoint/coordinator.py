@@ -18,7 +18,6 @@ from homeassistant.helpers.update_coordinator import (
 from .api import (
     RainPointApiError,
     RainPointClient,
-    _summarize_record,
     decode_co2,
     decode_flowmeter,
     decode_generic,
@@ -40,6 +39,7 @@ from .api import (
     decode_temphum,
     decode_valve_hub,
     is_ascii_declined,
+    summarize_record,
 )
 from .const import (
     CONF_HIDS,
@@ -1422,7 +1422,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
             if _LOGGER.isEnabledFor(logging.DEBUG):
                 _LOGGER.debug(
                     debug_with_version("Final data: hubs=%s, sensors=%s"),
-                    _summarize_record(hubs),
+                    summarize_record(hubs),
                     list(decoded_sensors.keys()),
                 )
 
@@ -1574,7 +1574,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 hub_copy = dict(hub)
                 hub_copy["hid"] = hid
                 # On the copy, never the caller's record: the raw dict is still
-                # handed to _summarize_record below and to the diagnostics path.
+                # handed to summarize_record below and to the diagnostics path.
                 _normalise_hub_mid(hub_copy)
                 # All devices are RainPoint hardware
                 hub_copy["brand"] = "RainPoint"
@@ -1590,7 +1590,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
                 # replaces, but it is built eagerly as a call argument, so the
                 # gate is what keeps it off the hot path when debug is off.
                 if _LOGGER.isEnabledFor(logging.DEBUG):
-                    _LOGGER.debug("Raw hub record mid=%s: %s", hub.get("mid"), _summarize_record(hub))
+                    _LOGGER.debug("Raw hub record mid=%s: %s", hub.get("mid"), summarize_record(hub))
                 hubs.append(hub_copy)
         return hubs
 
@@ -1810,7 +1810,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # makes the line greppable against an entity. Gated because this runs
         # once per sub-device per poll and the summary is built eagerly.
         if _LOGGER.isEnabledFor(logging.DEBUG):
-            _LOGGER.debug(debug_with_version("Sensor entity key=%s info=%s"), sensor_key, _summarize_record(sensor_entry))
+            _LOGGER.debug(debug_with_version("Sensor entity key=%s info=%s"), sensor_key, summarize_record(sensor_entry))
         return sensor_key, sensor_entry
 
     def _record_payload_history(self, sensor_key: str, status_entry: dict, decoded: dict | None) -> None:
