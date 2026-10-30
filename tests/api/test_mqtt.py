@@ -2642,8 +2642,8 @@ class TestTopicKindKeepsIdentifiersOutOfTheLog:
     default Home Assistant log rather than only a debug session.
     """
 
-    def test_the_real_captured_topic_loses_both_identifiers(self):
-        """The shape is the one observed on the wire, not an invented one."""
+    def test_the_captured_topic_shape_loses_both_identifiers(self):
+        """The shape is the one observed on the wire; the identifiers in it are made up."""
         topic = "/sys/FakeObsrvPk/FakeObserverDevName1/thing/service/property/set"
 
         kind = _topic_kind(topic)
