@@ -2,6 +2,22 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.25.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.2...v1.25.3) (2026-10-30)
+
+
+### Changed
+
+* add a common error type and a typed push target to the cloud client ([#311](https://github.com/funkadelic/ha-rainpoint/issues/311)) ([81d4c71](https://github.com/funkadelic/ha-rainpoint/commit/81d4c71ffd31cf81a89810615bb96b644044f7d8))
+* keep the device model list inside the cloud client ([#310](https://github.com/funkadelic/ha-rainpoint/issues/310)) ([362ce39](https://github.com/funkadelic/ha-rainpoint/commit/362ce392fbf4d900ed69a65f26f33fe03d630818))
+* make the client's integration-facing helpers public ([#309](https://github.com/funkadelic/ha-rainpoint/issues/309)) ([12a7a60](https://github.com/funkadelic/ha-rainpoint/commit/12a7a600cf754241987a61c1064463618a398510))
+
+
+### Other Changes
+
+* add what's new for 1.25.2 and tidy the README ([#307](https://github.com/funkadelic/ha-rainpoint/issues/307)) ([8443bc9](https://github.com/funkadelic/ha-rainpoint/commit/8443bc93a1f131500162350f0344a63cb3fea830))
+* use made-up device identifiers in test fixtures ([#312](https://github.com/funkadelic/ha-rainpoint/issues/312)) ([af01eb5](https://github.com/funkadelic/ha-rainpoint/commit/af01eb5b551872fe6fec709c55d1150dbf2cd826))
+* use made-up identifiers in the captured push topic fixture ([#313](https://github.com/funkadelic/ha-rainpoint/issues/313)) ([61866ed](https://github.com/funkadelic/ha-rainpoint/commit/61866edd1f782adcbb940a37c756c778ff5cf975))
+
 ## [1.25.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.1...v1.25.2) (2026-10-27)
 
 ### What's new
