@@ -28,11 +28,11 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import NamedTuple, Protocol, cast
 
 import paho.mqtt.client as paho_mqtt
 
-from .client import RainPointClient
+from .client import RainPointClient, RainPointError
 from .utils import _redact_identifier, _redact_secret
 
 _LOGGER = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ MQTT_PUSH_FRAME_SECTION_ONE_WIDTH = len(MQTT_PUSH_HUB_FRAME_PREFIX) + 12 + 4 + 8
 MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT = 32
 
 
-class RainPointMqttError(Exception):
+class RainPointMqttError(RainPointError):
     pass
 
 
@@ -446,6 +446,19 @@ _RENEWAL_SAFETY_MARGIN_SECONDS = 60.0
 _DEFAULT_CREDENTIAL_LIFETIME_SECONDS = 570.0
 
 
+class PushCoordinator(Protocol):
+    """What the push client calls on its coordinator.
+
+    The integration's coordinator satisfies this structurally.
+    """
+
+    def knows_hub_mid(self, mid: int) -> bool: ...
+
+    def apply_push_update(self, mid: int, sid: str, raw_value: str, device_ts: int | None) -> None: ...
+
+    def apply_hub_push_update(self, mid: int, connected: bool, changed_ts: int) -> None: ...
+
+
 class RainPointMqttClient:
     """Supervised push channel to the RainPoint MQTT broker.
 
@@ -464,7 +477,7 @@ class RainPointMqttClient:
         hub_device_name: str,
         hub_product_key: str,
         *,
-        coordinator=None,
+        coordinator: PushCoordinator | None = None,
         hub_mid=None,
         hub_hid=None,
         paho_client_factory=paho_mqtt.Client,
@@ -959,7 +972,7 @@ class RainPointMqttClient:
         Notification is left to _handle_message, which fires once after the
         whole dispatch.
         """
-        if not self._coordinator.knows_hub_mid(mid):
+        if not cast(PushCoordinator, self._coordinator).knows_hub_mid(mid):
             _LOGGER.debug("RainPoint MQTT frame named a mid this integration does not know; not stamping its clock")
             return
         self._last_message_at_by_mid[mid] = self._time_source()
@@ -1026,7 +1039,7 @@ class RainPointMqttClient:
             return
         self._note_hub_activity(mid)
         for sid, raw_value, device_ts in updates:
-            self._coordinator.apply_push_update(mid, sid, raw_value, device_ts)
+            cast(PushCoordinator, self._coordinator).apply_push_update(mid, sid, raw_value, device_ts)
 
     def _handle_hub_frame(self, frame: _HubFrame) -> None:
         """Route a recognized hub connectivity frame to apply_hub_push_update.
@@ -1044,7 +1057,7 @@ class RainPointMqttClient:
         if self._drop_if_no_coordinator():
             return
         self._note_hub_activity(mid)
-        self._coordinator.apply_hub_push_update(mid, frame.connected, frame.changed_ts)
+        cast(PushCoordinator, self._coordinator).apply_hub_push_update(mid, frame.connected, frame.changed_ts)
 
     def _dispatch_push(self, topic: str, payload: bytes) -> None:
         """Recognize the payload's frame family and hand it to that family's handler.

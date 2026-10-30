@@ -76,7 +76,11 @@ _SESSION_REJECTED_CODES = frozenset({1001, 1004})
 _DP_CODE_CTL_BT_WATER = 1
 
 
-class RainPointApiError(Exception):
+class RainPointError(Exception):
+    """Base for the errors the client raises itself; aiohttp transport errors propagate unwrapped."""
+
+
+class RainPointApiError(RainPointError):
     pass
 
 
