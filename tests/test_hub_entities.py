@@ -94,7 +94,7 @@ class TestResolvePushDiagnosticHubs:
 
     def test_every_real_hub_gets_diagnostics(self):
         """Both hubs on a two-hub account get their own pair."""
-        hubs = [{"mid": 300011, "did": "17053410"}, {"mid": 300013, "did": "17051777"}]
+        hubs = [{"mid": 300011, "did": "10000102"}, {"mid": 300013, "did": "10000101"}]
         assert resolve_push_diagnostic_hubs(self._coord(hubs)) == hubs
 
     def test_skips_a_record_with_no_hub_identity(self):
@@ -104,7 +104,7 @@ class TestResolvePushDiagnosticHubs:
         are all empty strings. It must not collect push diagnostics of its own.
         """
         wrapper = {"mid": 300012, "did": "", "mac": "", "productKey": "", "model": ""}
-        real = {"mid": 300011, "did": "17053410"}
+        real = {"mid": 300011, "did": "10000102"}
         assert resolve_push_diagnostic_hubs(self._coord([wrapper, real])) == [real]
 
     def test_returns_nothing_when_no_record_is_a_hub(self):
@@ -142,8 +142,8 @@ class TestResolveConnectivityHubs:
 
     def test_excludes_the_bluetooth_wrapper_record(self):
         """A record whose every identity field is an empty string yields no entity."""
-        hubs = [{"mid": 300012, "did": "", "mac": "", "productKey": "", "model": ""}, {"mid": 300011, "did": "17053410"}]
-        assert resolve_connectivity_hubs(self._coord(hubs)) == [{"mid": 300011, "did": "17053410"}]
+        hubs = [{"mid": 300012, "did": "", "mac": "", "productKey": "", "model": ""}, {"mid": 300011, "did": "10000102"}]
+        assert resolve_connectivity_hubs(self._coord(hubs)) == [{"mid": 300011, "did": "10000102"}]
 
     def test_accepts_dict_shaped_hubs(self):
         hubs = {"a": {"mid": 111, "did": "d1"}, "b": {"mid": 222, "did": "d2"}}
@@ -394,8 +394,8 @@ class TestRainPointHubDeviceIDSensor:
 
     def test_native_value_returns_did(self):
         """native_value should return the device id (did), matching the RainPoint app."""
-        sensor = self._make(hid=100, did="17053410")
-        assert sensor.native_value == "17053410"
+        sensor = self._make(hid=100, did="10000102")
+        assert sensor.native_value == "10000102"
 
     def test_native_value_falls_back_to_hid_without_did(self):
         """When the hub record omits did, native_value falls back to the home id."""

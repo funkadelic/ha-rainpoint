@@ -7358,7 +7358,7 @@ class TestIsHubRecord:
     REAL_HUB: ClassVar[dict] = {
         "mid": 300011,
         "name": "Hub",
-        "did": "17053410",
+        "did": "10000102",
         "mac": "A0:B0:C0:D0:00:03",
         "model": "HWG023WBRF-V2",
         "productKey": "FakePrdKy9Z",

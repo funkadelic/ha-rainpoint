@@ -2121,8 +2121,8 @@ class TestOrphanedDeviceRowRemoval:
         assert _device_row_is_empty([on_another_row, on_the_row], SUB_DEVICE_ROW_ID) is False
 
 
-# The identifiers observed on the maintainer's install when a valve moved
-# between two polls. A mid change means a top-level record appeared and another
+# The identifier change observed on the maintainer's install when a valve moved
+# between two polls, with made-up values. A mid change means a top-level record appeared and another
 # stopped listing the addr, which is what makes this two independent events in
 # one poll rather than one move.
 REKEY_HID = 100001

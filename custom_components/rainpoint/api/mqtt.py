@@ -72,7 +72,7 @@ MQTT_PUSH_TIME_FIELD = "time"
 MQTT_PUSH_MAX_PAYLOAD_BYTES = 8192
 
 # Hub-level connectivity frame shape, confirmed against the 2026-07-31
-# UAT capture: "#P260731181730000010000002300011|0|1785521850011|112882164350#".
+# UAT capture (identifiers replaced): "#P260731181730000010000002300011|0|1785521850011|112882164350#".
 # Section 1 decomposes as the "#P" prefix, a 12-digit YYMMDDHHMMSS stamp,
 # "0000", an 8-digit account id, and a 6-digit mid -- the mid is a fixed-width
 # tail, not an open-ended suffix, so _frame_mid reads it by slicing a known

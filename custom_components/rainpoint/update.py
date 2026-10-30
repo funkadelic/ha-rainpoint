@@ -213,8 +213,8 @@ class RainPointSubFirmwareUpdate(RainPointFirmwareUpdate):
 
         Read through the coordinator rather than off the record captured at
         construction, which device.py's own note asks of any value that changes
-        after setup. sid is one: the maintainer's HTV210B was 500003 before it
-        was re-paired and 500004 after. A device re-paired into the same hub and
+        after setup. sid is one: the maintainer's HTV210B got a new sid when it
+        was re-paired. A device re-paired into the same hub and
         address keeps this entity, so a frozen sid would leave it checking an id
         the cloud has retired for the life of the config entry.
 

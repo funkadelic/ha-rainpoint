@@ -379,7 +379,7 @@ class TestAsyncSetupEntryDispatch:
             "hid": 100001,
             "mid": 300011,
             "name": "Hub",
-            "did": "17053410",
+            "did": "10000102",
             "mac": "A0:B0:C0:D0:00:03",
             "model": "HWG023WBRF-V2",
             "productKey": "FakePrdKy9Z",
@@ -406,7 +406,7 @@ class TestAsyncSetupEntryDispatch:
         # One hub's worth of entities, not two and not the wrapper's.
         assert len(captured) == 4
         device_id = next(e for e in captured if isinstance(e, RainPointHubDeviceIDSensor))
-        assert device_id.native_value == "17053410"
+        assert device_id.native_value == "10000102"
         assert device_id._attr_name == "Device ID"
         assert device_id.device_info["name"] == "Hub"
 

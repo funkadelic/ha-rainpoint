@@ -270,7 +270,7 @@ class TestUpdateSetupEntry:
     @pytest.mark.asyncio
     async def test_one_entity_per_real_hub(self):
         """A real hub plus a Bluetooth wrapper record yields exactly one entity."""
-        real_hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "17053410", "mac": "A0:B0:C0:D0:00:03"}
+        real_hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "10000102", "mac": "A0:B0:C0:D0:00:03"}
         wrapper = {"hid": 100001, "mid": 300012, "name": "", "did": "", "mac": "", "model": "", "productKey": ""}
         hass, entry = _make_hass(hubs=[real_hub, wrapper])
 
@@ -288,7 +288,7 @@ class TestUpdateSetupEntry:
         SCAN_INTERVAL is measured in hours, so the first poll has to be the one
         that happens at setup rather than the one that happens on the next tick.
         """
-        hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "17053410", "mac": "A0:B0:C0:D0:00:03"}
+        hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "10000102", "mac": "A0:B0:C0:D0:00:03"}
         hass, entry = _make_hass(hubs=[hub])
 
         add_entities = MagicMock()
@@ -657,7 +657,7 @@ class TestSubUpdateSetupEntry:
     @pytest.mark.asyncio
     async def test_non_dict_sensors_snapshot_still_yields_the_hub_entities(self):
         """A malformed sensors snapshot costs the sub-device entities, not the hub's."""
-        hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "17053410", "mac": "A0:B0:C0:D0:00:03"}
+        hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "10000102", "mac": "A0:B0:C0:D0:00:03"}
         hass, entry = _make_hass(hubs=[hub], sensors=["not a dict"])
 
         add_entities = MagicMock()
