@@ -1348,7 +1348,7 @@ class TestNotTokenInvalidation:
         client._session.get = MagicMock(return_value=_mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
 
         with pytest.raises(RainPointApiError, match="code 1001"):
-            await client.get_devices_by_hid(182509)
+            await client.get_devices_by_hid(100001)
 
         assert client._token == "stale-token"  # kept -> is_relogin true, listeners fire
         assert client._token_expires_at is None  # expired -> ensure_logged_in re-authenticates
@@ -2867,11 +2867,11 @@ class TestGetFirmwareInfo:
         client.ensure_logged_in = AsyncMock()
         client._session.get = MagicMock(return_value=_mock_response({"code": 0, "data": {}}))
 
-        await client.get_hub_firmware_info(mid=361277)
+        await client.get_hub_firmware_info(mid=300013)
 
         args, kwargs = client._session.get.call_args
         assert args[0].endswith("/app/device/firmware/upgrade/info/v2")
-        assert kwargs == {"headers": client._auth_headers(), "params": {"mid": 361277}}
+        assert kwargs == {"headers": client._auth_headers(), "params": {"mid": 300013}}
 
     @pytest.mark.asyncio
     async def test_error_path_invalidates_the_matching_token(self):
@@ -3157,15 +3157,15 @@ class TestUpdateMainParam:
         client = _make_client()
         client.ensure_logged_in = AsyncMock()
 
-        json_body = {"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 7, "hid": 182509}}
+        json_body = {"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 7, "hid": 100001}}
         client._session.post = MagicMock(return_value=_mock_response(json_body))
 
-        result = await client.update_main_param(mid=236547, param="0|1||")
+        result = await client.update_main_param(mid=300011, param="0|1||")
 
         assert result is True
         call = client._session.post.call_args
         assert call.args[0].endswith("/app/device/main/update")
-        assert call.kwargs["json"] == {"mid": 236547, "param": "0|1||"}
+        assert call.kwargs["json"] == {"mid": 300011, "param": "0|1||"}
 
     @pytest.mark.asyncio
     async def test_non_zero_code_raises(self):
@@ -3200,12 +3200,12 @@ class TestUpdateMainParam:
         client = _make_client()
         client.ensure_logged_in = AsyncMock()
 
-        json_body = {"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 7, "hid": 182509}}
+        json_body = {"code": 0, "msg": "SUCCESS", "data": {"paramVersion": 7, "hid": 100001}}
         client._session.post = MagicMock(return_value=_mock_response(json_body))
 
         distinctive_param = "0|1|marker-should-never-be-logged|"
         with caplog.at_level(logging.DEBUG, logger="custom_components.rainpoint.api.client"):
-            await client.update_main_param(mid=236547, param=distinctive_param)
+            await client.update_main_param(mid=300011, param=distinctive_param)
 
         for record in caplog.records:
             assert distinctive_param not in record.getMessage()
@@ -3247,12 +3247,12 @@ class TestUpdateSubParam:
         json_body = {"code": 0, "msg": "SUCCESS", "data": {"homeVersion": 113475751763, "paramVersion": 3}}
         client._session.post = MagicMock(return_value=_mock_response(json_body))
 
-        result = await client.update_sub_param(mid=236547, sid=491657, param="5=02,11=a")
+        result = await client.update_sub_param(mid=300011, sid=500003, param="5=02,11=a")
 
         assert result is True
         call = client._session.post.call_args
         assert call.args[0].endswith("/app/device/sub/update")
-        assert call.kwargs["json"] == {"mid": 236547, "sid": 491657, "param": "5=02,11=a"}
+        assert call.kwargs["json"] == {"mid": 300011, "sid": 500003, "param": "5=02,11=a"}
 
     @pytest.mark.asyncio
     async def test_mid_and_sid_reach_the_body_unchanged(self):
@@ -3265,12 +3265,12 @@ class TestUpdateSubParam:
         client.ensure_logged_in = AsyncMock()
         client._session.post = MagicMock(return_value=_mock_response({"code": 0, "msg": "SUCCESS", "data": {}}))
 
-        await client.update_sub_param(mid="236547", sid=491657, param="5=02")
+        await client.update_sub_param(mid="300011", sid=500003, param="5=02")
 
         call = client._session.post.call_args
-        assert call.kwargs["json"]["mid"] == "236547"
+        assert call.kwargs["json"]["mid"] == "300011"
         assert isinstance(call.kwargs["json"]["mid"], str)
-        assert call.kwargs["json"]["sid"] == 491657
+        assert call.kwargs["json"]["sid"] == 500003
         assert isinstance(call.kwargs["json"]["sid"], int)
 
     @pytest.mark.asyncio
@@ -3384,7 +3384,7 @@ class TestGetSubscribeStatus:
         }
         client._session.post = MagicMock(return_value=self._mock_response(json_body))
 
-        result = await client.get_subscribe_status("hub-device", "pk123", 236547, 182509)
+        result = await client.get_subscribe_status("hub-device", "pk123", 300011, 100001)
 
         assert result == json_body["data"]
 
@@ -3399,13 +3399,13 @@ class TestGetSubscribeStatus:
         client.ensure_logged_in = AsyncMock()
         client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": {}}))
 
-        await client.get_subscribe_status("hub-device", "pk123", 236547, 182509)
+        await client.get_subscribe_status("hub-device", "pk123", 300011, 100001)
 
         _args, kwargs = client._session.post.call_args
         payload = kwargs["json"]
-        assert payload["hid"] == "182509"
-        assert payload["hidList"] == ["182509"]
-        assert payload["subscribe"] == [{"deviceName": "hub-device", "mid": 236547, "productKey": "pk123"}]
+        assert payload["hid"] == "100001"
+        assert payload["hidList"] == ["100001"]
+        assert payload["subscribe"] == [{"deviceName": "hub-device", "mid": 300011, "productKey": "pk123"}]
         assert payload["unsubscribe"] == []
         user_info = payload["userInfo"]
         assert user_info["deviceName"] == "hub-device"
@@ -3423,7 +3423,7 @@ class TestGetSubscribeStatus:
         client._session.post = MagicMock(return_value=self._mock_response({}, status=500))
 
         with pytest.raises(RainPointApiError, match="subscribeStatus HTTP 500"):
-            await client.get_subscribe_status("hub-device", "pk123", 236547, 182509)
+            await client.get_subscribe_status("hub-device", "pk123", 300011, 100001)
 
     @pytest.mark.asyncio
     async def test_subscribe_status_code_error_raises(self):
@@ -3434,7 +3434,7 @@ class TestGetSubscribeStatus:
         client._session.post = MagicMock(return_value=self._mock_response(json_body))
 
         with pytest.raises(RainPointApiError, match="code 1"):
-            await client.get_subscribe_status("hub-device", "pk123", 236547, 182509)
+            await client.get_subscribe_status("hub-device", "pk123", 300011, 100001)
 
     @pytest.mark.asyncio
     async def test_subscribe_status_posts_to_the_expected_url(self):
@@ -3443,7 +3443,7 @@ class TestGetSubscribeStatus:
         client.ensure_logged_in = AsyncMock()
         client._session.post = MagicMock(return_value=self._mock_response({"code": 0, "data": {}}))
 
-        await client.get_subscribe_status("hub-device", "pk123", 236547, 182509)
+        await client.get_subscribe_status("hub-device", "pk123", 300011, 100001)
 
         args, _kwargs = client._session.post.call_args
         assert args == (f"{client._base_url}/app/device/subscribeStatus",)
@@ -3457,7 +3457,7 @@ class TestGetSubscribeStatus:
         client._session.post = MagicMock(return_value=self._mock_response({"code": 1001, "msg": "NOT_TOKEN"}))
 
         with pytest.raises(RainPointApiError, match="subscribeStatus failed: code 1001"):
-            await client.get_subscribe_status("hub-device", "pk123", 236547, 182509)
+            await client.get_subscribe_status("hub-device", "pk123", 300011, 100001)
 
         assert client._token_expires_at is None
 
@@ -3477,7 +3477,7 @@ class TestGetSubscribeStatus:
         client._session.post = MagicMock(return_value=self._mock_response(json_body))
 
         with caplog.at_level(logging.DEBUG):
-            await client.get_subscribe_status("hub-device", "pk123", 236547, 182509)
+            await client.get_subscribe_status("hub-device", "pk123", 300011, 100001)
 
         assert "SEKRIT-value-9f3a" not in caplog.text
 
@@ -3563,21 +3563,21 @@ class TestCloudResponsesAreSummarisedNotDumped:
             "code": 0,
             "data": [
                 {
-                    "mid": 236547,
-                    "deviceName": "MAC-A84674BB91F0",
-                    "productKey": "a3QrDxYPTM2",
-                    "iotId": "jDQNeV92iFixCU42PDtUk0k0d4",
-                    "name": "Norms Back Garden Hub",
+                    "mid": 300011,
+                    "deviceName": "MAC-A0B0C0D00003",
+                    "productKey": "FakePrdKy9Z",
+                    "iotId": "FakeIotId0000001FakeTail01",
+                    "name": "Demos Back Garden Hub",
                 }
             ],
         }
         client._session.get = MagicMock(return_value=_mock_response(body))
 
         with caplog.at_level(logging.DEBUG):
-            await client.get_devices_by_hid(182509)
+            await client.get_devices_by_hid(100001)
 
         emitted = caplog.text
-        for identifier in ("MAC-A84674BB91F0", "a3QrDxYPTM2", "jDQNeV92iFixCU42PDtUk0k0d4", "Norms Back Garden Hub"):
+        for identifier in ("MAC-A0B0C0D00003", "FakePrdKy9Z", "FakeIotId0000001FakeTail01", "Demos Back Garden Hub"):
             assert identifier not in emitted, f"{identifier!r} reached the log"
         # The field names survive, which is what makes the line worth keeping.
         assert "deviceName" in emitted
@@ -3588,18 +3588,18 @@ class TestCloudResponsesAreSummarisedNotDumped:
         """The request payload named each device; it is now a count."""
         client = _make_client()
         client.ensure_logged_in = AsyncMock()
-        body = {"code": 0, "data": [{"mid": 236547, "iotId": "jDQNeV92iFixCU42", "status": []}]}
+        body = {"code": 0, "data": [{"mid": 300011, "iotId": "FakeIotId0000001", "status": []}]}
         client._session.post = MagicMock(return_value=_mock_response(body))
 
         with caplog.at_level(logging.DEBUG):
             await client.get_multiple_device_status(
-                [{"mid": 236547, "deviceName": "MAC-A84674BB91F0", "productKey": "a3QrDxYPTM2"}]
+                [{"mid": 300011, "deviceName": "MAC-A0B0C0D00003", "productKey": "FakePrdKy9Z"}]
             )
 
         emitted = caplog.text
-        assert "MAC-A84674BB91F0" not in emitted
-        assert "a3QrDxYPTM2" not in emitted
-        assert "jDQNeV92iFixCU42" not in emitted
+        assert "MAC-A0B0C0D00003" not in emitted
+        assert "FakePrdKy9Z" not in emitted
+        assert "FakeIotId0000001" not in emitted
         assert "devices=1" in emitted
 
     @pytest.mark.asyncio
@@ -3617,7 +3617,7 @@ class TestCloudResponsesAreSummarisedNotDumped:
         client._session.get = MagicMock(return_value=_mock_response(body))
 
         with caplog.at_level(logging.DEBUG):
-            await client.get_devices_by_hid(182509)
+            await client.get_devices_by_hid(100001)
 
         assert "aFieldNobodyHasSeenBefore" in caplog.text
         assert "leaked-canary-value" not in caplog.text
@@ -3627,11 +3627,11 @@ class TestCloudResponsesAreSummarisedNotDumped:
         """The failure path dumped the whole body, which is where msg strings live."""
         client = _make_client()
         client.ensure_logged_in = AsyncMock()
-        body = {"code": 1004, "msg": "session displaced for MAC-A84674BB91F0"}
+        body = {"code": 1004, "msg": "session displaced for MAC-A0B0C0D00003"}
         client._session.get = MagicMock(return_value=_mock_response(body))
 
         with caplog.at_level(logging.DEBUG), pytest.raises(RainPointApiError):
-            await client.get_devices_by_hid(182509)
+            await client.get_devices_by_hid(100001)
 
-        assert "MAC-A84674BB91F0" not in caplog.text
+        assert "MAC-A0B0C0D00003" not in caplog.text
         assert "getDeviceByHid failed response" in caplog.text

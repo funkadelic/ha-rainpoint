@@ -223,7 +223,7 @@ class RainPointSubDevicePowerSelect(RainPointSubDeviceEntity, SelectEntity):
         if spliced is None:
             raise HomeAssistantError("The device's settings could not be read, so this setting cannot be changed")
         # mid goes over the wire as a string here, matching the captured
-        # payload for this endpoint (`"mid":"236547"`) rather than the int
+        # payload for this endpoint (`"mid":"300011"`) rather than the int
         # this integration otherwise carries mid as -- update_sub_param
         # deliberately does not coerce it, so the caller must.
         await client.update_sub_param(mid=str(self._sensor_info.get("mid")), sid=sid, param=spliced)

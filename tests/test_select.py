@@ -47,8 +47,8 @@ class TestSelectSetupEntry:
         Its identity fields are empty strings rather than absent keys, so it
         used to collapse onto the real hub's hid-keyed slot and win.
         """
-        real_hub = {"hid": 182509, "mid": 236547, "name": "Hub", "did": "17053410", "mac": "A8:46:74:BB:91:F0"}
-        wrapper = {"hid": 182509, "mid": 346965, "name": "", "did": "", "mac": "", "model": "", "productKey": ""}
+        real_hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "17053410", "mac": "A0:B0:C0:D0:00:03"}
+        wrapper = {"hid": 100001, "mid": 300012, "name": "", "did": "", "mac": "", "model": "", "productKey": ""}
         hass, entry, _coord = _make_hass(hubs=[real_hub, wrapper])
 
         mock_add_entities = MagicMock()
@@ -230,9 +230,9 @@ class TestSubDevicePowerSelectRealTimeline:
     """
 
     _HID = 10
-    _MID = 236547
+    _MID = 300011
     _ADDR = 1
-    _SID = 491657
+    _SID = 500003
     _INITIAL_PARAM = (
         "5=01,11=58020a001e000000000000000000,12=58020a001e000000000000000000,"
         "50=646464646464646464646464,51=646464646464646464646464"
@@ -362,7 +362,7 @@ class TestSubDevicePowerSelectRealTimeline:
         # is still what a subsequent read reflects -- proven by re-reading
         # current_option a second time rather than trusting the first.
         assert select.current_option == "Enhance"
-        assert coordinator.data["sensors"]["10_236547_1"]["data"] is not None
+        assert coordinator.data["sensors"]["10_300011_1"]["data"] is not None
 
     @pytest.mark.asyncio
     async def test_an_unrelated_push_does_not_clear_the_optimistic_value(self):

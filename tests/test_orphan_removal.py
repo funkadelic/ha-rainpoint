@@ -2125,10 +2125,10 @@ class TestOrphanedDeviceRowRemoval:
 # between two polls. A mid change means a top-level record appeared and another
 # stopped listing the addr, which is what makes this two independent events in
 # one poll rather than one move.
-REKEY_HID = 182509
-REKEY_OLD_MID = 236547
+REKEY_HID = 100001
+REKEY_OLD_MID = 300011
 REKEY_OLD_ADDR = 3
-REKEY_NEW_MID = 346965
+REKEY_NEW_MID = 300012
 REKEY_NEW_ADDR = 1
 REKEY_OLD_KEY = f"{REKEY_HID}_{REKEY_OLD_MID}_{REKEY_OLD_ADDR}"
 REKEY_NEW_KEY = f"{REKEY_HID}_{REKEY_NEW_MID}_{REKEY_NEW_ADDR}"

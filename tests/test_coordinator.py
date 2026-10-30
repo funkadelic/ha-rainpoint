@@ -206,7 +206,7 @@ async def _run(coord):
     return await _async_update_data_fn(coord)
 
 
-def _wrapper_record(hid=100, mid=346965, addrs=(1,)):
+def _wrapper_record(hid=100, mid=300012, addrs=(1,)):
     """A Bluetooth wrapper record: every identity field empty, mid real.
 
     The empty strings rather than missing keys are what is_hub_record tests
@@ -282,8 +282,8 @@ class TestCoordinatorUpdate:
         # A value that only the record itself can carry, so its absence proves
         # values are gone rather than merely that this particular key is.
         hub["rfChannel"] = "canary-7"
-        hub["deviceName"] = "MAC-A84674BB91F0"
-        hub["productKey"] = "a3QrDxYPTM2"
+        hub["deviceName"] = "MAC-A0B0C0D00003"
+        hub["productKey"] = "FakePrdKy9Z"
         client.get_devices_by_hid.return_value = [hub]
         client.get_multiple_device_status.return_value = _make_status()
 
@@ -298,8 +298,8 @@ class TestCoordinatorUpdate:
         assert "deviceName" in line
         # None of their values does, including the model string.
         assert "canary-7" not in line
-        assert "MAC-A84674BB91F0" not in line
-        assert "a3QrDxYPTM2" not in line
+        assert "MAC-A0B0C0D00003" not in line
+        assert "FakePrdKy9Z" not in line
         assert "HWG023WBRF-V2" not in line
 
     @pytest.mark.asyncio
@@ -315,10 +315,10 @@ class TestCoordinatorUpdate:
         """
         coord, client = _make_coord()
         hub = _make_hub(model="HWG023WBRF-V2")
-        hub["deviceName"] = "MAC-A84674BB91F0"
-        hub["productKey"] = "a3QrDxYPTM2"
-        hub["iotId"] = "jDQNeV92iFixCU42PDtUk0k0d4"
-        hub["name"] = "Norms Back Garden Hub"
+        hub["deviceName"] = "MAC-A0B0C0D00003"
+        hub["productKey"] = "FakePrdKy9Z"
+        hub["iotId"] = "FakeIotId0000001FakeTail01"
+        hub["name"] = "Demos Back Garden Hub"
         client.get_devices_by_hid.return_value = [hub]
         client.get_multiple_device_status.return_value = _make_status()
 
@@ -331,10 +331,10 @@ class TestCoordinatorUpdate:
         # as product-scoped: it is a cloud addressing identifier and it travels
         # with deviceName in the same payloads.
         for identifier in (
-            "MAC-A84674BB91F0",
-            "a3QrDxYPTM2",
-            "jDQNeV92iFixCU42PDtUk0k0d4",
-            "Norms Back Garden Hub",
+            "MAC-A0B0C0D00003",
+            "FakePrdKy9Z",
+            "FakeIotId0000001FakeTail01",
+            "Demos Back Garden Hub",
         ):
             assert identifier not in emitted, f"{identifier!r} reached the log"
         # The model is the one deliberate exemption, settled 2026-08-14: it names
@@ -2250,7 +2250,7 @@ class TestHubConnectivityIntegration:
         coord, client = _make_coord()
         wrapper_hub = {
             "hid": 100,
-            "mid": 346965,
+            "mid": 300012,
             "did": "",
             "mac": "",
             "productKey": "",
@@ -2259,11 +2259,11 @@ class TestHubConnectivityIntegration:
             "subDevices": [{"addr": 1, "model": "HTV210B", "name": "BT Valve", "softVer": "1.0"}],
         }
         client.get_devices_by_hid.return_value = [wrapper_hub]
-        client.get_multiple_device_status.return_value = [{"mid": 346965, "subDeviceStatus": [{"id": "connected", "value": "1"}]}]
+        client.get_multiple_device_status.return_value = [{"mid": 300012, "subDeviceStatus": [{"id": "connected", "value": "1"}]}]
 
         result = await _run(coord)
 
-        assert 346965 not in result["hub_connectivity"]
+        assert 300012 not in result["hub_connectivity"]
 
     @pytest.mark.asyncio
     async def test_multi_status_and_fallback_paths_produce_identical_hub_connectivity(self):
@@ -2346,10 +2346,10 @@ class TestPruneHubConnectivityState:
         """A stray window start under a wrapper's key (which should never exist
         in practice) must not be kept alive by pruning either."""
         coord, _ = _make_coord()
-        coord._hub_disconnect_since = {(100, 346965): self._SINCE_A}
+        coord._hub_disconnect_since = {(100, 300012): self._SINCE_A}
         wrapper_hub = {
             "hid": 100,
-            "mid": 346965,
+            "mid": 300012,
             "did": "",
             "mac": "",
             "productKey": "",
@@ -2541,7 +2541,7 @@ class TestSyncHubConnectivityIssues:
         coord, _ = _make_coord()
         wrapper_hub = {
             "hid": 100,
-            "mid": 346965,
+            "mid": 300012,
             "did": "",
             "mac": "",
             "productKey": "",
@@ -2549,7 +2549,7 @@ class TestSyncHubConnectivityIssues:
             "name": "",
             "subDevices": [{"addr": 1, "model": "HTV210B", "name": "BT Valve", "softVer": "1.0"}],
         }
-        hub_connectivity = {346965: {"state": _coord_module.HUB_DISCONNECTED}}
+        hub_connectivity = {300012: {"state": _coord_module.HUB_DISCONNECTED}}
 
         _coord_module.RainPointCoordinator._sync_hub_connectivity_issues(coord, [wrapper_hub], hub_connectivity)
 
@@ -2696,9 +2696,9 @@ class TestSyncSilentDeviceIssues:
         """
         coord, _ = _make_coord()
         decoded_sensors = {
-            "100_346965_1": {
+            "100_300012_1": {
                 "hid": 100,
-                "mid": 346965,
+                "mid": 300012,
                 "addr": 1,
                 "model": "HTV210B",
                 "hub_name": "",
@@ -2713,8 +2713,8 @@ class TestSyncSilentDeviceIssues:
                 "addr": 2,
                 "model": MODEL_MOISTURE_SIMPLE,
                 "hub_name": "Hub1",
-                "product_key": "a3QrDxYPTM2",
-                "device_name": "MAC-A84674BB91F0",
+                "product_key": "FakePrdKy9Z",
+                "device_name": "MAC-A0B0C0D00003",
                 "hub_paired": True,
                 "data": {"type": "moisture"},
             },
@@ -2724,7 +2724,7 @@ class TestSyncSilentDeviceIssues:
 
         (records,) = coord._silent_issues.async_sync.call_args.args
         by_key = {(r.hid, r.mid, r.addr): r for r in records}
-        assert by_key[(100, 346965, 1)].hub_paired is False
+        assert by_key[(100, 300012, 1)].hub_paired is False
         assert by_key[(100, 200, 2)].hub_paired is True
 
     def test_hub_paired_reads_the_stamped_field_not_the_raw_hub_fields(self):
@@ -2733,9 +2733,9 @@ class TestSyncSilentDeviceIssues:
         inline predicate, which is the proof the stamped field is the source."""
         coord, _ = _make_coord()
         decoded_sensors = {
-            "100_346965_1": {
+            "100_300012_1": {
                 "hid": 100,
-                "mid": 346965,
+                "mid": 300012,
                 "addr": 1,
                 "model": "HTV210B",
                 "hub_name": "",
@@ -2763,8 +2763,8 @@ class TestSyncSilentDeviceIssues:
                 "addr": 2,
                 "model": MODEL_MOISTURE_SIMPLE,
                 "hub_name": "Hub1",
-                "product_key": "a3QrDxYPTM2",
-                "device_name": "MAC-A84674BB91F0",
+                "product_key": "FakePrdKy9Z",
+                "device_name": "MAC-A0B0C0D00003",
                 "hub_paired": False,
                 "data": {"type": "moisture"},
             }
@@ -3677,7 +3677,7 @@ class TestTrackMissingHubs:
         coord, _ = _make_coord()
         wrapper_hub = {
             "hid": 100,
-            "mid": 346965,
+            "mid": 300012,
             "did": "",
             "mac": "",
             "productKey": "",
@@ -3691,7 +3691,7 @@ class TestTrackMissingHubs:
         # Present, so nothing is provisional yet; remembered, so its absence
         # next poll is a shrink.
         assert provisional == set()
-        assert coord._last_poll_hub_keys == {(100, 346965)}
+        assert coord._last_poll_hub_keys == {(100, 300012)}
 
     def test_provisional_boundary_is_the_third_absence_and_release_is_the_fourth(self):
         """Pins the "<=" boundary at exactly HUB_ABSENT_DEBOUNCE_POLLS,
@@ -3746,8 +3746,8 @@ class TestWrapperRecordAbsenceIsProtected:
     nothing about either record.
     """
 
-    KEY = "100_346965_1"
-    WRAPPER_MID = 346965
+    KEY = "100_300012_1"
+    WRAPPER_MID = 300012
 
     _anchor = staticmethod(TestOrphanedKeyCounterFreeze._hub)
     _arrived_empty = staticmethod(TestOrphanedKeyCounterFreeze._arrived_empty)
@@ -3936,12 +3936,12 @@ class TestTrackOrphanedKeys:
         coord, _ = _make_coord()
         wrapper = _wrapper_record()
         real_hub = self._hub(mid=200)
-        wrapper_key = "100_346965_1"
+        wrapper_key = "100_300012_1"
 
         # Poll 1: both records present, both remembered.
         missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [wrapper, real_hub])
         _TRACK_ORPHANS(coord, [wrapper, real_hub], missing_hub_keys=missing_hub_keys)
-        assert coord._last_poll_hub_keys == {(100, 200), (100, 346965)}
+        assert coord._last_poll_hub_keys == {(100, 200), (100, 300012)}
         assert wrapper_key in coord._last_poll_sensor_keys
 
         # Poll 2: the wrapper record is gone. It is inside its provisional
@@ -3949,7 +3949,7 @@ class TestTrackOrphanedKeys:
         missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [real_hub])
         _TRACK_ORPHANS(coord, [real_hub], missing_hub_keys=missing_hub_keys)
 
-        assert missing_hub_keys == {(100, 346965)}
+        assert missing_hub_keys == {(100, 300012)}
         assert wrapper_key not in coord._orphaned_key_poll_counts
 
     def test_a_wrapper_record_that_stays_gone_releases_its_children_to_be_counted(self):
@@ -3960,7 +3960,7 @@ class TestTrackOrphanedKeys:
         coord, _ = _make_coord()
         wrapper = _wrapper_record()
         real_hub = self._hub(mid=200)
-        wrapper_key = "100_346965_1"
+        wrapper_key = "100_300012_1"
 
         missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [wrapper, real_hub])
         _TRACK_ORPHANS(coord, [wrapper, real_hub], missing_hub_keys=missing_hub_keys)
@@ -3968,7 +3968,7 @@ class TestTrackOrphanedKeys:
         for _ in range(_coord_module.HUB_ABSENT_DEBOUNCE_POLLS):
             missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [real_hub])
             _TRACK_ORPHANS(coord, [real_hub], missing_hub_keys=missing_hub_keys)
-            assert missing_hub_keys == {(100, 346965)}
+            assert missing_hub_keys == {(100, 300012)}
             assert wrapper_key not in coord._orphaned_key_poll_counts
 
         # The release poll: the key is dropped from the memory, so nothing is
@@ -3986,7 +3986,7 @@ class TestTrackOrphanedKeys:
         nothing is frozen, and the stale rows start their count at once."""
         coord, _ = _make_coord()
         real_hub = self._hub(mid=200)
-        wrapper_key = "100_346965_1"
+        wrapper_key = "100_300012_1"
 
         missing_hub_keys = _coord_module.RainPointCoordinator._track_missing_hubs(coord, [_wrapper_record(), real_hub])
         _TRACK_ORPHANS(coord, [_wrapper_record(), real_hub], missing_hub_keys=missing_hub_keys)
@@ -6333,11 +6333,11 @@ class TestApplyHubPushUpdate:
         """The Bluetooth wrapper record (every identity field empty) is found
         by mid but fails is_hub_record, so it contributes no connectivity
         record -- writing one here would create a record the next poll deletes."""
-        wrapper_hub = {"hid": 100, "mid": 346965, "did": "", "mac": "", "productKey": "", "model": "", "name": ""}
+        wrapper_hub = {"hid": 100, "mid": 300012, "did": "", "mac": "", "productKey": "", "model": "", "name": ""}
         coord = _seed_push_coord(wrapper_hub, sensors={})
         original = coord.data
 
-        _APPLY_HUB(coord, 346965, True, 1717200000000)
+        _APPLY_HUB(coord, 300012, True, 1717200000000)
 
         assert coord.data is original
         coord.async_update_listeners.assert_not_called()
@@ -6454,14 +6454,14 @@ class TestApplyHubPushUpdate:
         [
             ("before first poll", 200, False, False),
             ("unknown mid", 999, True, False),
-            ("non-hub record", 346965, True, True),
+            ("non-hub record", 300012, True, True),
         ],
     )
     def test_dropped_push_notifies_no_listener(self, reason, mid, seed, wrapper):
         """Each early-return drop path must not notify listeners or clear the
         issue, since none of them reach the merge that follows those drops."""
         if wrapper:
-            hub = {"hid": 100, "mid": 346965, "did": "", "mac": "", "productKey": "", "model": "", "name": ""}
+            hub = {"hid": 100, "mid": 300012, "did": "", "mac": "", "productKey": "", "model": "", "name": ""}
             coord = _seed_push_coord(hub, sensors={})
         elif seed:
             coord = _seed_push_coord(_push_hub(), sensors={})
@@ -7354,25 +7354,25 @@ class TestIsHubRecord:
     """
 
     # The real captured shapes: a HWG023WBRF-V2 hub and the wrapper the cloud
-    # added to hold an HTV210B, both under hid 182509.
+    # added to hold an HTV210B, both under hid 100001.
     REAL_HUB: ClassVar[dict] = {
-        "mid": 236547,
+        "mid": 300011,
         "name": "Hub",
         "did": "17053410",
-        "mac": "A8:46:74:BB:91:F0",
+        "mac": "A0:B0:C0:D0:00:03",
         "model": "HWG023WBRF-V2",
-        "productKey": "a3QrDxYPTM2",
-        "hid": 182509,
+        "productKey": "FakePrdKy9Z",
+        "hid": 100001,
     }
     WRAPPER: ClassVar[dict] = {
-        "mid": 346965,
+        "mid": 300012,
         "name": "",
         "did": "",
         "mac": "",
         "model": "",
         "productKey": "",
         "deviceName": "",
-        "hid": 182509,
+        "hid": 100001,
     }
 
     def test_real_hub_is_a_hub(self):

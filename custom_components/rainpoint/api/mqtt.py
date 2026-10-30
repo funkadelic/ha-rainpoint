@@ -72,7 +72,7 @@ MQTT_PUSH_TIME_FIELD = "time"
 MQTT_PUSH_MAX_PAYLOAD_BYTES = 8192
 
 # Hub-level connectivity frame shape, confirmed against the 2026-07-31
-# UAT capture: "#P260731181730000016822282236547|0|1785521850011|112882164350#".
+# UAT capture: "#P260731181730000010000002300011|0|1785521850011|112882164350#".
 # Section 1 decomposes as the "#P" prefix, a 12-digit YYMMDDHHMMSS stamp,
 # "0000", an 8-digit account id, and a 6-digit mid -- the mid is a fixed-width
 # tail, not an open-ended suffix, so _frame_mid reads it by slicing a known
@@ -238,7 +238,7 @@ def _parse_hub_frame(payload: bytes) -> _HubFrame | None:
     Two exception scopes, not one -- this is load-bearing. _parse_push_envelope
     can put json.loads first because every payload it handles is JSON; the hub
     frame is not. The captured disconnect frame
-    "#P260731181730000016822282236547|0|1785521850011|112882164350#" is not
+    "#P260731181730000010000002300011|0|1785521850011|112882164350#" is not
     valid JSON, so a single-outer-try transcription of that helper's shape
     would raise ValueError on the very first statement and return None for the
     exact frame this helper exists to read -- a silent, total feature kill.

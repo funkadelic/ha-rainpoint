@@ -376,18 +376,18 @@ class TestAsyncSetupEntryDispatch:
         from custom_components.rainpoint.hub_entities import RainPointHubDeviceIDSensor
 
         real_hub = {
-            "hid": 182509,
-            "mid": 236547,
+            "hid": 100001,
+            "mid": 300011,
             "name": "Hub",
             "did": "17053410",
-            "mac": "A8:46:74:BB:91:F0",
+            "mac": "A0:B0:C0:D0:00:03",
             "model": "HWG023WBRF-V2",
-            "productKey": "a3QrDxYPTM2",
+            "productKey": "FakePrdKy9Z",
             "softVer": "1.1.1041",
         }
         wrapper = {
-            "hid": 182509,
-            "mid": 346965,
+            "hid": 100001,
+            "mid": 300012,
             "name": "",
             "did": "",
             "mac": "",
@@ -3987,7 +3987,7 @@ class TestCatalogReadingsSensor:
             "model": "HTV245FRF",
             "model_code": "303",
             "product_key": "SECRET_PK",
-            "device_name": "MAC-A84674BB91F0",
+            "device_name": "MAC-A0B0C0D00003",
             "data": {"type": "valve", "battery_flag": 1},
         }
         coordinator = MagicMock()
@@ -3997,7 +3997,7 @@ class TestCatalogReadingsSensor:
         rendered = repr(sensor.extra_state_attributes)
 
         assert "SECRET_PK" not in rendered
-        assert "MAC-A84674BB91F0" not in rendered
+        assert "MAC-A0B0C0D00003" not in rendered
 
     def test_the_catalog_is_resolved_once_per_model_rather_than_once_per_read(self):
         """extra_state_attributes is read on every state write, so the lookup is

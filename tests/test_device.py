@@ -78,8 +78,8 @@ class TestRainPointHubDevice:
         The cloud carries no manufacturer serial for a hub, so the key is
         absent rather than holding some other value.
         """
-        info = self._make_hub(mac="A0:A3:B3:7C:AF:FC").device_info
-        assert info["connections"] == {("mac", "a0:a3:b3:7c:af:fc")}
+        info = self._make_hub(mac="A0:B0:C0:D0:00:01").device_info
+        assert info["connections"] == {("mac", "a0:b0:c0:d0:00:01")}
         assert "serial_number" not in info
 
     def test_hub_mac_is_normalised_to_the_spelling_the_registry_matches_on(self):
@@ -147,10 +147,10 @@ class TestRainPointHubDevice:
     @pytest.mark.parametrize(
         ("mac", "expected"),
         [
-            ("a0:a3:b3:7c:af:fc", "a0:a3:b3:7c:af:fc"),
-            ("A0:A3:B3:7C:AF:FC", "a0:a3:b3:7c:af:fc"),
-            ("A0-A3-B3-7C-AF-FC", "a0:a3:b3:7c:af:fc"),
-            ("A0A3B37CAFFC", "a0:a3:b3:7c:af:fc"),
+            ("a0:b0:c0:d0:00:01", "a0:b0:c0:d0:00:01"),
+            ("A0:B0:C0:D0:00:01", "a0:b0:c0:d0:00:01"),
+            ("A0-B0-C0-D0-00-01", "a0:b0:c0:d0:00:01"),
+            ("A0B0C0D00001", "a0:b0:c0:d0:00:01"),
             ("02:1a:2b:3c:4d:5e", "02:1a:2b:3c:4d:5e"),
             ("06:1a:2b:3c:4d:5e", "06:1a:2b:3c:4d:5e"),
         ],

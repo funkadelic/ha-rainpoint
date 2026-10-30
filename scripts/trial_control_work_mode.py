@@ -16,11 +16,11 @@ Usage:
 
     # Dry run: show exactly what would be sent, send nothing.
     RAINPOINT_EMAIL=... RAINPOINT_PASSWORD=... \\
-        python scripts/trial_control_work_mode.py --mid 346965 --addr 1 --port 1 --mode open --duration 120
+        python scripts/trial_control_work_mode.py --mid 300012 --addr 1 --port 1 --mode open --duration 120
 
     # The real trial. Watch the valve while this runs.
     RAINPOINT_EMAIL=... RAINPOINT_PASSWORD=... \\
-        python scripts/trial_control_work_mode.py --mid 346965 --addr 1 --port 1 --mode open --duration 120 --execute
+        python scripts/trial_control_work_mode.py --mid 300012 --addr 1 --port 1 --mode open --duration 120 --execute
 
 Credentials come from the environment (RAINPOINT_EMAIL, RAINPOINT_PASSWORD,
 and optionally RAINPOINT_AREA_CODE), never from a flag or a committed file.
