@@ -2644,13 +2644,13 @@ class TestTopicKindKeepsIdentifiersOutOfTheLog:
 
     def test_the_real_captured_topic_loses_both_identifiers(self):
         """The shape is the one observed on the wire, not an invented one."""
-        topic = "/sys/a3iCXW3C5CP/0ct1T72LlR7exSXOG2UU/thing/service/property/set"
+        topic = "/sys/FakeObsrvPk/FakeObserverDevName1/thing/service/property/set"
 
         kind = _topic_kind(topic)
 
         assert kind == "thing/service/property/set"
-        assert "a3iCXW3C5CP" not in kind
-        assert "0ct1T72LlR7exSXOG2UU" not in kind
+        assert "FakeObsrvPk" not in kind
+        assert "FakeObserverDevName1" not in kind
 
     def test_exactly_five_non_empty_parts_is_the_minimum_recognized_shape(self):
         """Pins '>= 5', not '> 5' or '>= 6': five is the minimum, not one more."""
