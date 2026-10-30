@@ -15,7 +15,7 @@ import paho.mqtt.client as paho
 import pytest
 
 import custom_components.rainpoint.api.mqtt as mqtt_module
-from custom_components.rainpoint.api.mqtt import RainPointMqttClient, RainPointMqttError, _topic_kind
+from custom_components.rainpoint.api.mqtt import PushCoordinator, RainPointMqttClient, RainPointMqttError, _topic_kind
 from tests.payload_samples import (
     SAMPLE_HUB_DISCONNECT_FRAME,
     SAMPLE_HUB_FRAME_MID,
@@ -604,7 +604,7 @@ class TestPushEnvelopeFailSafe:
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(hass, fake_paho, coordinator)
         await client.async_start()
         await _settle()
@@ -625,7 +625,7 @@ class TestPushEnvelopeFailSafe:
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(hass, fake_paho, coordinator)
         await client.async_start()
         await _settle()
@@ -655,7 +655,7 @@ class TestPushEnvelopeParsing:
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(hass, fake_paho, coordinator, hub_mid=4242)
         assert client.hub_mid == 4242
         await client.async_start()
@@ -686,7 +686,7 @@ class TestPushEnvelopeParsing:
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(hass, fake_paho, coordinator)
         await client.async_start()
         await _settle()
@@ -709,7 +709,7 @@ class TestPushEnvelopeParsing:
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(hass, fake_paho, coordinator)
         await client.async_start()
         await _settle()
@@ -794,7 +794,7 @@ class TestHubFrameParsing:
         """Rejection at the parser is not enough on its own: the frame must
         also leave both sanctioned coordinator entry points untouched, since
         that is the actual harm a misread would cause."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
         client._dispatch_push("topic", SAMPLE_NON_HUB_PIPE_FRAME.encode())
         coordinator.apply_hub_push_update.assert_not_called()
@@ -912,7 +912,7 @@ class TestHubFrameRouting:
     hub."""
 
     def test_hub_frame_reaches_apply_hub_push_update_with_the_clients_own_mid(self):
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
 
         client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
@@ -925,7 +925,7 @@ class TestHubFrameRouting:
         for. One session carries the whole account, so a frame naming a
         different hub is that hub's edge and is delivered as such; the
         coordinator is what decides whether that mid is a hub it knows."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=999999)
 
         client._dispatch_push("topic", SAMPLE_HUB_DISCONNECT_FRAME.encode())
@@ -939,7 +939,7 @@ class TestHubFrameRouting:
         suffix of the frame's real mid, which on a multi-hub account means
         one hub's edge landing on another. The slot is fixed now, so a
         section 1 that is not the captured width yields no mid at all."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
 
         client._dispatch_push("topic", b"#P123|0|1785521850011|112882164350#")
@@ -971,7 +971,7 @@ class TestHubFrameRouting:
     def test_a_hostile_identity_is_dropped_rather_than_raising_through_dispatch(self):
         """End to end, since the defect was an exception escaping the handler:
         the frame passes every recognition clause and must still be declined."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
 
         client._dispatch_push("topic", "#P26073118173000001682228223654\u00b2|0|1785521850011|112882164350#".encode())
@@ -992,7 +992,7 @@ class TestHubFrameRouting:
         decision: a sub-device envelope reaches only apply_push_update and a
         hub frame reaches only apply_hub_push_update, never both -- it goes
         red the instant a future change lets one payload reach both."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
 
         subdevice_payload = _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=SAMPLE_HUB_FRAME_MID)
@@ -1019,7 +1019,7 @@ class TestSubDeviceEnvelopeMidAttribution:
     def test_envelope_is_attributed_to_the_hub_it_names_not_the_bound_one(self):
         """A well-formed envelope naming another hub reaches that hub, rather
         than being refused for not naming the one this client was built for."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
 
         client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=361277))
@@ -1029,7 +1029,7 @@ class TestSubDeviceEnvelopeMidAttribution:
 
     def test_envelope_naming_this_hub_is_dispatched(self):
         """The same envelope naming this client's own hub reaches the coordinator."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
 
         client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=236547))
@@ -1042,7 +1042,7 @@ class TestSubDeviceEnvelopeMidAttribution:
         1, and D01 means addr 1 on either. The reading must carry the other
         hub's mid, so the coordinator resolves it to that hub's addr 1 rather
         than to this hub's."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
 
         client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "dead" * 28}, mid=361277))
@@ -1053,7 +1053,7 @@ class TestSubDeviceEnvelopeMidAttribution:
     def test_every_update_in_one_envelope_carries_that_envelope_s_mid(self):
         """One envelope can hold several sub-devices, and they all belong to the
         hub its section 1 names."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
 
         client._dispatch_push(
@@ -1067,7 +1067,7 @@ class TestSubDeviceEnvelopeMidAttribution:
     def test_per_hub_clock_advances_only_for_the_hub_a_frame_names(self):
         """One session carries every hub, so the per-hub clock is what tells a
         quiet hub apart from a quiet channel."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         clock = iter([100.0, 200.0, 300.0])
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547, time_source=lambda: next(clock))
 
@@ -1091,7 +1091,7 @@ class TestSubDeviceEnvelopeMidAttribution:
     def test_envelope_without_a_usable_identity_section_is_dropped(self, param, caplog):
         """No readable section 1 means no attribution, so the envelope is refused
         rather than falling back to the construction-supplied mid."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
         payload = json.dumps({"method": "thing.service.property.set", "params": {"param": param}, "version": "1.0.0"}).encode()
 
@@ -1123,7 +1123,7 @@ class TestSubDeviceEnvelopeMidAttribution:
         """A section 1 that is present but fails the width check must be logged
         under its own width, since section_one is not None here, passing
         None instead would collapse every such case into the 'none' bucket."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
         short_section_one = "#P" + "1" * 20  # correct prefix, wrong width
         inner = json.dumps({"D01": {"time": 1, "value": "11#ab"}})
@@ -1178,7 +1178,7 @@ class TestUnrecognisedShapeLogging:
         first-of-shape ones from the announcement's own nested debug call, the
         repeat from the already-seen branch. Only the two first-of-shape
         payloads add an INFO announcement."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
         shape_a = b'{"method":"thing.service.property.set","params":{"BroadcastTime":1}}'
         shape_a_repeat = b'{"method":"thing.service.property.set","params":{"BroadcastTime":2}}'
@@ -1200,7 +1200,7 @@ class TestUnrecognisedShapeLogging:
         """Above DEBUG the announcement still fires, and the preview it would
         otherwise carry is never produced: the identifiers observed frames
         embed stay out of the default log."""
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
         payload = b"#P26073118173000001682228223654|9|9|9#"
 
@@ -1216,7 +1216,7 @@ class TestUnrecognisedShapeLogging:
         assert "16822282" not in info_records[0].message
 
     def test_unrecognized_shape_cap_stops_growth_and_further_info_records(self, caplog):
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
         limit = mqtt_module.MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT
 
@@ -2593,7 +2593,7 @@ class TestUnreadableIdentityIsVisible:
         return f"{self.OVERWIDE_SECTION_ONE}|0|1785521850011|112882164350#".encode()
 
     def test_an_unobserved_identity_width_warns_once_and_carries_only_the_width(self, caplog):
-        coordinator = MagicMock()
+        coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
 
         with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.api.mqtt"):
@@ -2614,7 +2614,7 @@ class TestUnreadableIdentityIsVisible:
         sub-device updates but whose section 1 cannot be read at all."""
         param = "|".join(["not-a-prefix", json.dumps({"D01": {"time": 1, "value": "11#ab"}}), "1", "2#"])
         payload = json.dumps({"method": "thing.service.property.set", "params": {"param": param}, "version": "1.0.0"}).encode()
-        client = _make_push_client(MagicMock(), MagicMock(), MagicMock())
+        client = _make_push_client(MagicMock(), MagicMock(), MagicMock(spec=PushCoordinator))
 
         with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.api.mqtt"):
             client._dispatch_push("topic", payload)
@@ -2624,7 +2624,7 @@ class TestUnreadableIdentityIsVisible:
     def test_the_announcement_respects_the_bounded_bookkeeping(self, caplog):
         """It shares _unrecognised_shapes, so a full set declines to add another
         key rather than logging on every frame forever."""
-        client = _make_push_client(MagicMock(), MagicMock(), MagicMock())
+        client = _make_push_client(MagicMock(), MagicMock(), MagicMock(spec=PushCoordinator))
         client._unrecognised_shapes = {f"filler-{i}" for i in range(mqtt_module.MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT)}
 
         with caplog.at_level(logging.WARNING, logger="custom_components.rainpoint.api.mqtt"):
