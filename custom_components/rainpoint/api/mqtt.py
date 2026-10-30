@@ -32,7 +32,7 @@ from typing import NamedTuple, Protocol, cast
 
 import paho.mqtt.client as paho_mqtt
 
-from .client import RainPointClient
+from .client import RainPointClient, RainPointError
 from .utils import _redact_identifier, _redact_secret
 
 _LOGGER = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ MQTT_PUSH_FRAME_SECTION_ONE_WIDTH = len(MQTT_PUSH_HUB_FRAME_PREFIX) + 12 + 4 + 8
 MQTT_UNRECOGNISED_SHAPE_LOG_LIMIT = 32
 
 
-class RainPointMqttError(Exception):
+class RainPointMqttError(RainPointError):
     pass
 
 

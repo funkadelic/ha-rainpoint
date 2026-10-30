@@ -5,7 +5,7 @@ Re-exports the client, the per-model decoders, the catalog lookups and the
 helpers the integration uses, so callers import all of them from one place.
 """
 
-from .client import RainPointApiError, RainPointClient, RainPointThrottledError
+from .client import RainPointApiError, RainPointClient, RainPointError, RainPointThrottledError
 from .decoders import (
     SINGLE_OUTLET_GALLONS_PER_COUNT,
     USAGE_GALLONS_PER_COUNT,
@@ -86,6 +86,7 @@ __all__ = [
     # Client
     "RainPointApiError",
     "RainPointClient",
+    "RainPointError",
     "RainPointThrottledError",
     "_RecordSummary",
     # Utils and decoder helpers
