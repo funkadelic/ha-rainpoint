@@ -13,8 +13,9 @@ import pytest
 
 import custom_components.rainpoint.api.client as _client_module
 import custom_components.rainpoint.api.product_catalog as product_catalog
-from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointThrottledError
+from custom_components.rainpoint.api import RainPointApiError, RainPointClient, RainPointError, RainPointThrottledError
 from custom_components.rainpoint.api.client import _SESSION_REJECTED_CODES, _USER_AGENT
+from custom_components.rainpoint.api.mqtt import RainPointMqttError
 from custom_components.rainpoint.api.utils import _redact_secret
 from tests.helpers import make_mock_session_client, mock_json_response
 
@@ -50,6 +51,29 @@ def _login_json_body(token: str = "rotated-token", refresh: str = "rotated-refre
         "data": {"token": token, "refreshToken": refresh, "tokenExpired": 3600},
         "ts": 1700000000000,
     }
+
+
+class TestErrorHierarchy:
+    """One base catches everything the client raises; existing handlers keep their reach."""
+
+    def test_barrel_exports_the_clients_own_base(self):
+        assert RainPointError is _client_module.RainPointError
+
+    def test_api_and_mqtt_errors_derive_from_the_base(self):
+        assert RainPointApiError.__bases__ == (RainPointError,)
+        assert RainPointMqttError.__bases__ == (RainPointError,)
+
+    def test_throttled_error_still_derives_from_api_error(self):
+        assert RainPointThrottledError.__bases__ == (RainPointApiError,)
+
+    @pytest.mark.parametrize("handler", [RainPointApiError, RainPointError])
+    def test_throttled_error_is_caught_by_both_handlers(self, handler):
+        with pytest.raises(handler):
+            raise RainPointThrottledError("slow down", retry_after=5.0)
+
+    def test_mqtt_error_is_caught_by_the_base(self):
+        with pytest.raises(RainPointError):
+            raise RainPointMqttError("push down")
 
 
 class TestControlWorkModeCode4:
