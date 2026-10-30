@@ -77,7 +77,7 @@ _DP_CODE_CTL_BT_WATER = 1
 
 
 class RainPointError(Exception):
-    """Base for every error the client raises."""
+    """Base for the errors the client raises itself; aiohttp transport errors propagate unwrapped."""
 
 
 class RainPointApiError(RainPointError):
