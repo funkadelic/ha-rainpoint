@@ -125,6 +125,7 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["custom_components.rainpoint"]
+combine-as-imports = true
 
 # Default mode (not strict), targeting 3.13, the same floor as ruff's target-version.
 # scripts/ is not yet clean, so it stays out of `files`.

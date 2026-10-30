@@ -1,5 +1,8 @@
 """Tests for the shared trust-boundary predicates."""
 
+import ast
+from pathlib import Path
+
 import custom_components.rainpoint.api.product_catalog as product_catalog_module
 import custom_components.rainpoint.api.trust as trust_module
 from custom_components.rainpoint.api import decode_generic, has_bluetooth_control_identity, is_hand_written_model
@@ -221,3 +224,29 @@ class TestBluetoothControlIdentityRoutingInvariant:
                 # declaring the identity at a different code must fail this
                 # test instead of the hardware silently ignoring the command.
                 assert entry.get("dpCode") == 1
+
+
+class TestApiImportBoundary:
+    """The api package must import nothing from outside itself."""
+
+    def test_no_module_imports_outside_the_package(self):
+        """No import reaches above the package or into the integration or Home Assistant."""
+        files = list(Path(trust_module.__file__).parent.glob("*.py"))
+        assert len(files) >= 9
+        offenders = []
+        for path in files:
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.ImportFrom):
+                    names = [node.module or ""] if node.level == 0 else []
+                    if node.level >= 2:
+                        offenders.append(f"{path.name}:{node.lineno} relative level {node.level}")
+                elif isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                else:
+                    continue
+                offenders += [
+                    f"{path.name}:{node.lineno} {name}"
+                    for name in names
+                    if name.split(".")[0] in {"custom_components", "homeassistant"}
+                ]
+        assert offenders == []

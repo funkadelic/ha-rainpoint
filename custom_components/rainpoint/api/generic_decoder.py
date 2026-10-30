@@ -442,7 +442,7 @@ def decode_generic(raw: str, model: str | None = None, model_code: int | str | N
         # unregistered models (see coordinator._decode_subdevice_payload), but
         # guard here too so a hand-written model can never receive catalog
         # annotation even if this function is reached directly. Imported
-        # locally to avoid a circular import (trust.py imports from const,
+        # locally to avoid a circular import (trust.py imports from models,
         # not from this module).
         from .trust import is_hand_written_model
 

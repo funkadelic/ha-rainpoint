@@ -15,7 +15,7 @@ the Bluetooth-backed control identity routes to the datapoint endpoint by
 construction, with no per-model code change.
 """
 
-from ..const import HAND_WRITTEN_MODELS
+from .models import HAND_WRITTEN_MODELS
 from .product_catalog import get_catalog_entry, get_catalog_variant_codes
 
 # The catalog datapoint identity a Bluetooth-backed valve declares in place of

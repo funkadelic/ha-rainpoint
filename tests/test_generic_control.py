@@ -8,8 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.rainpoint import generic_control as generic_control_module
-from custom_components.rainpoint.api import RainPointApiError, get_catalog_fingerprint, get_catalog_variant_codes
-from custom_components.rainpoint.api import product_catalog as product_catalog_module
+from custom_components.rainpoint.api import (
+    RainPointApiError,
+    get_catalog_fingerprint,
+    get_catalog_variant_codes,
+    product_catalog as product_catalog_module,
+)
 from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.api.product_catalog import UNCODED_VARIANT
 from custom_components.rainpoint.const import (

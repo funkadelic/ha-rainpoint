@@ -28,8 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.rainpoint import binary_sensor as binary_sensor_module
-from custom_components.rainpoint import coordinator as coordinator_module
+from custom_components.rainpoint import binary_sensor as binary_sensor_module, coordinator as coordinator_module
 from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_HIC801W
 from custom_components.rainpoint.coordinator import RainPointCoordinator
 from custom_components.rainpoint.diagnostic_sensors import (

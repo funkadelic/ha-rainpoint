@@ -13,8 +13,7 @@ from homeassistant.const import UnitOfTime
 from homeassistant.helpers.entity import EntityCategory
 
 import custom_components.rainpoint.coordinator as _coord_module
-from custom_components.rainpoint import generic_control as generic_control_module
-from custom_components.rainpoint import generic_entities as generic_entities_module
+from custom_components.rainpoint import generic_control as generic_control_module, generic_entities as generic_entities_module
 from custom_components.rainpoint.api import (
     SINGLE_OUTLET_GALLONS_PER_COUNT,
     RainPointApiError,
