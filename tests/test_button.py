@@ -32,8 +32,8 @@ class TestButtonSetupEntry:
         The wrapper record's identity fields are empty strings rather than
         absent keys, which is the shape is_hub_record was written for.
         """
-        real_hub = {"hid": 182509, "mid": 236547, "name": "Hub", "did": "17053410", "mac": "A8:46:74:BB:91:F0"}
-        wrapper = {"hid": 182509, "mid": 346965, "name": "", "did": "", "mac": "", "model": "", "productKey": ""}
+        real_hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "10000102", "mac": "A0:B0:C0:D0:00:03"}
+        wrapper = {"hid": 100001, "mid": 300012, "name": "", "did": "", "mac": "", "model": "", "productKey": ""}
         hass, entry, _coord = _make_hass(hubs=[real_hub, wrapper])
 
         mock_add_entities = MagicMock()
@@ -43,7 +43,7 @@ class TestButtonSetupEntry:
         entities = mock_add_entities.call_args[0][0]
         assert len(entities) == 1
         assert isinstance(entities[0], RainPointHubBroadcastButton)
-        assert entities[0]._hub_info["did"] == "17053410"
+        assert entities[0]._hub_info["did"] == "10000102"
 
     @pytest.mark.asyncio
     async def test_setup_entry_no_hubs_adds_empty_list(self):

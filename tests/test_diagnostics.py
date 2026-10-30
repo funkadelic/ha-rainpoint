@@ -40,19 +40,19 @@ REDACTED = "**REDACTED**"
 SECRET_PASSWORD = "correct-horse-battery-staple"
 SECRET_TOKEN = "tok_ABCDEFGHIJKLMNOP"
 ACCOUNT_EMAIL = "someone@example.invalid"
-HUB_MAC = "A8:46:74:BB:91:F0"
-PRODUCT_KEY = "a3QrDxYPTM2"
-IOT_ID = "jDQNeV92iFixCU42PDtUk0k0d4"
+HUB_MAC = "A0:B0:C0:D0:00:03"
+PRODUCT_KEY = "FakePrdKy9Z"
+IOT_ID = "FakeIotId0000001FakeTail01"
 
 # The names a user chose, which the dump keeps on purpose. Distinctive for the
 # same reason the secrets above are: a survival assertion made by walking every
 # scalar is only worth something if the literal cannot match by accident.
-HOME_NAME = "Richmond"
+HOME_NAME = "Hometown"
 HUB_LABEL = "Garden Hub"
 SUB_LABEL = "Front Lawn Valve"
 
 
-def _hub_record(hid=182509, mid=236547, extra=None):
+def _hub_record(hid=100001, mid=300011, extra=None):
     """Return a top-level hub record shaped like a real getDeviceByHid entry."""
     record = {
         "hid": hid,
@@ -64,7 +64,7 @@ def _hub_record(hid=182509, mid=236547, extra=None):
         "softVer": "1.2.3",
         "hardwareVersion": "1.0",
         "mac": HUB_MAC,
-        "deviceName": "MAC-A84674BB91F0",
+        "deviceName": "MAC-A0B0C0D00003",
         "productKey": PRODUCT_KEY,
         "iotId": IOT_ID,
         "homeName": HOME_NAME,
@@ -74,10 +74,10 @@ def _hub_record(hid=182509, mid=236547, extra=None):
             {
                 "addr": 1,
                 "mid": mid,
-                "sid": 341550,
+                "sid": 500001,
                 "model": "HTV245FRF",
                 "name": SUB_LABEL,
-                "mac": "A4:C1:38:FF:88:E7",
+                "mac": "A0:B0:C0:D0:00:02",
                 "softVer": "2.0.1",
                 "param": "5=02,11=58020a001e000000000000000000",
             }
@@ -88,7 +88,7 @@ def _hub_record(hid=182509, mid=236547, extra=None):
     return record
 
 
-def _sensor_entry(hid=182509, mid=236547, addr=1):
+def _sensor_entry(hid=100001, mid=300011, addr=1):
     """Return a coordinator sensors entry carrying a decoded payload."""
     return {
         "hid": hid,
@@ -100,7 +100,7 @@ def _sensor_entry(hid=182509, mid=236547, addr=1):
         "model": "HTV245FRF",
         "model_code": "303",
         "firmware_version": "2.0.1",
-        "device_name": "MAC-A84674BB91F0",
+        "device_name": "MAC-A0B0C0D00003",
         "product_key": PRODUCT_KEY,
         "hub_paired": True,
         "raw_status": {"id": "D01", "value": "11#0100...", "time": 1785420002247},
@@ -118,7 +118,7 @@ def _make_hass(coordinator=None, mqtt_client=None, entry_id="entry-1"):
         "token": SECRET_TOKEN,
         "refresh_token": SECRET_TOKEN + "-r",
         "area_code": "1",
-        "hids": [182509],
+        "hids": [100001],
     }
     entry.options = {"push_enabled": True, "generic_entities_enabled": False}
 
@@ -143,9 +143,9 @@ def _make_coordinator(hubs=None, sensors=None, connectivity=None, history=None):
     coordinator.payload_history.return_value = history if history is not None else {}
     coordinator.data = {
         "hubs": hubs if hubs is not None else [_hub_record()],
-        "sensors": sensors if sensors is not None else {"182509_236547_1": _sensor_entry()},
+        "sensors": sensors if sensors is not None else {"100001_300011_1": _sensor_entry()},
         "status": {},
-        "hub_connectivity": connectivity if connectivity is not None else {236547: {"state": "connected", "changed_at": None}},
+        "hub_connectivity": connectivity if connectivity is not None else {300011: {"state": "connected", "changed_at": None}},
     }
     coordinator.last_update_success = True
     coordinator.update_interval = None
@@ -275,11 +275,11 @@ class TestUnlistedKeys:
         """
         entry = _sensor_entry()
         entry["raw_status"]["newStatusField"] = "unreviewed-status-value"
-        hass, hass_entry = _make_hass(coordinator=_make_coordinator(sensors={"182509_236547_1": entry}))
+        hass, hass_entry = _make_hass(coordinator=_make_coordinator(sensors={"100001_300011_1": entry}))
 
         result = await async_get_config_entry_diagnostics(hass, hass_entry)
 
-        raw_status = result["sensors"]["182509_236547_1"]["raw_status"]
+        raw_status = result["sensors"]["100001_300011_1"]["raw_status"]
         assert raw_status["unlisted_keys"] == ["newStatusField"]
         assert raw_status["value"] == "11#0100..."
         assert "unreviewed-status-value" not in list(_walk_values(result))
@@ -372,7 +372,7 @@ class TestNothingSensitiveSurvives:
         """The device path builds its own payload, so it needs its own proof."""
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
-        values = list(_walk_values(await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))))
+        values = list(_walk_values(await async_get_device_diagnostics(hass, entry, _device("100001_300011_1"))))
 
         assert SECRET_PASSWORD not in values
         assert ACCOUNT_EMAIL not in values
@@ -388,7 +388,7 @@ class TestSupportPayload:
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        sensor = result["sensors"]["182509_236547_1"]
+        sensor = result["sensors"]["100001_300011_1"]
         assert sensor["raw_status"]["value"] == "11#0100..."
         assert sensor["data"]["zones"][1]["duration_seconds"] == 120
         assert sensor["model"] == "HTV245FRF"
@@ -416,7 +416,7 @@ class TestSupportPayload:
         """The device-scoped path builds its own payload dict and needs its own proof."""
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
-        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))
+        result = await async_get_device_diagnostics(hass, entry, _device("100001_300011_1"))
 
         assert result["integration"] == {"domain": DOMAIN, "version": VERSION}
 
@@ -430,7 +430,7 @@ class TestSupportPayload:
 
         hass, entry = _make_hass(coordinator=_BareCoordinator())
 
-        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))
+        result = await async_get_device_diagnostics(hass, entry, _device("100001_300011_1"))
 
         assert result["sensors"] == {}
 
@@ -452,7 +452,7 @@ class TestPushSection:
         mqtt_client.connected = True
         mqtt_client.message_count = 17
         mqtt_client.last_message_at = 1785420002.5
-        mqtt_client.hub_mid = 236547
+        mqtt_client.hub_mid = 300011
         mqtt_client.device_secret = "SECRET-SHOULD-NEVER-APPEAR"
         hass, entry = _make_hass(coordinator=_make_coordinator(), mqtt_client=mqtt_client)
 
@@ -463,7 +463,7 @@ class TestPushSection:
             "connected": True,
             "message_count": 17,
             "last_message_at": 1785420002.5,
-            "hub_mid": 236547,
+            "hub_mid": 300011,
         }
         assert "SECRET-SHOULD-NEVER-APPEAR" not in list(_walk_values(result))
 
@@ -474,37 +474,37 @@ class TestDeviceRouting:
     @pytest.mark.asyncio
     async def test_a_sub_device_row_yields_only_its_own_sensor_entry(self):
         sensors = {
-            "182509_236547_1": _sensor_entry(addr=1),
-            "182509_236547_3": _sensor_entry(addr=3),
+            "100001_300011_1": _sensor_entry(addr=1),
+            "100001_300011_3": _sensor_entry(addr=3),
         }
         hass, entry = _make_hass(coordinator=_make_coordinator(sensors=sensors))
 
-        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_3"))
+        result = await async_get_device_diagnostics(hass, entry, _device("100001_300011_3"))
 
         assert result["device"]["kind"] == "sub_device"
-        assert list(result["sensors"]) == ["182509_236547_3"]
-        assert result["sensors"]["182509_236547_3"]["addr"] == 3
+        assert list(result["sensors"]) == ["100001_300011_3"]
+        assert result["sensors"]["100001_300011_3"]["addr"] == 3
 
     @pytest.mark.asyncio
     async def test_a_hub_row_yields_its_record_its_connectivity_and_its_children(self):
         """A hub device page dumps only its own hub record, connectivity and child sensors."""
         other_hub = _hub_record(mid=999999)
         sensors = {
-            "182509_236547_1": _sensor_entry(mid=236547),
-            "182509_999999_1": _sensor_entry(mid=999999),
+            "100001_300011_1": _sensor_entry(mid=300011),
+            "100001_999999_1": _sensor_entry(mid=999999),
         }
-        connectivity = {236547: {"state": "connected"}, 999999: {"state": "disconnected"}}
+        connectivity = {300011: {"state": "connected"}, 999999: {"state": "disconnected"}}
         coordinator = _make_coordinator(hubs=[_hub_record(), other_hub], sensors=sensors, connectivity=connectivity)
         hass, entry = _make_hass(coordinator=coordinator)
 
-        result = await async_get_device_diagnostics(hass, entry, _device("hub_182509_236547"))
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_100001_300011"))
 
         assert result["device"]["kind"] == "hub"
-        assert [hub["mid"] for hub in result["hubs"]] == [236547]
-        assert list(result["hub_connectivity"]) == [236547]
-        assert list(result["sensors"]) == ["182509_236547_1"]
+        assert [hub["mid"] for hub in result["hubs"]] == [300011]
+        assert list(result["hub_connectivity"]) == [300011]
+        assert list(result["sensors"]) == ["100001_300011_1"]
         # Each child is dumped, not stood in for by an unexpected-type placeholder.
-        assert result["sensors"]["182509_236547_1"]["model"] == "HTV245FRF"
+        assert result["sensors"]["100001_300011_1"]["model"] == "HTV245FRF"
 
     @pytest.mark.asyncio
     async def test_a_hub_row_still_on_the_older_hid_only_identity_still_resolves(self):
@@ -517,28 +517,28 @@ class TestDeviceRouting:
         coordinator = _make_coordinator()
         hass, entry = _make_hass(coordinator=coordinator)
 
-        result = await async_get_device_diagnostics(hass, entry, _device("hub_182509"))
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_100001"))
 
         assert result["device"]["kind"] == "hub"
-        assert [hub["mid"] for hub in result["hubs"]] == [236547]
-        assert list(result["hub_connectivity"]) == [236547]
-        assert list(result["sensors"]) == ["182509_236547_1"]
+        assert [hub["mid"] for hub in result["hubs"]] == [300011]
+        assert list(result["hub_connectivity"]) == [300011]
+        assert list(result["sensors"]) == ["100001_300011_1"]
 
     @pytest.mark.asyncio
     async def test_a_hid_only_identity_in_a_two_hub_home_returns_both_rather_than_neither(self):
         """The identifier is genuinely ambiguous there, and both beats an empty dump."""
         hubs = [_hub_record(), _hub_record(mid=999999)]
         sensors = {
-            "182509_236547_1": _sensor_entry(mid=236547),
-            "182509_999999_1": _sensor_entry(mid=999999),
+            "100001_300011_1": _sensor_entry(mid=300011),
+            "100001_999999_1": _sensor_entry(mid=999999),
         }
         coordinator = _make_coordinator(hubs=hubs, sensors=sensors)
         hass, entry = _make_hass(coordinator=coordinator)
 
-        result = await async_get_device_diagnostics(hass, entry, _device("hub_182509"))
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_100001"))
 
-        assert sorted(hub["mid"] for hub in result["hubs"]) == [236547, 999999]
-        assert sorted(result["sensors"]) == ["182509_236547_1", "182509_999999_1"]
+        assert sorted(hub["mid"] for hub in result["hubs"]) == [300011, 999999]
+        assert sorted(result["sensors"]) == ["100001_300011_1", "100001_999999_1"]
 
     @pytest.mark.asyncio
     async def test_a_hub_prefixed_identifier_of_neither_shape_yields_empty_sections(self):
@@ -555,12 +555,12 @@ class TestDeviceRouting:
     @pytest.mark.asyncio
     async def test_a_hub_row_from_another_home_is_not_matched_by_mid_alone(self):
         """hid is checked first, so two homes reusing a mid do not cross over."""
-        hubs = [_hub_record(hid=182710, mid=236547)]
-        sensors = {"182710_236547_1": _sensor_entry(hid=182710)}
+        hubs = [_hub_record(hid=100003, mid=300011)]
+        sensors = {"100003_300011_1": _sensor_entry(hid=100003)}
         coordinator = _make_coordinator(hubs=hubs, sensors=sensors)
         hass, entry = _make_hass(coordinator=coordinator)
 
-        result = await async_get_device_diagnostics(hass, entry, _device("hub_182509_236547"))
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_100001_300011"))
 
         assert result["hubs"] == []
         assert result["sensors"] == {}
@@ -589,7 +589,7 @@ class TestDeviceRouting:
         """A silent device still has a device page, and downloading from it must not raise."""
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
-        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_99"))
+        result = await async_get_device_diagnostics(hass, entry, _device("100001_300011_99"))
 
         assert result["sensors"] == {}
 
@@ -650,11 +650,11 @@ class TestBeforeSetupCompletes:
         """The nested pass is conditional, so an entry without one must still dump."""
         entry = _sensor_entry()
         del entry["raw_status"]
-        hass, hass_entry = _make_hass(coordinator=_make_coordinator(sensors={"182509_236547_1": entry}))
+        hass, hass_entry = _make_hass(coordinator=_make_coordinator(sensors={"100001_300011_1": entry}))
 
         result = await async_get_config_entry_diagnostics(hass, hass_entry)
 
-        dumped = result["sensors"]["182509_236547_1"]
+        dumped = result["sensors"]["100001_300011_1"]
         assert "raw_status" not in dumped
         assert dumped["model"] == "HTV245FRF"
 
@@ -785,7 +785,7 @@ class TestUserChosenNamesSurvive:
         """The device path builds its own payload, so it needs its own proof."""
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
-        values = list(_walk_values(await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))))
+        values = list(_walk_values(await async_get_device_diagnostics(hass, entry, _device("100001_300011_1"))))
 
         assert SUB_LABEL in values
         assert HUB_LABEL in values
@@ -822,7 +822,7 @@ class TestTheDeviceIsNamedTheWayItsOwnerNamesIt:
     async def test_an_unrenamed_device_carries_its_integration_name_and_a_null_override(self):
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
-        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))
+        result = await async_get_device_diagnostics(hass, entry, _device("100001_300011_1"))
 
         assert result["device"]["name"] == "HTV245FRF"
         assert result["device"]["name_by_user"] is None
@@ -835,7 +835,7 @@ class TestTheDeviceIsNamedTheWayItsOwnerNamesIt:
         raises, and a dump carrying only the winner cannot answer it.
         """
         hass, entry = _make_hass(coordinator=_make_coordinator())
-        device = _device("182509_236547_1", name="HTV245FRF", name_by_user="Front Lawn Valve")
+        device = _device("100001_300011_1", name="HTV245FRF", name_by_user="Front Lawn Valve")
 
         result = await async_get_device_diagnostics(hass, entry, device)
 
@@ -846,7 +846,7 @@ class TestTheDeviceIsNamedTheWayItsOwnerNamesIt:
     async def test_a_registry_name_is_not_redacted(self):
         """It is a user-chosen label, so it follows the same rule as the rest."""
         hass, entry = _make_hass(coordinator=_make_coordinator())
-        device = _device("182509_236547_1", name_by_user=SUB_LABEL)
+        device = _device("100001_300011_1", name_by_user=SUB_LABEL)
 
         result = await async_get_device_diagnostics(hass, entry, device)
 
@@ -865,12 +865,12 @@ class TestDeviceIdentityMap:
 
     @pytest.mark.asyncio
     async def test_a_sub_device_row_in_the_current_poll_reads_true(self, _registry_rows):
-        _registry_rows.append(_device("182509_236547_1", name="HTV245FRF", name_by_user="Front Lawn Valve"))
+        _registry_rows.append(_device("100001_300011_1", name="HTV245FRF", name_by_user="Front Lawn Valve"))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert result["devices"]["182509_236547_1"] == {
+        assert result["devices"]["100001_300011_1"] == {
             "kind": "sub_device",
             "name": "HTV245FRF",
             "name_by_user": "Front Lawn Valve",
@@ -879,13 +879,13 @@ class TestDeviceIdentityMap:
 
     @pytest.mark.asyncio
     async def test_a_sub_device_row_absent_from_the_poll_reads_false_and_still_appears(self, _registry_rows):
-        _registry_rows.append(_device("182509_236547_1"))
+        _registry_rows.append(_device("100001_300011_1"))
         hass, entry = _make_hass(coordinator=_make_coordinator(sensors={}))
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert "182509_236547_1" in result["devices"]
-        assert result["devices"]["182509_236547_1"]["in_current_poll"] is False
+        assert "100001_300011_1" in result["devices"]
+        assert result["devices"]["100001_300011_1"]["in_current_poll"] is False
 
     @pytest.mark.asyncio
     async def test_a_raising_registry_read_degrades_to_an_empty_map_not_an_exception(self, monkeypatch):
@@ -903,57 +903,57 @@ class TestDeviceIdentityMap:
 
     @pytest.mark.asyncio
     async def test_the_three_existing_sections_are_unchanged_by_the_new_key(self, _registry_rows):
-        _registry_rows.append(_device("182509_236547_1"))
+        _registry_rows.append(_device("100001_300011_1"))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
         assert result["hubs"][0]["name"] == HUB_LABEL
-        assert result["sensors"]["182509_236547_1"]["model"] == "HTV245FRF"
-        assert result["hub_connectivity"] == {236547: {"state": "connected", "changed_at": None}}
+        assert result["sensors"]["100001_300011_1"]["model"] == "HTV245FRF"
+        assert result["hub_connectivity"] == {300011: {"state": "connected", "changed_at": None}}
 
     @pytest.mark.asyncio
     async def test_a_migrated_hub_row_matching_the_poll_reads_hub_and_true(self, _registry_rows):
-        _registry_rows.append(_device("hub_182509_236547"))
+        _registry_rows.append(_device("hub_100001_300011"))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert result["devices"]["hub_182509_236547"]["kind"] == "hub"
-        assert result["devices"]["hub_182509_236547"]["in_current_poll"] is True
+        assert result["devices"]["hub_100001_300011"]["kind"] == "hub"
+        assert result["devices"]["hub_100001_300011"]["in_current_poll"] is True
 
     @pytest.mark.asyncio
     async def test_a_migrated_hub_row_against_a_different_mid_reads_false(self, _registry_rows):
-        _registry_rows.append(_device("hub_182509_236547"))
-        coordinator = _make_coordinator(hubs=[_hub_record(mid=999999)], sensors={"182509_999999_1": _sensor_entry(mid=999999)})
+        _registry_rows.append(_device("hub_100001_300011"))
+        coordinator = _make_coordinator(hubs=[_hub_record(mid=999999)], sensors={"100001_999999_1": _sensor_entry(mid=999999)})
         hass, entry = _make_hass(coordinator=coordinator)
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert result["devices"]["hub_182509_236547"]["in_current_poll"] is False
+        assert result["devices"]["hub_100001_300011"]["in_current_poll"] is False
 
     @pytest.mark.asyncio
     async def test_a_legacy_hid_only_row_matches_any_hub_in_that_home(self, _registry_rows):
-        _registry_rows.append(_device("hub_182509"))
-        hubs = [_hub_record(mid=236547), _hub_record(mid=999999)]
-        sensors = {"182509_236547_1": _sensor_entry(mid=236547), "182509_999999_1": _sensor_entry(mid=999999)}
+        _registry_rows.append(_device("hub_100001"))
+        hubs = [_hub_record(mid=300011), _hub_record(mid=999999)]
+        sensors = {"100001_300011_1": _sensor_entry(mid=300011), "100001_999999_1": _sensor_entry(mid=999999)}
         hass, entry = _make_hass(coordinator=_make_coordinator(hubs=hubs, sensors=sensors))
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert result["devices"]["hub_182509"]["in_current_poll"] is True
+        assert result["devices"]["hub_100001"]["in_current_poll"] is True
 
     @pytest.mark.asyncio
     async def test_a_legacy_and_a_migrated_row_for_the_same_home_stay_two_distinct_entries(self, _registry_rows):
-        _registry_rows.append(_device("hub_182509"))
-        _registry_rows.append(_device("hub_182509_236547"))
+        _registry_rows.append(_device("hub_100001"))
+        _registry_rows.append(_device("hub_100001_300011"))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert "hub_182509" in result["devices"]
-        assert "hub_182509_236547" in result["devices"]
-        assert result["devices"]["hub_182509"] is not result["devices"]["hub_182509_236547"]
+        assert "hub_100001" in result["devices"]
+        assert "hub_100001_300011" in result["devices"]
+        assert result["devices"]["hub_100001"] is not result["devices"]["hub_100001_300011"]
 
     @pytest.mark.asyncio
     async def test_a_hub_prefixed_identifier_of_neither_shape_reads_hub_and_false(self, _registry_rows):
@@ -1008,13 +1008,13 @@ class TestDeviceIdentityMap:
         unrecognised.name_by_user = None
         unrecognised.id = "device-row-11"
         _registry_rows.append(unrecognised)
-        _registry_rows.append(_device("182509_236547_1"))
+        _registry_rows.append(_device("100001_300011_1"))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
         assert "unrecognised_device-row-11" in result["devices"]
-        assert "182509_236547_1" in result["devices"]
+        assert "100001_300011_1" in result["devices"]
 
 
 class TestDeviceIdentityMapEdges:
@@ -1037,7 +1037,7 @@ class TestDeviceIdentityMapEdges:
 
     @pytest.mark.asyncio
     async def test_the_map_keys_come_back_sorted_regardless_of_registry_order(self, _registry_rows):
-        forward = [_device("182509_236547_1"), _device("hub_182509_236547"), _device("hub_182509")]
+        forward = [_device("100001_300011_1"), _device("hub_100001_300011"), _device("hub_100001")]
         hass, entry = _make_hass(coordinator=_make_coordinator())
         _registry_rows.extend(forward)
         forward_result = await async_get_config_entry_diagnostics(hass, entry)
@@ -1051,40 +1051,40 @@ class TestDeviceIdentityMapEdges:
 
     @pytest.mark.asyncio
     async def test_a_non_ascii_name_by_user_survives_byte_for_byte(self, _registry_rows):
-        _registry_rows.append(_device("182509_236547_1", name_by_user="Jardín Trasero"))
+        _registry_rows.append(_device("100001_300011_1", name_by_user="Jardín Trasero"))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert result["devices"]["182509_236547_1"]["name_by_user"] == "Jardín Trasero"
+        assert result["devices"]["100001_300011_1"]["name_by_user"] == "Jardín Trasero"
 
     @pytest.mark.asyncio
     async def test_a_cjk_name_by_user_survives_byte_for_byte(self, _registry_rows):
-        _registry_rows.append(_device("182509_236547_1", name_by_user="前庭阀门"))
+        _registry_rows.append(_device("100001_300011_1", name_by_user="前庭阀门"))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert result["devices"]["182509_236547_1"]["name_by_user"] == "前庭阀门"
+        assert result["devices"]["100001_300011_1"]["name_by_user"] == "前庭阀门"
 
     @pytest.mark.asyncio
     async def test_a_name_matching_a_redaction_set_key_name_survives_as_a_value(self, _registry_rows):
         """The redactor matches key names and never values."""
-        _registry_rows.append(_device("182509_236547_1", name="password"))
+        _registry_rows.append(_device("100001_300011_1", name="password"))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert result["devices"]["182509_236547_1"]["name"] == "password"
+        assert result["devices"]["100001_300011_1"]["name"] == "password"
 
     @pytest.mark.asyncio
     async def test_a_row_with_both_name_fields_unset_emits_both_keys_as_null(self, _registry_rows):
-        _registry_rows.append(_device("182509_236547_1", name=None, name_by_user=None))
+        _registry_rows.append(_device("100001_300011_1", name=None, name_by_user=None))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        entry_row = result["devices"]["182509_236547_1"]
+        entry_row = result["devices"]["100001_300011_1"]
         assert entry_row["name"] is None
         assert entry_row["name_by_user"] is None
         assert set(entry_row) == {"kind", "name", "name_by_user", "in_current_poll"}
@@ -1093,19 +1093,19 @@ class TestDeviceIdentityMapEdges:
         """Proves the map sits inside the single redaction pass, without touching production code."""
         payload = {
             "devices": {
-                "182509_236547_1": {
+                "100001_300011_1": {
                     "kind": "sub_device",
                     "name": "HTV245FRF",
                     "name_by_user": "Front Lawn Valve",
                     "in_current_poll": True,
-                    "deviceName": "MAC-A84674BB91F0",
+                    "deviceName": "MAC-A0B0C0D00003",
                 }
             }
         }
 
         redacted = async_redact_data(payload, TO_REDACT)
 
-        entry_row = redacted["devices"]["182509_236547_1"]
+        entry_row = redacted["devices"]["100001_300011_1"]
         assert entry_row["deviceName"] == REDACTED
         assert entry_row["kind"] == "sub_device"
         assert entry_row["name"] == "HTV245FRF"
@@ -1114,7 +1114,7 @@ class TestDeviceIdentityMapEdges:
 
     @pytest.mark.asyncio
     async def test_no_caplog_record_carries_a_registry_or_user_set_name(self, caplog, monkeypatch):
-        _registry_rows_success = [_device("182509_236547_1", name="HTV245FRF", name_by_user="Front Lawn Valve")]
+        _registry_rows_success = [_device("100001_300011_1", name="HTV245FRF", name_by_user="Front Lawn Valve")]
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         with caplog.at_level("DEBUG"):
@@ -1142,12 +1142,12 @@ class TestDeviceIdentityMapEdges:
         malformed.identifiers = None
         malformed.id = "device-row-bad"
         _registry_rows.append(malformed)
-        _registry_rows.append(_device("182509_236547_1"))
+        _registry_rows.append(_device("100001_300011_1"))
         hass, entry = _make_hass(coordinator=_make_coordinator())
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert "182509_236547_1" in result["devices"]
+        assert "100001_300011_1" in result["devices"]
         assert all(not key.startswith("unrecognised_device-row-bad") for key in result["devices"])
 
 
@@ -1169,7 +1169,7 @@ class TestSensorEntryAllowListParity:
 
         entry = _build_sensor_entry(
             {"hid": 1, "name": "Hub", "homeName": "Home", "deviceName": "dn", "productKey": "pk"},
-            {"addr": 1, "sid": 504942, "name": "Valve", "model": "HTV210B", "modelCode": 41, "softVer": "1.0"},
+            {"addr": 1, "sid": 500004, "name": "Valve", "model": "HTV210B", "modelCode": 41, "softVer": "1.0"},
             2,
             1,
             {},
@@ -1194,38 +1194,38 @@ class TestPayloadHistory:
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert "payload_history" not in result["sensors"]["182509_236547_1"]
+        assert "payload_history" not in result["sensors"]["100001_300011_1"]
 
     @pytest.mark.asyncio
     async def test_the_entry_dump_carries_the_retained_payloads_for_its_own_key(self):
-        history = {"182509_236547_1": self.HISTORY, "182509_236547_3": [{"value": "11#0300...", "time": 1}]}
-        sensors = {"182509_236547_1": _sensor_entry(addr=1), "182509_236547_3": _sensor_entry(addr=3)}
+        history = {"100001_300011_1": self.HISTORY, "100001_300011_3": [{"value": "11#0300...", "time": 1}]}
+        sensors = {"100001_300011_1": _sensor_entry(addr=1), "100001_300011_3": _sensor_entry(addr=3)}
         hass, entry = _make_hass(coordinator=_make_coordinator(sensors=sensors, history=history))
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert result["sensors"]["182509_236547_1"]["payload_history"] == self.HISTORY
-        assert result["sensors"]["182509_236547_3"]["payload_history"] == [{"value": "11#0300...", "time": 1}]
+        assert result["sensors"]["100001_300011_1"]["payload_history"] == self.HISTORY
+        assert result["sensors"]["100001_300011_3"]["payload_history"] == [{"value": "11#0300...", "time": 1}]
 
     @pytest.mark.asyncio
     async def test_a_sub_device_page_download_carries_them(self):
         """The template sends reporters to the device page, so this is the
         download that has to carry them."""
-        history = {"182509_236547_1": self.HISTORY}
+        history = {"100001_300011_1": self.HISTORY}
         hass, entry = _make_hass(coordinator=_make_coordinator(history=history))
 
-        result = await async_get_device_diagnostics(hass, entry, _device("182509_236547_1"))
+        result = await async_get_device_diagnostics(hass, entry, _device("100001_300011_1"))
 
-        assert result["sensors"]["182509_236547_1"]["payload_history"] == self.HISTORY
+        assert result["sensors"]["100001_300011_1"]["payload_history"] == self.HISTORY
 
     @pytest.mark.asyncio
     async def test_a_hub_page_download_carries_them_for_each_child(self):
-        history = {"182509_236547_1": self.HISTORY}
+        history = {"100001_300011_1": self.HISTORY}
         hass, entry = _make_hass(coordinator=_make_coordinator(history=history))
 
-        result = await async_get_device_diagnostics(hass, entry, _device("hub_182509_236547"))
+        result = await async_get_device_diagnostics(hass, entry, _device("hub_100001_300011"))
 
-        assert result["sensors"]["182509_236547_1"]["payload_history"] == self.HISTORY
+        assert result["sensors"]["100001_300011_1"]["payload_history"] == self.HISTORY
 
     @pytest.mark.asyncio
     async def test_a_coordinator_that_cannot_answer_yields_a_dump_without_them(self):
@@ -1236,4 +1236,4 @@ class TestPayloadHistory:
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert "payload_history" not in result["sensors"]["182509_236547_1"]
+        assert "payload_history" not in result["sensors"]["100001_300011_1"]

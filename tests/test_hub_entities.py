@@ -94,7 +94,7 @@ class TestResolvePushDiagnosticHubs:
 
     def test_every_real_hub_gets_diagnostics(self):
         """Both hubs on a two-hub account get their own pair."""
-        hubs = [{"mid": 236547, "did": "17053410"}, {"mid": 361277, "did": "17051777"}]
+        hubs = [{"mid": 300011, "did": "10000102"}, {"mid": 300013, "did": "10000101"}]
         assert resolve_push_diagnostic_hubs(self._coord(hubs)) == hubs
 
     def test_skips_a_record_with_no_hub_identity(self):
@@ -103,13 +103,13 @@ class TestResolvePushDiagnosticHubs:
         Pairing a Bluetooth valve adds a parent record whose identity fields
         are all empty strings. It must not collect push diagnostics of its own.
         """
-        wrapper = {"mid": 346965, "did": "", "mac": "", "productKey": "", "model": ""}
-        real = {"mid": 236547, "did": "17053410"}
+        wrapper = {"mid": 300012, "did": "", "mac": "", "productKey": "", "model": ""}
+        real = {"mid": 300011, "did": "10000102"}
         assert resolve_push_diagnostic_hubs(self._coord([wrapper, real])) == [real]
 
     def test_returns_nothing_when_no_record_is_a_hub(self):
         """An all-wrapper list yields nothing rather than a phantom hub."""
-        hubs = [{"mid": 346965, "did": "", "mac": "", "productKey": "", "model": ""}]
+        hubs = [{"mid": 300012, "did": "", "mac": "", "productKey": "", "model": ""}]
         assert resolve_push_diagnostic_hubs(self._coord(hubs)) == []
 
     def test_accepts_dict_shaped_hubs(self):
@@ -142,8 +142,8 @@ class TestResolveConnectivityHubs:
 
     def test_excludes_the_bluetooth_wrapper_record(self):
         """A record whose every identity field is an empty string yields no entity."""
-        hubs = [{"mid": 346965, "did": "", "mac": "", "productKey": "", "model": ""}, {"mid": 236547, "did": "17053410"}]
-        assert resolve_connectivity_hubs(self._coord(hubs)) == [{"mid": 236547, "did": "17053410"}]
+        hubs = [{"mid": 300012, "did": "", "mac": "", "productKey": "", "model": ""}, {"mid": 300011, "did": "10000102"}]
+        assert resolve_connectivity_hubs(self._coord(hubs)) == [{"mid": 300011, "did": "10000102"}]
 
     def test_accepts_dict_shaped_hubs(self):
         hubs = {"a": {"mid": 111, "did": "d1"}, "b": {"mid": 222, "did": "d2"}}
@@ -305,7 +305,7 @@ class TestRainPointHubRSSISensor:
 
     def test_native_value_reads_hub_rssi_from_state(self):
         """The second field of the `state` value (e.g. '0,-52') is the hub RSSI."""
-        sensor = self._make_with_state(236547, "0,-52")
+        sensor = self._make_with_state(300011, "0,-52")
         assert sensor.native_value == -52
 
     @pytest.mark.parametrize("state_value", ["0,0", "0,3"])
@@ -316,39 +316,39 @@ class TestRainPointHubRSSISensor:
         sibling, so a zero published here would sit in long-term statistics
         permanently rather than merely reading wrong on the device page.
         """
-        sensor = self._make_with_state(236547, state_value)
+        sensor = self._make_with_state(300011, state_value)
         assert sensor.native_value is None
 
     def test_native_value_none_for_malformed_state(self):
         """A `state` value without a parseable RSSI field yields None."""
-        sensor = self._make_with_state(236547, "0,notanumber")
+        sensor = self._make_with_state(300011, "0,notanumber")
         assert sensor.native_value is None
 
     def test_native_value_none_when_state_value_is_not_a_string(self):
         """A `state` entry whose value is not a string (e.g. None) yields None."""
-        sensor = self._make_with_state(236547, None)
+        sensor = self._make_with_state(300011, None)
         assert sensor.native_value is None
 
     def test_native_value_none_when_state_has_no_rssi_field(self):
         """A `state` value with no comma-separated RSSI field yields None."""
-        sensor = self._make_with_state(236547, "1")
+        sensor = self._make_with_state(300011, "1")
         assert sensor.native_value is None
 
     def test_native_value_none_when_status_entry_is_explicitly_none(self):
         """An explicit None for the mid's status (not just a missing key) yields None, not a crash."""
         coord = _make_coordinator()
-        coord.data["status"] = {236547: None}
+        coord.data["status"] = {300011: None}
         hub_info = _make_hub_info()
-        hub_info["mid"] = 236547
+        hub_info["mid"] = 300011
         sensor = self._make(coord=coord, hub_info=hub_info)
         assert sensor.native_value is None
 
     def test_native_value_none_when_subdevicestatus_is_explicitly_none(self):
         """An explicit None subDeviceStatus yields None rather than iterating None."""
         coord = _make_coordinator()
-        coord.data["status"] = {236547: {"subDeviceStatus": None}}
+        coord.data["status"] = {300011: {"subDeviceStatus": None}}
         hub_info = _make_hub_info()
-        hub_info["mid"] = 236547
+        hub_info["mid"] = 300011
         sensor = self._make(coord=coord, hub_info=hub_info)
         assert sensor.native_value is None
 
@@ -356,10 +356,10 @@ class TestRainPointHubRSSISensor:
         """Non-`state` status entries are skipped before the `state` entry is read."""
         coord = _make_coordinator()
         coord.data["status"] = {
-            236547: {"subDeviceStatus": [{"id": "connected", "value": "1"}, {"id": "state", "value": "0,-40"}]}
+            300011: {"subDeviceStatus": [{"id": "connected", "value": "1"}, {"id": "state", "value": "0,-40"}]}
         }
         hub_info = _make_hub_info()
-        hub_info["mid"] = 236547
+        hub_info["mid"] = 300011
         sensor = self._make(coord=coord, hub_info=hub_info)
         assert sensor.native_value == -40
 
@@ -394,8 +394,8 @@ class TestRainPointHubDeviceIDSensor:
 
     def test_native_value_returns_did(self):
         """native_value should return the device id (did), matching the RainPoint app."""
-        sensor = self._make(hid=100, did="17053410")
-        assert sensor.native_value == "17053410"
+        sensor = self._make(hid=100, did="10000102")
+        assert sensor.native_value == "10000102"
 
     def test_native_value_falls_back_to_hid_without_did(self):
         """When the hub record omits did, native_value falls back to the home id."""
@@ -1173,7 +1173,7 @@ class TestHubBroadcastSwitchRealTimeline:
         """A getDeviceByHid hub record carrying the given param, no sub-devices."""
         return [
             {
-                "mid": 236547,
+                "mid": 300011,
                 "name": "Hub A",
                 "deviceName": "hub-mac",
                 "productKey": "hub-pk",
@@ -1196,7 +1196,7 @@ class TestHubBroadcastSwitchRealTimeline:
 
         client = AsyncMock()
         client.get_devices_by_hid.return_value = TestHubBroadcastSwitchRealTimeline._hub_devices(initial_param)
-        client.get_multiple_device_status.return_value = [{"mid": 236547, "subDeviceStatus": []}]
+        client.get_multiple_device_status.return_value = [{"mid": 300011, "subDeviceStatus": []}]
 
         entry = MagicMock()
         entry.entry_id = "e1"
@@ -1235,7 +1235,7 @@ class TestHubBroadcastSwitchRealTimeline:
         client.update_main_param = AsyncMock(return_value=True)
         await switch.async_turn_on()
         assert switch.is_on is True
-        client.update_main_param.assert_called_once_with(mid=236547, param="0|1||")
+        client.update_main_param.assert_called_once_with(mid=300011, param="0|1||")
 
         # A poll confirming the command: the optimistic override is cleared,
         # and the value now comes from the poll agreeing with it.
@@ -1281,11 +1281,11 @@ class TestHubBroadcastSwitchRealTimeline:
         # coordinator.data and carries "hubs" forward by reference, so this
         # must not be mistaken for the poll that is supposed to confirm or
         # contradict the command.
-        coordinator.apply_hub_push_update(236547, True, 1717200000000)
+        coordinator.apply_hub_push_update(300011, True, 1717200000000)
         # Proves the push was applied rather than dropped by one of
         # apply_hub_push_update's guards, which would make the two
         # assertions below pass vacuously.
-        assert coordinator.data["hub_connectivity"][236547]["state"] == HUB_CONNECTED
+        assert coordinator.data["hub_connectivity"][300011]["state"] == HUB_CONNECTED
         assert switch.is_on is True
         assert switch._optimistic is True
 

@@ -22,7 +22,7 @@ Usage:
 
     # Bind an observer session to one hub and dump for 15 minutes.
     RAINPOINT_EMAIL=... RAINPOINT_PASSWORD=... \\
-        python scripts/dump_push_envelopes.py --mid 236547 --seconds 900
+        python scripts/dump_push_envelopes.py --mid 300011 --seconds 900
 
     # Parser self-check, no network and no credentials needed.
     python scripts/dump_push_envelopes.py --self-check
@@ -64,7 +64,7 @@ _CONNECT_POLL_SECONDS = 0.25
 # A hub connectivity frame captured 2026-07-31, used by --self-check so the
 # section splitter is exercised without credentials or hardware.
 _SAMPLE_HUB_FRAME = (
-    '{"method":"thing.service.property.set","params":{"param":"#P260731181730000016822282236547|0|1785521850011|112882164350#"}}'
+    '{"method":"thing.service.property.set","params":{"param":"#P260731181730000010000002300011|0|1785521850011|112882164350#"}}'
 )
 
 
@@ -189,7 +189,7 @@ def _self_check() -> int:
     text, sections = _split_sections(_SAMPLE_HUB_FRAME.encode())
     assert text == _SAMPLE_HUB_FRAME, "raw text should round-trip unchanged"
     assert len(sections) == 4, f"expected 4 sections, got {len(sections)}"
-    assert sections[0].endswith("236547"), "section 1 should carry the mid in its tail"
+    assert sections[0].endswith("300011"), "section 1 should carry the mid in its tail"
     assert sections[1] == "0", "section 2 should be the connected flag"
     # A bare non-envelope payload keeps its text and yields no sections.
     text, sections = _split_sections(b"not json at all")

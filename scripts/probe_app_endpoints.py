@@ -19,7 +19,7 @@ tool, and it is also why it must not be pasted into an issue as-is.
 
 Usage:
     RAINPOINT_EMAIL=you@example.com RAINPOINT_PASSWORD=secret \
-        python scripts/probe_app_endpoints.py --hid 182509 --mid 236547 --addr 1 --port 1
+        python scripts/probe_app_endpoints.py --hid 100001 --mid 300011 --addr 1 --port 1
 
 Credentials come from the environment (RAINPOINT_EMAIL, RAINPOINT_PASSWORD,
 and optionally RAINPOINT_AREA_CODE), never from a flag or a committed file.

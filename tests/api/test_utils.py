@@ -864,17 +864,17 @@ class TestSummarizeRecord:
 
     def test_dict_reports_count_and_sorted_keys_without_values(self):
         """The identifiers this integration was found leaking do not survive the summary."""
-        rendered = summarize_record({"mid": 236547, "deviceName": "MAC-A84674BB91F0", "productKey": "a3QrDxYPTM2"})
+        rendered = summarize_record({"mid": 300011, "deviceName": "MAC-A0B0C0D00003", "productKey": "FakePrdKy9Z"})
         assert rendered == "dict(n=3) keys=[deviceName,mid,productKey]"
-        assert "MAC-A84674BB91F0" not in rendered
-        assert "a3QrDxYPTM2" not in rendered
-        assert "236547" not in rendered
+        assert "MAC-A0B0C0D00003" not in rendered
+        assert "FakePrdKy9Z" not in rendered
+        assert "300011" not in rendered
 
     def test_list_reports_length_and_the_union_of_item_keys(self):
         """A status response reads as a count plus a field set, not as its records."""
-        rendered = summarize_record([{"mid": 1, "status": []}, {"mid": 2, "iotId": "jDQNeV92iFixCU42"}])
+        rendered = summarize_record([{"mid": 1, "status": []}, {"mid": 2, "iotId": "FakeIotId0000001"}])
         assert rendered == "list(n=2) keys=[iotId,mid,status]"
-        assert "jDQNeV92iFixCU42" not in rendered
+        assert "FakeIotId0000001" not in rendered
 
     def test_nested_values_are_counted_rather_than_walked(self):
         """A nested payload contributes its parent key only, never its own contents."""
@@ -923,9 +923,9 @@ class TestRedactIdentifier:
 
     def test_no_character_of_the_input_survives(self):
         """The whole point: unlike _redact_secret, there is no last-4 tail."""
-        rendered = _redact_identifier("MAC-A84674BB91F0&a3QrDxYPTM2")
+        rendered = _redact_identifier("MAC-A0B0C0D00003&FakePrdKy9Z")
         assert rendered == "len=28"
-        for fragment in ("MAC", "A84674BB91F0", "a3QrDxYPTM2", "PTM2", "&"):
+        for fragment in ("MAC", "A0B0C0D00003", "FakePrdKy9Z", "Ky9Z", "&"):
             assert fragment not in rendered
 
     def test_short_and_empty_values_are_named_not_echoed(self):
@@ -1010,21 +1010,21 @@ class TestRecordSummaryIsLazy:
             return "summary"
 
         monkeypatch.setattr("custom_components.rainpoint.api.utils.summarize_record", _spy)
-        wrapper = _RecordSummary({"deviceName": "MAC-A84674BB91F0"})
+        wrapper = _RecordSummary({"deviceName": "MAC-A0B0C0D00003"})
         assert calls == []
         assert str(wrapper) == "summary"
         assert len(calls) == 1
 
     def test_it_renders_the_same_string_summarize_record_would(self):
         """The wrapper is a deferral, not a different format."""
-        record = {"mid": 1, "deviceName": "MAC-A84674BB91F0"}
+        record = {"mid": 1, "deviceName": "MAC-A0B0C0D00003"}
         assert str(_RecordSummary(record)) == summarize_record(record)
 
     def test_repr_matches_str_so_a_percent_r_line_is_safe_too(self):
         """A log line written with %r must not fall back to the object repr."""
-        record = {"productKey": "a3QrDxYPTM2"}
+        record = {"productKey": "FakePrdKy9Z"}
         assert repr(_RecordSummary(record)) == summarize_record(record)
-        assert "a3QrDxYPTM2" not in repr(_RecordSummary(record))
+        assert "FakePrdKy9Z" not in repr(_RecordSummary(record))
 
     def test_a_debug_call_with_debug_off_never_builds_the_summary(self, caplog):
         """The end-to-end property, asserted through a real logger."""

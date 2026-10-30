@@ -394,7 +394,7 @@ class TestSecretRedaction:
         loop = asyncio.get_running_loop()
         hass = _make_hass(loop)
         fake_paho = _make_fake_paho()
-        creds = _fake_creds(device_name="MAC-A84674BB91F0", product_key="a3QrDxYPTM2")
+        creds = _fake_creds(device_name="MAC-A0B0C0D00003", product_key="FakePrdKy9Z")
         client = _make_mqtt_client(hass, fake_paho, creds=creds)
 
         with caplog.at_level(logging.DEBUG):
@@ -403,10 +403,10 @@ class TestSecretRedaction:
             await client.async_disconnect()
 
         emitted = caplog.text
-        assert "MAC-A84674BB91F0" not in emitted
-        assert "a3QrDxYPTM2" not in emitted
+        assert "MAC-A0B0C0D00003" not in emitted
+        assert "FakePrdKy9Z" not in emitted
         # The tail specifically, which is what a last-4 redaction would have left.
-        assert "PTM2" not in emitted
+        assert "Ky9Z" not in emitted
         # The line still ran, so the assertions above are not passing on an empty log.
         assert "RainPoint MQTT connecting" in emitted
 
@@ -768,7 +768,7 @@ class TestHubFrameParsing:
         known-good frame, each failing one clause in isolation. This one is
         real traffic and fails two at once (three sections, and an empty
         section 2 rather than a literal 0/1), which is how malformed input
-        actually arrives. Its section-1 tail is 182509, the hid rather than a
+        actually arrives. Its section-1 tail is 100001, the hid rather than a
         mid, so the mid cross-check would drop it as well even if both parse
         clauses were relaxed: three independent layers, not one.
         """
@@ -877,10 +877,10 @@ class TestHubFrameParsing:
             ("{" + SAMPLE_HUB_DISCONNECT_FRAME, "brace-prefixed section"),
             ("#P1|0|2#", "wrong section count (3)"),
             ("#P1|0|2|3|4#", "wrong section count (5)"),
-            ("P260731181730000016822282236547|0|1785521850011|112882164350#", "missing #P prefix"),
-            ("#P260731181730000016822282236547|2|1785521850011|112882164350#", "section 2 not literal 0/1"),
-            ("#P260731181730000016822282236547|0|not-an-int|112882164350#", "section 3 not int"),
-            ("#P260731181730000016822282236547|0|1785521850011|not-an-int#", "section 4 not int"),
+            ("P260731181730000010000002300011|0|1785521850011|112882164350#", "missing #P prefix"),
+            ("#P260731181730000010000002300011|2|1785521850011|112882164350#", "section 2 not literal 0/1"),
+            ("#P260731181730000010000002300011|0|not-an-int|112882164350#", "section 3 not int"),
+            ("#P260731181730000010000002300011|0|1785521850011|not-an-int#", "section 4 not int"),
         ],
     )
     def test_each_d05_clause_failing_yields_none(self, mutated, reason):
@@ -950,11 +950,11 @@ class TestHubFrameRouting:
         """A 5-digit value that is a proper suffix of the real mid must not be
         what the frame resolves to: the slot is the last six characters of a
         32-character section 1, read exactly."""
-        assert mqtt_module._frame_mid("#P260731181730000016822282236547") == SAMPLE_HUB_FRAME_MID
-        assert mqtt_module._frame_mid("#P26073118173000001682228223654") is None
-        assert mqtt_module._frame_mid("#P2607311817300000168222822365470") is None
+        assert mqtt_module._frame_mid("#P260731181730000010000002300011") == SAMPLE_HUB_FRAME_MID
+        assert mqtt_module._frame_mid("#P26073118173000001000000230001") is None
+        assert mqtt_module._frame_mid("#P2607311817300000100000023000110") is None
         # A well-formed width whose slot is not numeric resolves to nothing.
-        assert mqtt_module._frame_mid("#P26073118173000001682228223654X") is None
+        assert mqtt_module._frame_mid("#P26073118173000001000000230001X") is None
 
     def test_a_slot_that_is_digit_shaped_but_not_ascii_decimal_resolves_to_nothing(self):
         """str.isdigit() is True for both of these and is why the guard is not it.
@@ -962,11 +962,11 @@ class TestHubFrameRouting:
         callback and into the event loop, breaking this module's fail-safe
         contract; a non-ASCII digit script made int() succeed, routing a
         spelling no capture produced onto a real hub."""
-        assert "23654\u00b2".isdigit()
-        assert mqtt_module._frame_mid("#P26073118173000001682228223654\u00b2") is None
+        assert "30001\u00b2".isdigit()
+        assert mqtt_module._frame_mid("#P26073118173000001000000230001\u00b2") is None
 
         assert "\u0662\u0663\u0666\u0665\u0664\u0667".isdigit()
-        assert mqtt_module._frame_mid("#P260731181730000016822282\u0662\u0663\u0666\u0665\u0664\u0667") is None
+        assert mqtt_module._frame_mid("#P260731181730000010000002\u0662\u0663\u0666\u0665\u0664\u0667") is None
 
     def test_a_hostile_identity_is_dropped_rather_than_raising_through_dispatch(self):
         """End to end, since the defect was an exception escaping the handler:
@@ -974,7 +974,7 @@ class TestHubFrameRouting:
         coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=SAMPLE_HUB_FRAME_MID)
 
-        client._dispatch_push("topic", "#P26073118173000001682228223654\u00b2|0|1785521850011|112882164350#".encode())
+        client._dispatch_push("topic", "#P26073118173000001000000230001\u00b2|0|1785521850011|112882164350#".encode())
 
         coordinator.apply_hub_push_update.assert_not_called()
         coordinator.apply_push_update.assert_not_called()
@@ -1020,22 +1020,22 @@ class TestSubDeviceEnvelopeMidAttribution:
         """A well-formed envelope naming another hub reaches that hub, rather
         than being refused for not naming the one this client was built for."""
         coordinator = MagicMock(spec=PushCoordinator)
-        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=300011)
 
-        client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=361277))
+        client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=300013))
 
         coordinator.apply_push_update.assert_called_once()
-        assert coordinator.apply_push_update.call_args.args[0] == 361277
+        assert coordinator.apply_push_update.call_args.args[0] == 300013
 
     def test_envelope_naming_this_hub_is_dispatched(self):
         """The same envelope naming this client's own hub reaches the coordinator."""
         coordinator = MagicMock(spec=PushCoordinator)
-        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=300011)
 
-        client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=236547))
+        client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "0a1b" * 28}, mid=300011))
 
         coordinator.apply_push_update.assert_called_once()
-        assert coordinator.apply_push_update.call_args.args[0] == 236547
+        assert coordinator.apply_push_update.call_args.args[0] == 300011
 
     def test_same_addr_on_another_hub_no_longer_lands_on_this_hubs_device(self):
         """The concrete corruption this closes: both hubs have a device at addr
@@ -1043,41 +1043,41 @@ class TestSubDeviceEnvelopeMidAttribution:
         hub's mid, so the coordinator resolves it to that hub's addr 1 rather
         than to this hub's."""
         coordinator = MagicMock(spec=PushCoordinator)
-        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=300011)
 
-        client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "dead" * 28}, mid=361277))
+        client._dispatch_push("topic", _captured_push_payload({"D01": "11#" + "dead" * 28}, mid=300013))
 
         mid, sid, _raw, _ts = coordinator.apply_push_update.call_args.args
-        assert (mid, sid) == (361277, "D01")
+        assert (mid, sid) == (300013, "D01")
 
     def test_every_update_in_one_envelope_carries_that_envelope_s_mid(self):
         """One envelope can hold several sub-devices, and they all belong to the
         hub its section 1 names."""
         coordinator = MagicMock(spec=PushCoordinator)
-        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547)
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=300011)
 
         client._dispatch_push(
             "topic",
-            _captured_push_payload({"D01": "11#" + "0a1b" * 28, "D02": "10#" + "0a1b" * 6}, mid=361277),
+            _captured_push_payload({"D01": "11#" + "0a1b" * 28, "D02": "10#" + "0a1b" * 6}, mid=300013),
         )
 
         assert coordinator.apply_push_update.call_count == 2
-        assert {call.args[0] for call in coordinator.apply_push_update.call_args_list} == {361277}
+        assert {call.args[0] for call in coordinator.apply_push_update.call_args_list} == {300013}
 
     def test_per_hub_clock_advances_only_for_the_hub_a_frame_names(self):
         """One session carries every hub, so the per-hub clock is what tells a
         quiet hub apart from a quiet channel."""
         coordinator = MagicMock(spec=PushCoordinator)
         clock = iter([100.0, 200.0, 300.0])
-        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=236547, time_source=lambda: next(clock))
+        client = _make_push_client(MagicMock(), MagicMock(), coordinator, hub_mid=300011, time_source=lambda: next(clock))
 
-        assert client.last_message_at_for(236547) is None
-        assert client.last_message_at_for(361277) is None
+        assert client.last_message_at_for(300011) is None
+        assert client.last_message_at_for(300013) is None
 
-        client._dispatch_push("topic", _captured_push_payload({"D01": "11#ab"}, mid=361277))
+        client._dispatch_push("topic", _captured_push_payload({"D01": "11#ab"}, mid=300013))
 
-        assert client.last_message_at_for(361277) == 100.0
-        assert client.last_message_at_for(236547) is None
+        assert client.last_message_at_for(300013) == 100.0
+        assert client.last_message_at_for(300011) is None
 
     @pytest.mark.parametrize(
         "param",
@@ -1103,14 +1103,14 @@ class TestSubDeviceEnvelopeMidAttribution:
 
     def test_section_one_helper_reads_section_one_of_a_captured_envelope(self):
         """The helper returns section 1 verbatim, at the width the capture showed."""
-        payload = _captured_push_payload({"D01": "11#ab"}, mid=236547)
+        payload = _captured_push_payload({"D01": "11#ab"}, mid=300011)
         tail = mqtt_module._push_envelope_section_one(payload)
 
         assert tail is not None
         assert tail.startswith("#P")
         # 2 prefix + 12 stamp + 4 fixed + 8 account + 6 mid, per the capture.
         assert len(tail) == 32
-        assert mqtt_module._frame_mid(tail) == 236547
+        assert mqtt_module._frame_mid(tail) == 300011
 
     def test_section_one_helper_never_raises_on_invalid_utf8_bytes(self):
         """The decode must tolerate invalid bytes via replacement, this runs
@@ -1202,7 +1202,7 @@ class TestUnrecognisedShapeLogging:
         embed stay out of the default log."""
         coordinator = MagicMock(spec=PushCoordinator)
         client = _make_push_client(MagicMock(), MagicMock(), coordinator)
-        payload = b"#P26073118173000001682228223654|9|9|9#"
+        payload = b"#P26073118173000001000000230001|9|9|9#"
 
         with (
             caplog.at_level(logging.INFO, logger="custom_components.rainpoint.api.mqtt"),
@@ -1213,7 +1213,7 @@ class TestUnrecognisedShapeLogging:
         preview.assert_not_called()
         info_records = [r for r in caplog.records if r.levelno == logging.INFO and "unrecognized" in r.message]
         assert len(info_records) == 1
-        assert "16822282" not in info_records[0].message
+        assert "10000002" not in info_records[0].message
 
     def test_unrecognized_shape_cap_stops_growth_and_further_info_records(self, caplog):
         coordinator = MagicMock(spec=PushCoordinator)
@@ -2587,7 +2587,7 @@ class TestUnreadableIdentityIsVisible:
     """
 
     # 2 prefix + 24 filler + a 7-digit mid: one character wider than any capture.
-    OVERWIDE_SECTION_ONE = "#P" + "0" * 24 + "2365470"
+    OVERWIDE_SECTION_ONE = "#P" + "0" * 24 + "3000110"
 
     def _overwide_hub_frame(self):
         return f"{self.OVERWIDE_SECTION_ONE}|0|1785521850011|112882164350#".encode()
@@ -2606,7 +2606,7 @@ class TestUnreadableIdentityIsVisible:
         assert "33 characters" in message
         # Section 1 holds an account id and a stamp; only its width may be logged.
         assert self.OVERWIDE_SECTION_ONE not in message
-        assert "2365470" not in message
+        assert "3000110" not in message
         coordinator.apply_hub_push_update.assert_not_called()
 
     def test_a_sub_device_envelope_with_no_identity_section_warns_too(self, caplog):

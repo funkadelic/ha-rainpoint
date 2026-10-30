@@ -83,7 +83,7 @@ def _make_entity(payload=None, error=None):
         side_effect=error if error is not None else None,
         return_value=payload,
     )
-    return RainPointHubFirmwareUpdate(client, make_hub_info(mid=361277)), client
+    return RainPointHubFirmwareUpdate(client, make_hub_info(mid=300013)), client
 
 
 def _make_hass(hubs=None, with_client=True, sensors=None):
@@ -117,7 +117,7 @@ class TestFirmwareUpdateEntity:
         # is asked for, so there is nothing an English-reading user could do with it.
         assert entity.release_summary is None
         assert entity.available is True
-        client.get_hub_firmware_info.assert_awaited_once_with(361277)
+        client.get_hub_firmware_info.assert_awaited_once_with(300013)
 
     @pytest.mark.asyncio
     async def test_current_hub_reports_latest_equal_to_installed(self):
@@ -245,7 +245,7 @@ class TestFirmwareUpdateEntity:
         Both are persisted in the entity registry, so a collision would silently
         drop one of them rather than fail loudly.
         """
-        hub_info = make_hub_info(mid=361277)
+        hub_info = make_hub_info(mid=300013)
         update_entity = RainPointHubFirmwareUpdate(MagicMock(), hub_info)
         sensor = RainPointHubFirmwareSensor(MagicMock(), hub_info)
 
@@ -270,8 +270,8 @@ class TestUpdateSetupEntry:
     @pytest.mark.asyncio
     async def test_one_entity_per_real_hub(self):
         """A real hub plus a Bluetooth wrapper record yields exactly one entity."""
-        real_hub = {"hid": 182509, "mid": 236547, "name": "Hub", "did": "17053410", "mac": "A8:46:74:BB:91:F0"}
-        wrapper = {"hid": 182509, "mid": 346965, "name": "", "did": "", "mac": "", "model": "", "productKey": ""}
+        real_hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "10000102", "mac": "A0:B0:C0:D0:00:03"}
+        wrapper = {"hid": 100001, "mid": 300012, "name": "", "did": "", "mac": "", "model": "", "productKey": ""}
         hass, entry = _make_hass(hubs=[real_hub, wrapper])
 
         add_entities = MagicMock()
@@ -288,7 +288,7 @@ class TestUpdateSetupEntry:
         SCAN_INTERVAL is measured in hours, so the first poll has to be the one
         that happens at setup rather than the one that happens on the next tick.
         """
-        hub = {"hid": 182509, "mid": 236547, "name": "Hub", "did": "17053410", "mac": "A8:46:74:BB:91:F0"}
+        hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "10000102", "mac": "A0:B0:C0:D0:00:03"}
         hass, entry = _make_hass(hubs=[hub])
 
         add_entities = MagicMock()
@@ -309,7 +309,7 @@ class TestUpdateSetupEntry:
     @pytest.mark.asyncio
     async def test_non_list_hubs_snapshot_is_rejected(self):
         """A dict snapshot skips setup rather than crashing the platform."""
-        hass, entry = _make_hass(hubs={"236547": {}})
+        hass, entry = _make_hass(hubs={"300011": {}})
 
         add_entities = MagicMock()
         await async_setup_entry(hass, entry, add_entities)
@@ -319,7 +319,7 @@ class TestUpdateSetupEntry:
     @pytest.mark.asyncio
     async def test_missing_client_skips_setup(self):
         """Every value this platform shows comes from the client, so there is nothing to build without one."""
-        hub = {"hid": 1, "mid": 2, "name": "Hub", "did": "d", "mac": "A8:46:74:BB:91:F0"}
+        hub = {"hid": 1, "mid": 2, "name": "Hub", "did": "d", "mac": "A0:B0:C0:D0:00:03"}
         hass, entry = _make_hass(hubs=[hub], with_client=False)
 
         add_entities = MagicMock()
@@ -332,7 +332,7 @@ class TestUpdateSetupEntry:
         """A swapped-out client would still construct, so the entity's
         `_client` attribute has to be checked directly rather than inferred
         from `isinstance`."""
-        hub = {"hid": 1, "mid": 2, "name": "Hub", "did": "d", "mac": "A8:46:74:BB:91:F0"}
+        hub = {"hid": 1, "mid": 2, "name": "Hub", "did": "d", "mac": "A0:B0:C0:D0:00:03"}
         hass, entry = _make_hass(hubs=[hub])
 
         add_entities = MagicMock()
@@ -346,7 +346,7 @@ class TestUpdateSetupEntry:
     async def test_sub_device_entities_are_built_with_the_coordinator_and_client(self):
         """Both addressing sources have to be the platform's real objects, not
         a swapped-out or missing one."""
-        sensors = {"1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 504942, "model": "HTV210B"}}
+        sensors = {"1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 500004, "model": "HTV210B"}}
         hass, entry = _make_hass(hubs=[], sensors=sensors)
 
         add_entities = MagicMock()
@@ -365,7 +365,7 @@ class TestUpdateSetupEntry:
         holding an empty one) must not abort the whole setup before the
         sub-device entities below ever get built."""
         coord = MagicMock()
-        coord.data = {"sensors": {"1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 504942, "model": "HTV210B"}}}
+        coord.data = {"sensors": {"1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 500004, "model": "HTV210B"}}}
         hass = MagicMock()
         entry = MagicMock()
         entry.entry_id = "test_entry"
@@ -388,7 +388,7 @@ class TestGetHubFirmwareInfo:
             client = _logged_in_client()
             client._session.get = MagicMock(return_value=mock_json_response({"code": 0, "data": payload}))
 
-            assert await client.get_hub_firmware_info(361277) == payload
+            assert await client.get_hub_firmware_info(300013) == payload
 
     @pytest.mark.asyncio
     async def test_mid_is_sent_as_a_query_param(self):
@@ -396,9 +396,9 @@ class TestGetHubFirmwareInfo:
         client = _logged_in_client()
         client._session.get = MagicMock(return_value=mock_json_response({"code": 0, "data": CURRENT_PAYLOAD}))
 
-        await client.get_hub_firmware_info(361277)
+        await client.get_hub_firmware_info(300013)
 
-        assert client._session.get.call_args.kwargs["params"] == {"mid": 361277}
+        assert client._session.get.call_args.kwargs["params"] == {"mid": 300013}
         assert client._session.get.call_args[0][0].endswith("/app/device/firmware/upgrade/info/v2")
 
     @pytest.mark.asyncio
@@ -413,7 +413,7 @@ class TestGetHubFirmwareInfo:
         client._session.get = MagicMock(return_value=mock_json_response(["unexpected"]))
 
         with pytest.raises(RainPointApiError, match="not an object"):
-            await client.get_hub_firmware_info(361277)
+            await client.get_hub_firmware_info(300013)
 
     @pytest.mark.asyncio
     async def test_http_error_raises(self):
@@ -421,7 +421,7 @@ class TestGetHubFirmwareInfo:
         client._session.get = MagicMock(return_value=mock_json_response({}, status=500))
 
         with pytest.raises(RainPointApiError, match="get_hub_firmware_info HTTP 500"):
-            await client.get_hub_firmware_info(361277)
+            await client.get_hub_firmware_info(300013)
 
     @pytest.mark.asyncio
     async def test_non_zero_code_raises(self):
@@ -429,7 +429,7 @@ class TestGetHubFirmwareInfo:
         client._session.get = MagicMock(return_value=mock_json_response({"code": 3, "msg": "nope"}))
 
         with pytest.raises(RainPointApiError, match="get_hub_firmware_info failed: code 3"):
-            await client.get_hub_firmware_info(361277)
+            await client.get_hub_firmware_info(300013)
 
     @pytest.mark.asyncio
     async def test_unusable_data_shape_returns_empty(self):
@@ -441,10 +441,10 @@ class TestGetHubFirmwareInfo:
         client = _logged_in_client()
         client._session.get = MagicMock(return_value=mock_json_response({"code": 0, "data": [CURRENT_PAYLOAD]}))
 
-        assert await client.get_hub_firmware_info(361277) == {}
+        assert await client.get_hub_firmware_info(300013) == {}
 
 
-def _make_sub_entity(payload=None, error=None, sid=504942, data=None):
+def _make_sub_entity(payload=None, error=None, sid=500004, data=None):
     """Return a sub-device entity wired to a client that answers with payload (or raises)."""
     coordinator = make_sensor_coordinator(
         model="HTV210B",
@@ -482,7 +482,7 @@ class TestSharedFirmwareUpdateBase:
         than to the mdi:chip its Firmware Version sibling uses.
         """
         hub_entity = RainPointHubFirmwareUpdate(MagicMock(), make_hub_info())
-        sub_entity = RainPointSubFirmwareUpdate(MagicMock(), MagicMock(), "182509_361277_1", {"sid": 504942})
+        sub_entity = RainPointSubFirmwareUpdate(MagicMock(), MagicMock(), "100001_300013_1", {"sid": 500004})
 
         for entity in (hub_entity, sub_entity):
             assert entity.entity_picture is None
@@ -501,23 +501,23 @@ class TestSubFirmwareUpdateEntity:
 
         await entity.async_update()
 
-        client.get_sub_firmware_info.assert_awaited_once_with(504942)
+        client.get_sub_firmware_info.assert_awaited_once_with(500004)
 
     @pytest.mark.asyncio
     async def test_a_re_keyed_sid_is_picked_up_without_a_reload(self):
         """The cloud re-keys a sub-device's sid when it is re-paired.
 
-        The maintainer's HTV210B was 491657 before one and 504942 after. A device
+        The maintainer's HTV210B was 500003 before one and 500004 after. A device
         re-paired into the same hub and address keeps this entity, so an id read
         once at construction would address something the cloud has retired for
         the life of the config entry.
         """
-        entity, client = _make_sub_entity(payload=CURRENT_PAYLOAD, sid=491657)
-        entity._coordinator.data["sensors"]["100_200_1"]["sid"] = 504942
+        entity, client = _make_sub_entity(payload=CURRENT_PAYLOAD, sid=500003)
+        entity._coordinator.data["sensors"]["100_200_1"]["sid"] = 500004
 
         await entity.async_update()
 
-        client.get_sub_firmware_info.assert_awaited_once_with(504942)
+        client.get_sub_firmware_info.assert_awaited_once_with(500004)
 
     @pytest.mark.asyncio
     async def test_a_poll_that_has_not_carried_this_device_falls_back(self):
@@ -527,7 +527,7 @@ class TestSubFirmwareUpdateEntity:
 
         await entity.async_update()
 
-        client.get_sub_firmware_info.assert_awaited_once_with(504942)
+        client.get_sub_firmware_info.assert_awaited_once_with(500004)
 
     @pytest.mark.asyncio
     async def test_both_envelope_shapes_decode_as_they_do_for_a_hub(self):
@@ -628,7 +628,7 @@ class TestSubUpdateSetupEntry:
         its own entity and no other, matching the listener's own guard.
         """
         sensors = {
-            "1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 504942, "model": "HTV210B"},
+            "1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 500004, "model": "HTV210B"},
             "1_2_2": {"hid": 1, "mid": 2, "addr": 2, "sid": None, "model": "HCS026FRF"},
             "1_2_3": "not a record",
         }
@@ -644,8 +644,8 @@ class TestSubUpdateSetupEntry:
     async def test_no_model_gate(self):
         """The endpoint answers for the RF models too, so every addressable sub-device gets one."""
         sensors = {
-            "1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 341550, "model": "HTV245FRF"},
-            "1_2_2": {"hid": 1, "mid": 2, "addr": 2, "sid": 485351, "model": "HCS026FRF"},
+            "1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 500001, "model": "HTV245FRF"},
+            "1_2_2": {"hid": 1, "mid": 2, "addr": 2, "sid": 500002, "model": "HCS026FRF"},
         }
         hass, entry = _make_hass(hubs=[], sensors=sensors)
 
@@ -657,7 +657,7 @@ class TestSubUpdateSetupEntry:
     @pytest.mark.asyncio
     async def test_non_dict_sensors_snapshot_still_yields_the_hub_entities(self):
         """A malformed sensors snapshot costs the sub-device entities, not the hub's."""
-        hub = {"hid": 182509, "mid": 236547, "name": "Hub", "did": "17053410", "mac": "A8:46:74:BB:91:F0"}
+        hub = {"hid": 100001, "mid": 300011, "name": "Hub", "did": "10000102", "mac": "A0:B0:C0:D0:00:03"}
         hass, entry = _make_hass(hubs=[hub], sensors=["not a dict"])
 
         add_entities = MagicMock()
@@ -671,7 +671,7 @@ class TestSubUpdateSetupEntry:
         """Without a published adder these rows are in no ledger, and a row in no
         ledger is one the departed-key removal cannot take, which leaves the
         sub-device's device registry row permanently non-empty."""
-        sensors = {"1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 504942, "model": "HTV210B"}}
+        sensors = {"1_2_1": {"hid": 1, "mid": 2, "addr": 1, "sid": 500004, "model": "HTV210B"}}
         hass, entry = _make_hass(hubs=[], sensors=sensors)
 
         await async_setup_entry(hass, entry, MagicMock())
@@ -693,7 +693,7 @@ class TestSubUpdateSilentTimeline:
     _HID = 10
     _MID = 20
     _ADDR = 1
-    _SID = 504942
+    _SID = 500004
     _KEY = "10_20_1"
 
     @classmethod
@@ -811,9 +811,9 @@ class TestGetSubFirmwareInfo:
         client = _logged_in_client()
         client._session.get = MagicMock(return_value=mock_json_response({"code": 0, "data": CURRENT_PAYLOAD}))
 
-        assert await client.get_sub_firmware_info(504942) == CURRENT_PAYLOAD
+        assert await client.get_sub_firmware_info(500004) == CURRENT_PAYLOAD
 
-        assert client._session.get.call_args.kwargs["params"] == {"sid": 504942}
+        assert client._session.get.call_args.kwargs["params"] == {"sid": 500004}
         assert client._session.get.call_args[0][0].endswith("/app/device/sub/firmware/upgrade/info")
 
     @pytest.mark.asyncio
@@ -823,7 +823,7 @@ class TestGetSubFirmwareInfo:
         client._session.get = MagicMock(return_value=mock_json_response({}, status=500))
 
         with pytest.raises(RainPointApiError, match="get_sub_firmware_info HTTP 500"):
-            await client.get_sub_firmware_info(504942)
+            await client.get_sub_firmware_info(500004)
 
 
 # Runs in a child interpreter for the same reason test_entity_naming.py's
