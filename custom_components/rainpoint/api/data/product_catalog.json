@@ -3431,7 +3431,7 @@
           "identity": "STA_REPTIME"
         }
       ],
-      "hasDistribution": false,
+      "hasDistribution": true,
       "isMainDevice": false,
       "portNumber": 1
     }
@@ -3605,7 +3605,7 @@
           "identity": "STA_REPTIME"
         }
       ],
-      "hasDistribution": false,
+      "hasDistribution": true,
       "isMainDevice": false,
       "portNumber": 1
     }
@@ -4127,7 +4127,115 @@
           "identity": "STA_RSSI"
         }
       ],
-      "hasDistribution": false,
+      "hasDistribution": true,
+      "isMainDevice": true,
+      "portNumber": 1
+    }
+  },
+  "HTV143WRFE-V7": {
+    "399": {
+      "accessoryFlag": false,
+      "dp": [
+        {
+          "dpCode": 0,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "STA_CHG"
+        },
+        {
+          "dpCode": 1,
+          "dpDataType": "",
+          "dpLen": 2,
+          "dpPort": 1,
+          "identity": "CTL_WATER"
+        },
+        {
+          "dpCode": 2,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 1,
+          "identity": "STA_ALARM"
+        },
+        {
+          "dpCode": 4,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "STA_OTHER"
+        },
+        {
+          "dpCode": 11,
+          "dpDataType": "",
+          "dpLen": 1,
+          "dpPort": 1,
+          "identity": "CTL_SET_DELAY"
+        },
+        {
+          "dpCode": 15,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_LASTUSAGE"
+        },
+        {
+          "dpCode": 17,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_POWER"
+        },
+        {
+          "dpCode": 19,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_DURATION"
+        },
+        {
+          "dpCode": 21,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_EVTIME"
+        },
+        {
+          "dpCode": 29,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_VOLTAGE"
+        },
+        {
+          "dpCode": 30,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 1,
+          "identity": "STA_WKSTATE"
+        },
+        {
+          "dpCode": 31,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "STA_BAT"
+        },
+        {
+          "dpCode": 32,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 1,
+          "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 61,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_PV_V"
+        }
+      ],
+      "hasDistribution": true,
       "isMainDevice": true,
       "portNumber": 1
     }
@@ -4444,7 +4552,7 @@
           "identity": "STA_REPTIME"
         }
       ],
-      "hasDistribution": false,
+      "hasDistribution": true,
       "isMainDevice": false,
       "portNumber": 2
     }
@@ -5162,6 +5270,198 @@
       "hasDistribution": true,
       "isMainDevice": false,
       "portNumber": 2
+    }
+  },
+  "HTV311FRF": {
+    "359": {
+      "accessoryFlag": false,
+      "dp": [
+        {
+          "dpCode": 1,
+          "dpDataType": "",
+          "dpLen": 2,
+          "dpPort": 1,
+          "identity": "CTL_WATER"
+        },
+        {
+          "dpCode": 1,
+          "dpDataType": "",
+          "dpLen": 2,
+          "dpPort": 2,
+          "identity": "CTL_WATER"
+        },
+        {
+          "dpCode": 1,
+          "dpDataType": "",
+          "dpLen": 2,
+          "dpPort": 3,
+          "identity": "CTL_WATER"
+        },
+        {
+          "dpCode": 2,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 1,
+          "identity": "STA_ALARM"
+        },
+        {
+          "dpCode": 2,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 2,
+          "identity": "STA_ALARM"
+        },
+        {
+          "dpCode": 2,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 3,
+          "identity": "STA_ALARM"
+        },
+        {
+          "dpCode": 11,
+          "dpDataType": "",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "CTL_SET_DELAY"
+        },
+        {
+          "dpCode": 15,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 2,
+          "identity": "STA_LASTUSAGE"
+        },
+        {
+          "dpCode": 15,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_LASTUSAGE"
+        },
+        {
+          "dpCode": 15,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 3,
+          "identity": "STA_LASTUSAGE"
+        },
+        {
+          "dpCode": 19,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_DURATION"
+        },
+        {
+          "dpCode": 19,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 2,
+          "identity": "STA_DURATION"
+        },
+        {
+          "dpCode": 19,
+          "dpDataType": "U32",
+          "dpLen": 4,
+          "dpPort": 3,
+          "identity": "STA_DURATION"
+        },
+        {
+          "dpCode": 21,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_EVTIME"
+        },
+        {
+          "dpCode": 21,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 2,
+          "identity": "STA_EVTIME"
+        },
+        {
+          "dpCode": 21,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 3,
+          "identity": "STA_EVTIME"
+        },
+        {
+          "dpCode": 30,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 1,
+          "identity": "STA_WKSTATE"
+        },
+        {
+          "dpCode": 30,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 2,
+          "identity": "STA_WKSTATE"
+        },
+        {
+          "dpCode": 30,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 3,
+          "identity": "STA_WKSTATE"
+        },
+        {
+          "dpCode": 31,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "STA_BAT"
+        },
+        {
+          "dpCode": 32,
+          "dpDataType": "U8",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "STA_RSSI"
+        },
+        {
+          "dpCode": 51,
+          "dpDataType": "S8",
+          "dpLen": 1,
+          "dpPort": 0,
+          "identity": "STA_RSRP"
+        },
+        {
+          "dpCode": 52,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 2,
+          "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 52,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 1,
+          "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 52,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 3,
+          "identity": "STA_EVTIME2"
+        },
+        {
+          "dpCode": 54,
+          "dpDataType": "T4",
+          "dpLen": 4,
+          "dpPort": 0,
+          "identity": "STA_REPTIME"
+        }
+      ],
+      "hasDistribution": true,
+      "isMainDevice": false,
+      "portNumber": 3
     }
   },
   "HTV345FRF": {
