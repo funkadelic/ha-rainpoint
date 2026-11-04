@@ -62,6 +62,10 @@ mutation = ["mutmut>=3.8.1,<4"]
 # has not seen before, so a new test is picked up without discarding anything,
 # and registering the directory would throw the whole cache away on every
 # assertion added while chasing a surviving mutant.
+#
+# mutmut never deletes from mutants/ and skips source files already copied there, so
+# remove mutants/ after files are deleted or moved. The manifest is listed below so
+# a changed pin or logger list reaches the copy the manifest tests read.
 [tool.mutmut]
 source_paths = ["custom_components/"]
 also_copy = [
@@ -69,10 +73,12 @@ also_copy = [
     "pyproject.toml",
     "README.md",
     ".github/ISSUE_TEMPLATE/",
+    "custom_components/rainpoint/manifest.json",
 ]
 cache_invalidation_files = [
     "README.md",
     ".github/ISSUE_TEMPLATE/*",
+    "custom_components/rainpoint/manifest.json",
 ]
 do_not_mutate = ["*/debug.py"]
 # Mutated log calls were a third of all survivors and test nothing but log text.
