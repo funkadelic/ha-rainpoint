@@ -50,7 +50,9 @@ jobs:
           enable-cache: false
 
       - name: Install dependencies
-        run: uv pip install --system -r requirements-test.txt
+        run: |
+          jq -r '.requirements[]' custom_components/rainpoint/manifest.json > "$RUNNER_TEMP/manifest-requirements.txt"
+          uv pip install --system -r requirements-test.txt -r "$RUNNER_TEMP/manifest-requirements.txt"
 
       # junit_family=legacy keeps the file and line attributes on each testcase
       # that pytest's default xunit2 drops. Codecov Test Analytics attributes a
@@ -183,7 +185,9 @@ jobs:
           enable-cache: false
 
       - name: Install dependencies
-        run: uv pip install --system -r requirements-test-min.txt
+        run: |
+          jq -r '.requirements[]' custom_components/rainpoint/manifest.json > "$RUNNER_TEMP/manifest-requirements.txt"
+          uv pip install --system -r requirements-test-min.txt -r "$RUNNER_TEMP/manifest-requirements.txt"
 
       # --no-cov because addopts turns coverage on with a fail_under gate. The
       # job above already measures and uploads it, and a product path that only
