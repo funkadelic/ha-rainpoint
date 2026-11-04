@@ -1,7 +1,7 @@
 """Evidence sweep for the TLV (11#) catalog annotation key selection.
 
-Measurement only, not production change: nothing here touches
-``custom_components/``. It exists to widen the evidence behind the finding
+Measurement only: it reads production code (``generic_control``) but
+changes none. It exists to widen the evidence behind the finding
 that the catalog annotation was keyed on the wrong field, before the
 annotation key is changed - a decoded field's structural
 ``index`` lines up with the catalog's ``dpCode``, while its per-entry
@@ -31,10 +31,10 @@ case against dp_id-keying: the old key does not just fail silently, it can
 occasionally produce a plausible-looking wrong answer. The sweep below
 therefore keeps the full-catalog cross-product for the "index dominates"
 and "more than one model" claims, and scopes the "dp_id doesn't work"
-claim to the three identities the folded todo's original single-payload
+claim to the three identities the original single-payload
 measurement covered (``STA_BAT``, ``STA_WKSTATE``, ``STA_DURATION``),
 evaluated against each sample's own catalog variant - which is exactly the
-todo's reported zero, reproduced across every TLV sample now available
+originally reported zero, reproduced across every TLV sample now available
 rather than the one payload it was taken from.
 """
 
@@ -74,7 +74,7 @@ SAMPLE_MODEL: dict[str, str] = {
     "VALVE_HUB_APPLY_TLV_PAYLOAD": "HTV0540FRF",
 }
 
-# The three identities the folded todo's original single-payload measurement
+# The three identities the original single-payload measurement
 # covered (STA_BAT, STA_WKSTATE, STA_DURATION).
 _PAIRING_IDENTITIES = {"STA_BAT", "STA_WKSTATE", "STA_DURATION"}
 
@@ -114,7 +114,7 @@ def _pairing(fields: list[dict], dp_list: list, index: int) -> list[tuple[dict, 
     """Pair decoded fields at `index` to catalog entries at dpCode == index.
 
     Ascending dp_id on the field side, ascending dpPort on the catalog side -
-    the exact pairing task 2 implements in production. strict=True so a
+    the exact pairing production implements. strict=True so a
     group whose field count disagrees with its catalog candidate count
     raises immediately instead of silently zipping a truncated pairing.
     """
@@ -137,10 +137,10 @@ class TestIndexVsDpIdAlignmentSweep:
         assert total_index_hits > total_dp_id_hits
 
     def test_dp_id_key_produces_zero_hits_for_the_pairing_identities_within_their_own_model(self):
-        """Reproduces the todo's exact single-payload finding, widened to every TLV sample.
+        """Reproduces the original single-payload finding, widened to every TLV sample.
 
         Scoped to each sample's own catalog variant and to the three
-        identities the todo's table covered: dp_id never matches that
+        identities that measurement covered: dp_id never matches that
         variant's dpCode for any of them, on any of the four samples. See
         the module docstring for why a full-catalog cross-product is not
         used for this claim.
