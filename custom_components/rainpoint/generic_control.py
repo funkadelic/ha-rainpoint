@@ -153,11 +153,10 @@ _ERROR_PLACEHOLDER_LIMIT = 200
 def _response_code_from_error(exc: Exception) -> str:
     """Extract the numeric controlWorkMode response code from the client's error text.
 
-    Extracting from the message rather than from an attribute on the
-    exception is deliberate: aiorainpoint/client.py is reused unchanged, so the
-    message is the only place the code is exposed. Do not
-    "fix" this by adding a code attribute to RainPointApiError -- that would
-    be an unrequested change to the reused client.
+    The message is the only place aiorainpoint exposes the code, so its
+    wording is a cross-package contract, pinned by tests/test_library_contract.py
+    against the real client. Moving the code onto an exception attribute is a
+    library change first.
 
     Returns the literal string "unknown" when no code can be found (e.g. the
     HTTP-status branch of control_work_mode, which never mentions "code" at
