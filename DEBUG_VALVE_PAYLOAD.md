@@ -16,7 +16,10 @@ logger:
   default: info
   logs:
     custom_components.rainpoint: debug
+    aiorainpoint: debug
 ```
+
+The second line covers the RainPoint client library, which logs the cloud API calls, push messages and payload decoding under its own name. The "Enable debug logging" button on the integration page sets both.
 
 2. **Restart Home Assistant**
 
