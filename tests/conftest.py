@@ -1,7 +1,7 @@
 """Test configuration for rainpoint integration tests.
 
 This conftest stubs out Home Assistant and third-party HA dependencies so that
-custom_components.rainpoint.api can be imported in plain pytest without a running
+`custom_components.rainpoint` can be imported in plain pytest without a running
 Home Assistant instance.
 """
 
@@ -768,7 +768,7 @@ sys.modules["aiohttp"].ClientError = _FakeClientError
 # `from homeassistant.core import callback` would otherwise resolve to a
 # MagicMock. Decorating a function with a MagicMock replaces it with the
 # mock's return value instead of the original function, silently breaking
-# any `@callback`-decorated method (e.g. api/mqtt.py's _handle_message).
+# any `@callback`-decorated method (e.g. aiorainpoint/mqtt.py's _handle_message).
 # ---------------------------------------------------------------------------
 def _identity_callback(func):
     """Real stand-in for homeassistant.core.callback -- returns func unchanged."""

@@ -28,7 +28,7 @@ mutation = ["mutmut>=3.8.1,<4"]
 # Mutation testing, run by hand rather than in CI. mutmut copies the source and
 # everything listed in also_copy into ./mutants/, mutates the copy, and runs the
 # suite from there, so anything the tests open by path has to be copied too:
-# README.md and scripts/ are read directly by tests, and pyproject.toml carries
+# README.md is read directly by tests, and pyproject.toml carries
 # the pytest configuration the suite needs to run at all.
 #
 # --no-cov is what keeps the results honest. This project's pytest run enables
@@ -38,12 +38,6 @@ mutation = ["mutmut>=3.8.1,<4"]
 #
 # debug.py is left alone for the same reason it is left out of coverage: nothing
 # imports it in a shipped build.
-#
-# The deselected tests inspect source that mutmut rewrites with every mutant inlined
-# (the decoders.py digest pin and the mqtt.py call-graph pair), so they fail on the
-# unmutated baseline. They still run in every ordinary pytest run. A renamed test
-# leaves a stale node id here, which shows up as "failed to collect stats" before
-# the first mutant runs.
 #
 # on_dependency_change defaults to "warn", which keeps a cache built under the
 # previous config when one of the copied inputs changes. That cache is what
@@ -56,30 +50,35 @@ mutation = ["mutmut>=3.8.1,<4"]
 # also_copy only copies; it registers nothing for change detection, and neither
 # of mutmut's two detectors sees these files on its own. The git detector skips
 # every .py file, because the per-function source hashes are meant to cover
-# those, but those hashes only span source_paths, so scripts/ is invisible to
-# both. Markdown is then dropped as documentation noise, which hides README.md.
-# cache_invalidation_files is the escape hatch: a registered path is hashed every
-# run and is never dropped as noise. Keep the globs one level deep. mutmut
-# matches them with fnmatch as well as glob, and fnmatch's "*" already spans
-# separators, so "scripts/**/*" silently matches nothing there.
+# those, but those hashes only span source_paths, so a non-Python input outside
+# them is invisible to both. Markdown is then dropped as documentation noise,
+# which hides README.md. cache_invalidation_files is the escape hatch: a
+# registered path is hashed every run and is never dropped as noise. Keep the
+# globs one level deep. mutmut matches them with fnmatch as well as glob, and
+# fnmatch's "*" already spans separators, so a recursive glob such as
+# "dir/**/*" silently matches nothing there.
 #
 # tests/ is deliberately left unregistered. mutmut re-collects stats for tests it
 # has not seen before, so a new test is picked up without discarding anything,
 # and registering the directory would throw the whole cache away on every
 # assertion added while chasing a surviving mutant.
+#
+# mutmut never deletes from mutants/ and skips source files already copied there, so
+# remove mutants/ after files are deleted or moved. The manifest is listed below so
+# a changed pin or logger list reaches the copy the manifest tests read.
 [tool.mutmut]
 source_paths = ["custom_components/"]
 also_copy = [
     "tests/",
-    "scripts/",
     "pyproject.toml",
     "README.md",
     ".github/ISSUE_TEMPLATE/",
+    "custom_components/rainpoint/manifest.json",
 ]
 cache_invalidation_files = [
-    "scripts/*",
     "README.md",
     ".github/ISSUE_TEMPLATE/*",
+    "custom_components/rainpoint/manifest.json",
 ]
 do_not_mutate = ["*/debug.py"]
 # Mutated log calls were a third of all survivors and test nothing but log text.
@@ -94,13 +93,7 @@ timeout_multiplier = 5.0
 # cache at the start of the next run.
 cache_invalidation_exclude = [".vale.ini", ".vale/*"]
 on_dependency_change = "rerun"
-pytest_add_cli_args = [
-    "--no-cov",
-    "--deselect",
-    "tests/api/test_generic_decoder.py::TestAsciiFramingNonRegression::test_decoders_py_digest_is_pinned",
-    "--deselect",
-    "tests/api/test_mqtt.py::TestPushDispatchNeverRunsOnPahoThread",
-]
+pytest_add_cli_args = ["--no-cov"]
 pytest_add_cli_args_test_selection = ["tests/"]
 
 [tool.ruff]

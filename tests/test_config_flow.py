@@ -13,9 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import voluptuous as vol
+from aiorainpoint import RainPointApiError, RainPointThrottledError
 from homeassistant.helpers.selector import CountrySelector
 
-from custom_components.rainpoint.api import RainPointApiError, RainPointThrottledError
 from custom_components.rainpoint.config_flow import RainPointConfigFlow, RainPointOptionsFlow, _country_selector
 from custom_components.rainpoint.const import (
     CONF_AREA_CODE,

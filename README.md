@@ -118,6 +118,8 @@ To do it by hand instead:
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & Services → Add Integration** and search for **RainPoint Cloud**.
 
+When Home Assistant loads the integration it downloads one extra package, `aiorainpoint`, from PyPI. That package is the integration's connection to the RainPoint cloud. Home Assistant needs to reach pypi.org at that moment, on first install and after an update that needs a newer version. There is nothing to install by hand.
+
 ### Installing a beta build
 
 Support for a new device, or a fix, sometimes ships as a beta first, so whoever reported it can confirm it works before it reaches everyone.

@@ -6,16 +6,16 @@ import copy
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from custom_components.rainpoint import generic_control as generic_control_module
-from custom_components.rainpoint.api import (
+from aiorainpoint import (
     RainPointApiError,
     get_catalog_fingerprint,
     get_catalog_variant_codes,
     product_catalog as product_catalog_module,
 )
-from custom_components.rainpoint.api.generic_decoder import decode_generic
-from custom_components.rainpoint.api.product_catalog import UNCODED_VARIANT
+from aiorainpoint.generic_decoder import decode_generic
+from aiorainpoint.product_catalog import UNCODED_VARIANT
+
+from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ACKED_KEYS,
     CONF_GENERIC_CONTROL_ENABLED,
@@ -355,7 +355,7 @@ class TestEvaluateControlGateRealCatalog:
         """CTL_BT_WATER models must produce no control entity through this factory.
 
         The exclusion is proven, not suspected. A 2026-07-29 hardware trial
-        (scripts/trial_control_work_mode.py) showed a hub-paired HTV210B rejects
+        (aiorainpoint's scripts/trial_control_work_mode.py) showed a hub-paired HTV210B rejects
         control_work_mode with response code 3 for both open and close, in the same
         session where the identical call shape was accepted by an HTV245FRF on the
         same hub. A 2026-08-05 traffic capture then identified the endpoint and

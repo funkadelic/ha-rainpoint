@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Container
+from importlib.metadata import version
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
@@ -73,6 +74,19 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Read once at import so no metadata file is touched inside the event loop.
+_LIBRARY_VERSION = version("aiorainpoint")
+
+
+def _integration_info() -> dict[str, Any]:
+    """The integration and client library versions stamped on both dumps."""
+    return {
+        "domain": DOMAIN,
+        "version": VERSION,
+        "library": {"name": "aiorainpoint", "version": _LIBRARY_VERSION},
+    }
+
 
 # Values replaced with a redaction marker wherever they appear, at any depth.
 #
@@ -466,7 +480,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, config_entry: 
     sensors = {key: _sensor_dump(entry, history.get(key)) for key, entry in (data.get("sensors") or {}).items()}
 
     payload = {
-        "integration": {"domain": DOMAIN, "version": VERSION},
+        "integration": _integration_info(),
         "entry": _entry_dump(config_entry),
         "coordinator": _coordinator_dump(coordinator) if coordinator else {"set_up": False},
         "push": _push_dump(entry_store),
@@ -505,7 +519,7 @@ async def async_get_device_diagnostics(hass: HomeAssistant, config_entry: Config
     identifier = _domain_sensor_key(device)
 
     payload: dict[str, Any] = {
-        "integration": {"domain": DOMAIN, "version": VERSION},
+        "integration": _integration_info(),
         "device": {
             "identifier": identifier,
             "kind": None,

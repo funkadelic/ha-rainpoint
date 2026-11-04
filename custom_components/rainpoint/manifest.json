@@ -10,10 +10,11 @@
     "iot_class": "cloud_push",
     "issue_tracker": "https://github.com/funkadelic/ha-rainpoint/issues",
     "loggers": [
-        "custom_components.rainpoint"
+        "custom_components.rainpoint",
+        "aiorainpoint"
     ],
     "requirements": [
-        "paho-mqtt>=2.1.0"
+        "aiorainpoint==0.1.1"
     ],
     "version": "1.25.2"
 }

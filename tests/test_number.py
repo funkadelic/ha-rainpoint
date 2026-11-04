@@ -6,9 +6,9 @@ import inspect
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiorainpoint import decode_hic801w
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.rainpoint.api import decode_hic801w
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,

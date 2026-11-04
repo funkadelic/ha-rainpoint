@@ -2,13 +2,13 @@
 
 import logging
 
+from aiorainpoint import battery_flag_is_low
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import battery_flag_is_low
 from .const import DOMAIN, HIC801W_STATION_COUNT, MODEL_HCS044FRF, MODEL_HIC801W
 from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .entity import LateEntityAdder, RainPointSubDeviceEntity, hic801w_station_is_running, register_late_adder

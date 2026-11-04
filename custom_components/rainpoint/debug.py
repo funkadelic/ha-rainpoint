@@ -4,12 +4,12 @@ import logging
 from datetime import UTC, datetime
 
 import aiohttp
+from aiorainpoint import RainPointApiError
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 
-from .api import RainPointApiError
 from .const import (
     CONF_DEBUG_LAST_SUBMISSION,
     DEBUG_WORKER_URL,

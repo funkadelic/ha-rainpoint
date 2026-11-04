@@ -17,6 +17,7 @@ test.
 
 from __future__ import annotations
 
+import importlib.metadata
 from typing import ClassVar
 from unittest.mock import MagicMock
 
@@ -409,7 +410,11 @@ class TestSupportPayload:
 
         result = await async_get_config_entry_diagnostics(hass, entry)
 
-        assert result["integration"] == {"domain": DOMAIN, "version": VERSION}
+        assert result["integration"] == {
+            "domain": DOMAIN,
+            "version": VERSION,
+            "library": {"name": "aiorainpoint", "version": importlib.metadata.version("aiorainpoint")},
+        }
 
     @pytest.mark.asyncio
     async def test_the_integration_version_is_also_stamped_on_a_device_dump(self):
@@ -418,7 +423,11 @@ class TestSupportPayload:
 
         result = await async_get_device_diagnostics(hass, entry, _device("100001_300011_1"))
 
-        assert result["integration"] == {"domain": DOMAIN, "version": VERSION}
+        assert result["integration"] == {
+            "domain": DOMAIN,
+            "version": VERSION,
+            "library": {"name": "aiorainpoint", "version": importlib.metadata.version("aiorainpoint")},
+        }
 
     @pytest.mark.asyncio
     async def test_a_coordinator_missing_a_data_attribute_degrades_to_empty_sensors(self):

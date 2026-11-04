@@ -6,6 +6,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from aiorainpoint import SINGLE_OUTLET_GALLONS_PER_COUNT, USAGE_GALLONS_PER_COUNT, is_ascii_payload, parse_entries, split_prefix
+from aiorainpoint.product_catalog import get_catalog_entry, get_catalog_variant_codes
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -22,8 +24,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .api import SINGLE_OUTLET_GALLONS_PER_COUNT, USAGE_GALLONS_PER_COUNT, is_ascii_payload, parse_entries, split_prefix
-from .api.product_catalog import get_catalog_entry, get_catalog_variant_codes
 from .const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
@@ -1754,7 +1754,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
 
     The value is a converted flow count, not a metered volume: the device
     reports a raw count and the gallons-per-count factor is calibrated from a
-    single RainPoint-app reading per model family (see api/decoders.py).
+    single RainPoint-app reading per model family (see aiorainpoint/decoders.py).
     Two consequences follow, and both are deliberate.
 
     There is no device_class. SensorDeviceClass.WATER accepts only the TOTAL
@@ -2046,7 +2046,7 @@ class RainPointHicRunEndsAtSensor(RainPointHic801wSensorBase):
     ways and must never be arithmetic on each other's terms.
 
     The decoder's run_ends_at is a deliberately naive local wall-clock ISO
-    string (api/decoders.py's decode_packed_timestamp docstring), and Home
+    string (aiorainpoint/decoders.py's decode_packed_timestamp docstring), and Home
     Assistant raises ValueError on a naive datetime for a TIMESTAMP sensor
     (homeassistant/components/sensor/__init__.py:620-624). dt_util.as_local
     attaches Home Assistant's own configured timezone to a naive input

@@ -1,4 +1,4 @@
-from .api.models import (
+from aiorainpoint.models import (
     HAND_WRITTEN_MODELS as HAND_WRITTEN_MODELS,
     MODEL_CO2 as MODEL_CO2,
     MODEL_DISPLAY_HUB as MODEL_DISPLAY_HUB,
@@ -269,7 +269,7 @@ HIC801W_STATION_COUNT = 8
 # number.py build its entities, and coordinator.py's
 # _preserve_recent_valve_command_state protects its command-versus-poll
 # staleness guard. Which write endpoint a zone commands through is a separate
-# question, decided by the catalog datapoint identity in api/trust.py, not by
+# question, decided by the catalog datapoint identity in aiorainpoint/trust.py, not by
 # this set.
 VALVE_MODELS = {
     MODEL_VALVE_HUB,

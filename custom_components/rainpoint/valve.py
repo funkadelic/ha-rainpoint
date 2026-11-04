@@ -3,6 +3,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from aiorainpoint import (
+    decode_hic801w,
+    decode_htv145frf,
+    decode_htv210b_dp_state,
+    decode_htv213frf_valve,
+    decode_valve_hub,
+    encode_dp_duration_param,
+    has_bluetooth_control_identity,
+)
 from homeassistant.components.valve import (
     ValveDeviceClass,
     ValveEntity,
@@ -14,15 +23,6 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import (
-    decode_hic801w,
-    decode_htv145frf,
-    decode_htv210b_dp_state,
-    decode_htv213frf_valve,
-    decode_valve_hub,
-    encode_dp_duration_param,
-    has_bluetooth_control_identity,
-)
 from .const import (
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,

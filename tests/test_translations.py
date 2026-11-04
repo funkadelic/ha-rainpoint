@@ -13,9 +13,10 @@ import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from aiorainpoint import RainPointApiError
+
 import custom_components.rainpoint as rainpoint_pkg
 from custom_components.rainpoint import generic_control, repairs
-from custom_components.rainpoint.api import RainPointApiError
 from custom_components.rainpoint.const import (
     GENERIC_CONTROL_ISSUE_ID_PREFIX,
     LEFTOVER_ENTITIES_TRANSLATION_KEY,
