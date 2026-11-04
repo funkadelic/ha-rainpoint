@@ -81,14 +81,14 @@ Model constants and decoders live in the [aiorainpoint](https://github.com/funka
 
 1. Capture a raw payload. The quickest source is the device's **Download diagnostics** file, which carries the payload and the integration's decode of it with no setup. The disabled-by-default "Raw Payload" diagnostic sensor exposes the same string; see `DEBUG_VALVE_PAYLOAD.md` for the full capture procedure and for capturing the same device in several states.
 2. In the library, add `MODEL_XXX` and its `HAND_WRITTEN_MODELS` entry to `models.py`, write `decode_xxx(raw: str) -> dict` in `decoders.py`, and export it. Release the library.
-3. Bump the `aiorainpoint` pin in `manifest.json`.
+3. Bump the `aiorainpoint` pin in the `requirements` list of `manifest.json` (not its `version`, which release-please owns).
 4. Re-export `MODEL_XXX` from `const.py` the way the existing names are, and register `MODEL_XXX: decode_xxx` in `DECODER_REGISTRY` in `coordinator.py`.
 5. Wire any model-specific entities in `sensor.py` / `binary_sensor.py` / `valve.py` / `number.py`.
 6. For valve models, also add `MODEL_XXX` to the `VALVE_MODELS` set in `const.py`. The `valve.py` and `number.py` platforms filter on that set, so a valve model absent from it gets no valve or duration entities. A variant that shares an existing decoder (e.g. `HTV345FRF` reusing `decode_htv213frf_valve`) only needs the registry mapping and `VALVE_MODELS` entry, not a new `decode_xxx`.
 
 The library goes first because a drift test fails if the integration registers a model the pinned library does not list.
 
-While working on both, install a sibling checkout with `uv pip install -e ../aiorainpoint`, then reinstall the pinned version before pushing: `tests/test_manifest.py` fails when the installed version is not the pin.
+While working on both, install a sibling checkout with `uv pip install -e ../aiorainpoint`. Before pushing, replace it with the pinned release: `uv pip install --reinstall $(jq -r '.requirements[]' custom_components/rainpoint/manifest.json)`. Without `--reinstall`, an editable checkout at the same version counts as already installed, and `tests/test_manifest.py` checks only the version, so the suite would still run against the sibling code.
 
 The integration's tests import a few of the library's private names, so a library release that renames one fails this suite at the pin bump. That is the intended tripwire.
 
