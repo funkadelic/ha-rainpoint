@@ -6,8 +6,8 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiorainpoint import RainPointApiError
 
-from custom_components.rainpoint.api import RainPointApiError
 from custom_components.rainpoint.const import (
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
     PUSH_LAST_MESSAGE_UNIQUE_ID_SUFFIX,

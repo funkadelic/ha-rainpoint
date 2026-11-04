@@ -514,7 +514,7 @@ class TestPushReachesTheHubItNamesThroughARealCoordinator:
     """The joint _frame_mid's int() crosses into the coordinator's mid comparison.
 
     Both sides are otherwise tested against a mock of the other: every test in
-    tests/api/test_mqtt.py asserts against a MagicMock coordinator, and every
+    aiorainpoint's MQTT tests asserts against a MagicMock coordinator, and every
     push test in tests/test_coordinator.py hands apply_*_push_update a mid the
     test author picked. Before this branch the mid came from hub.get("mid")
     itself, so the two sides were type-identical by construction and could not
@@ -525,7 +525,7 @@ class TestPushReachesTheHubItNamesThroughARealCoordinator:
 
     @staticmethod
     def _push_client(hass, coordinator):
-        from custom_components.rainpoint.api.mqtt import RainPointMqttClient
+        from aiorainpoint.mqtt import RainPointMqttClient
 
         rainpoint_client = MagicMock()
         rainpoint_client.get_subscribe_status = AsyncMock(return_value={})

@@ -13,10 +13,10 @@ rather than on a mocked call.
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from aiorainpoint import RainPointClient
 from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.rainpoint.api import RainPointClient
 from custom_components.rainpoint.const import DOMAIN, HUB_IDENTIFIER_PREFIX, MODEL_HTV210B
 from tests.payload_samples import SAMPLE_HTV210B_TLV_PAYLOAD
 
@@ -172,10 +172,9 @@ def make_mock_session_client() -> RainPointClient:
     """Create a real RainPointClient with a mocked aiohttp session.
 
     Constructor args: area_code, email, password, session. ``_token`` is set
-    directly so ``_auth_headers()`` does not raise. Moved here from
-    ``tests/api/test_client.py``'s module-level ``_make_client`` so a test in
-    any module can assert on the exact JSON body a real client method builds,
-    not just on a mocked call.
+    directly so ``_auth_headers()`` does not raise. Lets a test in any
+    module assert on the exact JSON body a real client method builds, not just
+    on a mocked call.
     """
     mock_session = MagicMock()
     client = RainPointClient(
@@ -191,8 +190,7 @@ def make_mock_session_client() -> RainPointClient:
 def mock_json_response(json_data: dict, status: int = 200) -> AsyncMock:
     """Create a mock aiohttp response context manager returning json_data.
 
-    Moved here from ``tests/api/test_client.py``'s module-level
-    ``_mock_response`` for the same reason as ``make_mock_session_client``.
+    Pairs with ``make_mock_session_client`` for asserting on a real client method.
     """
     mock_resp = AsyncMock()
     mock_resp.status = status

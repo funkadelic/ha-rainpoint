@@ -44,9 +44,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from homeassistant.components.sensor import SensorDeviceClass
-
-from .api import (
+from aiorainpoint import (
     battery_flag_to_percent,
     decode_packed_report_time,
     decode_packed_timestamp,
@@ -57,6 +55,8 @@ from .api import (
     get_catalog_variant_codes,
     is_hand_written_model,
 )
+from homeassistant.components.sensor import SensorDeviceClass
+
 from .const import GENERIC_UNIQUE_ID_MARKER, UNIQUE_ID_PREFIX
 from .sensor import RainPointSensorBase
 
@@ -263,9 +263,9 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         widths=frozenset({1}),
         # Width: every capture carries this flag as a single byte, and the
         # trusted extraction reads only the first byte of the record.
-        # Evidence: api/validators.py (_extract_battery_flag) locates STA_BAT
+        # Evidence: aiorainpoint/validators.py (_extract_battery_flag) locates STA_BAT
         # structurally and reads its first value byte, on the same record walk
-        # the generic decode path uses, and api/validators.py
+        # the generic decode path uses, and aiorainpoint/validators.py
         # (battery_flag_to_percent) is the percentage mapping every
         # hand-written decoder that reports a battery level already applies to
         # that byte. This row calls that same function, so the unit and the
@@ -283,12 +283,12 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         widths=frozenset({2, 4}),
         # Width: the two the captures and the trusted decoders agree on, 2
         # bytes on the HTV213 family and 4 on the HTV210B, which is the same
-        # pair api/decoders.py enforces before reading seconds.
+        # pair aiorainpoint/decoders.py enforces before reading seconds.
         # Evidence: the captured HTV245 zone-2-active frame proves the unit
         # internally, with no external reading needed. Its report time unpacks
         # to 17:40:51, its zone-2 event time to 18:29:51, and the difference of
         # 2940 seconds is exactly the raw value this identity carries on that
-        # zone. api/decoders.py (_extract_dp_zones) reads the record as little-endian
+        # zone. aiorainpoint/decoders.py (_extract_dp_zones) reads the record as little-endian
         # seconds, at the two widths captures show (2 bytes on the HTV213
         # family, 4 on the HTV210B).
         #
@@ -312,14 +312,14 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         valid_range=None,
         precision=None,
         widths=frozenset({4}),
-        # Width: exactly 4, the width api/decoders.py requires before it will
+        # Width: exactly 4, the width aiorainpoint/decoders.py requires before it will
         # unpack an event time, and the only width any capture shows.
-        # Evidence: api/decoders.py (decode_packed_timestamp) unpacks this
+        # Evidence: aiorainpoint/decoders.py (decode_packed_timestamp) unpacks this
         # word, and its docstring records the two independent captures that
         # confirm the bit layout: one frame's trailing stamp decodes to the day
         # that capture was taken, and a mid-run frame's zone event time is
         # exactly that frame's report time plus the zone's remaining duration.
-        # api/decoders.py reads the same field index (21) off the same
+        # aiorainpoint/decoders.py reads the same field index (21) off the same
         # little-endian four-byte record the generic decode path hands over.
     ),
     "STA_REPTIME": GenericSensorSpec(
@@ -331,12 +331,12 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         valid_range=None,
         precision=None,
         widths=frozenset({4}),
-        # Width: exactly 4, the width api/utils.py (_extract_report_time)
+        # Width: exactly 4, the width aiorainpoint/utils.py (_extract_report_time)
         # requires before unpacking, and the only width any capture shows.
-        # Evidence: api/utils.py (decode_packed_report_time) unpacks this
+        # Evidence: aiorainpoint/utils.py (decode_packed_report_time) unpacks this
         # identity's word, and its year base is confirmed against captures
         # whose decoded stamp matched the moment they were pulled, where a base
-        # of 2000 would have placed those same frames in 2006. api/utils.py
+        # of 2000 would have placed those same frames in 2006. aiorainpoint/utils.py
         # (_extract_report_time) reads it off the same little-endian four-byte
         # record the generic decode path hands over, and the hand-written
         # decoders already surface the result on trusted devices.
@@ -351,10 +351,10 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         precision=0,
         widths=frozenset({1}),
         # Width: a single byte, which is what both cited soil decoders read.
-        # Evidence: api/decoders.py (decode_moisture_simple, HCS026FRF) reads
+        # Evidence: aiorainpoint/decoders.py (decode_moisture_simple, HCS026FRF) reads
         # the byte this identity carries as a moisture percentage with no
         # scaling, against a captured frame whose 0x1A reads as 26%, and
-        # api/decoders.py (_decode_moisture_full_hex, HCS021FRF) reads the byte
+        # aiorainpoint/decoders.py (_decode_moisture_full_hex, HCS021FRF) reads the byte
         # behind the same 0x88 tag the same unscaled way, with 0x1F reading as
         # 31%. Both are the 10# framing the generic decode path reads, and
         # decoding that same captured frame generically resolves that byte to
@@ -378,8 +378,8 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         widths=frozenset({1, 2}),
         # Width: 1 on most models and 2 on the Bluetooth-capable ones, both
         # covered by the low-byte mask the transform applies.
-        # Evidence: _extract_rssi in api/validators.py reinterprets the raw
-        # byte as a signed int8, and the decoders in api/decoders.py discard
+        # Evidence: _extract_rssi in aiorainpoint/validators.py reinterprets the raw
+        # byte as a signed int8, and the decoders in aiorainpoint/decoders.py discard
         # non-negative values rather than reporting them.
     ),
     "STA_TEM": GenericSensorSpec(
@@ -393,9 +393,9 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         widths=frozenset({2}),
         # Width: 2 bytes, the width the cited decoders read through _le16
         # before scaling.
-        # Evidence: f10_to_c in api/utils.py treats the raw value as
+        # Evidence: f10_to_c in aiorainpoint/utils.py treats the raw value as
         # Fahrenheit times ten, and _decode_moisture_full_hex and decode_pool
-        # in api/decoders.py both show that scaling against real captured values.
+        # in aiorainpoint/decoders.py both show that scaling against real captured values.
     ),
     "STA_WKSTATE": GenericSensorSpec(
         label="Run State",
@@ -418,12 +418,12 @@ _IDENTITY_SPECS: dict[str, GenericSensorSpec] = {
         #
         # A model-name allowlist is not available here: every evidenced
         # family below is in HAND_WRITTEN_MODELS, and having a hand-written
-        # decoder is exactly what api/trust.py's is_hand_written_model uses to
+        # decoder is exactly what aiorainpoint/trust.py's is_hand_written_model uses to
         # keep a model out of this generic path, so a model-name gate would
         # refuse every model that can actually reach this row. Trusting only
         # proven models and keeping the feature are not both available.
         #
-        # Provenance, not a gate, naming each decoder path in api/decoders.py
+        # Provenance, not a gate, naming each decoder path in aiorainpoint/decoders.py
         # by symbol. Line numbers are deliberately omitted: the two this note
         # used to carry both drifted onto unrelated code, a symbol does not,
         # and TestRunStateEvidenceNoteDriftGuard below checks the symbol.

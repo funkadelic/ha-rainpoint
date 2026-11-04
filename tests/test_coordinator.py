@@ -38,14 +38,15 @@ _async_update_data_fn = _coord_module.RainPointCoordinator.__dict__["_async_upda
 DECODER_REGISTRY = _coord_module.DECODER_REGISTRY
 SILENT_DATA_TYPE = _coord_module.SILENT_DATA_TYPE
 
-import custom_components.rainpoint.repairs as _repairs_module  # noqa: E402
-import tests.payload_samples as _payload_samples  # noqa: E402
-from custom_components.rainpoint.api import (  # noqa: E402
+from aiorainpoint import (  # noqa: E402
     RainPointApiError,
     decode_hcs0528arf,
     decode_htv145frf,
     decode_pool,
 )
+
+import custom_components.rainpoint.repairs as _repairs_module  # noqa: E402
+import tests.payload_samples as _payload_samples  # noqa: E402
 from custom_components.rainpoint.const import (  # noqa: E402
     CONF_HIDS,
     DOMAIN,
@@ -995,7 +996,7 @@ class TestFindHubStatusEntries:
 
         with (
             patch.object(_coord_module, "async_create"),
-            patch("custom_components.rainpoint.api.generic_decoder.get_catalog_entry", _record),
+            patch("aiorainpoint.generic_decoder.get_catalog_entry", _record),
         ):
             coord, client = _make_coord()
             hub = _make_hub(model="UNKNOWN_VARIANT")
@@ -1498,8 +1499,8 @@ class TestHtv210bStalenessGuardCoverage:
 
     # Zone 1 running, zone 2 idle: state 0x21, a 120s duration, and an event
     # time exactly two minutes after the run started. Every field value is
-    # taken from tests/api/test_decoders.py's TestDecodeHtv210b.RUNNING_PAYLOAD,
-    # itself pinned against a timed two-minute run on real hardware.
+    # taken from a payload pinned against a timed two-minute run on real
+    # hardware.
     RUNNING_PAYLOAD = "11#18DC0117E1B40119D8211AD80021B71132FB1922B70000000025AF7800000026AF00000000FEFF0F1527FB19"
 
     @pytest.mark.asyncio
@@ -5394,7 +5395,9 @@ class TestDecoderRegistry:
         import ast
         from pathlib import Path
 
-        source = Path(_coord_module.__file__).parent / "api" / "decoders.py"
+        import aiorainpoint.decoders as _decoders_module
+
+        source = Path(_decoders_module.__file__)
         tree = ast.parse(source.read_text())
         passthrough = set()
         for node in tree.body:
@@ -6989,8 +6992,8 @@ class TestPollTailHasNoSuspensionPoint:
     assignment just as surely as an await would.
 
     Two legs are deliberately not claimed. The paho hop that keeps a push off
-    the network thread is pinned in tests/api/test_mqtt.py, next to the code it
-    reads. And DataUpdateCoordinator resuming from `self.data = await
+    the network thread is pinned in aiorainpoint's own MQTT tests, next to the
+    code it reads. And DataUpdateCoordinator resuming from `self.data = await
     self._async_update_data()` without yielding is Home Assistant's behaviour,
     not this integration's: nothing here can pin it, and a release that changed
     it would reopen the window with this class still green.
@@ -7193,7 +7196,8 @@ class TestHubPushTracerEndToEnd:
 
     @pytest.mark.asyncio
     async def test_pushed_disconnect_reaches_the_connectivity_entity_with_no_poll_between(self):
-        from custom_components.rainpoint.api.mqtt import RainPointMqttClient
+        from aiorainpoint.mqtt import RainPointMqttClient
+
         from custom_components.rainpoint.binary_sensor import async_setup_entry as binary_setup_entry
         from custom_components.rainpoint.hub_entities import RainPointHubConnectivityBinarySensor
 

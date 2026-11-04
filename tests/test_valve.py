@@ -5,9 +5,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiorainpoint import decode_hic801w, encode_dp_duration_param
 from homeassistant.components.valve import ValveDeviceClass, ValveEntityFeature
 
-from custom_components.rainpoint.api import decode_hic801w, encode_dp_duration_param
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,

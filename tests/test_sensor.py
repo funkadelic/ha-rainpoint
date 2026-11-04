@@ -8,19 +8,19 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiorainpoint import (
+    SINGLE_OUTLET_GALLONS_PER_COUNT,
+    RainPointApiError,
+    decode_hic801w,
+    decode_htv213frf_valve,
+)
+from aiorainpoint.generic_decoder import decode_generic
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import UnitOfTime
 from homeassistant.helpers.entity import EntityCategory
 
 import custom_components.rainpoint.coordinator as _coord_module
 from custom_components.rainpoint import generic_control as generic_control_module, generic_entities as generic_entities_module
-from custom_components.rainpoint.api import (
-    SINGLE_OUTLET_GALLONS_PER_COUNT,
-    RainPointApiError,
-    decode_hic801w,
-    decode_htv213frf_valve,
-)
-from custom_components.rainpoint.api.generic_decoder import decode_generic
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_HIDS,
@@ -3768,7 +3768,8 @@ class TestFlowMeterEndToEnd:
     @pytest.mark.asyncio
     async def test_captured_frame_reaches_every_flow_entity(self):
         """Decode the real payload, run the real platform setup, read the states back."""
-        from custom_components.rainpoint.api import decode_flow_meter
+        from aiorainpoint import decode_flow_meter
+
         from custom_components.rainpoint.const import MODEL_FLOWMETER
         from tests.payload_samples import FLOWMETER_IDLE_HEX
 
@@ -3802,7 +3803,8 @@ class TestFlowMeterEndToEnd:
     @pytest.mark.asyncio
     async def test_no_flow_entity_reads_unknown_on_a_complete_frame(self):
         """A complete frame must leave nothing unknown, which is the state the placeholder left them all in."""
-        from custom_components.rainpoint.api import decode_flow_meter
+        from aiorainpoint import decode_flow_meter
+
         from custom_components.rainpoint.const import MODEL_FLOWMETER
         from tests.payload_samples import FLOWMETER_FLOWING_HEX
 

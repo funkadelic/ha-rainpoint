@@ -6,10 +6,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiorainpoint import decode_hcs044frf, decode_hic801w
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.const import EntityCategory
 
-from custom_components.rainpoint.api import decode_hcs044frf, decode_hic801w
 from custom_components.rainpoint.binary_sensor import (
     RainPointBatteryLowBinarySensor,
     RainPointHicStationWateringBinarySensor,

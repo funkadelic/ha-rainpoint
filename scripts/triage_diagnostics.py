@@ -45,7 +45,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # The dp identity a catalog variant declares for an RF-commanded water port.
-# Its Bluetooth counterpart lives in api/trust.py, which owns that question.
+# Its Bluetooth counterpart lives in aiorainpoint/trust.py, which owns that question.
 _RF_CONTROL_IDENTITY = "CTL_WATER"
 
 
@@ -98,7 +98,7 @@ def _payload_of(entry: dict) -> str | None:
 
 def _catalog_summary(model: str | None, model_code) -> list[str]:
     """Describe what the committed catalog records for this variant."""
-    from custom_components.rainpoint.api.product_catalog import (
+    from aiorainpoint.product_catalog import (
         get_catalog_entry,
         get_catalog_port_number,
         get_catalog_variant_codes,
@@ -136,8 +136,8 @@ def _catalog_summary(model: str | None, model_code) -> list[str]:
 
 def _control_route(model: str | None, model_code) -> str:
     """Name the endpoint this model's zones would command through."""
-    from custom_components.rainpoint.api.product_catalog import get_catalog_entry
-    from custom_components.rainpoint.api.trust import has_bluetooth_control_identity
+    from aiorainpoint.product_catalog import get_catalog_entry
+    from aiorainpoint.trust import has_bluetooth_control_identity
 
     if has_bluetooth_control_identity(model, model_code):
         return "controlWorkModeDP (Bluetooth datapoint endpoint, CTL_BT_WATER)"
@@ -151,7 +151,7 @@ def _control_route(model: str | None, model_code) -> str:
 
 def _generic_lines(payload: str, model: str | None, model_code) -> list[str]:
     """Render the model-agnostic decode the reporter's dump already carries."""
-    from custom_components.rainpoint.api.generic_decoder import decode_generic
+    from aiorainpoint.generic_decoder import decode_generic
 
     generic = decode_generic(payload, model=model, model_code=model_code)
     if generic.get("error") and not generic.get("fields"):
@@ -238,7 +238,7 @@ def _decoder_trial(payload: str, model: str | None = None) -> list[str]:
 
 
 def _report(model: str | None, model_code, payload: str | None, extra: dict) -> list[str]:
-    from custom_components.rainpoint.api.trust import is_hand_written_model
+    from aiorainpoint.trust import is_hand_written_model
 
     lines = [f"=== {model or 'unknown model'} (modelCode {model_code if model_code is not None else 'not stated'})"]
     for label, key in (("firmware", "firmware_version"), ("hub paired", "hub_paired")):
@@ -380,6 +380,7 @@ def main(argv: list[str] | None = None) -> int:
     # only one family owns. The script reports each decline itself, so the
     # integration's own logging is noise on this path.
     logging.getLogger("custom_components.rainpoint").setLevel(logging.CRITICAL)
+    logging.getLogger("aiorainpoint").setLevel(logging.CRITICAL)
 
     if args.selftest:
         return _selftest()

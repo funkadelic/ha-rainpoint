@@ -7,6 +7,7 @@ import aiohttp
 
 # HA 2026.10 types data_schema as probatio; voluptuous stays for the HA 2026.2 floor.
 import voluptuous as vol
+from aiorainpoint import RainPointApiError, RainPointClient, RainPointThrottledError
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import callback
@@ -17,7 +18,6 @@ from homeassistant.helpers.selector import (
     CountrySelectorConfig,
 )
 
-from .api import RainPointApiError, RainPointClient, RainPointThrottledError
 from .const import (
     CONF_AREA_CODE,
     CONF_COUNTRY,

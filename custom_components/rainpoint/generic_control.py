@@ -38,6 +38,15 @@ import re
 from dataclasses import dataclass
 from typing import Any, cast
 
+from aiorainpoint import (
+    RainPointApiError,
+    get_catalog_entry,
+    get_catalog_fingerprint,
+    get_catalog_port_number,
+    is_ascii_declined,
+    is_hand_written_model,
+)
+from aiorainpoint.product_catalog import UNCODED_VARIANT
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.valve import ValveEntity, ValveEntityFeature
 from homeassistant.core import CALLBACK_TYPE
@@ -46,15 +55,6 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import (
-    RainPointApiError,
-    get_catalog_entry,
-    get_catalog_fingerprint,
-    get_catalog_port_number,
-    is_ascii_declined,
-    is_hand_written_model,
-)
-from .api.product_catalog import UNCODED_VARIANT
 from .const import (
     CONF_GENERIC_CONTROL_ACKED_KEYS,
     DOMAIN,
@@ -93,7 +93,7 @@ DEFAULT_CONTROL_DURATION_SECONDS = 600  # 10 minutes
 # CTL_BT_WATER is deliberately absent, and the exclusion is proven rather
 # than suspected. Every entity built here commands through
 # client.control_work_mode, and a hardware trial on 2026-07-29 (via
-# scripts/trial_control_work_mode.py) showed a hub-paired HTV210B rejects
+# aiorainpoint's scripts/trial_control_work_mode.py) showed a hub-paired HTV210B rejects
 # that call with response code 3 for both open and close, in the same
 # session where the identical call shape was accepted by an HTV245FRF on
 # the same hub. The RainPoint app can command the valve through the cloud with
@@ -154,7 +154,7 @@ def _response_code_from_error(exc: Exception) -> str:
     """Extract the numeric controlWorkMode response code from the client's error text.
 
     Extracting from the message rather than from an attribute on the
-    exception is deliberate: api/client.py is reused unchanged, so the
+    exception is deliberate: aiorainpoint/client.py is reused unchanged, so the
     message is the only place the code is exposed. Do not
     "fix" this by adding a code attribute to RainPointApiError -- that would
     be an unrequested change to the reused client.

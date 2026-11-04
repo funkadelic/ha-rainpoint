@@ -7,13 +7,13 @@ from abc import abstractmethod
 from datetime import timedelta
 
 from aiohttp import ClientError
+from aiorainpoint import RainPointApiError
 from homeassistant.components.update import UpdateDeviceClass, UpdateEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import RainPointApiError
 from .const import DOMAIN, UNIQUE_ID_PREFIX
 from .coordinator import RainPointCoordinator, is_hub_record
 from .device import RainPointHubDevice, build_sub_device_info

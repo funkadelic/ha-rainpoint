@@ -5,9 +5,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiorainpoint import RainPointApiError
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.rainpoint.api import RainPointApiError
 from custom_components.rainpoint.const import DOMAIN, MODEL_HTV210B
 from custom_components.rainpoint.select import RainPointSubDevicePowerSelect, _sub_device_record, async_setup_entry
 from tests.helpers import htv210b_status, make_mock_session_client, mock_json_response

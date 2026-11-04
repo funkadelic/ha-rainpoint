@@ -10,14 +10,12 @@ from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
-
-from custom_components.rainpoint import generic_control as generic_control_module, generic_entities as generic_entities_module
-from custom_components.rainpoint.api import (
+from aiorainpoint import (
     get_catalog_fingerprint,
     get_catalog_variant_codes,
     product_catalog as product_catalog_module,
 )
-from custom_components.rainpoint.api.decoders import (
+from aiorainpoint.decoders import (
     decode_co2,
     decode_flow_meter,
     decode_hcs005frf,
@@ -33,10 +31,12 @@ from custom_components.rainpoint.api.decoders import (
     decode_rain,
     decode_temphum,
 )
-from custom_components.rainpoint.api.generic_decoder import _STATUS_FIELDS, decode_generic
-from custom_components.rainpoint.api.trust import is_hand_written_model
-from custom_components.rainpoint.api.utils import decode_packed_report_time
-from custom_components.rainpoint.api.validators import battery_flag_to_percent
+from aiorainpoint.generic_decoder import _STATUS_FIELDS, decode_generic
+from aiorainpoint.trust import is_hand_written_model
+from aiorainpoint.utils import decode_packed_report_time
+from aiorainpoint.validators import battery_flag_to_percent
+
+from custom_components.rainpoint import generic_control as generic_control_module, generic_entities as generic_entities_module
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
@@ -883,7 +883,7 @@ class TestEvaluateGenericGate:
 class TestDpCodeAmbiguityRule:
     """Tests for the "same dpCode declared more than once" gate rule.
 
-    The runtime catalog matcher (_match_catalog_dp in api/generic_decoder.py)
+    The runtime catalog matcher (_match_catalog_dp in aiorainpoint/generic_decoder.py)
     keys on dpCode alone and refuses to annotate a field whose dpCode is
     ambiguous, so an entity built over one of those entries would never
     resolve a value and would sit at None forever.

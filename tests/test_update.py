@@ -1,7 +1,7 @@
 """Tests for the hub firmware update platform (update.py) and its client call.
 
 Feature-scoped rather than module-scoped: the behaviour is one round trip that
-spans ``api/client.py``'s ``get_hub_firmware_info`` and the entity that renders
+spans ``aiorainpoint/client.py``'s ``get_hub_firmware_info`` and the entity that renders
 its two possible shapes, and splitting it would put the payload fixtures in one
 file and the assertions about them in another.
 
@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiohttp import ClientError
+from aiorainpoint import RainPointApiError
 
-from custom_components.rainpoint.api import RainPointApiError
 from custom_components.rainpoint.const import DOMAIN
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS
 from custom_components.rainpoint.diagnostic_sensors import RainPointFirmwareVersionSensor
