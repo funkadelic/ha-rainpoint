@@ -160,6 +160,9 @@ jobs:
           if not isinstance(requirements, list) or not requirements:
               sys.exit("::error::manifest.json pins no client library, so this release could not import its client.")
 
+          if not any(isinstance(e, str) and re.match(r"aiorainpoint==", e, re.I) for e in requirements):
+              sys.exit("::error::manifest.json does not pin aiorainpoint exactly, so this release could not import its client.")
+
           final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*==[0-9]+(\.[0-9]+)*(\.post[0-9]+)?")
           for entry in requirements:
               if not isinstance(entry, str) or not final.fullmatch(entry):
