@@ -21,6 +21,8 @@ name: Release PR guard
 # caught 2026-08-17, which prepended its replayed history. It is here because it
 # is free, not because it is the guard.
 #
+# The last step refuses a stable release that pins a pre-release client.
+#
 # None of this prevents the hijack. It makes it a red check rather than a clean
 # merge button.
 
@@ -141,3 +143,35 @@ jobs:
             exit 1
           fi
           echo "CHANGELOG.md gains entries only." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The library pin must be a final release
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          with open("custom_components/rainpoint/manifest.json") as handle:
+              requirements = json.load(handle).get("requirements")
+
+          if not isinstance(requirements, list) or not requirements:
+              sys.exit("::error::manifest.json pins no client library, so this release could not import its client.")
+
+          if not any(isinstance(e, str) and re.match(r"aiorainpoint==", e, re.I) for e in requirements):
+              sys.exit("::error::manifest.json does not pin aiorainpoint exactly, so this release could not import its client.")
+
+          final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*==[0-9]+(\.[0-9]+)*(\.post[0-9]+)?")
+          for entry in requirements:
+              if not isinstance(entry, str) or not final.fullmatch(entry):
+                  sys.exit(
+                      f"::error::manifest.json requires '{entry}', which is not an exact final release. "
+                      "A stable release must pin a final release, so release the pre-release or unpinned "
+                      "library as stable (or move the pin back) before this release PR merges."
+                  )
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("Client pins are final releases: " + ", ".join(requirements) + ".\n")
+          PY
