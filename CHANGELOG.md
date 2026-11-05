@@ -2,6 +2,36 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.25.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.2...v1.25.3) (2026-11-05)
+
+
+### Fixed
+
+* **deps:** bump aiorainpoint to 0.1.2 ([#324](https://github.com/funkadelic/ha-rainpoint/issues/324)) ([ce29a79](https://github.com/funkadelic/ha-rainpoint/commit/ce29a796d3431f3984469cca00e785976277ad6f))
+
+
+### Changed
+
+* add a common error type and a typed push target to the cloud client ([#311](https://github.com/funkadelic/ha-rainpoint/issues/311)) ([81d4c71](https://github.com/funkadelic/ha-rainpoint/commit/81d4c71ffd31cf81a89810615bb96b644044f7d8))
+* keep the device model list inside the cloud client ([#310](https://github.com/funkadelic/ha-rainpoint/issues/310)) ([362ce39](https://github.com/funkadelic/ha-rainpoint/commit/362ce392fbf4d900ed69a65f26f33fe03d630818))
+* make the client's integration-facing helpers public ([#309](https://github.com/funkadelic/ha-rainpoint/issues/309)) ([12a7a60](https://github.com/funkadelic/ha-rainpoint/commit/12a7a600cf754241987a61c1064463618a398510))
+* use the aiorainpoint package for the RainPoint connection ([#320](https://github.com/funkadelic/ha-rainpoint/issues/320)) ([b2939a8](https://github.com/funkadelic/ha-rainpoint/commit/b2939a8bd603fbda5ee7b4bcf20935b6185f18bf))
+
+
+### Other Changes
+
+* add what's new for 1.25.2 and tidy the README ([#307](https://github.com/funkadelic/ha-rainpoint/issues/307)) ([8443bc9](https://github.com/funkadelic/ha-rainpoint/commit/8443bc93a1f131500162350f0344a63cb3fea830))
+* bump the actions group with 2 updates ([#319](https://github.com/funkadelic/ha-rainpoint/issues/319)) ([1542e83](https://github.com/funkadelic/ha-rainpoint/commit/1542e835fd4cceb9885df286d685e991185754a3))
+* bump the pip group with 2 updates ([#316](https://github.com/funkadelic/ha-rainpoint/issues/316)) ([d24a124](https://github.com/funkadelic/ha-rainpoint/commit/d24a1241d39f5b16d197c3903d59ceb9daa18f8b))
+* **catalog:** refresh the product catalog snapshot ([#314](https://github.com/funkadelic/ha-rainpoint/issues/314)) ([1ca8ee8](https://github.com/funkadelic/ha-rainpoint/commit/1ca8ee8817395bd43173e61287692c9dd1e0d840))
+* include the client library logger in the YAML debug setup ([#321](https://github.com/funkadelic/ha-rainpoint/issues/321)) ([e5e5ff8](https://github.com/funkadelic/ha-rainpoint/commit/e5e5ff830442544a8dcb2a630d43ab34540273cc))
+* pin the client's control failure text ([#322](https://github.com/funkadelic/ha-rainpoint/issues/322)) ([78d1177](https://github.com/funkadelic/ha-rainpoint/commit/78d1177fc73a5e8f19ece984d3cf91003f853f6f))
+* pre-commit autoupdate ([#315](https://github.com/funkadelic/ha-rainpoint/issues/315)) ([b114c6e](https://github.com/funkadelic/ha-rainpoint/commit/b114c6e4ad35a0d1566e42e013378578f32492a5))
+* refuse a stable release that pins a pre-release client ([#323](https://github.com/funkadelic/ha-rainpoint/issues/323)) ([0f50dce](https://github.com/funkadelic/ha-rainpoint/commit/0f50dce562f1ef018f589d8057a10fb21ee6f0cd))
+* update mutmut requirement from &lt;4,&gt;=3.8.0 to &gt;=3.8.1,&lt;4 ([#317](https://github.com/funkadelic/ha-rainpoint/issues/317)) ([c6f9b52](https://github.com/funkadelic/ha-rainpoint/commit/c6f9b52e1a9f1a8d484698fe72b63ee9afc0cb32))
+* use made-up device identifiers in test fixtures ([#312](https://github.com/funkadelic/ha-rainpoint/issues/312)) ([af01eb5](https://github.com/funkadelic/ha-rainpoint/commit/af01eb5b551872fe6fec709c55d1150dbf2cd826))
+* use made-up identifiers in the captured push topic fixture ([#313](https://github.com/funkadelic/ha-rainpoint/issues/313)) ([61866ed](https://github.com/funkadelic/ha-rainpoint/commit/61866edd1f782adcbb940a37c756c778ff5cf975))
+
 ## [1.25.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.1...v1.25.2) (2026-10-27)
 
 ### What's new
