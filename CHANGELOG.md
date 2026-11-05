@@ -4,6 +4,14 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.25.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.2...v1.25.3) (2026-11-05)
 
+### What's new
+
+**RainPoint connection code now comes from its own package**
+
+The code that talks to the RainPoint cloud now lives in a separate package, aiorainpoint. Home Assistant installs it from PyPI the first time the updated integration loads, so it needs internet access to PyPI on that restart. Your devices and entities stay as they are.
+
+If you added `custom_components.rainpoint.api: debug` under `logger:` in `configuration.yaml`, change it to `aiorainpoint: debug`. The "Enable debug logging" button on the integration page already covers both.
+
 
 ### Fixed
 
