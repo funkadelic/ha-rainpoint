@@ -16,5 +16,5 @@
     "requirements": [
         "aiorainpoint==0.1.2"
     ],
-    "version": "1.25.2"
+    "version": "1.25.3"
 }
