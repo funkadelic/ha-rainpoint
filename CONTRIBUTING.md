@@ -4,7 +4,7 @@ Thanks for your interest in improving `ha-rainpoint`. Bug reports, payload captu
 
 ## Development setup
 
-The project targets **Python 3.13** (matches CI).
+Development needs **Python 3.14**, the version `.python-version` names and the main CI job runs. The integration still supports 3.13, which CI covers in a separate job against the oldest supported Home Assistant.
 
 Install [uv](https://docs.astral.sh/uv/) if you don't have it, then:
 
@@ -20,16 +20,16 @@ uv installs this dependency tree in a fraction of pip's time (seconds rather tha
 If you'd rather stick with pip, the equivalent is:
 
 ```bash
-python3 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-test.txt ruff $(jq -r '.requirements[]' custom_components/rainpoint/manifest.json)
 ```
 
 The last argument installs the RainPoint client package, `aiorainpoint`, at the exact version `manifest.json` pins, which is what CI and Home Assistant install. It needs `jq`.
 
-Nothing else in this guide depends on which installer you used.
+The rest of this guide shows uv commands. With pip, drop the `uv` prefix.
 
-`requirements-test.txt` pulls in `pytest-homeassistant-custom-component`, which in turn installs a pinned `homeassistant`: do not add `homeassistant` as a separate dependency.
+`requirements-test.txt` pulls in `pytest-homeassistant-custom-component`, which installs a pinned `homeassistant`, so do not add `homeassistant` as a separate dependency.
 
 ### Editor (VS Code / Pylance)
 
@@ -38,7 +38,7 @@ After creating the venv:
 1. `Ctrl+Shift+P` → **Python: Select Interpreter** → pick `.venv/bin/python`.
 2. Reload the window. `homeassistant.*` imports will now resolve.
 
-`.venv/` and `.vscode/` are gitignored, so don't commit either.
+`.venv/` and `.vscode/` are gitignored.
 
 ## Running checks
 
@@ -46,9 +46,12 @@ After creating the venv:
 pytest              # test suite with coverage
 ruff check .        # lint
 ruff format .       # format
+mypy                # type-check
 ```
 
-CI runs the same `pytest` invocation plus `hassfest` and HACS validation on every PR. Coverage is uploaded to Codecov and a SonarQube scan runs on PRs (skipped for Dependabot).
+`pytest` fails below 100% branch coverage. To run `ruff` and the hygiene hooks on every commit, install [pre-commit](https://pre-commit.com/) and run `pre-commit install`.
+
+CI runs `pytest`, `mypy`, `hassfest` and HACS validation on every PR, and repeats `pytest` on Python 3.13 against the oldest supported Home Assistant. Coverage is uploaded to Codecov and a SonarQube scan runs on PRs (skipped for Dependabot).
 
 Every action in `.github/workflows/` is pinned to a full commit SHA with the version in a trailing comment, e.g. `uses: actions/checkout@3d3c42e... # v7.0.1`. A tag can be repointed at new code without review, so a new `uses:` line needs a SHA rather than `@v4`. Dependabot reads the trailing comment and bumps both parts together. Two actions have no usable release and track a branch commit instead, `hacs/action` and `home-assistant/actions/hassfest`; Dependabot cannot bump those, so refresh them by hand.
 
@@ -61,7 +64,7 @@ mutmut results                                                     # what surviv
 mutmut show MUTANT_NAME                                            # one of those names, and its exact change
 ```
 
-Scope it to a module while you work on that module. A whole-tree `mutmut run` covers over fifteen thousand mutants and takes hours, though results are cached, so a later run picks up where the last one stopped. `mutants/` is the working copy mutmut builds; it is gitignored and safe to delete.
+Scope it to a module while you work on that module. A whole-tree `mutmut run` covers about ten thousand mutants and takes hours, though results are cached, so a later run picks up where the last one stopped. `mutants/` is the working copy mutmut builds; it is gitignored and safe to delete.
 
 Pass `--max-children`, and pick a number below your core count. It defaults to one worker per core, and every worker is a forked copy of a process that has already imported Home Assistant and the whole test suite, so a default run saturates the machine and costs a few hundred MB per worker. That is enough to leave a laptop, or a WSL session, unresponsive until the run finishes. Half your cores is a reasonable ceiling, and prefixing the command with `nice -n 19` keeps the rest of your shell usable.
 
@@ -71,7 +74,7 @@ Even with `--max-children`, a whole-tree run can hang WSL. Some mutants break a 
 systemd-run --user --scope -p MemoryMax=10G -p MemorySwapMax=0 -p OOMPolicy=continue nice -n 19 mutmut run --max-children 4
 ```
 
-A surviving mutant is a question, not a defect: it names a change to the source that no test objects to. Sometimes that means a missing assertion, sometimes it means the line genuinely doesn't matter.
+A surviving mutant names a change to the source that no test objects to. Sometimes that means a missing assertion, and sometimes the line doesn't matter.
 
 Configuration lives in `pyproject.toml` under `[tool.mutmut]`, with comments explaining why coverage is switched off for those runs and why editing one of the files the tests open by path throws the cache away rather than reusing it.
 
@@ -86,13 +89,13 @@ Model constants and decoders live in the [aiorainpoint](https://github.com/funka
 5. Wire any model-specific entities in `sensor.py` / `binary_sensor.py` / `valve.py` / `number.py`.
 6. For valve models, also add `MODEL_XXX` to the `VALVE_MODELS` set in `const.py`. The `valve.py` and `number.py` platforms filter on that set, so a valve model absent from it gets no valve or duration entities. A variant that shares an existing decoder (e.g. `HTV345FRF` reusing `decode_htv213frf_valve`) only needs the registry mapping and `VALVE_MODELS` entry, not a new `decode_xxx`.
 
-The library goes first because a drift test fails if the integration registers a model the pinned library does not list.
+The library goes first because a drift test requires the integration's registry to match the pinned library's model list exactly, so steps 3 and 4 land in the same PR.
 
-While working on both, install a sibling checkout with `uv pip install -e ../aiorainpoint`. Before pushing, replace it with the pinned release: `uv pip install --reinstall $(jq -r '.requirements[]' custom_components/rainpoint/manifest.json)`. Without `--reinstall`, an editable checkout at the same version counts as already installed, and `tests/test_manifest.py` checks only the version, so the suite would still run against the sibling code.
+While working on both, install a sibling checkout with `uv pip install -e ../aiorainpoint`. Before pushing, replace it with the pinned release: `uv pip install --reinstall $(jq -r '.requirements[]' custom_components/rainpoint/manifest.json)` (with pip, `pip install --force-reinstall`). Without the reinstall flag, an editable checkout at the same version counts as already installed, and `tests/test_manifest.py` checks only the version, so the suite would still run against the sibling code.
 
-The integration's tests import a few of the library's private names, so a library release that renames one fails this suite at the pin bump. That is the intended tripwire.
+The integration's tests import a few of the library's private names, so a library release that renames one fails this suite at the pin bump, on purpose.
 
-Unknown models are handled gracefully by the coordinator, so partial support is fine.
+The coordinator falls back to a generic decode for a model with no decoder, so partial support is fine.
 
 ## Versioning
 
