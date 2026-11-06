@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/github/license/funkadelic/ha-rainpoint.svg)](LICENSE)
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
 
-A Home Assistant custom integration for RainPoint Smart+ irrigation devices via the RainPoint cloud API.
+A Home Assistant custom integration for RainPoint Smart+ irrigation devices via the RainPoint cloud API. It connects through [aiorainpoint](https://github.com/funkadelic/aiorainpoint), a client library from the same maintainer.
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=funkadelic&repository=ha-rainpoint&category=integration)
 
