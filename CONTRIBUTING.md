@@ -91,7 +91,7 @@ Model constants and decoders live in the [aiorainpoint](https://github.com/funka
 
 The library goes first because a drift test requires the integration's registry to match the pinned library's model list exactly, so steps 3 and 4 land in the same PR.
 
-While working on both, install a sibling checkout with `uv pip install -e ../aiorainpoint`. Before pushing, replace it with the pinned release: `uv pip install --reinstall $(jq -r '.requirements[]' custom_components/rainpoint/manifest.json)` (with pip, `pip install --force-reinstall`). Without the reinstall flag, an editable checkout at the same version counts as already installed, and `tests/test_manifest.py` checks only the version, so the suite would still run against the sibling code.
+While working on both, install a sibling checkout with `uv pip install -e ../aiorainpoint`. Before pushing, replace it with the pinned release: `uv pip install --reinstall $(jq -r '.requirements[]' custom_components/rainpoint/manifest.json)` (with pip, `pip install --force-reinstall $(jq -r '.requirements[]' custom_components/rainpoint/manifest.json)`). Without the reinstall flag, an editable checkout at the same version counts as already installed, and `tests/test_manifest.py` checks only the version, so the suite would still run against the sibling code.
 
 The integration's tests import a few of the library's private names, so a library release that renames one fails this suite at the pin bump, on purpose.
 
