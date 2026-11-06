@@ -48,7 +48,7 @@ from aiorainpoint.models import (
 DOMAIN = "rainpoint"
 
 # Integration version
-VERSION = "1.25.3"  # x-release-please-version
+VERSION = "1.25.4"  # x-release-please-version
 
 # Issue tracker URL
 ISSUE_URL = "https://github.com/funkadelic/ha-rainpoint/issues"
