@@ -51,7 +51,7 @@ mypy                # type-check
 
 `pytest` fails below 100% branch coverage. To run `ruff` and the hygiene hooks on every commit, install [pre-commit](https://pre-commit.com/) and run `pre-commit install`.
 
-CI runs `pytest`, `mypy`, `hassfest` and HACS validation on every PR, and repeats `pytest` on Python 3.13 against the oldest supported Home Assistant. pre-commit.ci runs the same hooks on every PR. Coverage is uploaded to Codecov and a SonarQube scan runs on PRs (skipped for Dependabot).
+CI runs `pytest`, `mypy`, `hassfest` and HACS validation on every PR, and repeats `pytest` on Python 3.13 against the oldest supported Home Assistant. pre-commit.ci runs the same hooks on every PR and pushes any fixes to the branch, and CodeQL scans the code. Coverage is uploaded to Codecov and a SonarQube scan runs on PRs (skipped for Dependabot).
 
 Every action in `.github/workflows/` is pinned to a full commit SHA with the version in a trailing comment, e.g. `uses: actions/checkout@3d3c42e... # v7.0.1`. A tag can be repointed at new code without review, so a new `uses:` line needs a SHA rather than `@v4`. Dependabot reads the trailing comment and bumps both parts together. Two actions have no usable release and track a branch commit instead, `hacs/action` and `home-assistant/actions/hassfest`; Dependabot cannot bump those, so refresh them by hand.
 
