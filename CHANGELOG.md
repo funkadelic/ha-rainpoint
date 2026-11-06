@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.25.4](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.3...v1.25.4) (2026-11-06)
+
+
+### Other Changes
+
+* bring the contributing guide and README up to date ([#325](https://github.com/funkadelic/ha-rainpoint/issues/325)) ([3709491](https://github.com/funkadelic/ha-rainpoint/commit/370949162bc1b42099d7688d0c426a11695ffb66))
+
 ## [1.25.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.2...v1.25.3) (2026-11-05)
 
 ### What's new
