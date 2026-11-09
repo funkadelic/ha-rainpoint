@@ -2,6 +2,18 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.26.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.3...v1.26.0) (2026-11-09)
+
+
+### Added
+
+* support the HTP115FRF watering timer ([#329](https://github.com/funkadelic/ha-rainpoint/issues/329)) ([31b93f9](https://github.com/funkadelic/ha-rainpoint/commit/31b93f943d3ca39c46b9b29a0a86a92003a91250))
+
+
+### Other Changes
+
+* bring the contributing guide and README up to date ([#325](https://github.com/funkadelic/ha-rainpoint/issues/325)) ([3709491](https://github.com/funkadelic/ha-rainpoint/commit/370949162bc1b42099d7688d0c426a11695ffb66))
+
 ## [1.25.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.2...v1.25.3) (2026-11-05)
 
 ### What's new
