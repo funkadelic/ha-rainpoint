@@ -31,7 +31,7 @@ from aiorainpoint.decoders import (
     decode_rain,
     decode_temphum,
 )
-from aiorainpoint.generic_decoder import _STATUS_FIELDS, decode_generic
+from aiorainpoint.generic_decoder import STATUS_FIELDS, decode_generic
 from aiorainpoint.trust import is_hand_written_model
 from aiorainpoint.utils import decode_packed_report_time
 from aiorainpoint.validators import battery_flag_to_percent
@@ -1437,11 +1437,11 @@ class TestCuratedTableIsReachable:
 
     def test_every_curated_identity_can_be_produced_by_the_decoder(self):
         """The gate names identities from the catalog; an entity reads them from the decoder map."""
-        assert set(_IDENTITY_SPECS) <= set(_STATUS_FIELDS.values())
+        assert set(_IDENTITY_SPECS) <= set(STATUS_FIELDS.values())
 
     def test_the_known_unreachable_catalog_identity_is_still_unreachable(self):
         """Pins the reason STA_RSRP stays out, so curating it fails here rather than in a dashboard."""
-        assert "STA_RSRP" not in set(_STATUS_FIELDS.values())
+        assert "STA_RSRP" not in set(STATUS_FIELDS.values())
         assert "STA_RSRP" not in _IDENTITY_SPECS
 
 

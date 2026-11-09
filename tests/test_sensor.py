@@ -35,6 +35,7 @@ from custom_components.rainpoint.const import (
     MODEL_HCS044FRF,
     MODEL_HCS0528ARF,
     MODEL_HIC801W,
+    MODEL_HTP115FRF,
     MODEL_HTP160FRF,
     MODEL_HTV157B,
     MODEL_HTV210B,
@@ -1699,7 +1700,7 @@ class TestSingleOutletTimerDispatch:
         return captured
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B, MODEL_HTP160FRF])
+    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B, MODEL_HTP160FRF, MODEL_HTP115FRF])
     async def test_creates_rssi_and_run_duration(self, model):
         """All four models yield the same three entities off one reported outlet."""
         captured = await self._setup(
@@ -1727,7 +1728,7 @@ class TestSingleOutletTimerDispatch:
         assert len(captured) == (5 if model == MODEL_VALVE_145 else 4)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_HTV157B, MODEL_HTP160FRF])
+    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_HTV157B, MODEL_HTP160FRF, MODEL_HTP115FRF])
     async def test_no_water_usage_entity(self, model):
         """STA_LASTUSAGE is uncalibrated on these models, so no entity for it even when decoded.
 

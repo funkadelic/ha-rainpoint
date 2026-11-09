@@ -56,6 +56,7 @@ from custom_components.rainpoint.const import (  # noqa: E402
     MODEL_HCS044FRF,
     MODEL_HCS0528ARF,
     MODEL_HIC801W,
+    MODEL_HTP115FRF,
     MODEL_HTP160FRF,
     MODEL_HTV157B,
     MODEL_HTV210B,
@@ -89,6 +90,7 @@ from tests.payload_samples import (  # noqa: E402
     RAIN_DETECTOR_WET_SECOND_PAYLOAD,
     SAMPLE_HIC801W_ALL_FRAMES,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
+    SAMPLE_HTP115_IDLE_PAYLOAD,
     SAMPLE_HTP160_IDLE_PAYLOAD,
     SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
@@ -5507,6 +5509,15 @@ class TestDecoderRegistry:
 
         assert dispatched == decode_htv145frf(SAMPLE_HTP160_IDLE_PAYLOAD)
         assert dispatched["decoder"] == "htv145frf_hex"
+        assert dispatched["zones"][1]["open"] is False
+
+    def test_valve_htp115frf_dispatches_through_registry_to_htv145_decoder(self):
+        """HTP115FRF reuses the HTV145FRF decoder, asserted through the registry."""
+        assert DECODER_REGISTRY[MODEL_HTP115FRF] is decode_htv145frf
+
+        dispatched = _coord_module._decode_subdevice_payload(MODEL_HTP115FRF, SAMPLE_HTP115_IDLE_PAYLOAD)
+
+        assert dispatched == decode_htv145frf(SAMPLE_HTP115_IDLE_PAYLOAD)
         assert dispatched["zones"][1]["open"] is False
 
     def test_registry_contains_moisture_simple(self):

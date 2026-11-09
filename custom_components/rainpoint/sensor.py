@@ -36,6 +36,7 @@ from .const import (
     MODEL_HCS024FRF_V1,
     MODEL_HCS044FRF,
     MODEL_HIC801W,
+    MODEL_HTP115FRF,
     MODEL_HTP160FRF,
     MODEL_HTV157B,
     MODEL_HTV210B,
@@ -264,7 +265,7 @@ def _make_htv_valve_diagnostic_entities(coordinator, key, info, base_slug):
 def _make_single_outlet_timer_entities(coordinator, key, info, base_slug):
     """Signal and the outlet's run duration for the single-outlet timers.
 
-    The HTV113FRF, HTV145FRF, HTV157B and HTP160FRF share one decoder and one
+    The HTV113FRF, HTV145FRF, HTV157B, HTP160FRF and HTP115FRF share one decoder and one
     outlet, so they share this factory. No battery reading, for the reason the
     HTV213 factory documents: STA_BAT reads as a low/normal condition on every
     capture from these models, and the Battery Low binary sensor is what carries
@@ -430,6 +431,7 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     MODEL_VALVE_145: _make_htv145frf_entities,
     MODEL_HTV157B: _make_single_outlet_timer_entities,
     MODEL_HTP160FRF: _make_single_outlet_timer_entities,
+    MODEL_HTP115FRF: _make_single_outlet_timer_entities,
     MODEL_VALVE_213: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_245: _make_htv_valve_diagnostic_entities,
     MODEL_VALVE_345: _make_htv_valve_diagnostic_entities,

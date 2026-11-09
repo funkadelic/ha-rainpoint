@@ -16,6 +16,7 @@ from aiorainpoint.models import (
     MODEL_HCS0528ARF as MODEL_HCS0528ARF,
     MODEL_HCS0530THO as MODEL_HCS0530THO,
     MODEL_HIC801W as MODEL_HIC801W,
+    MODEL_HTP115FRF as MODEL_HTP115FRF,
     MODEL_HTP160FRF as MODEL_HTP160FRF,
     MODEL_HTV0540FRF as MODEL_HTV0540FRF,
     MODEL_HTV113FRF as MODEL_HTV113FRF,
@@ -282,6 +283,7 @@ VALVE_MODELS = {
     MODEL_VALVE_445,
     MODEL_HTV157B,
     MODEL_HTP160FRF,
+    MODEL_HTP115FRF,
     MODEL_HTV210B,
     # MODEL_HIC801W is still deliberately absent, and station control shipping
     # is what settled that rather than what changed it. This set means
