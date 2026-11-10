@@ -144,6 +144,29 @@ jobs:
           fi
           echo "CHANGELOG.md gains entries only." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: The newest changelog entry must have a What's new section
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Re-runs on every push to the branch, so a regeneration that wipes the section fails too.
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          with open("CHANGELOG.md") as handle:
+              sections = re.split(r"^## \[?[0-9]", handle.read(), flags=re.MULTILINE)
+
+          if len(sections) < 2 or not re.search(r"^### What's new[ \t]*$", sections[1], re.MULTILINE):
+              sys.exit(
+                  "::error::The newest CHANGELOG.md entry has no \"### What's new\" section. "
+                  "Add one on this branch before merging: the release page is built from this entry."
+              )
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("Newest changelog entry has a What's new section.\n")
+          PY
+
       - name: The library pin must be a final release
         shell: bash
         run: |
