@@ -4,6 +4,20 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.26.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.3...v1.26.0) (2026-11-09)
 
+### What's new
+
+**The HTP115FRF watering timer is supported**
+
+You get a valve you can open and close, a run length setting, run duration and signal sensors, and a low battery alert. It was built from a capture of an idle timer, so behavior during a watering hasn't been confirmed yet.
+
+**CO2, temperature and humidity readings now work**
+
+The HCS0530THO and HCS014ARF now report their readings, including high and low values.
+
+### Thanks
+
+Thanks to **@Bigamusj** for the HTP115FRF capture, which made this release's new device support possible.
+
 
 ### Added
 
