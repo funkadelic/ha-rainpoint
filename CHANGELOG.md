@@ -10,9 +10,9 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 You get a valve you can open and close, a run length setting, run duration and signal sensors, and a low battery alert. It was built from a capture of an idle timer, so behavior during a watering hasn't been confirmed yet.
 
-**CO2, temperature and humidity readings are back**
+**CO2, temperature and humidity readings now work**
 
-The HCS0530THO and HCS014ARF report their readings again, including high and low values. They also no longer show a false signal strength.
+The HCS0530THO and HCS014ARF now report their readings, including high and low values.
 
 ### Thanks
 
