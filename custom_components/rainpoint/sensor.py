@@ -6,8 +6,15 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from aiorainpoint import SINGLE_OUTLET_GALLONS_PER_COUNT, USAGE_GALLONS_PER_COUNT, is_ascii_payload, parse_entries, split_prefix
-from aiorainpoint.product_catalog import get_catalog_entry, get_catalog_variant_codes
+from aiorainpoint import (
+    SINGLE_OUTLET_GALLONS_PER_COUNT,
+    USAGE_GALLONS_PER_COUNT,
+    get_catalog_entry,
+    get_catalog_variant_codes,
+    is_ascii_payload,
+    parse_entries,
+    split_prefix,
+)
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
