@@ -861,23 +861,21 @@ class TestEvaluateGenericGate:
                 checked += 1
         assert checked > 0
 
-        # A repeated dpCode is expected when one identity repeats across distinct
-        # ports (multi-zone). Any other repeat is a new catalog shape: add it here
-        # deliberately. HTP159W/354 carries STA_CHG and CTL_CMD on one port.
-        known_collisions = {("HTP159W", "354", 0, ("CTL_CMD", "STA_CHG"))}
-        odd = set()
+        # A repeated dpCode is fine when one identity repeats across distinct
+        # ports (multi-zone). Any other repeat is ambiguous, and the gate must
+        # refuse that variant whatever the catalog holds.
         for model, variants in product_catalog_module._CATALOG.items():
             for model_code, record in variants.items():
                 by_code = collections.defaultdict(list)
                 for entry in record["dp"]:
                     if isinstance(entry, dict):
                         by_code[entry.get("dpCode")].append((entry.get("identity"), entry.get("dpPort")))
-                for dp_code, entries in by_code.items():
-                    ports = [port for _, port in entries]
-                    if len(entries) > 1 and (len({identity for identity, _ in entries}) > 1 or len(set(ports)) < len(ports)):
-                        identities = tuple(sorted({identity for identity, _ in entries}))
-                        odd.add((model, model_code, dp_code, identities))
-        assert odd == known_collisions
+                if any(
+                    len(entries) > 1
+                    and (len({identity for identity, _ in entries}) > 1 or len({port for _, port in entries}) < len(entries))
+                    for entries in by_code.values()
+                ):
+                    assert evaluate_generic_gate(model, model_code).passed is False, (model, model_code)
 
 
 class TestDpCodeAmbiguityRule:
