@@ -2,6 +2,40 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.26.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.26.0...v1.26.1) (2026-11-11)
+
+### What's new
+
+**Nothing changes for you**
+
+This release updates aiorainpoint to 0.2.1. Your devices and entities stay as they are, and there is nothing to set up.
+
+### What's new in aiorainpoint 0.2.1
+
+**More RainPoint models are recognized**
+
+The product list that ships with the library now includes every model RainPoint publishes, among them the new HTV269FRF and the BZ, HIS and HPS families. If one of these devices has no dedicated support, you can turn on the opt-in generic entities to see its readings. Some of these models still won't get generic entities, because their readings can't be told apart.
+
+As always, if your device is missing support, please [submit a ticket](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) so that it can be added.
+
+
+### Fixed
+
+* **deps:** bump aiorainpoint to 0.2.1 ([#337](https://github.com/funkadelic/ha-rainpoint/issues/337)) ([7af61d6](https://github.com/funkadelic/ha-rainpoint/commit/7af61d60b06cb9316f71aa43a295bd56980be400))
+
+
+### Changed
+
+* import the catalog helpers from the aiorainpoint top level ([#336](https://github.com/funkadelic/ha-rainpoint/issues/336)) ([6c86d32](https://github.com/funkadelic/ha-rainpoint/commit/6c86d32570a2ea9367b2b3d85697289f18313ec1))
+
+
+### Other Changes
+
+* add what's new for 1.26.0 ([#330](https://github.com/funkadelic/ha-rainpoint/issues/330)) ([7455201](https://github.com/funkadelic/ha-rainpoint/commit/7455201457995562c4f4030bc1b8d8d2bcecd587))
+* bump the actions group with 2 updates ([#333](https://github.com/funkadelic/ha-rainpoint/issues/333)) ([c91cf4c](https://github.com/funkadelic/ha-rainpoint/commit/c91cf4c2096e632513b2686d6de021d84827f24a))
+* drop the redundant pytest-asyncio floor ([#335](https://github.com/funkadelic/ha-rainpoint/issues/335)) ([9ef8179](https://github.com/funkadelic/ha-rainpoint/commit/9ef8179b82d81d3f6c1167c9a63c2991e00131be))
+* require a what's new section on release PRs ([#331](https://github.com/funkadelic/ha-rainpoint/issues/331)) ([27c7582](https://github.com/funkadelic/ha-rainpoint/commit/27c75821e3ff2220e51181c6cc20a80e3f592a6d))
+
 ## [1.26.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.25.3...v1.26.0) (2026-11-09)
 
 ### What's new
