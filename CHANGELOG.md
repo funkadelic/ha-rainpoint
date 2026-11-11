@@ -4,6 +4,20 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.26.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.26.0...v1.26.1) (2026-11-11)
 
+### What's new
+
+**Nothing changes for you**
+
+This release updates aiorainpoint to 0.2.1. Your devices and entities stay as they are, and there is nothing to set up.
+
+### What's new in aiorainpoint 0.2.1
+
+**More RainPoint models are recognized**
+
+The product list that ships with the library now includes every model RainPoint publishes, among them the new HTV269FRF and the BZ, HIS and HPS families. If one of these devices has no dedicated support, you can turn on the opt-in generic entities to see its readings. Some of these models still won't get generic entities, because their readings can't be told apart.
+
+As always, if your device is missing support, please [submit a ticket](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) so that it can be added.
+
 
 ### Fixed
 
