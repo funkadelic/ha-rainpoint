@@ -59,14 +59,19 @@ from tests.payload_samples import (  # noqa: E402
     CATALOG_ANCHOR_MODEL,
     HWS019WRF_V2_PAYLOAD,
     MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD,
+    POOL_HCS0528ARF_HEX_PAYLOAD,
     RAIN_DETECTOR_DRY_PAYLOAD,
     RAIN_DETECTOR_DRY_SECOND_PAYLOAD,
     RAIN_DETECTOR_WET_PAYLOAD,
     RAIN_DETECTOR_WET_SECOND_PAYLOAD,
     SAMPLE_HIC801W_ALL_FRAMES,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
+    SAMPLE_HTP115_IDLE_PAYLOAD,
+    SAMPLE_HTP160_IDLE_PAYLOAD,
+    SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
+    SAMPLE_HTV157B_IDLE_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
@@ -5332,6 +5337,32 @@ class TestCoordinatorConstructor:
 
 class TestModelTable:
     """Guards on the aiorainpoint model table the coordinator dispatches through."""
+
+    def test_hcs0528arf_dispatches_to_the_pool_decode(self):
+        """The pool sensor decodes through its MODELS row."""
+        dispatched = _coord_module._decode_subdevice_payload(models.HCS0528ARF, POOL_HCS0528ARF_HEX_PAYLOAD)
+
+        assert dispatched["type"] == "pool"
+
+    @pytest.mark.parametrize(
+        ("model", "payload"),
+        [
+            (models.HTV113FRF, SAMPLE_HTV113_IDLE_PAYLOAD),
+            (models.HTV157B, SAMPLE_HTV157B_IDLE_PAYLOAD),
+            (models.HTP160FRF, SAMPLE_HTP160_IDLE_PAYLOAD),
+            (models.HTP115FRF, SAMPLE_HTP115_IDLE_PAYLOAD),
+        ],
+    )
+    def test_single_outlet_timers_dispatch_to_a_zone(self, model, payload):
+        """Each HTV145FRF-frame timer decodes through its row to a closed zone 1.
+
+        HTV157B and HTP160FRF once decoded to no zone at all, so the zone is
+        asserted rather than the decoder identity.
+        """
+        dispatched = _coord_module._decode_subdevice_payload(model, payload)
+
+        assert dispatched["decoder"] == "htv145frf_hex"
+        assert dispatched["zones"][1]["open"] is False
 
     def test_no_registered_decoder_delegates_to_decode_unknown(self):
         """A registered model is a claim of real support, so no decoder may be a

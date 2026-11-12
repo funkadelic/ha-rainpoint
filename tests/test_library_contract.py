@@ -19,6 +19,12 @@ from tests.helpers import make_mock_session_client, mock_json_response
 from tests.payload_samples import SAMPLE_HTV245_FULL_IDLE_PAYLOAD
 
 
+def test_valve_models_keeps_the_valve_hub_and_leaves_out_the_station_controller():
+    """The family-derived set still holds HTV0540FRF, and the zoneless HIC801W stays out."""
+    assert models.HTV0540FRF in VALVE_MODELS
+    assert models.HIC801W not in VALVE_MODELS
+
+
 class TestIsHandWrittenModel:
     """is_hand_written_model must recognize every trusted model and no others."""
 
