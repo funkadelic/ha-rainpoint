@@ -144,7 +144,9 @@ def _control_route(model: str | None, model_code) -> str:
 
     spec = models.MODELS.get(model)
     if spec is not None and spec.control_endpoint is not None:
-        return f"{spec.control_endpoint} (model table row)"
+        if spec.control_endpoint == models.ControlEndpoint.WORK_MODE_DP:
+            return "controlWorkModeDP (Bluetooth datapoint endpoint, model table row)"
+        return "controlWorkMode (RF, model table row)"
     if has_bluetooth_control_identity(model, model_code):
         return "controlWorkModeDP (Bluetooth datapoint endpoint, CTL_BT_WATER)"
 
