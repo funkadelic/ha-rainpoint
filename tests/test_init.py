@@ -8,6 +8,7 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiorainpoint import models
 from homeassistant.core import SupportsResponse
 from homeassistant.helpers import issue_registry as ir
 
@@ -33,7 +34,6 @@ from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ENABLED,
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_PUSH_ENABLED,
-    MODEL_HCS026FRF,
     PUSH_HUB_IDENTITY_ISSUE_ID,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
@@ -2241,7 +2241,7 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
         removed, async_get, async_entries = self._make_fake_registry()
         entry, coordinator = self._make_entry_and_coordinator(
             {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True},
-            self._sensors(slug_a_model="HCS777ARF", slug_b_model=MODEL_HCS026FRF),
+            self._sensors(slug_a_model="HCS777ARF", slug_b_model=models.HCS026FRF),
         )
 
         with (
@@ -2257,7 +2257,7 @@ class TestRemoveStaleGenericEntities(_GenericSweepFixtures):
         removed, async_get, async_entries = self._make_fake_registry()
         entry, coordinator = self._make_entry_and_coordinator(
             {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True},
-            self._sensors(slug_b_model=MODEL_HCS026FRF, include_slug_a=False),
+            self._sensors(slug_b_model=models.HCS026FRF, include_slug_a=False),
         )
 
         with (
@@ -2473,7 +2473,7 @@ class TestSweepSurvivesMalformedSensorRecords(_GenericSweepFixtures):
         removed, async_get, async_entries = self._make_fake_registry()
         entry, coordinator = self._make_entry_and_coordinator(
             {CONF_GENERIC_ENTITIES_ENABLED: True, CONF_GENERIC_CONTROL_ENABLED: True},
-            {self.SLUG_A: "a string where a record should be", self.SLUG_B: {"model": MODEL_HCS026FRF}},
+            {self.SLUG_A: "a string where a record should be", self.SLUG_B: {"model": models.HCS026FRF}},
         )
 
         with (

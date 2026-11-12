@@ -10,27 +10,10 @@ import aiohttp
 from aiorainpoint import (
     RainPointApiError,
     RainPointClient,
-    decode_co2,
-    decode_flowmeter,
     decode_generic,
     # New HCS decoder functions
-    decode_hcs005frf,
-    decode_hcs015arf,
-    decode_hcs024frf_v1,
-    decode_hcs044frf,
-    decode_hcs0528arf,
-    decode_hic801w,
-    decode_htv145frf,
-    decode_htv210b,
-    decode_htv213frf_valve,
-    decode_hws019wrf_v2,
-    decode_moisture_full,
-    decode_moisture_simple,
-    decode_pool_plus,
-    decode_rain,
-    decode_temphum,
-    decode_valve_hub,
     is_ascii_declined,
+    models,
     summarize_record,
 )
 from homeassistant.components.persistent_notification import async_create
@@ -44,33 +27,6 @@ from .const import (
     CONF_HIDS,
     DEFAULT_SCAN_INTERVAL,
     ISSUE_URL,
-    MODEL_CO2,
-    MODEL_DISPLAY_HUB,
-    MODEL_FLOWMETER,
-    # New HCS sensor models
-    MODEL_HCS005FRF,
-    MODEL_HCS015ARF,
-    MODEL_HCS024FRF_V1,
-    MODEL_HCS044FRF,
-    MODEL_HCS0528ARF,
-    MODEL_HIC801W,
-    MODEL_HTP115FRF,
-    MODEL_HTP160FRF,
-    MODEL_HTV157B,
-    MODEL_HTV210B,  # HTV210B support
-    MODEL_MOISTURE_FULL,
-    MODEL_MOISTURE_SIMPLE,
-    MODEL_POOL_PLUS,
-    MODEL_RAIN,
-    MODEL_TEMPHUM,
-    MODEL_VALVE_113,  # HTV113FRF support
-    MODEL_VALVE_145,  # HTV145FRF support
-    MODEL_VALVE_213,  # HTV213FRF support
-    MODEL_VALVE_245,  # HTV245FRF support
-    MODEL_VALVE_345,  # HTV345FRF support
-    MODEL_VALVE_405,  # HTV405FRF support
-    MODEL_VALVE_445,  # HTV445FRF support
-    MODEL_VALVE_HUB,
     VALVE_MODELS,
     debug_with_version,
 )
@@ -239,37 +195,6 @@ _VOLATILE_STATE_KEYS = frozenset(
 HUB_CONNECTED = "connected"
 HUB_DISCONNECTED = "disconnected"
 HUB_CONNECTIVITY_UNKNOWN = "unknown"
-
-# Decoder registry - maps device models to their decoder functions
-DECODER_REGISTRY = {
-    MODEL_MOISTURE_SIMPLE: decode_moisture_simple,
-    MODEL_MOISTURE_FULL: decode_moisture_full,
-    MODEL_RAIN: decode_rain,
-    MODEL_TEMPHUM: decode_temphum,
-    MODEL_FLOWMETER: decode_flowmeter,
-    MODEL_CO2: decode_co2,
-    MODEL_POOL_PLUS: decode_pool_plus,
-    MODEL_VALVE_HUB: decode_valve_hub,
-    MODEL_VALVE_113: decode_htv145frf,  # HTV113FRF shares the HTV145FRF single-outlet 10# format
-    MODEL_VALVE_145: decode_htv145frf,  # HTV145FRF single-outlet timer (10# compact format)
-    MODEL_HTV157B: decode_htv145frf,  # HTV157B shares that frame, with a 4-byte duration
-    MODEL_HTP160FRF: decode_htv145frf,  # HTP160FRF shares it too, minus the STA_LASTUSAGE record
-    MODEL_HTP115FRF: decode_htv145frf,  # HTP115FRF shares the HTP160FRF frame, with a STA_LASTUSAGE record
-    MODEL_VALVE_213: decode_htv213frf_valve,  # HTV213FRF uses custom decoder
-    MODEL_VALVE_245: decode_htv213frf_valve,  # HTV245FRF uses custom decoder
-    MODEL_VALVE_345: decode_htv213frf_valve,  # HTV345FRF uses custom decoder
-    MODEL_VALVE_405: decode_htv213frf_valve,  # HTV405FRF uses custom decoder
-    MODEL_VALVE_445: decode_htv213frf_valve,  # HTV445FRF uses custom decoder
-    MODEL_HTV210B: decode_htv210b,  # HTV210B structural record walk (hub-paired frames)
-    MODEL_HIC801W: decode_hic801w,  # 8-station irrigation controller, read from the 279 accessory record
-    # HCS sensor models (v1.3.0)
-    MODEL_HCS005FRF: decode_hcs005frf,
-    MODEL_HCS024FRF_V1: decode_hcs024frf_v1,
-    MODEL_HCS015ARF: decode_hcs015arf,
-    MODEL_HCS0528ARF: decode_hcs0528arf,
-    MODEL_HCS044FRF: decode_hcs044frf,  # Rain detector, wet/dry only
-}
-
 
 # Issue-form file that the pre-filled report link targets. GitHub issue forms
 # accept query params keyed by each field's `id`, so the reporter lands on this
@@ -802,17 +727,15 @@ def first_hub_record(hubs: list[dict]) -> dict | None:
 
 
 def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int | str | None = None) -> dict:
-    """Dispatch raw_value through DECODER_REGISTRY or the MODEL_DISPLAY_HUB special case.
+    """Dispatch raw_value through the model's row in aiorainpoint's MODELS table.
 
     Returns the decoded dict, or an {"type": "unknown", ...} shape if no decoder is
     registered. Raises whatever the underlying decoder raises - callers handle the
     try/except and any side-effects (logging, persistent notifications).
     """
-    if model == MODEL_DISPLAY_HUB:
-        return decode_hws019wrf_v2(raw_value)
-    decoder_func = DECODER_REGISTRY.get(model) if model is not None else None
-    if decoder_func:
-        return decoder_func(raw_value)
+    spec = models.MODELS.get(model)
+    if spec is not None:
+        return spec.decoder(raw_value)
     # No per-model decoder: fall back to a model-agnostic structural decode so
     # the diagnostic sensor and bug report show named fields instead of raw hex.
     # This is best-effort and unverified - it never feeds entities or control.
@@ -1851,7 +1774,7 @@ class RainPointCoordinator(DataUpdateCoordinator):
         # would fall straight through for it, and what has to be preserved is
         # a different thing: one aggregate record rather than a mapping of
         # independently-commanded zones.
-        if model == MODEL_HIC801W:
+        if model == models.HIC801W:
             # Class-level dispatch, not self._..., matching every other
             # extracted helper in this module: parts of the test suite drive
             # these bodies with `self` faked as a SimpleNamespace, which

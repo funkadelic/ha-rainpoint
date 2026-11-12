@@ -3,7 +3,7 @@
 import logging
 from typing import cast
 
-from aiorainpoint import parse_sub_power_mode, splice_sub_power_mode
+from aiorainpoint import models, parse_sub_power_mode, splice_sub_power_mode
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, MODEL_HTV210B, UNIQUE_ID_PREFIX
+from .const import DOMAIN, UNIQUE_ID_PREFIX
 from .coordinator import (
     SILENT_DATA_TYPE,
     RainPointCoordinator,
@@ -26,8 +26,8 @@ _LOGGER = logging.getLogger(__name__)
 # The only device this key-5 blob shape has ever been observed on. Widening
 # this set later is a one-line addition once someone captures a second
 # device's traffic and confirms key 5 means the same thing there -- the
-# parse/splice contract in aiorainpoint/utils.py does not need to change.
-SUB_POWER_MODE_MODELS = frozenset({MODEL_HTV210B})
+# parse/splice contract in aiorainpoint/_utils.py does not need to change.
+SUB_POWER_MODE_MODELS = frozenset({models.HTV210B})
 
 # Canonical key-5 mode digit -> display label, insertion-ordered so
 # _attr_options renders Power Saving, Standard, Enhance in that order.

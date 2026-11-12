@@ -2,14 +2,14 @@
 
 import logging
 
-from aiorainpoint import battery_flag_is_low
+from aiorainpoint import battery_flag_is_low, models
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, HIC801W_STATION_COUNT, MODEL_HCS044FRF, MODEL_HIC801W
+from .const import DOMAIN, HIC801W_STATION_COUNT
 from .coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from .entity import LateEntityAdder, RainPointSubDeviceEntity, hic801w_station_is_running, register_late_adder
 from .hub_entities import (
@@ -171,7 +171,7 @@ def _build_rain_detector_entities(coordinator: RainPointCoordinator, key: str, i
     Returns [] for any other model, and [] for a silent entry, for the same
     reason the HIC801W factory below does.
     """
-    if info.get("model") != MODEL_HCS044FRF:
+    if info.get("model") != models.HCS044FRF:
         return []
     if (info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
         return []
@@ -198,7 +198,7 @@ def _build_hic801w_station_entities(coordinator: RainPointCoordinator, key: str,
     per-station enumeration to derive from, and variant 279 declares
     portNumber 8.
     """
-    if info.get("model") != MODEL_HIC801W:
+    if info.get("model") != models.HIC801W:
         return []
     if (info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
         return []

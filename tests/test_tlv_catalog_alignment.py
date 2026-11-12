@@ -39,10 +39,13 @@ rather than the one payload it was taken from.
 """
 
 import pytest
-from aiorainpoint import product_catalog as product_catalog_module
-from aiorainpoint.decoders import decode_htv213frf_valve
-from aiorainpoint.generic_decoder import decode_generic
-from aiorainpoint.product_catalog import get_catalog_entry, get_catalog_variant_codes
+from aiorainpoint import (
+    _product_catalog as product_catalog_module,
+    decode_generic,
+    decode_htv213frf_valve,
+    get_catalog_entry,
+    get_catalog_variant_codes,
+)
 
 from custom_components.rainpoint.generic_control import CONTROL_IDENTITY_ALLOWLIST, RUN_STATE_IDENTITY
 from tests.payload_samples import (

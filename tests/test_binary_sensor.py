@@ -6,7 +6,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiorainpoint import decode_hcs044frf, decode_hic801w
+from aiorainpoint import decode_hcs044frf, decode_hic801w, models
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.const import EntityCategory
 
@@ -22,8 +22,6 @@ from custom_components.rainpoint.binary_sensor import (
 from custom_components.rainpoint.const import (
     CONF_HIDS,
     DOMAIN,
-    MODEL_HCS044FRF,
-    MODEL_HIC801W,
     PUSH_CONNECTED_UNIQUE_ID_SUFFIX,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS, RainPointCoordinator
@@ -257,7 +255,7 @@ class TestHicStationWateringEntities:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HIC801W,
+            model=models.HIC801W,
             sub_name="Irrigation Controller",
             data=decode_hic801w(raw_payload),
         )
@@ -302,7 +300,7 @@ class TestHicStationWateringEntities:
         falsy-data branch is_on guards, distinct from a parsed envelope whose
         current_station is None."""
         sensor_key = "100_200_3"
-        entry = make_sensor_entry(hid=100, mid=200, addr=3, model=MODEL_HIC801W, data=None)
+        entry = make_sensor_entry(hid=100, mid=200, addr=3, model=models.HIC801W, data=None)
         coordinator = MagicMock()
         coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
         station = RainPointHicStationWateringBinarySensor(coordinator, sensor_key, entry, "100_200_3", 1)
@@ -339,7 +337,9 @@ class TestHicStationWateringEntities:
 
 def _battery_entry(flag, hid=100, mid=200, addr=1):
     """A coordinator sensors entry for a sub-device reporting a STA_BAT flag."""
-    return make_sensor_entry(hid=hid, mid=mid, addr=addr, model=MODEL_HCS044FRF, data={"type": "valve_hub", "battery_flag": flag})
+    return make_sensor_entry(
+        hid=hid, mid=mid, addr=addr, model=models.HCS044FRF, data={"type": "valve_hub", "battery_flag": flag}
+    )
 
 
 class TestBatteryLowBinarySensor:
@@ -373,7 +373,7 @@ class TestBatteryLowBinarySensor:
     def test_returns_empty_without_a_battery_field(self):
         """A mains-powered device omits STA_BAT and gets no entity."""
         sensor_key = "100_200_1"
-        entry = make_sensor_entry(hid=100, mid=200, addr=1, model=MODEL_HIC801W, data={"type": "irrigation_controller"})
+        entry = make_sensor_entry(hid=100, mid=200, addr=1, model=models.HIC801W, data={"type": "irrigation_controller"})
         coordinator = MagicMock()
         coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
         assert _build_battery_low_entities(coordinator, sensor_key, entry) == []
@@ -385,7 +385,7 @@ class TestBatteryLowBinarySensor:
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_HCS044FRF,
+            model=models.HCS044FRF,
             data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported", "battery_flag": 2},
         )
         coordinator = MagicMock()
@@ -395,7 +395,7 @@ class TestBatteryLowBinarySensor:
 
 def _rain_detector_entry(payload=RAIN_DETECTOR_DRY_PAYLOAD, hid=100, mid=200, addr=3):
     """A coordinator sensors entry for a reporting HCS044FRF."""
-    return make_sensor_entry(hid=hid, mid=mid, addr=addr, model=MODEL_HCS044FRF, data=decode_hcs044frf(payload))
+    return make_sensor_entry(hid=hid, mid=mid, addr=addr, model=models.HCS044FRF, data=decode_hcs044frf(payload))
 
 
 class TestRainDetectedBinarySensor:
@@ -445,7 +445,7 @@ class TestRainDetectedBinarySensor:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HCS044FRF,
+            model=models.HCS044FRF,
             data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
         )
         coordinator = MagicMock()
@@ -455,7 +455,7 @@ class TestRainDetectedBinarySensor:
     def test_returns_empty_for_another_model(self):
         """A sub-device of any other model produces zero rain entities."""
         sensor_key = "100_200_3"
-        entry = make_sensor_entry(hid=100, mid=200, addr=3, model=MODEL_HIC801W, data={"type": "irrigation_controller"})
+        entry = make_sensor_entry(hid=100, mid=200, addr=3, model=models.HIC801W, data={"type": "irrigation_controller"})
         coordinator = MagicMock()
         coordinator.data = make_coordinator_data(sensors={sensor_key: entry})
         assert _build_rain_detector_entities(coordinator, sensor_key, entry) == []
@@ -492,7 +492,7 @@ class TestBuildHic801wStationEntitiesGuards:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HIC801W,
+            model=models.HIC801W,
             data={"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
         )
         coordinator = MagicMock()
@@ -522,7 +522,7 @@ def _hic801w_hub_devices(mid=200, addr=1):
                 {
                     "addr": addr,
                     "name": "Irrigation Controller",
-                    "model": MODEL_HIC801W,
+                    "model": models.HIC801W,
                     "modelCode": 279,
                     "softVer": "1.1.1026",
                 }
@@ -609,7 +609,7 @@ class TestHicStationLateAddTimeline:
         await coordinator.async_refresh()
         silent_entry = coordinator.data["sensors"][key]
         assert silent_entry["data"]["type"] == SILENT_DATA_TYPE
-        assert silent_entry["model"] == MODEL_HIC801W
+        assert silent_entry["model"] == models.HIC801W
         assert [e for e in captured if isinstance(e, RainPointHicStationWateringBinarySensor)] == []
 
     @pytest.mark.asyncio

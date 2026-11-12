@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from aiorainpoint import models
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
@@ -20,7 +21,6 @@ from .const import (
     GENERIC_CONTROL_MARKER_ICON,
     GENERIC_CONTROL_UNIQUE_ID_MARKER,
     HIC801W_STATION_COUNT,
-    MODEL_HIC801W,
     UNIQUE_ID_PREFIX,
     VALVE_MODELS,
 )
@@ -531,7 +531,7 @@ def _build_hic801w_station_durations(coordinator: RainPointCoordinator, sensor_k
     counting to HIC801W_STATION_COUNT, which is why that lives in const.py
     rather than as a literal in either file.
     """
-    if sensor_info.get("model") != MODEL_HIC801W:
+    if sensor_info.get("model") != models.HIC801W:
         return []
     if (sensor_info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
         return []

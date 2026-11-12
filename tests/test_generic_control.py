@@ -7,13 +7,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiorainpoint import (
+    UNCODED_VARIANT,
     RainPointApiError,
+    _product_catalog as product_catalog_module,
+    decode_generic,
     get_catalog_fingerprint,
     get_catalog_variant_codes,
-    product_catalog as product_catalog_module,
+    models,
 )
-from aiorainpoint.generic_decoder import decode_generic
-from aiorainpoint.product_catalog import UNCODED_VARIANT
 
 from custom_components.rainpoint import generic_control as generic_control_module
 from custom_components.rainpoint.const import (
@@ -26,8 +27,6 @@ from custom_components.rainpoint.const import (
     GENERIC_CONTROL_REFRESH_DELAY_SECONDS,
     GENERIC_CONTROL_UNIQUE_ID_MARKER,
     GENERIC_UNIQUE_ID_MARKER,
-    HAND_WRITTEN_MODELS,
-    MODEL_VALVE_245,
     VALVE_MODELS,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE
@@ -213,7 +212,7 @@ class TestEvaluateControlGateTerminalRules:
 
     def test_hand_written_model_is_refused(self):
         """A model with a hand-written decoder is refused outright, never handed to generic control."""
-        model = sorted(HAND_WRITTEN_MODELS)[0]
+        model = sorted(models.HAND_WRITTEN_MODELS)[0]
 
         result = evaluate_control_gate(model, None)
 
@@ -222,7 +221,7 @@ class TestEvaluateControlGateTerminalRules:
         assert result.blocked_by == ("this model already has a hand-written decoder, so it never uses generic control",)
 
     def test_every_hand_written_model_is_refused_across_every_modelcode(self):
-        for model in HAND_WRITTEN_MODELS:
+        for model in models.HAND_WRITTEN_MODELS:
             for code in get_catalog_variant_codes(model) or (None,):
                 result = evaluate_control_gate(model, code)
                 assert result.passed is False
@@ -617,7 +616,7 @@ class TestCountGenericControlEligibleDevices:
         assert count_generic_control_eligible_devices(None) == (0, 0)
 
     def test_devices_with_a_working_decoder_are_not_counted_as_unsupported(self):
-        data = {"sensors": {"a": {"model": MODEL_VALVE_245, "data": {"type": "valve"}}}}
+        data = {"sensors": {"a": {"model": models.HTV245FRF, "data": {"type": "valve"}}}}
 
         assert count_generic_control_eligible_devices(data) == (0, 0)
 
@@ -670,7 +669,7 @@ class TestBuildGenericValveEntities:
         assert build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
 
     def test_hand_written_model_yields_nothing_even_with_unknown_type_data(self):
-        sensor_info = _anchor_sensor_info(model=MODEL_VALVE_245)
+        sensor_info = _anchor_sensor_info(model=models.HTV245FRF)
         coordinator = _make_coordinator("100_200_1", sensor_info)
 
         assert build_generic_valve_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
@@ -788,8 +787,8 @@ class TestBuildGenericSwitchEntities:
 
     def test_hand_written_model_yields_nothing_even_with_unknown_type_data(self):
         sensor_info = _socket_sensor_info()
-        sensor_info["model"] = MODEL_VALVE_245
-        sensor_info["data"]["model"] = MODEL_VALVE_245
+        sensor_info["model"] = models.HTV245FRF
+        sensor_info["data"]["model"] = models.HTV245FRF
         coordinator = _make_coordinator("300_400_1", sensor_info)
 
         assert build_generic_switch_entities(coordinator, "300_400_1", sensor_info, "300_400_1") == []
@@ -1660,7 +1659,7 @@ class TestEndToEndValveSetupEntry:
         from custom_components.rainpoint.valve import async_setup_entry
 
         sensor_key = "100_200_1"
-        sensor_info = _anchor_sensor_info(model=MODEL_VALVE_245)
+        sensor_info = _anchor_sensor_info(model=models.HTV245FRF)
         coordinator = _make_coordinator(sensor_key, sensor_info)
         hass, entry = _make_hass_and_entry(coordinator, {CONF_GENERIC_CONTROL_ENABLED: True})
 
@@ -2330,13 +2329,13 @@ class TestGenericControlCommandFailedRepairIssue:
 
 class TestHandWrittenModelsRefusedAcrossEveryCatalogVariant:
     def test_every_hand_written_model_and_catalog_variant_is_refused_by_every_builder(self):
-        """Cross HAND_WRITTEN_MODELS with every modelCode the catalog lists for
+        """Cross models.HAND_WRITTEN_MODELS with every modelCode the catalog lists for
         each -- a model absent from the catalog entirely is checked once
         against no modelCode -- and assert the gate refuses every pair and
         that all three generic builders (valve, switch, duration) yield
         nothing for it, exactly as if the control option were on."""
         checked_pairs = 0
-        for model in sorted(HAND_WRITTEN_MODELS):
+        for model in sorted(models.HAND_WRITTEN_MODELS):
             codes = get_catalog_variant_codes(model) or (None,)
             for code in codes:
                 checked_pairs += 1
@@ -2354,7 +2353,7 @@ class TestHandWrittenModelsRefusedAcrossEveryCatalogVariant:
 
         # Sanity: the loop actually exercised every hand-written model, not an
         # accidentally-empty iterable.
-        assert checked_pairs >= len(HAND_WRITTEN_MODELS)
+        assert checked_pairs >= len(models.HAND_WRITTEN_MODELS)
 
 
 class TestTrustedValveEntitySetsUnchangedByControlOption:
@@ -2417,7 +2416,7 @@ class TestGenericAndHandWrittenUniqueIdNamespacesAreDisjoint:
         assert generic_ids, "the generic side produced nothing to compare against"
 
         trusted_coordinator = MagicMock()
-        trusted_sensor_info = make_sensor_entry(hid=9, mid=8, addr=7, model=MODEL_VALVE_245, sub_name="Trusted")
+        trusted_sensor_info = make_sensor_entry(hid=9, mid=8, addr=7, model=models.HTV245FRF, sub_name="Trusted")
         trusted_valve = RainPointValveEntity(trusted_coordinator, "9_8_7", trusted_sensor_info, 1)
         trusted_duration = RainPointZoneDurationNumber(trusted_coordinator, "9_8_7", trusted_sensor_info, 1)
         hand_written_ids = {trusted_valve._attr_unique_id, trusted_duration._attr_unique_id}

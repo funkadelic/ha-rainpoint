@@ -45,7 +45,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # The dp identity a catalog variant declares for an RF-commanded water port.
-# Its Bluetooth counterpart lives in aiorainpoint/trust.py, which owns that question.
+# Its Bluetooth counterpart lives in aiorainpoint/_trust.py; hand-written models use their MODELS row.
 _RF_CONTROL_IDENTITY = "CTL_WATER"
 
 
@@ -98,7 +98,7 @@ def _payload_of(entry: dict) -> str | None:
 
 def _catalog_summary(model: str | None, model_code) -> list[str]:
     """Describe what the committed catalog records for this variant."""
-    from aiorainpoint.product_catalog import (
+    from aiorainpoint import (
         get_catalog_entry,
         get_catalog_port_number,
         get_catalog_variant_codes,
@@ -135,10 +135,16 @@ def _catalog_summary(model: str | None, model_code) -> list[str]:
 
 
 def _control_route(model: str | None, model_code) -> str:
-    """Name the endpoint this model's zones would command through."""
-    from aiorainpoint.product_catalog import get_catalog_entry
-    from aiorainpoint.trust import has_bluetooth_control_identity
+    """Name the endpoint this model's zones would command through.
 
+    A hand-written model's row decides, as it does in the integration; the
+    catalog decides for everything else.
+    """
+    from aiorainpoint import get_catalog_entry, has_bluetooth_control_identity, models
+
+    spec = models.MODELS.get(model)
+    if spec is not None and spec.control_endpoint is not None:
+        return f"{spec.control_endpoint} (model table row)"
     if has_bluetooth_control_identity(model, model_code):
         return "controlWorkModeDP (Bluetooth datapoint endpoint, CTL_BT_WATER)"
 
@@ -151,7 +157,7 @@ def _control_route(model: str | None, model_code) -> str:
 
 def _generic_lines(payload: str, model: str | None, model_code) -> list[str]:
     """Render the model-agnostic decode the reporter's dump already carries."""
-    from aiorainpoint.generic_decoder import decode_generic
+    from aiorainpoint import decode_generic
 
     generic = decode_generic(payload, model=model, model_code=model_code)
     if generic.get("error") and not generic.get("fields"):
@@ -178,11 +184,11 @@ def _clip(value, limit: int = 90) -> str:
 
 def _decoder_candidates() -> dict:
     """Map each distinct registered decoder to the models that use it."""
-    from custom_components.rainpoint.coordinator import DECODER_REGISTRY
+    from aiorainpoint.models import MODELS
 
     by_func: dict = {}
-    for model, func in DECODER_REGISTRY.items():
-        by_func.setdefault(func, []).append(model)
+    for model, spec in MODELS.items():
+        by_func.setdefault(spec.decoder, []).append(model)
     return by_func
 
 
@@ -199,9 +205,10 @@ def _decoder_trial(payload: str, model: str | None = None) -> list[str]:
     to check; replace it with a per-family sanity assertion if it ever picks a
     confident wrong answer.
     """
-    from custom_components.rainpoint.coordinator import DECODER_REGISTRY
+    from aiorainpoint.models import MODELS
 
-    registered = DECODER_REGISTRY.get(model) if model else None
+    spec = MODELS.get(model) if model else None
+    registered = spec.decoder if spec else None
     results = []
     for func, models in _decoder_candidates().items():
         try:
@@ -232,13 +239,13 @@ def _decoder_trial(payload: str, model: str | None = None) -> list[str]:
             marker = "  ->"
         else:
             marker = "    "
-        suffix = "  <- the registry already maps this model here" if is_registered else ""
+        suffix = "  <- the model table already maps this model here" if is_registered else ""
         lines.append(f"{marker} {name} ({', '.join(sorted(models))}): {detail}{suffix}")
     return lines
 
 
 def _report(model: str | None, model_code, payload: str | None, extra: dict) -> list[str]:
-    from aiorainpoint.trust import is_hand_written_model
+    from aiorainpoint import is_hand_written_model
 
     lines = [f"=== {model or 'unknown model'} (modelCode {model_code if model_code is not None else 'not stated'})"]
     for label, key in (("firmware", "firmware_version"), ("hub paired", "hub_paired")):

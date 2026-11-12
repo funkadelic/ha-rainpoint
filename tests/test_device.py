@@ -6,11 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiorainpoint import models
 from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.rainpoint import _register_hub_devices
-from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_VALVE_245
+from custom_components.rainpoint.const import CONF_HIDS, DOMAIN
 from custom_components.rainpoint.device import (
     _VIA_DEVICE_ID_SUPPORTED,
     RainPointHubDevice,
@@ -497,7 +498,7 @@ class TestSubDeviceParentingRealTimeline:
                 "deviceName": "d",
                 "productKey": "pk",
                 "homeName": "H",
-                "subDevices": [{"addr": 1, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"}],
+                "subDevices": [{"addr": 1, "name": "Valve", "model": models.HTV245FRF, "softVer": "127"}],
             },
             {
                 # The Bluetooth wrapper record: every identity field is the
@@ -508,7 +509,7 @@ class TestSubDeviceParentingRealTimeline:
                 "productKey": "",
                 "model": "",
                 "homeName": "H",
-                "subDevices": [{"addr": 1, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"}],
+                "subDevices": [{"addr": 1, "name": "Valve", "model": models.HTV245FRF, "softVer": "127"}],
             },
         ]
         client.get_multiple_device_status.return_value = [
@@ -649,5 +650,5 @@ class TestHubAndSubDeviceReadMidTheSameWay:
         hub_row = dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, **hub.device_info)
 
         platform = SimpleNamespace(hass=hass, config_entry=entry)
-        sub_info = {"hid": 100, "mid": 200, "addr": 1, "sub_name": "Valve", "model": MODEL_VALVE_245}
+        sub_info = {"hid": 100, "mid": 200, "addr": 1, "sub_name": "Valve", "model": models.HTV245FRF}
         assert registered_parent_id(platform, build_sub_device_info(sub_info, platform)) == hub_row.id

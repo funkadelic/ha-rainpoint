@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import dataclasses
 import logging
 import re
 import types
@@ -13,6 +14,7 @@ from urllib.parse import parse_qs
 
 import aiohttp
 import pytest
+from aiorainpoint import models
 
 # ---------------------------------------------------------------------------
 # Strategy: call _async_update_data as an unbound function.
@@ -35,14 +37,10 @@ assert "_async_update_data" in _coord_module.RainPointCoordinator.__dict__, (
 # Grab the raw function (bypasses MagicMock descriptor protocol)
 _async_update_data_fn = _coord_module.RainPointCoordinator.__dict__["_async_update_data"]
 
-DECODER_REGISTRY = _coord_module.DECODER_REGISTRY
 SILENT_DATA_TYPE = _coord_module.SILENT_DATA_TYPE
 
 from aiorainpoint import (  # noqa: E402
     RainPointApiError,
-    decode_hcs0528arf,
-    decode_htv145frf,
-    decode_pool,
 )
 
 import custom_components.rainpoint.repairs as _repairs_module  # noqa: E402
@@ -50,28 +48,6 @@ import tests.payload_samples as _payload_samples  # noqa: E402
 from custom_components.rainpoint.const import (  # noqa: E402
     CONF_HIDS,
     DOMAIN,
-    MODEL_CO2,
-    MODEL_DISPLAY_HUB,
-    MODEL_FLOWMETER,
-    MODEL_HCS044FRF,
-    MODEL_HCS0528ARF,
-    MODEL_HIC801W,
-    MODEL_HTP115FRF,
-    MODEL_HTP160FRF,
-    MODEL_HTV157B,
-    MODEL_HTV210B,
-    MODEL_MOISTURE_FULL,
-    MODEL_MOISTURE_SIMPLE,
-    MODEL_RAIN,
-    MODEL_TEMPHUM,
-    MODEL_VALVE_113,
-    MODEL_VALVE_145,
-    MODEL_VALVE_213,
-    MODEL_VALVE_245,
-    MODEL_VALVE_345,
-    MODEL_VALVE_405,
-    MODEL_VALVE_445,
-    MODEL_VALVE_HUB,
 )
 from custom_components.rainpoint.entity import sub_device_attributes  # noqa: E402
 from custom_components.rainpoint.repairs import (  # noqa: E402
@@ -83,19 +59,14 @@ from tests.payload_samples import (  # noqa: E402
     CATALOG_ANCHOR_MODEL,
     HWS019WRF_V2_PAYLOAD,
     MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD,
-    POOL_HCS0528ARF_HEX_PAYLOAD,
     RAIN_DETECTOR_DRY_PAYLOAD,
     RAIN_DETECTOR_DRY_SECOND_PAYLOAD,
     RAIN_DETECTOR_WET_PAYLOAD,
     RAIN_DETECTOR_WET_SECOND_PAYLOAD,
     SAMPLE_HIC801W_ALL_FRAMES,
     SAMPLE_HIC801W_STATION3_PAYLOAD,
-    SAMPLE_HTP115_IDLE_PAYLOAD,
-    SAMPLE_HTP160_IDLE_PAYLOAD,
-    SAMPLE_HTV113_IDLE_PAYLOAD,
     SAMPLE_HTV145_CLOSED_PAYLOAD,
     SAMPLE_HTV145_OPEN_PAYLOAD,
-    SAMPLE_HTV157B_IDLE_PAYLOAD,
     SAMPLE_HTV245_ASCII_PAYLOAD,
     SAMPLE_HTV245_TLV_PAYLOAD,
     SAMPLE_HTV405_TLV_PAYLOAD,
@@ -230,7 +201,7 @@ def _wrapper_record(hid=100, mid=300012, addrs=(1,)):
     }
 
 
-def _make_hub(hid=100, mid=200, model=MODEL_MOISTURE_SIMPLE):
+def _make_hub(hid=100, mid=200, model=models.HCS026FRF):
     """Make hub helper."""
     return {
         "mid": mid,
@@ -383,9 +354,9 @@ class TestCoordinatorUpdate:
 
     @pytest.mark.asyncio
     async def test_update_decoder_dispatch_known_model(self):
-        """Known model is dispatched to DECODER_REGISTRY and decoded correctly."""
+        """Known model is dispatched to MODELS and decoded correctly."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.return_value = _make_status()
 
         result = await _run(coord)
@@ -539,7 +510,7 @@ class TestCoordinatorUpdate:
     async def test_model_code_is_exposed_on_sensor_entry(self):
         """modelCode from the device list is carried through to the sensor entry."""
         coord, client = _make_coord()
-        hub = _make_hub(model=MODEL_MOISTURE_SIMPLE)
+        hub = _make_hub(model=models.HCS026FRF)
         hub["subDevices"][0]["modelCode"] = 303
         client.get_devices_by_hid.return_value = [hub]
         client.get_multiple_device_status.return_value = _make_status()
@@ -553,7 +524,7 @@ class TestCoordinatorUpdate:
     async def test_model_code_absent_is_none_not_an_error(self):
         """A device list without modelCode still decodes, leaving model_code None."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.return_value = _make_status()
 
         result = await _run(coord)
@@ -998,7 +969,7 @@ class TestFindHubStatusEntries:
 
         with (
             patch.object(_coord_module, "async_create"),
-            patch("aiorainpoint.generic_decoder.get_catalog_entry", _record),
+            patch("aiorainpoint._generic_decoder.get_catalog_entry", _record),
         ):
             coord, client = _make_coord()
             hub = _make_hub(model="UNKNOWN_VARIANT")
@@ -1011,9 +982,9 @@ class TestFindHubStatusEntries:
 
     @pytest.mark.asyncio
     async def test_update_display_hub_model(self):
-        """MODEL_DISPLAY_HUB routes to decode_hws019wrf_v2 (special-case path)."""
+        """models.HWS019WRF_V2 routes to decode_hws019wrf_v2 through its MODELS row."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_DISPLAY_HUB)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HWS019WRF_V2)]
         client.get_multiple_device_status.return_value = _make_status(value=_DISPLAY_HUB_PAYLOAD)
 
         result = await _run(coord)
@@ -1026,7 +997,7 @@ class TestFindHubStatusEntries:
     async def test_update_fallback_to_individual_calls(self):
         """When get_multiple_device_status raises a transport error, falls back to get_device_status."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.side_effect = aiohttp.ClientError("API error")
         client.get_device_status.return_value = {"subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD}]}
 
@@ -1039,8 +1010,8 @@ class TestFindHubStatusEntries:
     async def test_update_fallback_individual_call_invoked_per_hub(self):
         """Fallback path calls get_device_status once per hub mid."""
         coord, client = _make_coord()
-        hub1 = _make_hub(mid=201, model=MODEL_MOISTURE_SIMPLE)
-        hub2 = _make_hub(mid=202, model=MODEL_MOISTURE_SIMPLE)
+        hub1 = _make_hub(mid=201, model=models.HCS026FRF)
+        hub2 = _make_hub(mid=202, model=models.HCS026FRF)
         client.get_devices_by_hid.return_value = [hub1, hub2]
         client.get_multiple_device_status.side_effect = aiohttp.ClientError("fail")
         client.get_device_status.return_value = {"subDeviceStatus": []}
@@ -1068,7 +1039,7 @@ class TestFindHubStatusEntries:
     async def test_update_no_raw_value_skips_decoding(self):
         """Empty 'value' produces data=None for that sensor."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.return_value = [{"mid": 200, "subDeviceStatus": [{"id": "D1", "value": ""}]}]
 
         result = await _run(coord)
@@ -1079,7 +1050,7 @@ class TestFindHubStatusEntries:
     async def test_update_device_timestamp_extracted(self):
         """'time' field in status is decoded into device_timestamp on data dict."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.return_value = _make_status(time_ms=1700000000000)
 
         result = await _run(coord)
@@ -1158,7 +1129,7 @@ class TestFindHubStatusEntries:
     async def test_update_empty_multiple_status_triggers_fallback(self):
         """Empty list from get_multiple_device_status triggers fallback path."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.return_value = []
         client.get_device_status.return_value = {"subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD}]}
 
@@ -1184,7 +1155,7 @@ class TestFindHubStatusEntries:
         """Status entry addr not in subDevices is skipped."""
         coord, client = _make_coord()
         hub = _make_hub()
-        hub["subDevices"] = [{"addr": 99, "model": MODEL_MOISTURE_SIMPLE, "name": "X", "softVer": "1.0"}]
+        hub["subDevices"] = [{"addr": 99, "model": models.HCS026FRF, "name": "X", "softVer": "1.0"}]
         client.get_devices_by_hid.return_value = [hub]
         client.get_multiple_device_status.return_value = [
             {"mid": 200, "subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD}]}
@@ -1199,10 +1170,11 @@ class TestFindHubStatusEntries:
     async def test_update_decode_exception_yields_none_data(self):
         """Decoder exceptions set data=None without propagating."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.return_value = _make_status()
 
-        with patch.dict(DECODER_REGISTRY, {MODEL_MOISTURE_SIMPLE: MagicMock(side_effect=ValueError("boom"))}):
+        failing = dataclasses.replace(models.MODELS[models.HCS026FRF], decoder=MagicMock(side_effect=ValueError("boom")))
+        with patch.object(models, "MODELS", {**models.MODELS, models.HCS026FRF: failing}):
             result = await _run(coord)
 
         assert result["sensors"]["100_200_1"]["data"] is None
@@ -1220,7 +1192,7 @@ class TestFindHubStatusEntries:
             }
         }
         coord._last_valve_command_at = {("100_200_1", 1): datetime(2024, 1, 2, tzinfo=UTC)}
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_VALVE_245)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HTV245FRF)]
         client.get_multiple_device_status.return_value = _make_status(
             value=SAMPLE_HTV245_TLV_PAYLOAD,
             time_ms=int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000),
@@ -1243,7 +1215,7 @@ class TestFindHubStatusEntries:
             }
         }
         coord._last_valve_command_at = {("100_200_1", 1): datetime(2024, 1, 1, tzinfo=UTC)}
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_VALVE_245)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HTV245FRF)]
         client.get_multiple_device_status.return_value = _make_status(
             value=SAMPLE_HTV245_TLV_PAYLOAD,
             time_ms=int(datetime(2024, 1, 2, tzinfo=UTC).timestamp() * 1000),
@@ -1263,7 +1235,7 @@ class TestFindHubStatusEntries:
         closed_zone = {"open": False, "duration_seconds": 0, "state_raw": 0}
         coord.data = {"sensors": {"100_200_1": {"data": {"zones": {1: closed_zone}}}}}
         coord._last_valve_command_at = {("100_200_1", 1): datetime.now(UTC) - timedelta(minutes=1)}
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_VALVE_245)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HTV245FRF)]
         client.get_multiple_device_status.return_value = _make_status(value=SAMPLE_HTV245_TLV_PAYLOAD, time_ms=None)
 
         result = await _run(coord)
@@ -1280,7 +1252,7 @@ class TestFindHubStatusEntries:
         result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
             coord,
             "100_200_1",
-            MODEL_MOISTURE_SIMPLE,
+            models.HCS026FRF,
             decoded,
             {"time": int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000)},
         )
@@ -1296,7 +1268,7 @@ class TestFindHubStatusEntries:
         result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
             coord,
             "100_200_1",
-            MODEL_VALVE_245,
+            models.HTV245FRF,
             decoded,
             {},
         )
@@ -1312,7 +1284,7 @@ class TestFindHubStatusEntries:
         result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
             coord,
             "100_200_1",
-            MODEL_VALVE_245,
+            models.HTV245FRF,
             decoded,
             {"time": int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000)},
         )
@@ -1336,7 +1308,7 @@ class TestFindHubStatusEntries:
         result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
             coord,
             "100_200_1",
-            MODEL_VALVE_245,
+            models.HTV245FRF,
             decoded,
             {"time": int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000)},
         )
@@ -1363,7 +1335,7 @@ class TestFindHubStatusEntries:
         result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
             coord,
             "100_200_1",
-            MODEL_VALVE_245,
+            models.HTV245FRF,
             decoded,
             {"time": int(datetime(2024, 1, 2, tzinfo=UTC).timestamp() * 1000)},
         )
@@ -1381,7 +1353,7 @@ class TestFindHubStatusEntries:
         result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
             coord,
             "100_200_1",
-            MODEL_VALVE_245,
+            models.HTV245FRF,
             decoded,
             {"time": int(datetime(2024, 1, 2, tzinfo=UTC).timestamp() * 1000)},
         )
@@ -1492,7 +1464,7 @@ class TestMergePushSensorEntryToleranceOfMissingBranches:
 
 
 class TestHtv210bStalenessGuardCoverage:
-    """Admitting MODEL_HTV210B to VALVE_MODELS enrols it in the
+    """Admitting models.HTV210B to VALVE_MODELS enrols it in the
     command-versus-poll staleness guard with no coordinator source change.
     _preserve_recent_valve_command_state gates purely on model not in
     VALVE_MODELS, so this is confirmed by test rather than by reading,
@@ -1524,7 +1496,7 @@ class TestHtv210bStalenessGuardCoverage:
         }
         _coord_module.RainPointCoordinator.record_valve_command(coord, "100_200_1", 1)
 
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_HTV210B)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HTV210B)]
         client.get_multiple_device_status.return_value = _make_status(
             value=self.RUNNING_PAYLOAD,
             time_ms=int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000),
@@ -1551,7 +1523,7 @@ class TestHtv210bStalenessGuardCoverage:
             }
         }
         coord._last_valve_command_at = {("100_200_1", 1): datetime(2024, 1, 1, tzinfo=UTC)}
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_HTV210B)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HTV210B)]
         client.get_multiple_device_status.return_value = _make_status(
             value=self.RUNNING_PAYLOAD,
             time_ms=int(datetime(2024, 1, 2, tzinfo=UTC).timestamp() * 1000),
@@ -1571,7 +1543,7 @@ class TestHtv210bStalenessGuardCoverage:
         coord, _ = _make_coord()
         silent_decoded = {
             "type": SILENT_DATA_TYPE,
-            "model": MODEL_HTV210B,
+            "model": models.HTV210B,
             "silent_state": "stopped_reporting",
             "last_seen": None,
             "missed_polls": 3,
@@ -1582,7 +1554,7 @@ class TestHtv210bStalenessGuardCoverage:
         result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
             coord,
             "100_200_1",
-            MODEL_HTV210B,
+            models.HTV210B,
             silent_decoded,
             {"time": int(datetime(2024, 1, 1, tzinfo=UTC).timestamp() * 1000)},
         )
@@ -1599,7 +1571,7 @@ class TestCoordinatorEdgeBranches:
         coord, client = _make_coord()
         hub = _make_hub()
         # Add addr=1 to subDevices so the valid sid="D1" resolves
-        hub["subDevices"] = [{"addr": 1, "model": MODEL_MOISTURE_SIMPLE, "name": "Sensor1", "softVer": "1.0"}]
+        hub["subDevices"] = [{"addr": 1, "model": models.HCS026FRF, "name": "Sensor1", "softVer": "1.0"}]
         client.get_devices_by_hid.return_value = [hub]
         client.get_multiple_device_status.return_value = [
             {
@@ -1621,7 +1593,7 @@ class TestCoordinatorEdgeBranches:
     async def test_update_device_timestamp_value_error_continues(self):
         """A non-numeric 'time' value is swallowed; decoded data lacks device_timestamp."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.return_value = [
             {
                 "mid": 200,
@@ -1715,7 +1687,7 @@ class TestCoordinatorEdgeBranches:
         described something that never happened.
         """
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.side_effect = aiohttp.ClientError("bulk call fails")
         client.get_device_status.return_value = {"subDeviceStatus": []}
 
@@ -1730,7 +1702,7 @@ class TestCoordinatorEdgeBranches:
     async def test_a_bulk_call_that_really_returned_nothing_still_says_so(self, caplog):
         """The other half of the pair, so the guard cannot pass by silencing both."""
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.return_value = []
         client.get_device_status.return_value = {"subDeviceStatus": []}
 
@@ -1745,8 +1717,8 @@ class TestCoordinatorEdgeBranches:
         with a transport error, that hub is recorded with an empty subDeviceStatus list
         and iteration continues."""
         coord, client = _make_coord()
-        hub1 = _make_hub(mid=301, model=MODEL_MOISTURE_SIMPLE)
-        hub2 = _make_hub(mid=302, model=MODEL_MOISTURE_SIMPLE)
+        hub1 = _make_hub(mid=301, model=models.HCS026FRF)
+        hub2 = _make_hub(mid=302, model=models.HCS026FRF)
         client.get_devices_by_hid.return_value = [hub1, hub2]
         client.get_multiple_device_status.side_effect = aiohttp.ClientError("first call fails")
 
@@ -1828,8 +1800,8 @@ class TestSilentSubDeviceEndToEnd:
         for any of its children, while a sibling hub in the same poll still decodes
         its healthy children normally."""
         coord, client = _make_coord()
-        outage_hub = _make_hub(mid=301, model=MODEL_MOISTURE_SIMPLE)
-        healthy_hub = _make_hub(mid=302, model=MODEL_MOISTURE_SIMPLE)
+        outage_hub = _make_hub(mid=301, model=models.HCS026FRF)
+        healthy_hub = _make_hub(mid=302, model=models.HCS026FRF)
         client.get_devices_by_hid.return_value = [outage_hub, healthy_hub]
         client.get_multiple_device_status.side_effect = aiohttp.ClientError("boom")
 
@@ -2308,7 +2280,7 @@ class TestPruneSilentState:
         coord._silent_poll_counts = {"100_200_1": 1, "100_300_5": 2}
         hub1 = _make_hub(mid=200)
         hub1["hid"] = 100
-        hub2 = {"hid": 100, "mid": 300, "subDevices": [{"addr": 5, "model": MODEL_MOISTURE_SIMPLE}]}
+        hub2 = {"hid": 100, "mid": 300, "subDevices": [{"addr": 5, "model": models.HCS026FRF}]}
 
         _coord_module.RainPointCoordinator._prune_silent_state(coord, [hub1, hub2])
 
@@ -2647,7 +2619,7 @@ class TestSyncSilentDeviceIssues:
                 "hid": 100,
                 "mid": 200,
                 "addr": 2,
-                "model": MODEL_MOISTURE_SIMPLE,
+                "model": models.HCS026FRF,
                 "hub_name": "Hub1",
                 "data": {"type": "moisture"},
             },
@@ -2714,7 +2686,7 @@ class TestSyncSilentDeviceIssues:
                 "hid": 100,
                 "mid": 200,
                 "addr": 2,
-                "model": MODEL_MOISTURE_SIMPLE,
+                "model": models.HCS026FRF,
                 "hub_name": "Hub1",
                 "product_key": "FakePrdKy9Z",
                 "device_name": "MAC-A0B0C0D00003",
@@ -2764,7 +2736,7 @@ class TestSyncSilentDeviceIssues:
                 "hid": 100,
                 "mid": 200,
                 "addr": 2,
-                "model": MODEL_MOISTURE_SIMPLE,
+                "model": models.HCS026FRF,
                 "hub_name": "Hub1",
                 "product_key": "FakePrdKy9Z",
                 "device_name": "MAC-A0B0C0D00003",
@@ -2787,7 +2759,7 @@ class TestSyncSilentDeviceIssues:
                 "hid": 100,
                 "mid": 200,
                 "addr": 2,
-                "model": MODEL_MOISTURE_SIMPLE,
+                "model": models.HCS026FRF,
                 "hub_name": "Hub1",
                 "data": {"type": "moisture"},
             }
@@ -4505,7 +4477,7 @@ class TestHubConnectivitySurvivesPartialHubShrink:
             "deviceName": f"dev{self.HUB_B_MID}",
             "productKey": "pk1",
             "homeName": "Home",
-            "subDevices": [{"addr": 1, "model": MODEL_MOISTURE_SIMPLE, "name": "Sub1", "softVer": "1.0"}],
+            "subDevices": [{"addr": 1, "model": models.HCS026FRF, "name": "Sub1", "softVer": "1.0"}],
         }
         coordinator, client = self._build(hub_a_connected="1", hub_b_connected="1")
         client.get_devices_by_hid.return_value = [self._hub(self.HUB_A_MID, "HubA"), hub_b_with_child]
@@ -5358,38 +5330,15 @@ class TestCoordinatorConstructor:
         assert instance._hids == []
 
 
-class TestDecoderRegistry:
-    """Tests for the DECODER_REGISTRY constant."""
-
-    def test_registry_is_dict(self):
-        """Registry is dict."""
-        assert isinstance(DECODER_REGISTRY, dict)
-
-    def test_registry_contains_required_models(self):
-        """Registry must cover every model we claim to support."""
-        required = {
-            MODEL_CO2,
-            MODEL_FLOWMETER,
-            MODEL_MOISTURE_FULL,
-            MODEL_MOISTURE_SIMPLE,
-            MODEL_RAIN,
-            MODEL_TEMPHUM,
-            MODEL_VALVE_213,
-            MODEL_VALVE_245,
-            MODEL_VALVE_345,
-            MODEL_VALVE_405,
-            MODEL_VALVE_445,
-            MODEL_VALVE_HUB,
-        }
-        missing = required - DECODER_REGISTRY.keys()
-        assert not missing, f"DECODER_REGISTRY missing required models: {missing}"
+class TestModelTable:
+    """Guards on the aiorainpoint model table the coordinator dispatches through."""
 
     def test_no_registered_decoder_delegates_to_decode_unknown(self):
         """A registered model is a claim of real support, so no decoder may be a
         passthrough to decode_unknown.
 
         Registering a stub is worse than registering nothing: the model lands in
-        HAND_WRITTEN_MODELS, which makes is_hand_written_model keep it out of both
+        models.HAND_WRITTEN_MODELS, which makes is_hand_written_model keep it out of both
         generic paths, so its owner gets neither a real decode nor the opt-in
         catalog-driven one. Unregistered models already fall through to the
         unknown-model notification with the pre-filled report link.
@@ -5397,7 +5346,7 @@ class TestDecoderRegistry:
         import ast
         from pathlib import Path
 
-        import aiorainpoint.decoders as _decoders_module
+        import aiorainpoint._decoders as _decoders_module
 
         source = Path(_decoders_module.__file__)
         tree = ast.parse(source.read_text())
@@ -5415,167 +5364,10 @@ class TestDecoderRegistry:
             ):
                 passthrough.add(node.name)
 
-        offenders = {model: fn.__name__ for model, fn in DECODER_REGISTRY.items() if fn.__name__ in passthrough}
+        offenders = {
+            model: spec.decoder.__name__ for model, spec in models.MODELS.items() if spec.decoder.__name__ in passthrough
+        }
         assert not offenders, f"registered models decode nothing: {offenders}"
-
-    def test_no_two_registry_keys_resolve_to_the_same_model_string(self):
-        """Every key in the DECODER_REGISTRY literal must name a distinct model.
-
-        Model constants carry legacy aliases (MODEL_POOL is MODEL_HCS0528ARF),
-        so two differently-named keys can be the same string, and the later
-        one silently wins. That is not a decode bug on its own, both entries
-        having pointed at equivalent decoders, but it makes the literal lie
-        about itself: anything deriving a set from DECODER_REGISTRY sees a
-        decoder the source appears to register and the dict does not hold.
-
-        Read from the source rather than the built dict on purpose. The dict
-        has already collapsed the duplicate by the time it can be imported, so
-        only the literal still carries the evidence.
-        """
-        import ast
-        from pathlib import Path
-
-        from custom_components.rainpoint import const
-
-        tree = ast.parse(Path(_coord_module.__file__).read_text())
-        literal = next(
-            node.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "DECODER_REGISTRY" for target in node.targets)
-        )
-
-        resolved: dict[str, str] = {}
-        collisions: dict[str, list[str]] = {}
-        for key in literal.keys:
-            assert isinstance(key, ast.Name), f"registry key {ast.dump(key)} is not a model constant"
-            model = getattr(const, key.id)
-            if model in resolved:
-                collisions.setdefault(model, [resolved[model]]).append(key.id)
-            resolved[model] = key.id
-
-        assert not collisions, f"registry keys resolving to the same model string: {collisions}"
-        assert len(resolved) == len(DECODER_REGISTRY)
-
-    def test_hcs0528arf_dispatches_through_registry_to_the_pool_decoder(self):
-        """The pool sensor decodes through its one remaining registry entry.
-
-        Pinned via dispatch rather than by calling decode_hcs0528arf, because
-        what broke here before was the registry wiring and not the decoder:
-        MODEL_POOL and MODEL_HCS0528ARF are the same string, so the literal
-        held two entries for this model and only the later one ever ran.
-        """
-        assert DECODER_REGISTRY[MODEL_HCS0528ARF] is decode_hcs0528arf
-
-        dispatched = _coord_module._decode_subdevice_payload(MODEL_HCS0528ARF, POOL_HCS0528ARF_HEX_PAYLOAD)
-
-        assert dispatched == decode_pool(POOL_HCS0528ARF_HEX_PAYLOAD)
-        assert dispatched["type"] == "pool"
-
-    def test_valve_113_dispatches_through_registry_to_htv145_decoder(self):
-        """HTV113FRF is decoded by reusing the HTV145FRF decoder. Assert the wiring
-        via the registry/dispatch path, not by calling decode_htv145frf directly, so
-        a broken or removed MODEL_VALVE_113 registry entry is caught."""
-        assert DECODER_REGISTRY[MODEL_VALVE_113] is decode_htv145frf
-
-        dispatched = _coord_module._decode_subdevice_payload(MODEL_VALVE_113, SAMPLE_HTV113_IDLE_PAYLOAD)
-
-        # Registry dispatch must preserve the decoder's own result exactly.
-        assert dispatched == decode_htv145frf(SAMPLE_HTV113_IDLE_PAYLOAD)
-        assert dispatched["decoder"] == "htv145frf_hex"
-        assert dispatched["hub_online"] is True
-
-    def test_valve_157b_dispatches_through_registry_to_htv145_decoder(self):
-        """HTV157B reuses the HTV145FRF decoder. Asserted through the registry so a
-        broken or removed MODEL_HTV157B entry is caught, and on a zone rather than
-        just the decoder identity, because the frame's 4-byte duration is the width
-        that used to leave this model with no zone at all."""
-        assert DECODER_REGISTRY[MODEL_HTV157B] is decode_htv145frf
-
-        dispatched = _coord_module._decode_subdevice_payload(MODEL_HTV157B, SAMPLE_HTV157B_IDLE_PAYLOAD)
-
-        assert dispatched == decode_htv145frf(SAMPLE_HTV157B_IDLE_PAYLOAD)
-        assert dispatched["decoder"] == "htv145frf_hex"
-        assert dispatched["zones"][1]["open"] is False
-
-    def test_valve_htp160frf_dispatches_through_registry_to_htv145_decoder(self):
-        """HTP160FRF reuses the HTV145FRF decoder. Asserted through the registry so a
-        broken or removed MODEL_HTP160FRF entry is caught, and on a zone rather than
-        just the decoder identity, because a frame this model's leading compact-form
-        record threw off the walk on would decode to no zone at all."""
-        assert DECODER_REGISTRY[MODEL_HTP160FRF] is decode_htv145frf
-
-        dispatched = _coord_module._decode_subdevice_payload(MODEL_HTP160FRF, SAMPLE_HTP160_IDLE_PAYLOAD)
-
-        assert dispatched == decode_htv145frf(SAMPLE_HTP160_IDLE_PAYLOAD)
-        assert dispatched["decoder"] == "htv145frf_hex"
-        assert dispatched["zones"][1]["open"] is False
-
-    def test_valve_htp115frf_dispatches_through_registry_to_htv145_decoder(self):
-        """HTP115FRF reuses the HTV145FRF decoder, asserted through the registry."""
-        assert DECODER_REGISTRY[MODEL_HTP115FRF] is decode_htv145frf
-
-        dispatched = _coord_module._decode_subdevice_payload(MODEL_HTP115FRF, SAMPLE_HTP115_IDLE_PAYLOAD)
-
-        assert dispatched == decode_htv145frf(SAMPLE_HTP115_IDLE_PAYLOAD)
-        assert dispatched["zones"][1]["open"] is False
-
-    def test_registry_contains_moisture_simple(self):
-        """Registry contains moisture simple."""
-        assert MODEL_MOISTURE_SIMPLE in DECODER_REGISTRY
-
-    def test_registry_contains_moisture_full(self):
-        """Registry contains moisture full."""
-        assert MODEL_MOISTURE_FULL in DECODER_REGISTRY
-
-    def test_registry_contains_rain(self):
-        """Registry contains rain."""
-        assert MODEL_RAIN in DECODER_REGISTRY
-
-    def test_registry_contains_temphum(self):
-        """Registry contains temphum."""
-        assert MODEL_TEMPHUM in DECODER_REGISTRY
-
-    def test_registry_contains_flowmeter(self):
-        """Registry contains flowmeter."""
-        assert MODEL_FLOWMETER in DECODER_REGISTRY
-
-    def test_registry_contains_co2(self):
-        """Registry contains co2."""
-        assert MODEL_CO2 in DECODER_REGISTRY
-
-    def test_registry_contains_valve_245(self):
-        """Registry contains valve 245."""
-        assert MODEL_VALVE_245 in DECODER_REGISTRY
-
-    def test_registry_contains_valve_345(self):
-        """Registry contains valve 345."""
-        assert MODEL_VALVE_345 in DECODER_REGISTRY
-
-    def test_registry_contains_valve_405(self):
-        """Registry contains valve 405."""
-        assert MODEL_VALVE_405 in DECODER_REGISTRY
-
-    def test_registry_contains_valve_445(self):
-        """Registry contains valve 445."""
-        assert MODEL_VALVE_445 in DECODER_REGISTRY
-
-    def test_registry_contains_valve_213(self):
-        """Registry contains valve 213."""
-        assert MODEL_VALVE_213 in DECODER_REGISTRY
-
-    def test_registry_contains_valve_hub(self):
-        """Registry contains valve hub."""
-        assert MODEL_VALVE_HUB in DECODER_REGISTRY
-
-    def test_registry_display_hub_not_in_registry(self):
-        """MODEL_DISPLAY_HUB uses a special-case code path, not DECODER_REGISTRY."""
-        assert MODEL_DISPLAY_HUB not in DECODER_REGISTRY
-
-    def test_registry_values_are_callable(self):
-        """Every value is a callable decoder function."""
-        for model, fn in DECODER_REGISTRY.items():
-            assert callable(fn), f"Decoder for {model!r} is not callable"
 
 
 class TestPureHelpers:
@@ -5600,33 +5392,33 @@ class TestPureHelpers:
 
     # _decode_subdevice_payload
     def test_decode_subdevice_payload_known_model(self):
-        """Known models dispatch through DECODER_REGISTRY and return the decoded dict."""
-        result = _coord_module._decode_subdevice_payload(MODEL_MOISTURE_SIMPLE, _MOISTURE_SIMPLE_PAYLOAD)
+        """Known models dispatch through MODELS and return the decoded dict."""
+        result = _coord_module._decode_subdevice_payload(models.HCS026FRF, _MOISTURE_SIMPLE_PAYLOAD)
         assert result["type"] == "moisture_simple"
 
     def test_decode_subdevice_payload_valve_345_model(self):
         """HTV345FRF dispatches through the shared HTV213/245 valve decoder."""
-        result = _coord_module._decode_subdevice_payload(MODEL_VALVE_345, SAMPLE_HTV245_TLV_PAYLOAD)
+        result = _coord_module._decode_subdevice_payload(models.HTV345FRF, SAMPLE_HTV245_TLV_PAYLOAD)
         assert result["type"] == "valve_hub"
         assert result["decoder"] == "htv213frf_hex"
 
     def test_decode_subdevice_payload_valve_405_model(self):
         """HTV405FRF dispatches through the shared HTV213/245 valve decoder."""
-        result = _coord_module._decode_subdevice_payload(MODEL_VALVE_405, SAMPLE_HTV405_TLV_PAYLOAD)
+        result = _coord_module._decode_subdevice_payload(models.HTV405FRF, SAMPLE_HTV405_TLV_PAYLOAD)
         assert result["type"] == "valve_hub"
         assert result["decoder"] == "htv213frf_hex"
         assert set(result["zones"]) == {1, 2, 3, 4}
 
     def test_decode_subdevice_payload_valve_445_model(self):
         """HTV445FRF dispatches through the shared HTV213/245 valve decoder."""
-        result = _coord_module._decode_subdevice_payload(MODEL_VALVE_445, SAMPLE_HTV445_TLV_PAYLOAD)
+        result = _coord_module._decode_subdevice_payload(models.HTV445FRF, SAMPLE_HTV445_TLV_PAYLOAD)
         assert result["type"] == "valve_hub"
         assert result["decoder"] == "htv213frf_hex"
         assert set(result["zones"]) == {1, 2, 3, 4}
 
     def test_decode_subdevice_payload_display_hub_special_case(self):
-        """MODEL_DISPLAY_HUB routes to decode_hws019wrf_v2, not the registry."""
-        result = _coord_module._decode_subdevice_payload(MODEL_DISPLAY_HUB, _DISPLAY_HUB_PAYLOAD)
+        """models.HWS019WRF_V2 routes to decode_hws019wrf_v2 through its MODELS row."""
+        result = _coord_module._decode_subdevice_payload(models.HWS019WRF_V2, _DISPLAY_HUB_PAYLOAD)
         assert result["type"] == "hws019wrf_v2"
 
     def test_decode_subdevice_payload_unknown_model(self):
@@ -5652,10 +5444,10 @@ class TestPureHelpers:
         assert catalog["width_mismatch"] is False
 
     def test_decode_subdevice_payload_registered_model_never_reaches_generic_path(self):
-        """A DECODER_REGISTRY model always dispatches to its hand-written decoder,
+        """A MODELS model always dispatches to its hand-written decoder,
         never diverting into the generic/unknown branch, confirming the trust
         boundary between hand-written and catalog-driven decoding holds."""
-        result = _coord_module._decode_subdevice_payload(MODEL_MOISTURE_SIMPLE, _MOISTURE_SIMPLE_PAYLOAD)
+        result = _coord_module._decode_subdevice_payload(models.HCS026FRF, _MOISTURE_SIMPLE_PAYLOAD)
 
         assert result["type"] != "unknown"
         assert "generic" not in result
@@ -5666,7 +5458,7 @@ class TestPureHelpers:
         shape a real poll happens to pass (int, the equivalent string, or
         omitted entirely)."""
         for model_code in (279, "279", None):
-            result = _coord_module._decode_subdevice_payload(MODEL_HIC801W, SAMPLE_HIC801W_STATION3_PAYLOAD, model_code)
+            result = _coord_module._decode_subdevice_payload(models.HIC801W, SAMPLE_HIC801W_STATION3_PAYLOAD, model_code)
             assert result["type"] == "irrigation_controller"
             assert result["type"] != "unknown"
             assert "generic" not in result
@@ -5675,7 +5467,7 @@ class TestPureHelpers:
         """The same absence-of-fallback proof, over every committed frame
         rather than just the one used above."""
         for raw in SAMPLE_HIC801W_ALL_FRAMES.values():
-            result = _coord_module._decode_subdevice_payload(MODEL_HIC801W, raw, 279)
+            result = _coord_module._decode_subdevice_payload(models.HIC801W, raw, 279)
             assert result["type"] == "irrigation_controller"
             assert "generic" not in result
 
@@ -5879,7 +5671,7 @@ class TestApiErrorSurfacing:
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         client.get_multiple_device_status.side_effect = RainPointApiError("token expired")
         # Even if a fallback per-hub call would have succeeded, RainPointApiError must surface.
         client.get_device_status.return_value = {"subDeviceStatus": [{"id": "D1", "value": _MOISTURE_SIMPLE_PAYLOAD}]}
@@ -5903,7 +5695,7 @@ class TestApiErrorSurfacing:
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         # Force fallback: a transport-level error trips the narrow
         # ``except (aiohttp.ClientError, TimeoutError):`` clause on multi-status.
         client.get_multiple_device_status.side_effect = aiohttp.ClientError("transient")
@@ -5925,7 +5717,7 @@ class TestNonTransportErrorsPropagate:
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         # Programming bug shape: KeyError is NOT aiohttp.ClientError / TimeoutError.
         client.get_multiple_device_status.side_effect = KeyError("missing-key")
         # If the fallback were wrongly invoked, this would mask the bug.
@@ -5945,7 +5737,7 @@ class TestNonTransportErrorsPropagate:
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
         coord, client = _make_coord()
-        client.get_devices_by_hid.return_value = [_make_hub(model=MODEL_MOISTURE_SIMPLE)]
+        client.get_devices_by_hid.return_value = [_make_hub(model=models.HCS026FRF)]
         # Force fallback through a real transport error.
         client.get_multiple_device_status.side_effect = aiohttp.ClientError("transient")
         # Per-hub raises a programming bug, NOT a transport error.
@@ -5955,7 +5747,7 @@ class TestNonTransportErrorsPropagate:
             await _run(coord)
 
 
-def _push_hub(hid=100, mid=200, addr=1, model=MODEL_VALVE_245):
+def _push_hub(hid=100, mid=200, addr=1, model=models.HTV245FRF):
     """Hub record shaped as coordinator.data carries it (hid already injected)."""
     return {
         "hid": hid,
@@ -6151,7 +5943,7 @@ class TestApplyPushUpdate:
     def test_stale_push_after_command_preserves_commanded_zone(self):
         """A push whose device timestamp predates a fresh valve command does not
         revert the just-commanded zone state (the valve-race guard, via push)."""
-        hub = _push_hub(model=MODEL_VALVE_245)
+        hub = _push_hub(model=models.HTV245FRF)
         closed_zone = {"open": False, "duration_seconds": 0, "state_raw": 0}
         coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": {"zones": {1: closed_zone}}}})
         command_dt = _coord_module.RainPointCoordinator.record_valve_command(coord, "100_200_1", 1)
@@ -6164,7 +5956,7 @@ class TestApplyPushUpdate:
 
     def test_fresh_push_after_command_applies_new_zone_state(self):
         """A push whose device timestamp postdates the command is applied normally."""
-        hub = _push_hub(model=MODEL_VALVE_245)
+        hub = _push_hub(model=models.HTV245FRF)
         closed_zone = {"open": False, "duration_seconds": 0, "state_raw": 0}
         coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": {"zones": {1: closed_zone}}}})
         command_dt = _coord_module.RainPointCoordinator.record_valve_command(coord, "100_200_1", 1)
@@ -6253,7 +6045,7 @@ class TestApplyPushUpdate:
         _sub_devices_by_addr at that call site fails this test.
         """
         hub = _push_hub(addr=1)
-        hub["subDevices"].append({"model": MODEL_VALVE_245, "name": "NoAddr", "softVer": "1.0"})
+        hub["subDevices"].append({"model": models.HTV245FRF, "name": "NoAddr", "softVer": "1.0"})
         coord = _seed_push_coord(hub, sensors={"100_200_1": {"data": None}})
 
         _APPLY(coord, 200, "D1", SAMPLE_HTV245_TLV_PAYLOAD, 1717200000000)
@@ -7207,7 +6999,7 @@ class TestHubPushTracerEndToEnd:
 
     @pytest.mark.asyncio
     async def test_pushed_disconnect_reaches_the_connectivity_entity_with_no_poll_between(self):
-        from aiorainpoint.mqtt import RainPointMqttClient
+        from aiorainpoint import RainPointMqttClient
 
         from custom_components.rainpoint.binary_sensor import async_setup_entry as binary_setup_entry
         from custom_components.rainpoint.hub_entities import RainPointHubConnectivityBinarySensor
@@ -7437,7 +7229,7 @@ class TestMalformedCloudRecordsAreSkipped:
     @staticmethod
     def _hub_two_children(mid=200, *, extra_sub_device=None):
         """One good child at addr 1, plus an optional second entry."""
-        sub_devices = [{"addr": 1, "model": MODEL_MOISTURE_SIMPLE, "name": "Sensor1", "softVer": "1.0"}]
+        sub_devices = [{"addr": 1, "model": models.HCS026FRF, "name": "Sensor1", "softVer": "1.0"}]
         if extra_sub_device is not None:
             sub_devices.append(extra_sub_device)
         return {
@@ -7452,7 +7244,7 @@ class TestMalformedCloudRecordsAreSkipped:
     @staticmethod
     def _hub_single_child(mid=200, *, malformed=False):
         """A hub whose only child is at addr 1, or has no addr when malformed."""
-        child = {"model": MODEL_MOISTURE_SIMPLE, "name": "Sensor1", "softVer": "1.0"}
+        child = {"model": models.HCS026FRF, "name": "Sensor1", "softVer": "1.0"}
         if not malformed:
             child["addr"] = 1
         return {
@@ -7502,7 +7294,7 @@ class TestMalformedCloudRecordsAreSkipped:
         healthy. Both good children decode; the malformed entry contributes
         no key."""
         coord, client = _make_coord()
-        bad_entry = {"model": MODEL_MOISTURE_SIMPLE, "name": "Bad", "softVer": "1.0"}
+        bad_entry = {"model": models.HCS026FRF, "name": "Bad", "softVer": "1.0"}
         hub_a = self._hub_two_children(mid=200, extra_sub_device=bad_entry)
         hub_b = self._hub_two_children(mid=300)
         client.get_devices_by_hid.return_value = [hub_a, hub_b]
@@ -7534,7 +7326,7 @@ class TestMalformedCloudRecordsAreSkipped:
         TypeError costs the whole poll exactly the same way, so presence
         alone is not the property this walk needs."""
         coord, client = _make_coord()
-        bad_entry = {"addr": bad_addr, "model": MODEL_MOISTURE_SIMPLE, "name": "Bad", "softVer": "1.0"}
+        bad_entry = {"addr": bad_addr, "model": models.HCS026FRF, "name": "Bad", "softVer": "1.0"}
         hub_a = self._hub_two_children(mid=200, extra_sub_device=bad_entry)
         hub_b = self._hub_two_children(mid=300)
         client.get_devices_by_hid.return_value = [hub_a, hub_b]
@@ -7551,7 +7343,7 @@ class TestMalformedCloudRecordsAreSkipped:
         would report nothing forever and collect a not-reporting card for a
         device that does not exist, so the record is skipped instead."""
         coord, client = _make_coord()
-        bad_entry = {"addr": None, "model": MODEL_MOISTURE_SIMPLE, "name": "Bad", "softVer": "1.0"}
+        bad_entry = {"addr": None, "model": models.HCS026FRF, "name": "Bad", "softVer": "1.0"}
         hub = self._hub_two_children(mid=200, extra_sub_device=bad_entry)
         client.get_devices_by_hid.return_value = [hub]
         client.get_multiple_device_status.return_value = self._status_single(200)
@@ -7601,7 +7393,7 @@ class TestMalformedCloudRecordsAreSkipped:
             await coordinator.async_refresh()
             assert "100_200_1" in coordinator.data["sensors"]
 
-            bad_entry = {"model": MODEL_MOISTURE_SIMPLE, "name": "Bad", "softVer": "1.0"}
+            bad_entry = {"model": models.HCS026FRF, "name": "Bad", "softVer": "1.0"}
             self._point(client, self._hub_two_children(extra_sub_device=bad_entry), self._status_single(200))
             await coordinator.async_refresh()
 
@@ -7911,7 +7703,7 @@ class TestHicStalenessGuard:
         return _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
             coord,
             "100_200_3",
-            MODEL_HIC801W,
+            models.HIC801W,
             decoded,
             self._poll_at(poll_time),
         )
@@ -8035,7 +7827,7 @@ class TestHicStalenessGuard:
         result = _coord_module.RainPointCoordinator._preserve_recent_valve_command_state(
             coord,
             "100_200_3",
-            MODEL_HIC801W,
+            models.HIC801W,
             self._idle(),
             {"time": "not-a-number"},
         )
@@ -8050,7 +7842,7 @@ class TestPayloadHistoryRealTimeline:
     MID = 200
     KEY = "100_200_1"
 
-    def _build(self, model=MODEL_HCS044FRF, value=_RAIN_DRY):
+    def _build(self, model=models.HCS044FRF, value=_RAIN_DRY):
         """Return (coordinator, client) wired the way __init__.py wires it."""
         client = AsyncMock()
         client.get_devices_by_hid.return_value = [_make_hub(mid=self.MID, model=model)]
@@ -8203,7 +7995,7 @@ class TestPayloadHistoryRealTimeline:
             await coordinator.async_config_entry_first_refresh()
             assert self.KEY in coordinator.payload_history()
 
-            hub = _make_hub(mid=self.MID, model=MODEL_HCS044FRF)
+            hub = _make_hub(mid=self.MID, model=models.HCS044FRF)
             hub["subDevices"] = []
             client.get_devices_by_hid.return_value = [hub]
             client.get_multiple_device_status.return_value = [{"mid": self.MID, "subDeviceStatus": []}]
@@ -8221,11 +8013,11 @@ class TestStateSignatureAgainstCapturedPayloads:
     """
 
     CASES: ClassVar[list] = [
-        (MODEL_HCS044FRF, _RAIN_DRY, _RAIN_DRY_SECOND, True),
-        (MODEL_HCS044FRF, _RAIN_WET, _RAIN_WET_SECOND, True),
-        (MODEL_HCS044FRF, _RAIN_DRY, _RAIN_WET, False),
-        (MODEL_VALVE_145, SAMPLE_HTV145_CLOSED_PAYLOAD, SAMPLE_HTV145_OPEN_PAYLOAD, False),
-        (MODEL_MOISTURE_SIMPLE, _MOISTURE_SIMPLE_PAYLOAD, MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD, False),
+        (models.HCS044FRF, _RAIN_DRY, _RAIN_DRY_SECOND, True),
+        (models.HCS044FRF, _RAIN_WET, _RAIN_WET_SECOND, True),
+        (models.HCS044FRF, _RAIN_DRY, _RAIN_WET, False),
+        (models.HTV145FRF, SAMPLE_HTV145_CLOSED_PAYLOAD, SAMPLE_HTV145_OPEN_PAYLOAD, False),
+        (models.HCS026FRF, _MOISTURE_SIMPLE_PAYLOAD, MOISTURE_SIMPLE_SECOND_CAPTURE_PAYLOAD, False),
     ]
 
     @pytest.mark.parametrize(("model", "first", "second", "same_state"), CASES)
@@ -8268,7 +8060,7 @@ class TestStateSignatureAgainstCapturedPayloads:
         constants = [v for k, v in vars(_payload_samples).items() if not k.startswith("_")]
         payloads = {v for v in strings(constants) if "#" in v or "," in v}
         leaks = set()
-        for model in [*_coord_module.DECODER_REGISTRY, MODEL_DISPLAY_HUB]:
+        for model in models.MODELS:
             for raw in payloads:
                 try:
                     decoded = _coord_module._decode_subdevice_payload(model, raw, None)

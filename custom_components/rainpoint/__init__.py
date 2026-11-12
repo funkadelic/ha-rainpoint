@@ -4,8 +4,7 @@ from collections.abc import Collection, Mapping, Set as AbstractSet
 from typing import Any, Literal, cast
 
 import voluptuous as vol
-from aiorainpoint import RainPointClient, is_hand_written_model
-from aiorainpoint.mqtt import RainPointMqttClient
+from aiorainpoint import RainPointClient, RainPointMqttClient, is_hand_written_model
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_RESTORED
 from homeassistant.core import HomeAssistant, SupportsResponse, callback
@@ -130,7 +129,7 @@ def _resolve_hub_identity(coordinator) -> tuple[str | None, str | None, int | No
     That identity no longer bounds what the session reports for. Push frames do
     carry the mid, in a fixed slot confirmed by a 2026-08-25 capture, so the
     client routes each frame on the mid the frame names and one session serves
-    every hub on the account. See aiorainpoint/mqtt.py's _frame_mid.
+    every hub on the account. See aiorainpoint/_mqtt.py's _frame_mid.
     """
     hubs = (coordinator.data or {}).get("hubs", [])
     hub = first_hub_record(hubs)

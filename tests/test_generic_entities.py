@@ -11,13 +11,11 @@ from unittest.mock import MagicMock
 
 import pytest
 from aiorainpoint import (
-    get_catalog_fingerprint,
-    get_catalog_variant_codes,
-    product_catalog as product_catalog_module,
-)
-from aiorainpoint.decoders import (
+    _product_catalog as product_catalog_module,
+    battery_flag_to_percent,
     decode_co2,
     decode_flow_meter,
+    decode_generic,
     decode_hcs005frf,
     decode_hcs015arf,
     decode_hcs024frf_v1,
@@ -26,27 +24,24 @@ from aiorainpoint.decoders import (
     decode_hws019wrf_v2,
     decode_moisture_full,
     decode_moisture_simple,
+    decode_packed_report_time,
     decode_packed_timestamp,
     decode_pool_plus,
     decode_rain,
     decode_temphum,
+    get_catalog_fingerprint,
+    get_catalog_variant_codes,
+    is_hand_written_model,
+    models,
 )
-from aiorainpoint.generic_decoder import STATUS_FIELDS, decode_generic
-from aiorainpoint.trust import is_hand_written_model
-from aiorainpoint.utils import decode_packed_report_time
-from aiorainpoint.validators import battery_flag_to_percent
+from aiorainpoint._generic_decoder import STATUS_FIELDS
 
 from custom_components.rainpoint import generic_control as generic_control_module, generic_entities as generic_entities_module
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
     GENERIC_UNIQUE_ID_MARKER,
-    HAND_WRITTEN_MODELS,
-    MODEL_MOISTURE_SIMPLE,
-    MODEL_VALVE_245,
-    MODEL_VALVE_HUB,
 )
-from custom_components.rainpoint.coordinator import DECODER_REGISTRY
 from custom_components.rainpoint.generic_entities import (
     _IDENTITY_SPECS,
     GENERIC_MARKER_ICON,
@@ -60,7 +55,7 @@ from custom_components.rainpoint.generic_entities import (
     describe_generic_gate,
     evaluate_generic_gate,
 )
-from custom_components.rainpoint.sensor import _MODEL_FACTORIES, async_setup_entry
+from custom_components.rainpoint.sensor import _factory_for, async_setup_entry
 from tests.helpers import make_coordinator_data, make_sensor_entry
 from tests.payload_samples import SAMPLE_HTV245_FULL_ZONE2_ACTIVE_PAYLOAD
 
@@ -68,20 +63,17 @@ FAKE_MODEL = "FAKE_GENERIC_MODEL"
 
 _SENTINEL = object()
 
-# Every decoder DECODER_REGISTRY (plus the display-hub special case, added
-# below) actually dispatches that reports no run or open state at all: soil
+# Every decoder in _DECODERS that reports no run or open state at all: soil
 # moisture, rain, temp/humidity, CO2, pool and weather-display readings carry
 # no work-state datapoint to mask. Built from imported function objects, never
 # from typed strings, so a rename or an alias cannot silently drift the set --
-# the flow-meter registry entry is decode_flowmeter, an alias for
-# decode_flow_meter, whose __name__ differs from the registry key, and a
+# the flow-meter row is decode_flowmeter, an alias for
+# decode_flow_meter, whose __name__ differs from it, and a
 # hand-typed string would encode that mismatch rather than survive it.
-# decode_pool is deliberately absent: the registry's entry for the pool sensor
-# is decode_hcs0528arf, a passthrough that calls decode_pool, so a set built
-# from the registry's own function names never carries decode_pool and naming
-# it here would exempt a decoder the guard below cannot reach. The literal
-# used to carry a second, shadowed entry spelled MODEL_POOL, which is where
-# this exemption's original wording came from; that entry is gone. A wrong
+# decode_pool is deliberately absent: the pool sensor's row is
+# decode_hcs0528arf, a passthrough that calls decode_pool, so a set built from
+# the table's own function names never carries decode_pool and naming it here
+# would exempt a decoder the guard below cannot reach. A wrong
 # entry here is a written false statement about what that decoder reports: if
 # this set ever names a decoder that does report a run state, it is silencing
 # a real failure of TestRunStateEvidenceNoteDriftGuard below rather than
@@ -138,17 +130,17 @@ def _wkstate_row_source() -> str:
     raise AssertionError("STA_WKSTATE row not found in _IDENTITY_SPECS")
 
 
+# Model to decoder, as the coordinator dispatches it.
+_DECODERS = {model: spec.decoder for model, spec in models.MODELS.items()}
+
+
 def _registered_decoder_names(registry: dict) -> set[str]:
     """Return the __name__s of every decoder the integration dispatches.
 
-    The display-hub decoder is unioned in because it is dispatched as a
-    special case outside DECODER_REGISTRY entirely (the same "registry plus
-    display hub" shape HAND_WRITTEN_MODELS itself follows). Both the run-state
-    filter below and the phantom-exemption test read this one definition, so a
-    second special case added here reaches both rather than only whichever
-    call site its author happened to be looking at.
+    Both the run-state filter below and the phantom-exemption test read this
+    one definition.
     """
-    return {fn.__name__ for fn in registry.values()} | {decode_hws019wrf_v2.__name__}
+    return {fn.__name__ for fn in registry.values()}
 
 
 def _run_state_decoder_names(registry: dict) -> set[str]:
@@ -173,7 +165,7 @@ def _fake_run_state_decoder(raw: str) -> dict:
 
 
 class TestRunStateEvidenceNoteDriftGuard:
-    """Keeps the STA_WKSTATE row's provenance list in lockstep with DECODER_REGISTRY.
+    """Keeps the STA_WKSTATE row's provenance list in lockstep with the model table.
 
     Going stale means a decoder that reports a run or open state was
     registered without being named in the row's Evidence note. A failure
@@ -185,7 +177,7 @@ class TestRunStateEvidenceNoteDriftGuard:
 
     def test_every_run_state_decoder_is_named_in_the_row(self):
         """Every real run-state decoder must appear by name in the row's source."""
-        assert _unnamed_run_state_decoders(DECODER_REGISTRY) == set()
+        assert _unnamed_run_state_decoders(_DECODERS) == set()
 
     def test_an_unnamed_run_state_decoder_fails_the_guard(self):
         """A synthetic fourth decoder is reported as unnamed.
@@ -194,19 +186,19 @@ class TestRunStateEvidenceNoteDriftGuard:
         without updating the row, which is the failure this guard exists to
         catch.
         """
-        registry_with_extra = dict(DECODER_REGISTRY) | {"HTVZZZFRF": _fake_run_state_decoder}
+        registry_with_extra = dict(_DECODERS) | {"HTVZZZFRF": _fake_run_state_decoder}
         assert _unnamed_run_state_decoders(registry_with_extra) == {"_fake_run_state_decoder"}
 
     def test_exemption_names_no_decoder_absent_from_the_registry(self):
-        """A decoder removed from DECODER_REGISTRY cannot linger as a phantom exemption."""
-        assert _registered_decoder_names(DECODER_REGISTRY) >= _DECODERS_WITHOUT_RUN_STATE
+        """A decoder removed from _DECODERS cannot linger as a phantom exemption."""
+        assert _registered_decoder_names(_DECODERS) >= _DECODERS_WITHOUT_RUN_STATE
 
 
 class TestRunStateRowShapeClaimHasItsMechanism:
     """The row's record-shape claim is only as good as the width that enforces it.
 
     Kept out of TestRunStateEvidenceNoteDriftGuard above, whose subject is
-    keeping the provenance list in lockstep with DECODER_REGISTRY. This
+    keeping the provenance list in lockstep with the model table. This
     class has a different subject: the declared width the note names as the
     mechanism behind its claim.
     """
@@ -407,18 +399,17 @@ class TestBuildGenericEntitiesGate:
         return coordinator
 
     def test_hand_written_model_yields_nothing_even_when_catalog_is_curated(self, monkeypatch):
-        """A hand-written model absent from _MODEL_FACTORIES still yields zero generic sensors.
+        """A hand-written model with no sensor factory still yields zero generic sensors.
 
-        HTV0540FRF is the stand-in for that shape, and the only model left
-        carrying it: it has a hand-written decoder and takes all its entities
-        from the valve and number platforms, so it never appears in the sensor
-        factory map. The trust check, not the map, is what keeps it out of the
-        generic path.
+        HTV0540FRF is the stand-in for that shape: it has a hand-written decoder
+        and takes all its entities from the valve and number platforms, so no
+        model or family factory serves it. The trust check, not the factory
+        lookup, is what keeps it out of the generic path.
         """
-        assert MODEL_VALVE_HUB not in _MODEL_FACTORIES
+        assert _factory_for(models.HTV0540FRF) is None
         dp_entries = [_dp("STA_TEM", dp_code=9)]
         monkeypatch.setattr(generic_entities_module, "get_catalog_entry", lambda model, model_code=None: dp_entries)
-        sensor_info = make_sensor_entry(model=MODEL_VALVE_HUB, data=_unknown_data(model=MODEL_VALVE_HUB))
+        sensor_info = make_sensor_entry(model=models.HTV0540FRF, data=_unknown_data(model=models.HTV0540FRF))
         coordinator = self._coordinator_for("100_200_1", sensor_info)
 
         assert build_generic_entities(coordinator, "100_200_1", sensor_info, "100_200_1") == []
@@ -776,7 +767,7 @@ class TestEvaluateGenericGate:
 
     def test_hand_written_model_states_hand_written_reason(self):
         """A model with a hand-written decoder fails the gate with the hand-written reason, never a catalog one."""
-        model = sorted(HAND_WRITTEN_MODELS)[0]
+        model = sorted(models.HAND_WRITTEN_MODELS)[0]
 
         result = evaluate_generic_gate(model, None)
 
@@ -881,7 +872,7 @@ class TestEvaluateGenericGate:
 class TestDpCodeAmbiguityRule:
     """Tests for the "same dpCode declared more than once" gate rule.
 
-    The runtime catalog matcher (_match_catalog_dp in aiorainpoint/generic_decoder.py)
+    The runtime catalog matcher (_match_catalog_dp in aiorainpoint/_generic_decoder.py)
     keys on dpCode alone and refuses to annotate a field whose dpCode is
     ambiguous, so an entity built over one of those entries would never
     resolve a value and would sit at None forever.
@@ -1023,7 +1014,7 @@ class TestRealCatalogMultiReasonRegression:
     def test_htv245frf_reports_both_the_dp_code_collision_and_the_uncurated_identities(self, monkeypatch):
         monkeypatch.setattr(generic_entities_module, "is_hand_written_model", lambda model: False)
 
-        result = evaluate_generic_gate(MODEL_VALVE_245, 303)
+        result = evaluate_generic_gate(models.HTV245FRF, 303)
 
         assert result.passed is False
         assert any("dpCode" in reason for reason in result.blocked_by)
@@ -1556,7 +1547,7 @@ class TestHumidityRow:
         decoder reports as a moisture percentage is the same byte the generic
         decode path labels with this identity.
         """
-        decoded = decode_generic("10#E1C600DC01881AFF0F5E21F718", model=MODEL_MOISTURE_SIMPLE)
+        decoded = decode_generic("10#E1C600DC01881AFF0F5E21F718", model=models.HCS026FRF)
         field = next(f for f in decoded["fields"] if f["name"] == "STA_RH")
         assert field["value"] == 26
         assert decode_moisture_simple("10#E1C600DC01881AFF0F5E21F718")["moisture_percent"] == 26
@@ -1756,7 +1747,7 @@ class TestGenericSensorDispatchEndToEnd:
 
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
-            model=MODEL_MOISTURE_SIMPLE,
+            model=models.HCS026FRF,
             data={"type": "moisture_simple", "moisture_percent": 5, "rssi_dbm": -80, "battery_percent": 75},
         )
         coordinator = MagicMock()

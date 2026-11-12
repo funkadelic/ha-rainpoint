@@ -198,9 +198,7 @@ HWS019WRF_V2_PAYLOAD = "1,0,1;707(707/694/1),42(42/39/1),P=9709(9709/9701/1),"
 
 # --- Additional synthetic payloads for coverage push ---
 
-# Synthetic TLV payload for decode_valve_hub (MODEL_VALVE_HUB / HTV0540FRF).
-# Used to cover the MODEL_VALVE_HUB branch of
-# RainPointValveEntity._apply_response_state (only MODEL_VALVE_245 was previously covered).
+# Synthetic TLV payload for decode_valve_hub (HTV0540FRF).
 # DP 0x18 type 0xDC value 0x01 (hub online)
 # DP 0x19 type 0xD8 value 0x01 (zone 1 open)
 # DP 0x25 type 0xAD value 0xAC01 -> LE 0x01AC = 428 seconds (zone 1 duration)
@@ -336,7 +334,7 @@ SYNTHETIC_POOL_PLUS_DATA = {
 SAMPLE_UNSUPPORTED_MULTI_SENSOR_PAYLOAD = "10#208500968832DC64E0C5"
 
 # The real catalog model the enrichment tests anchor on. Chosen because it is
-# a genuine entry in the committed snapshot that is NOT in HAND_WRITTEN_MODELS
+# a genuine entry in the committed snapshot that is NOT in models.HAND_WRITTEN_MODELS
 # (so the generic path actually runs for it), has exactly one modelCode
 # variant (so lookups need no model_code), declares dpCodes 9/10/31/32 to match
 # the payload above, and does NOT declare dpCode 2 - which keeps the

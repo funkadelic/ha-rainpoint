@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiorainpoint import models
 
 from custom_components.rainpoint import (
     _build_orphaned_entity_records,
@@ -41,8 +42,6 @@ from custom_components.rainpoint.const import (
     CONF_HIDS,
     DOMAIN,
     HUB_IDENTIFIER_PREFIX,
-    MODEL_MOISTURE_SIMPLE,
-    MODEL_VALVE_245,
 )
 from custom_components.rainpoint.coordinator import (
     ORPHANED_KEY_DEBOUNCE_POLLS,
@@ -90,7 +89,7 @@ _REGISTRY_ROWS = [
 ]
 
 
-def _hub_record(*, with_child: bool, model: str = MODEL_VALVE_245) -> list[dict]:
+def _hub_record(*, with_child: bool, model: str = models.HTV245FRF) -> list[dict]:
     """One real valve hub whose subDevices either lists its child or does not."""
     sub_devices = [{"addr": ADDR, "name": "Hub A", "model": model, "softVer": "127"}]
     return [
@@ -139,7 +138,7 @@ def _make_entity_registry():
     return removed, _async_get, _async_entries_for_config_entry
 
 
-def _build_timeline(*, zones_reported: bool = True, model: str = MODEL_VALVE_245):
+def _build_timeline(*, zones_reported: bool = True, model: str = models.HTV245FRF):
     """Return (coordinator, hass, entry, client) for one real valve hub."""
     client = AsyncMock()
     client.get_devices_by_hid.return_value = _hub_record(with_child=True, model=model)
@@ -804,7 +803,7 @@ class TestOrphanedCardLifecycle:
     """A card only ever appears for a sustained absence, and clears itself."""
 
     @staticmethod
-    async def _armed_timeline(model: str = MODEL_VALVE_245):
+    async def _armed_timeline(model: str = models.HTV245FRF):
         """Drive construct -> first refresh -> sweep armed -> platform setup.
 
         The shared preamble of every lifecycle test, in the order a real
@@ -989,10 +988,10 @@ class TestOrphanedCardLifecycle:
         """The blast-radius limit as an observable: the moisture sensor's key
         ages out exactly the same way, but the valve adder emitted nothing for
         it, so there is no row to offer and therefore no card."""
-        coordinator, _hass, _entry, client = await self._armed_timeline(model=MODEL_MOISTURE_SIMPLE)
+        coordinator, _hass, _entry, client = await self._armed_timeline(model=models.HCS026FRF)
 
         with _patched_issue_registry() as (create, _delete):
-            client.get_devices_by_hid.return_value = _hub_record(with_child=False, model=MODEL_MOISTURE_SIMPLE)
+            client.get_devices_by_hid.return_value = _hub_record(with_child=False, model=models.HCS026FRF)
             for _ in range(ORPHANED_KEY_DEBOUNCE_POLLS + 2):
                 await coordinator.async_refresh()
 
@@ -2142,7 +2141,7 @@ def _rekey_hub_record(mid: int, addrs) -> dict:
         "deviceName": "d",
         "productKey": "pk",
         "homeName": "H",
-        "subDevices": [{"addr": addr, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"} for addr in addrs],
+        "subDevices": [{"addr": addr, "name": "Valve", "model": models.HTV245FRF, "softVer": "127"} for addr in addrs],
     }
 
 
