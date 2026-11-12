@@ -733,7 +733,7 @@ def _decode_subdevice_payload(model: str | None, raw_value: str, model_code: int
     registered. Raises whatever the underlying decoder raises - callers handle the
     try/except and any side-effects (logging, persistent notifications).
     """
-    spec = models.MODELS.get(model)
+    spec = models.MODELS.get(model) if model is not None else None
     if spec is not None:
         return spec.decoder(raw_value)
     # No per-model decoder: fall back to a model-agnostic structural decode so

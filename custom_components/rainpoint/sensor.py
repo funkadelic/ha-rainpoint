@@ -425,6 +425,8 @@ _FAMILY_FACTORIES: dict[models.Family, Callable[..., list]] = {
 
 def _factory_for(model: str | None) -> Callable[..., list] | None:
     """Return the model's own factory, else its family's, else None."""
+    if model is None:
+        return None
     factory = _MODEL_FACTORIES.get(model)
     if factory is None and (spec := models.MODELS.get(model)) is not None:
         factory = _FAMILY_FACTORIES.get(spec.family)

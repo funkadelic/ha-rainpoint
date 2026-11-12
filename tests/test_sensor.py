@@ -3830,6 +3830,10 @@ class TestEveryDecodableModelIsServed:
         """Resolve aliases the way the platform does before looking the model up."""
         return _factory_for(_SENSOR_MODEL_ALIASES.get(model, model)) is not None
 
+    def test_a_record_with_no_model_has_no_factory(self):
+        """A sub-device record missing its model resolves to no factory."""
+        assert _factory_for(None) is None
+
     def test_no_decodable_model_silently_builds_nothing(self):
         """Necessary but not sufficient: a factory can still return []."""
         unserved = {model for model in self._decodable_models() if not self._has_factory(model)}
