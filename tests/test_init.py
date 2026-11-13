@@ -1220,10 +1220,17 @@ class TestAsyncRemoveEntry:
 
 
 class TestAsyncRemoveConfigEntryDevice:
-    """The device page's Delete is allowed only for a device the last poll did not list."""
+    """Remove device is allowed only for a device the last poll did not list, and a refusal says why."""
+
+    LISTED = "remove_device_still_listed"
+    RECENT = "remove_device_recently_gone"
+    UNSURE = "remove_device_unconfirmed"
 
     @staticmethod
     async def _call(identifier, enumerated, hubs, provisional=frozenset(), pending=frozenset(), *, loaded=True):
+        """Return True when allowed, or the translation key of the refusal."""
+        from homeassistant.exceptions import HomeAssistantError
+
         from custom_components.rainpoint import async_remove_config_entry_device
 
         hass = _make_hass()
@@ -1237,49 +1244,64 @@ class TestAsyncRemoveConfigEntryDevice:
         if loaded:
             hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coordinator}}}
         device = SimpleNamespace(identifiers={identifier} if identifier else set())
-        return await async_remove_config_entry_device(hass, entry, device)
+        try:
+            return await async_remove_config_entry_device(hass, entry, device)
+        except HomeAssistantError as err:
+            assert err.translation_domain == DOMAIN
+            return err.translation_key
 
     @pytest.mark.parametrize(
         ("identifier", "enumerated", "hubs", "provisional", "expected"),
         [
             # Sub-devices: allowed only once the enumeration omits the key.
             ((DOMAIN, "1_10_3"), frozenset({"1_10_1"}), [], frozenset(), True),
-            ((DOMAIN, "1_10_1"), frozenset({"1_10_1"}), [], frozenset(), False),
-            ((DOMAIN, "1_10_3"), None, [], frozenset(), False),
+            ((DOMAIN, "1_10_1"), frozenset({"1_10_1"}), [], frozenset(), LISTED),
+            ((DOMAIN, "1_10_3"), None, [], frozenset(), UNSURE),
             # A hub inside its absence window is an outage, so its children stay.
-            ((DOMAIN, "1_10_3"), frozenset(), [], frozenset({"1_10"}), False),
+            ((DOMAIN, "1_10_3"), frozenset(), [], frozenset({"1_10"}), RECENT),
             # Hubs: refused while the hub record or any of its sub-devices is still listed.
             ((DOMAIN, "hub_1_20"), frozenset({"1_10_1"}), [{"hid": 1, "mid": 10}, "junk"], frozenset(), True),
-            ((DOMAIN, "hub_1_10"), frozenset(), [{"hid": 1, "mid": 10}], frozenset(), False),
-            ((DOMAIN, "hub_1_10"), frozenset({"1_10_1"}), [], frozenset(), False),
-            ((DOMAIN, "hub_1_10"), frozenset(), [], frozenset({"1_10"}), False),
-            ((DOMAIN, "hub_1_10"), frozenset(), "not a list", frozenset(), False),
+            ((DOMAIN, "hub_1_10"), frozenset(), [{"hid": 1, "mid": 10}], frozenset(), LISTED),
+            ((DOMAIN, "hub_1_10"), frozenset({"1_10_1"}), [], frozenset(), LISTED),
+            ((DOMAIN, "hub_1_10"), frozenset(), [], frozenset({"1_10"}), RECENT),
+            ((DOMAIN, "hub_1_10"), frozenset(), "not a list", frozenset(), UNSURE),
             # A legacy hid-only row matches any hub under that hid.
-            ((DOMAIN, "hub_1"), frozenset(), [{"hid": 1, "mid": 10}], frozenset(), False),
+            ((DOMAIN, "hub_1"), frozenset(), [{"hid": 1, "mid": 10}], frozenset(), LISTED),
             ((DOMAIN, "hub_1"), frozenset({"2_10_1"}), [{"hid": 2, "mid": 10}], frozenset(), True),
             # Rows this integration did not identify are never ours to drop.
-            ((DOMAIN, "hub_1_2_3"), frozenset(), [], frozenset(), False),
-            (("other", "1_10_3"), frozenset(), [], frozenset(), False),
-            (None, frozenset(), [], frozenset(), False),
+            ((DOMAIN, "hub_1_2_3"), frozenset(), [], frozenset(), UNSURE),
+            (("other", "1_10_3"), frozenset(), [], frozenset(), UNSURE),
+            (None, frozenset(), [], frozenset(), UNSURE),
         ],
     )
     @pytest.mark.asyncio
     async def test_verdict(self, identifier, enumerated, hubs, provisional, expected):
         """Each identifier shape gets the verdict its enumeration supports."""
-        assert await self._call(identifier, enumerated, hubs, provisional) is expected
+        assert await self._call(identifier, enumerated, hubs, provisional) == expected
 
     @pytest.mark.parametrize(
-        ("identifier", "expected"), [((DOMAIN, "1_10_3"), False), ((DOMAIN, "hub_1_10"), False), ((DOMAIN, "1_10_4"), True)]
+        ("identifier", "expected"), [((DOMAIN, "1_10_3"), RECENT), ((DOMAIN, "hub_1_10"), RECENT), ((DOMAIN, "1_10_4"), True)]
     )
     @pytest.mark.asyncio
     async def test_a_key_short_of_the_orphan_window_holds(self, identifier, expected):
         """A departed key still inside the Repairs card's window holds itself and its hub."""
-        assert await self._call(identifier, frozenset(), [], pending=frozenset({"1_10_3"})) is expected
+        assert await self._call(identifier, frozenset(), [], pending=frozenset({"1_10_3"})) == expected
 
     @pytest.mark.asyncio
     async def test_unreadable_coordinator_refuses(self):
-        """A coordinator whose data cannot be read refuses rather than allowing the delete."""
-        assert await self._call((DOMAIN, "1_10_3"), frozenset(), [], loaded=False) is False
+        """A coordinator whose data cannot be read refuses rather than allowing the removal."""
+        assert await self._call((DOMAIN, "1_10_3"), frozenset(), [], loaded=False) == self.UNSURE
+
+    def test_every_refusal_has_a_message(self):
+        """Each refusal key resolves to a message in en.json, or the user sees a bare key."""
+        import json
+        from pathlib import Path
+
+        import custom_components.rainpoint as pkg
+
+        strings = json.loads((Path(pkg.__file__).parent / "translations" / "en.json").read_text())
+        for key in (self.LISTED, self.RECENT, self.UNSURE):
+            assert strings["exceptions"][key]["message"]
 
 
 class TestPlatformsListSymmetry:

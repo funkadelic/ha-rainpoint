@@ -1,13 +1,14 @@
 import logging
 import re
 from collections.abc import Collection, Mapping, Set as AbstractSet
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 
 import voluptuous as vol
 from aiorainpoint import RainPointClient, RainPointMqttClient, is_hand_written_model
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_RESTORED
 from homeassistant.core import HomeAssistant, SupportsResponse, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, device_registry as dr, entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
@@ -2983,12 +2984,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_remove_config_entry_device(hass: HomeAssistant, entry: ConfigEntry, device_entry: dr.DeviceEntry) -> bool:
-    """Allow the device page's Delete only for a device RainPoint no longer lists.
+    """Allow the device page's Remove device only for a device RainPoint no longer lists.
 
-    A live device would be recreated on the next reload, so anything still
-    enumerated, under a hub inside its absence window (an outage, not a
-    departure), short of the Repairs card's orphan window, or behind a lookup
-    that cannot answer, refuses.
+    A live device would be recreated on the next reload, so a refusal raises
+    with the reason the user sees: still listed, gone too recently (a hub in
+    its absence window, or a key short of the Repairs card's orphan window),
+    or unconfirmed because a lookup could not answer.
     """
     key = _domain_sensor_key(device_entry) or ""
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("coordinator")
@@ -2998,18 +2999,32 @@ async def async_remove_config_entry_device(hass: HomeAssistant, entry: ConfigEnt
         provisional = coordinator.provisionally_absent_hub_keys()
         pending = coordinator.keys_short_of_orphan_window()
     except Exception:
-        return False
-    if not key or enumerated is None or not isinstance(hubs, list):
-        return False
+        _refuse_removal("remove_device_unconfirmed")
     hub = _hub_identity(key)
+    if not key or enumerated is None or not isinstance(hubs, list) or (hub is None and key.startswith(HUB_IDENTIFIER_PREFIX)):
+        _refuse_removal("remove_device_unconfirmed")
     if hub is None:
-        if key.startswith(HUB_IDENTIFIER_PREFIX):
-            return False
-        return key not in enumerated | pending and key.rsplit("_", 1)[0] not in provisional
+        if key in enumerated:
+            _refuse_removal("remove_device_still_listed")
+        if key in pending or key.rsplit("_", 1)[0] in provisional:
+            _refuse_removal("remove_device_recently_gone")
+        return True
     hid, mid = hub
-    listed = enumerated | provisional | pending | {f"{h.get('hid')}_{h.get('mid')}" for h in hubs if isinstance(h, dict)}
-    # A legacy hub_{hid} row (mid None) matches any key under that hid.
-    return not any(k.split("_")[0] == hid and (mid is None or k.split("_")[1:2] == [mid]) for k in listed)
+
+    def _covers(keys: AbstractSet[str]) -> bool:
+        # A legacy hub_{hid} row (mid None) matches any key under that hid.
+        return any(k.split("_")[0] == hid and (mid is None or k.split("_")[1:2] == [mid]) for k in keys)
+
+    if _covers(enumerated | {f"{h.get('hid')}_{h.get('mid')}" for h in hubs if isinstance(h, dict)}):
+        _refuse_removal("remove_device_still_listed")
+    if _covers(provisional | pending):
+        _refuse_removal("remove_device_recently_gone")
+    return True
+
+
+def _refuse_removal(translation_key: str) -> NoReturn:
+    """Refuse a Remove device with a message the device page shows."""
+    raise HomeAssistantError(translation_domain=DOMAIN, translation_key=translation_key)
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

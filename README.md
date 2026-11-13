@@ -308,7 +308,7 @@ Short of deleting entities yourself under **Settings → Devices & services → 
 
 ### Removing a device that is gone
 
-A hub or device that RainPoint no longer lists can also be removed from its device page: open the three-dot menu and choose **Remove device**. A device that was already gone before Home Assistant started can be removed right away. Home Assistant shows an error instead in three cases: the device is still on your account, its hub is only briefly missing from your account listing, or it left while Home Assistant was running and the thirty checks described above have not passed yet. Removing it deletes the device's entities and the history recorded against them, which cannot be undone.
+A hub or device that RainPoint no longer lists can also be removed from its device page: open the three-dot menu and choose **Remove device**. A device that was already gone before Home Assistant started can be removed right away. Home Assistant refuses, with a message saying why, in three cases: the device is still on your account, its hub is only briefly missing from your account listing, or it left while Home Assistant was running less than about an hour ago, before the thirty checks described above have passed. Removing it deletes the device's entities and the history recorded against them, which cannot be undone.
 
 ---
 
