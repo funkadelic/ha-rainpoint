@@ -2986,20 +2986,28 @@ async def async_remove_config_entry_device(hass: HomeAssistant, entry: ConfigEnt
     """Allow the device page's Delete only for a device RainPoint no longer lists.
 
     A live device would be recreated on the next reload, so anything still
-    enumerated, or any lookup that cannot answer, refuses.
+    enumerated, under a hub inside its absence window (an outage, not a
+    departure), or behind a lookup that cannot answer, refuses.
     """
-    key = _domain_sensor_key(device_entry)
+    key = _domain_sensor_key(device_entry) or ""
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("coordinator")
     enumerated = _enumerated_keys_or_none(coordinator)
-    if key is None or enumerated is None:
+    try:
+        hubs = coordinator.data["hubs"]
+        provisional = coordinator.provisionally_absent_hub_keys()
+    except Exception:
         return False
-    if not key.startswith(HUB_IDENTIFIER_PREFIX):
-        return key not in enumerated
-    hub_key = key.removeprefix(HUB_IDENTIFIER_PREFIX)
-    hubs = _read_current_hubs(coordinator)
-    if hubs is None or any(f"{hub.get('hid')}_{hub.get('mid')}" == hub_key for hub in hubs):
+    if not key or enumerated is None or not isinstance(hubs, list):
         return False
-    return not any(sub_key.startswith(f"{hub_key}_") for sub_key in enumerated)
+    hub = _hub_identity(key)
+    if hub is None:
+        if key.startswith(HUB_IDENTIFIER_PREFIX):
+            return False
+        return key not in enumerated and key.rsplit("_", 1)[0] not in provisional
+    hid, mid = hub
+    listed = enumerated | provisional | {f"{h.get('hid')}_{h.get('mid')}" for h in hubs if isinstance(h, dict)}
+    # A legacy hub_{hid} row (mid None) matches any key under that hid.
+    return not any(k.split("_")[0] == hid and (mid is None or k.split("_")[1:2] == [mid]) for k in listed)
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

@@ -1223,57 +1223,53 @@ class TestAsyncRemoveConfigEntryDevice:
     """The device page's Delete is allowed only for a device the last poll did not list."""
 
     @staticmethod
-    async def _call(identifier, enumerated, hubs, *, loaded=True):
+    async def _call(identifier, enumerated, hubs, provisional=frozenset(), *, loaded=True):
         from custom_components.rainpoint import async_remove_config_entry_device
 
         hass = _make_hass()
         entry = _make_entry()
-        coordinator = SimpleNamespace(enumerated_sensor_keys=lambda: enumerated, data={"hubs": hubs})
+        coordinator = SimpleNamespace(
+            enumerated_sensor_keys=lambda: enumerated,
+            provisionally_absent_hub_keys=lambda: provisional,
+            data={"hubs": hubs},
+        )
         if loaded:
             hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coordinator}}}
         device = SimpleNamespace(identifiers={identifier} if identifier else set())
         return await async_remove_config_entry_device(hass, entry, device)
 
     @pytest.mark.parametrize(
-        ("identifier", "enumerated", "hubs", "expected"),
+        ("identifier", "enumerated", "hubs", "provisional", "expected"),
         [
             # Sub-devices: allowed only once the enumeration omits the key.
-            ((DOMAIN, "1_10_3"), frozenset({"1_10_1"}), [], True),
-            ((DOMAIN, "1_10_1"), frozenset({"1_10_1"}), [], False),
-            ((DOMAIN, "1_10_3"), None, [], False),
+            ((DOMAIN, "1_10_3"), frozenset({"1_10_1"}), [], frozenset(), True),
+            ((DOMAIN, "1_10_1"), frozenset({"1_10_1"}), [], frozenset(), False),
+            ((DOMAIN, "1_10_3"), None, [], frozenset(), False),
+            # A hub inside its absence window is an outage, so its children stay.
+            ((DOMAIN, "1_10_3"), frozenset(), [], frozenset({"1_10"}), False),
             # Hubs: refused while the hub record or any of its sub-devices is still listed.
-            ((DOMAIN, "hub_1_20"), frozenset({"1_10_1"}), [{"hid": 1, "mid": 10}], True),
-            ((DOMAIN, "hub_1_10"), frozenset(), [{"hid": 1, "mid": 10}], False),
-            ((DOMAIN, "hub_1_10"), frozenset({"1_10_1"}), [], False),
-            ((DOMAIN, "hub_1_10"), frozenset(), "not a list", True),
-            # A row this integration did not identify is never ours to drop.
-            (("other", "1_10_3"), frozenset(), [], False),
-            (None, frozenset(), [], False),
+            ((DOMAIN, "hub_1_20"), frozenset({"1_10_1"}), [{"hid": 1, "mid": 10}, "junk"], frozenset(), True),
+            ((DOMAIN, "hub_1_10"), frozenset(), [{"hid": 1, "mid": 10}], frozenset(), False),
+            ((DOMAIN, "hub_1_10"), frozenset({"1_10_1"}), [], frozenset(), False),
+            ((DOMAIN, "hub_1_10"), frozenset(), [], frozenset({"1_10"}), False),
+            ((DOMAIN, "hub_1_10"), frozenset(), "not a list", frozenset(), False),
+            # A legacy hid-only row matches any hub under that hid.
+            ((DOMAIN, "hub_1"), frozenset(), [{"hid": 1, "mid": 10}], frozenset(), False),
+            ((DOMAIN, "hub_1"), frozenset({"2_10_1"}), [{"hid": 2, "mid": 10}], frozenset(), True),
+            # Rows this integration did not identify are never ours to drop.
+            ((DOMAIN, "hub_1_2_3"), frozenset(), [], frozenset(), False),
+            (("other", "1_10_3"), frozenset(), [], frozenset(), False),
+            (None, frozenset(), [], frozenset(), False),
         ],
     )
     @pytest.mark.asyncio
-    async def test_verdict(self, identifier, enumerated, hubs, expected):
+    async def test_verdict(self, identifier, enumerated, hubs, provisional, expected):
         """Each identifier shape gets the verdict its enumeration supports."""
-        assert await self._call(identifier, enumerated, hubs) is expected
+        assert await self._call(identifier, enumerated, hubs, provisional) is expected
 
     @pytest.mark.asyncio
-    async def test_unreadable_hubs_refuse(self):
-        """A hub lookup that raises refuses rather than allowing the delete."""
-        from custom_components.rainpoint import async_remove_config_entry_device
-
-        hass = _make_hass()
-        entry = _make_entry()
-        coordinator = MagicMock()
-        coordinator.enumerated_sensor_keys.return_value = frozenset()
-        type(coordinator).data = property(lambda _self: (_ for _ in ()).throw(RuntimeError("boom")))
-        hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coordinator}}}
-        device = SimpleNamespace(identifiers={(DOMAIN, "hub_1_10")})
-
-        assert await async_remove_config_entry_device(hass, entry, device) is False
-
-    @pytest.mark.asyncio
-    async def test_unloaded_entry_refuses(self):
-        """No coordinator means no enumeration, so nothing is deletable."""
+    async def test_unreadable_coordinator_refuses(self):
+        """A coordinator whose data cannot be read refuses rather than allowing the delete."""
         assert await self._call((DOMAIN, "1_10_3"), frozenset(), [], loaded=False) is False
 
 

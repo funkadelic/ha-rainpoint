@@ -2412,6 +2412,10 @@ class RainPointCoordinator(DataUpdateCoordinator):
         """
         return self._last_enumerated_sensor_keys
 
+    def provisionally_absent_hub_keys(self) -> frozenset[str]:
+        """Return "{hid}_{mid}" for every hub still inside its absence window."""
+        return frozenset(f"{hid}_{mid}" for hid, mid in self._hub_absent_poll_counts)
+
     def _sync_silent_device_issues(
         self,
         decoded_sensors: dict[str, dict],

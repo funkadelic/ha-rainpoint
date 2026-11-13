@@ -8106,3 +8106,9 @@ class TestStateSignatureAgainstCapturedPayloads:
                 }
 
         assert leaks == set()
+
+
+def test_provisionally_absent_hub_keys_formats_each_windowed_hub():
+    """Each (hid, mid) inside its absence window is published as "{hid}_{mid}"."""
+    fake = types.SimpleNamespace(_hub_absent_poll_counts={(1, 10): 1, (2, 20): 2})
+    assert _coord_module.RainPointCoordinator.provisionally_absent_hub_keys(fake) == frozenset({"1_10", "2_20"})
