@@ -304,7 +304,11 @@ This card names the entities it would remove, up to ten of them and a count of a
 
 ### Neither card removes anything on its own
 
-Short of deleting entities yourself under **Settings → Devices & services → Entities**, those cards' **Submit** buttons are the only thing that removes an entity you did not opt into, and they delete the history recorded against those entities along with them, which cannot be undone. (The one other integration-side deletion is switching off an option you turned on yourself, under [unverified generic entities](#unverified-generic-entities-opt-in), which clears the entities that option created.) If you would rather keep the history, leave the card alone: the leftover entities stay where they are, unavailable but intact. On the first card, the leftover device page is released at the same time as the entities, once it carries nothing else; on the second the device is still in use, so its page stays.
+Short of deleting entities yourself under **Settings → Devices & services → Entities**, or deleting a device as described below, those cards' **Submit** buttons are the only thing that removes an entity you did not opt into, and they delete the history recorded against those entities along with them, which cannot be undone. (The one other integration-side deletion is switching off an option you turned on yourself, under [unverified generic entities](#unverified-generic-entities-opt-in), which clears the entities that option created.) If you would rather keep the history, leave the card alone: the leftover entities stay where they are, unavailable but intact. On the first card, the leftover device page is released at the same time as the entities, once it carries nothing else; on the second the device is still in use, so its page stays.
+
+### Deleting a device that is gone
+
+A hub or device that RainPoint no longer lists can also be removed from its device page: open the three-dot menu and choose **Delete**. A device that was already gone before Home Assistant started can be deleted right away. Home Assistant shows an error instead in three cases: the device is still on your account, its hub is only briefly missing from your account listing, or it left while Home Assistant was running and the thirty checks described above have not passed yet. Deleting removes the device's entities and the history recorded against them, which cannot be undone.
 
 ---
 
