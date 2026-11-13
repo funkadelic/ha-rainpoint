@@ -14,7 +14,7 @@
         "aiorainpoint"
     ],
     "requirements": [
-        "aiorainpoint==0.3.0"
+        "aiorainpoint==0.3.1"
     ],
     "version": "1.27.0"
 }
