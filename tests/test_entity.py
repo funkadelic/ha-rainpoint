@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from aiorainpoint import models
 
 from custom_components.rainpoint.entity import (
     LATE_ADDER_STORE_KEY,
@@ -633,13 +634,12 @@ class _AddEntitiesSpy:
 
 def _valve_entry():
     """A reporting valve hub entry, the per-zone platform shape."""
-    from custom_components.rainpoint.const import MODEL_VALVE_245
 
     return make_sensor_entry(
         hid=100,
         mid=200,
         addr=1,
-        model=MODEL_VALVE_245,
+        model=models.HTV245FRF,
         sub_name="Valve Hub",
         data={"type": "valve_hub", "zones": {1: {"open": False, "duration_seconds": 0}}},
     )
@@ -647,13 +647,12 @@ def _valve_entry():
 
 def _moisture_entry():
     """A reporting moisture entry, the per-key platform shape."""
-    from custom_components.rainpoint.const import MODEL_MOISTURE_SIMPLE
 
     return make_sensor_entry(
         hid=100,
         mid=200,
         addr=1,
-        model=MODEL_MOISTURE_SIMPLE,
+        model=models.HCS026FRF,
         sub_name="Soil",
         data={"type": "moisture_simple", "moisture_percent": 42, "rssi_dbm": -70, "battery_percent": 80},
     )

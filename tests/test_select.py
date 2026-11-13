@@ -5,10 +5,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiorainpoint import RainPointApiError
+from aiorainpoint import RainPointApiError, models
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.rainpoint.const import DOMAIN, MODEL_HTV210B
+from custom_components.rainpoint.const import DOMAIN
 from custom_components.rainpoint.select import RainPointSubDevicePowerSelect, _sub_device_record, async_setup_entry
 from tests.helpers import htv210b_status, make_mock_session_client, mock_json_response
 
@@ -199,7 +199,7 @@ class TestSubDevicePowerSelectConstruction:
         """Build a select entity for a fixed HTV210B sensor key and its coordinator."""
         coordinator = MagicMock()
         coordinator.data = {"hubs": [], "sensors": {}}
-        sensor_info = {"hid": 300, "mid": 400, "addr": 5, "model": MODEL_HTV210B}
+        sensor_info = {"hid": 300, "mid": 400, "addr": 5, "model": models.HTV210B}
         return RainPointSubDevicePowerSelect(coordinator, "300_400_5", sensor_info), coordinator
 
     def test_unique_id_carries_the_real_hid_mid_addr(self):
@@ -258,7 +258,7 @@ class TestSubDevicePowerSelectRealTimeline:
                         "addr": cls._ADDR,
                         "sid": cls._SID,
                         "name": "BT Valve",
-                        "model": MODEL_HTV210B,
+                        "model": models.HTV210B,
                         "modelCode": 41,
                         "softVer": "1.0",
                         "param": param,

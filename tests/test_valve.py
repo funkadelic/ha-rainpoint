@@ -5,22 +5,13 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiorainpoint import decode_hic801w, encode_dp_duration_param
+from aiorainpoint import decode_hic801w, encode_dp_duration_param, models
 from homeassistant.components.valve import ValveDeviceClass, ValveEntityFeature
 
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
     HIC801W_STATION_COUNT,
-    MODEL_HIC801W,
-    MODEL_HTP115FRF,
-    MODEL_HTP160FRF,
-    MODEL_HTV157B,
-    MODEL_HTV210B,
-    MODEL_VALVE_145,
-    MODEL_VALVE_245,
-    MODEL_VALVE_345,
-    MODEL_VALVE_445,
 )
 from custom_components.rainpoint.coordinator import (
     SILENT_DATA_TYPE,
@@ -113,6 +104,14 @@ def _make_valve(zone_data=None, hub_online=True, model="HTV245FRF"):
     valve._attr_unique_id = "rainpoint_100_200_1_zone1"
     valve._attr_name = "Zone 1"
     return valve
+
+
+def _patch_decoder(monkeypatch, model, decoder):
+    """Swap one model row's decoder in aiorainpoint's MODELS table."""
+    import dataclasses
+
+    row = dataclasses.replace(models.MODELS[model], decoder=decoder)
+    monkeypatch.setattr(models, "MODELS", {**models.MODELS, model: row})
 
 
 class TestValveProperties:
@@ -288,7 +287,7 @@ class TestValveControl:
         payload and async_set_updated_data is asserted directly, rather than
         exercising the decode and coordinator-push halves separately.
         """
-        valve = _make_valve(model=MODEL_VALVE_245)
+        valve = _make_valve(model=models.HTV245FRF)
         valve.coordinator.async_set_updated_data = MagicMock()
         valve._get_configured_duration_seconds = MagicMock(return_value=600)
         mock_control = AsyncMock(return_value=SAMPLE_HTV245_ASCII_PAYLOAD)
@@ -366,15 +365,14 @@ class TestValveControl:
     @pytest.mark.asyncio
     async def test_async_close_valve_applies_closed_response_state(self, monkeypatch):
         """A successful close response immediately updates coordinator state."""
-        from custom_components.rainpoint import valve as valve_mod
 
-        valve = _make_valve(model=MODEL_VALVE_245)
+        valve = _make_valve(model=models.HTV245FRF)
         valve.coordinator.async_set_updated_data = MagicMock()
         valve.coordinator.record_valve_command = MagicMock()
         valve.coordinator._client.control_work_mode = AsyncMock(return_value="close-response")
-        monkeypatch.setattr(
-            valve_mod,
-            "decode_htv213frf_valve",
+        _patch_decoder(
+            monkeypatch,
+            models.HTV245FRF,
             MagicMock(
                 return_value={
                     "type": "valve_hub",
@@ -393,7 +391,7 @@ class TestValveControl:
 
     def test_apply_response_state_updates_coordinator(self):
         """_apply_response_state should call async_set_updated_data when raw_state given."""
-        valve = _make_valve(model=MODEL_VALVE_245)
+        valve = _make_valve(model=models.HTV245FRF)
         valve.coordinator.async_set_updated_data = MagicMock()
 
         # Canonical two-zone ASCII payload from maintainer's HTV245FRF
@@ -405,7 +403,7 @@ class TestValveControl:
 
     def test_apply_response_state_routes_htv145(self):
         """HTV145FRF control responses decode via the HTV145 decoder."""
-        valve = _make_valve(model=MODEL_VALVE_145)
+        valve = _make_valve(model=models.HTV145FRF)
         valve.coordinator.async_set_updated_data = MagicMock()
 
         valve._apply_response_state(SAMPLE_HTV145_OPEN_PAYLOAD)
@@ -419,11 +417,10 @@ class TestValveControl:
     def test_apply_response_state_routes_htv157b(self):
         """HTV157B control responses decode via the same single-outlet decoder.
 
-        Routed on the model, so without the MODEL_HTV157B arm the response
-        would fall through to decode_valve_hub and inject an empty zones dict
-        over the zone the poll had just read.
+        A wrong decoder here would inject an empty zones dict over the zone
+        the poll had just read.
         """
-        valve = _make_valve(model=MODEL_HTV157B)
+        valve = _make_valve(model=models.HTV157B)
         valve.coordinator.async_set_updated_data = MagicMock()
 
         valve._apply_response_state(SAMPLE_HTV157B_IDLE_PAYLOAD)
@@ -435,7 +432,7 @@ class TestValveControl:
 
     def test_apply_response_state_routes_htp115frf(self):
         """HTP115FRF control responses decode via the single-outlet decoder, keeping the zone."""
-        valve = _make_valve(model=MODEL_HTP115FRF)
+        valve = _make_valve(model=models.HTP115FRF)
         valve.coordinator.async_set_updated_data = MagicMock()
 
         valve._apply_response_state(SAMPLE_HTP115_IDLE_PAYLOAD)
@@ -448,11 +445,10 @@ class TestValveControl:
     def test_apply_response_state_routes_htp160frf(self):
         """HTP160FRF control responses decode via the same single-outlet decoder.
 
-        Routed on the model, so without the MODEL_HTP160FRF arm the response
-        would fall through to decode_valve_hub and inject an empty zones dict
-        over the zone the poll had just read.
+        A wrong decoder here would inject an empty zones dict over the zone
+        the poll had just read.
         """
-        valve = _make_valve(model=MODEL_HTP160FRF)
+        valve = _make_valve(model=models.HTP160FRF)
         valve.coordinator.async_set_updated_data = MagicMock()
 
         valve._apply_response_state(SAMPLE_HTP160_IDLE_PAYLOAD)
@@ -482,7 +478,7 @@ class TestValveControl:
 
     def test_apply_response_state_no_sensors_key_at_all_does_not_raise(self):
         """coordinator.data with no "sensors" key must not crash a live response decode."""
-        valve = _make_valve(model=MODEL_VALVE_245)
+        valve = _make_valve(model=models.HTV245FRF)
         valve.coordinator.async_set_updated_data = MagicMock()
         del valve.coordinator.data["sensors"]
 
@@ -701,7 +697,7 @@ class TestValveSetupEntry:
                 "mid": 20,
                 "addr": 1,
                 "sub_name": "Hub A",
-                "model": MODEL_VALVE_245,
+                "model": models.HTV245FRF,
                 "data": {
                     "hub_online": True,
                     "zones": {
@@ -740,7 +736,7 @@ class TestValveSetupEntry:
                 "mid": 20,
                 "addr": 1,
                 "sub_name": "HTV345",
-                "model": MODEL_VALVE_345,
+                "model": models.HTV345FRF,
                 "data": {
                     "hub_online": True,
                     "zones": {
@@ -765,7 +761,7 @@ class TestValveSetupEntry:
         await async_setup_entry(hass, entry, async_add_entities)
 
         assert [entity._zone_num for entity in captured] == [1, 2, 3]
-        assert all(entity._sensor_info["model"] == MODEL_VALVE_345 for entity in captured)
+        assert all(entity._sensor_info["model"] == models.HTV345FRF for entity in captured)
 
     @pytest.mark.asyncio
     async def test_setup_entry_creates_four_valves_from_a_real_htv445_frame(self):
@@ -782,8 +778,8 @@ class TestValveSetupEntry:
                 "mid": 20,
                 "addr": 1,
                 "sub_name": "HTV445",
-                "model": MODEL_VALVE_445,
-                "data": _decode_subdevice_payload(MODEL_VALVE_445, SAMPLE_HTV445_TLV_PAYLOAD),
+                "model": models.HTV445FRF,
+                "data": _decode_subdevice_payload(models.HTV445FRF, SAMPLE_HTV445_TLV_PAYLOAD),
             }
         }
         mock_coordinator = MagicMock()
@@ -841,7 +837,7 @@ class TestValveSetupEntry:
                 "mid": 20,
                 "addr": 1,
                 "sub_name": "Hub A",
-                "model": MODEL_VALVE_245,
+                "model": models.HTV245FRF,
                 "raw_status": {},
                 "data": {"type": SILENT_DATA_TYPE, "silent_state": "never_reported"},
             }
@@ -871,7 +867,7 @@ class TestValveSetupEntry:
                 "hid": 10,
                 "mid": 20,
                 "addr": 1,
-                "model": MODEL_VALVE_245,
+                "model": models.HTV245FRF,
                 "data": {"hub_online": True, "zones": {1: {"open": False, "duration_seconds": 0, "state_raw": 0}}},
             },
         }
@@ -901,7 +897,7 @@ class TestValveSetupEntry:
                 "hid": 10,
                 "mid": 20,
                 "addr": 1,
-                "model": MODEL_VALVE_245,
+                "model": models.HTV245FRF,
                 "data": {"hub_online": False, "zones": {}},
             }
         }
@@ -928,7 +924,7 @@ class TestValveSetupEntry:
                 "hid": 10,
                 "mid": 20,
                 "addr": 1,
-                "model": MODEL_VALVE_245,
+                "model": models.HTV245FRF,
                 # No "data" key at all
             }
         }
@@ -974,7 +970,7 @@ class TestValveSetupEntry:
                 "mid": 20,
                 "addr": 1,
                 "sub_name": "Controller",
-                "model": MODEL_HIC801W,
+                "model": models.HIC801W,
                 "device_name": "dev1",
                 "product_key": "pk1",
                 "data": decode_hic801w(SAMPLE_HIC801W_IDLE_PAYLOAD),
@@ -1128,16 +1124,13 @@ class TestValveExtraAttributes:
 class TestApplyResponseStateBranches:
     """Cover _apply_response_state edge branches (lines 213, 215, 219)."""
 
-    def test_apply_response_state_uses_valve_hub_decoder_for_non_213_245(self, monkeypatch):
-        """Model not in (213, 245) routes through decode_valve_hub and short-circuits on falsy decode."""
-        from custom_components.rainpoint import valve as valve_mod
-
-        valve = _make_valve(model=MODEL_VALVE_245)
-        valve._sensor_info["model"] = "HWV100FRF"  # unknown valve-hub variant
+    def test_apply_response_state_uses_the_model_rows_decoder(self, monkeypatch):
+        """The valve hub's response decodes through its own MODELS row."""
+        valve = _make_valve(model=models.HTV0540FRF)
         valve.coordinator.async_set_updated_data = MagicMock()
 
         spy = MagicMock(return_value=None)
-        monkeypatch.setattr(valve_mod, "decode_valve_hub", spy)
+        _patch_decoder(monkeypatch, models.HTV0540FRF, spy)
 
         valve._apply_response_state("whatever-payload")
 
@@ -1145,10 +1138,8 @@ class TestApplyResponseStateBranches:
         valve.coordinator.async_set_updated_data.assert_not_called()
 
     def test_apply_response_state_uses_htv_decoder_for_valve_345(self, monkeypatch):
-        """HTV345FRF routes control responses through the shared HTV213/245 decoder."""
-        from custom_components.rainpoint import valve as valve_mod
-
-        valve = _make_valve(model=MODEL_VALVE_345)
+        """HTV345FRF routes control responses through its row's decoder."""
+        valve = _make_valve(model=models.HTV345FRF)
         valve.coordinator.async_set_updated_data = MagicMock()
 
         decoded = {
@@ -1157,7 +1148,7 @@ class TestApplyResponseStateBranches:
             "zones": {1: {"open": False, "duration_seconds": 0, "state_raw": 0}},
         }
         spy = MagicMock(return_value=decoded)
-        monkeypatch.setattr(valve_mod, "decode_htv213frf_valve", spy)
+        _patch_decoder(monkeypatch, models.HTV345FRF, spy)
 
         valve._apply_response_state("whatever-payload")
 
@@ -1166,7 +1157,7 @@ class TestApplyResponseStateBranches:
 
     def test_apply_response_state_key_missing_in_sensors(self):
         """If the sensor_key is not in coordinator.data['sensors'], return without update."""
-        valve = _make_valve(model=MODEL_VALVE_245)
+        valve = _make_valve(model=models.HTV245FRF)
         valve._sensor_key = "not_in_data"
         valve.coordinator.async_set_updated_data = MagicMock()
 
@@ -1175,14 +1166,11 @@ class TestApplyResponseStateBranches:
         valve.coordinator.async_set_updated_data.assert_not_called()
 
     def test_apply_response_state_decoder_returns_empty(self, monkeypatch):
-        """decode_valve_hub returning falsy short-circuits before async_set_updated_data."""
-        from custom_components.rainpoint import valve as valve_mod
-
-        valve = _make_valve(model=MODEL_VALVE_245)
-        valve._sensor_info["model"] = "HWV100FRF"  # not in (VALVE_213, VALVE_245)
+        """A falsy decode short-circuits before async_set_updated_data."""
+        valve = _make_valve(model=models.HTV245FRF)
         valve.coordinator.async_set_updated_data = MagicMock()
 
-        monkeypatch.setattr(valve_mod, "decode_valve_hub", lambda raw: None)
+        _patch_decoder(monkeypatch, models.HTV245FRF, lambda raw: None)
         valve._apply_response_state("anything")
 
         valve.coordinator.async_set_updated_data.assert_not_called()
@@ -1247,7 +1235,7 @@ class TestValveEntitiesAppearWithinTheSession:
                 "deviceName": "d",
                 "productKey": "pk",
                 "homeName": "H",
-                "subDevices": [{"addr": 1, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}],
+                "subDevices": [{"addr": 1, "name": "Hub A", "model": models.HTV245FRF, "softVer": "127"}],
             }
         ]
         client.get_multiple_device_status.return_value = self._hub(zones_reported=False)
@@ -1302,7 +1290,7 @@ class TestValveEntitiesAppearWithinTheSession:
                 "deviceName": "d",
                 "productKey": "pk",
                 "homeName": "H",
-                "subDevices": [{"addr": 1, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}],
+                "subDevices": [{"addr": 1, "name": "Hub A", "model": models.HTV245FRF, "softVer": "127"}],
             }
         ]
         # The captured two-zone frame with zone 2's entries removed, so the
@@ -1373,7 +1361,7 @@ async def _build_valve_availability_timeline():
             "deviceName": "d",
             "productKey": "pk",
             "homeName": "H",
-            "subDevices": [{"addr": 1, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}],
+            "subDevices": [{"addr": 1, "name": "Hub A", "model": models.HTV245FRF, "softVer": "127"}],
         }
     ]
     client.get_multiple_device_status.return_value = _valve_hub_status(connected_value="1")
@@ -1686,7 +1674,7 @@ class TestSilentUnitGuardRealTimeline:
         await coordinator.async_refresh()
         entry = coordinator.data["sensors"][key]
         assert entry["data"]["type"] == SILENT_DATA_TYPE
-        assert entry["model"] == MODEL_HTV210B
+        assert entry["model"] == models.HTV210B
         assert captured == []
 
     @pytest.mark.asyncio
@@ -1778,7 +1766,7 @@ def _make_dp_valve(zone_data=None, hub_online=True):
         "mid": 200,
         "addr": 1,
         "sub_name": "BT Valve",
-        "model": MODEL_HTV210B,
+        "model": models.HTV210B,
         "device_name": "dev1",
         "product_key": "pk1",
         "firmware_version": "1.0",
@@ -1794,7 +1782,7 @@ def _make_dp_valve(zone_data=None, hub_online=True):
         },
     }
     mock_coordinator = make_sensor_coordinator(
-        model=MODEL_HTV210B,
+        model=models.HTV210B,
         data=decoded,
         sub_name="BT Valve",
         firmware_version="1.0",
@@ -2043,12 +2031,12 @@ class TestEncodeDpDurationParam:
 
 
 class TestDpClassDispatch:
-    """build() discriminates by catalog identity rather than replacing the RF
-    class for every VALVE_MODELS member."""
+    """build() picks the class from the model row's control endpoint rather than
+    replacing the RF class for every VALVE_MODELS member."""
 
     @pytest.mark.asyncio
     async def test_non_bluetooth_model_still_builds_rf_entity(self):
-        """A VALVE_MODELS member with no CTL_BT_WATER identity (MODEL_VALVE_245)
+        """A VALVE_MODELS member on controlWorkMode (models.HTV245FRF)
         still builds the plain RF entity, not the DP subclass."""
         _coordinator, _client, valve = await _build_valve_availability_timeline()
 
@@ -2066,37 +2054,56 @@ class TestBuildTrustedValveEntities:
             "hid": 10,
             "mid": 20,
             "addr": 1,
-            "model": MODEL_VALVE_245,
+            "model": models.HTV245FRF,
             "data": {"type": SILENT_DATA_TYPE, "zones": {1: {"open": False}}},
         }
         assert _build_trusted_valve_entities(coordinator, "10_20_1", info) == []
 
-    def test_model_code_is_passed_through_to_the_bluetooth_identity_check(self, monkeypatch):
-        """The catalog identity check is asked about this entry's own model_code, not None or a stray key."""
-        from custom_components.rainpoint import valve as valve_mod
+    def test_dp_endpoint_row_builds_the_dp_class(self, monkeypatch):
+        """The row's control endpoint picks the class, whatever the catalog says."""
+        import dataclasses
 
+        dp_row = dataclasses.replace(models.MODELS[models.HTV245FRF], control_endpoint=models.ControlEndpoint.WORK_MODE_DP)
+        monkeypatch.setattr(models, "MODELS", {**models.MODELS, models.HTV245FRF: dp_row})
         coordinator = MagicMock()
         info = {
             "hid": 10,
             "mid": 20,
             "addr": 1,
-            "model": MODEL_VALVE_245,
+            "model": models.HTV245FRF,
             "model_code": 41,
             "data": {"zones": {1: {"open": False}}},
         }
-        mock_identity = MagicMock(return_value=False)
-        monkeypatch.setattr(valve_mod, "has_bluetooth_control_identity", mock_identity)
 
-        _build_trusted_valve_entities(coordinator, "10_20_1", info)
+        built = _build_trusted_valve_entities(coordinator, "10_20_1", info)
 
-        mock_identity.assert_called_once_with(MODEL_VALVE_245, 41)
+        assert [type(entity) for entity in built] == [RainPointDpValveEntity]
+
+    def test_htv210b_keeps_the_dp_class_when_the_catalog_is_empty(self, monkeypatch):
+        """A catalog that failed to load cannot send the HTV210B to controlWorkMode."""
+        from aiorainpoint import _product_catalog, has_bluetooth_control_identity
+
+        monkeypatch.setattr(_product_catalog, "_CATALOG", {})
+        assert has_bluetooth_control_identity(models.HTV210B, 41) is False
+        info = {
+            "hid": 10,
+            "mid": 20,
+            "addr": 1,
+            "model": models.HTV210B,
+            "model_code": 41,
+            "data": {"zones": {1: {"open": False}}},
+        }
+
+        built = _build_trusted_valve_entities(MagicMock(), "10_20_1", info)
+
+        assert [type(entity) for entity in built] == [RainPointDpValveEntity]
 
 
 class TestHicStationValveBuilder:
     """Which sensor keys grow station valves, and how many."""
 
     @staticmethod
-    def _entry(model=MODEL_HIC801W, payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_UNSET):
+    def _entry(model=models.HIC801W, payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_UNSET):
         """Return a coordinator sensor entry for an HIC801W, decoded from `payload`."""
         entry = make_sensor_entry(
             hid=100,
@@ -2137,7 +2144,7 @@ class TestHicStationValveBuilder:
     def test_another_model_builds_nothing(self):
         """The builder is dispatched on the model, so a valve hub sharing this
         platform never grows station entities."""
-        assert self._build(self._entry(model=MODEL_VALVE_245)) == []
+        assert self._build(self._entry(model=models.HTV245FRF)) == []
 
     def test_a_silent_controller_builds_nothing(self):
         """A controller the integration cannot currently reach is never offered
@@ -2161,7 +2168,7 @@ def _make_station_valve(payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_UNSET, statio
         hid=100,
         mid=200,
         addr=3,
-        model=MODEL_HIC801W,
+        model=models.HIC801W,
         sub_name="Irrigation Controller",
         data=decode_hic801w(payload) if data is _UNSET else data,
     )

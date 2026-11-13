@@ -13,11 +13,11 @@ rather than on a mocked call.
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from aiorainpoint import RainPointClient
+from aiorainpoint import RainPointClient, models
 from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.rainpoint.const import DOMAIN, HUB_IDENTIFIER_PREFIX, MODEL_HTV210B
+from custom_components.rainpoint.const import DOMAIN, HUB_IDENTIFIER_PREFIX
 from tests.payload_samples import SAMPLE_HTV210B_TLV_PAYLOAD
 
 _SENTINEL = object()
@@ -238,7 +238,9 @@ def htv210b_hub_devices(mid=20, addr=1, model_code=41):
             "deviceName": "hub-mac",
             "productKey": "hub-pk",
             "homeName": "H",
-            "subDevices": [{"addr": addr, "name": "BT Valve", "model": MODEL_HTV210B, "modelCode": model_code, "softVer": "1.0"}],
+            "subDevices": [
+                {"addr": addr, "name": "BT Valve", "model": models.HTV210B, "modelCode": model_code, "softVer": "1.0"}
+            ],
         }
     ]
 

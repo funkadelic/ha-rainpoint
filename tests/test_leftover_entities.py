@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from aiorainpoint import models
 from homeassistant.const import ATTR_RESTORED
 
 from custom_components.rainpoint import (
@@ -2210,9 +2211,8 @@ class TestGenericRowRemovalReason:
     def test_the_graduated_model_reason_reads_exactly(self):
         """A model that graduated to a hand-written decoder produces this exact reason text."""
         from custom_components.rainpoint import _generic_row_removal_reason
-        from custom_components.rainpoint.const import MODEL_VALVE_245
 
-        sensors = {SENSOR_KEY: {"model": MODEL_VALVE_245}}
+        sensors = {SENSOR_KEY: {"model": models.HTV245FRF}}
         assert _generic_row_removal_reason(self.UNIQUE_ID, True, sensors) == "the model now has a hand-written decoder"
 
     def test_the_base_slug_is_cut_at_the_first_marker_not_the_last(self):
@@ -2223,10 +2223,9 @@ class TestGenericRowRemovalReason:
         that should have been recognised as graduated.
         """
         from custom_components.rainpoint import _generic_row_removal_reason
-        from custom_components.rainpoint.const import MODEL_VALVE_245
 
         unique_id = f"rainpoint_{SENSOR_KEY}{GENERIC_UNIQUE_ID_MARKER}extra{GENERIC_UNIQUE_ID_MARKER}humidity"
-        sensors = {SENSOR_KEY: {"model": MODEL_VALVE_245}}
+        sensors = {SENSOR_KEY: {"model": models.HTV245FRF}}
 
         assert _generic_row_removal_reason(unique_id, True, sensors) == "the model now has a hand-written decoder"
 
@@ -2245,9 +2244,8 @@ class TestGenericControlRowRemovalReason:
     def test_the_graduated_model_reason_reads_exactly(self):
         """A model that graduated to a hand-written decoder produces this exact reason text."""
         from custom_components.rainpoint import _generic_control_row_removal_reason
-        from custom_components.rainpoint.const import MODEL_VALVE_245
 
-        sensors = {SENSOR_KEY: {"model": MODEL_VALVE_245}}
+        sensors = {SENSOR_KEY: {"model": models.HTV245FRF}}
         assert _generic_control_row_removal_reason(self.UNIQUE_ID, True, sensors) == "the model now has a hand-written decoder"
 
     def test_the_force_disabled_override_reason_reads_exactly(self, monkeypatch):
@@ -2265,10 +2263,9 @@ class TestGenericControlRowRemovalReason:
     def test_the_base_slug_is_cut_at_the_first_marker_not_the_last(self):
         """A base slug carrying the marker twice must still split on the first one, or the sensors lookup misses."""
         from custom_components.rainpoint import _generic_control_row_removal_reason
-        from custom_components.rainpoint.const import MODEL_VALVE_245
 
         unique_id = f"rainpoint_{SENSOR_KEY}{GENERIC_CONTROL_UNIQUE_ID_MARKER}extra{GENERIC_CONTROL_UNIQUE_ID_MARKER}1"
-        sensors = {SENSOR_KEY: {"model": MODEL_VALVE_245}}
+        sensors = {SENSOR_KEY: {"model": models.HTV245FRF}}
 
         assert _generic_control_row_removal_reason(unique_id, True, sensors) == "the model now has a hand-written decoder"
 

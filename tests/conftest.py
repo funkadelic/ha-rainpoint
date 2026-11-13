@@ -768,7 +768,7 @@ sys.modules["aiohttp"].ClientError = _FakeClientError
 # `from homeassistant.core import callback` would otherwise resolve to a
 # MagicMock. Decorating a function with a MagicMock replaces it with the
 # mock's return value instead of the original function, silently breaking
-# any `@callback`-decorated method (e.g. aiorainpoint/mqtt.py's _handle_message).
+# any `@callback`-decorated method (e.g. aiorainpoint/_mqtt.py's _handle_message).
 # ---------------------------------------------------------------------------
 def _identity_callback(func):
     """Real stand-in for homeassistant.core.callback -- returns func unchanged."""

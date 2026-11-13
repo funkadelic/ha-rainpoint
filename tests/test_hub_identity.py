@@ -525,7 +525,7 @@ class TestPushReachesTheHubItNamesThroughARealCoordinator:
 
     @staticmethod
     def _push_client(hass, coordinator):
-        from aiorainpoint.mqtt import RainPointMqttClient
+        from aiorainpoint import RainPointMqttClient
 
         rainpoint_client = MagicMock()
         rainpoint_client.get_subscribe_status = AsyncMock(return_value={})

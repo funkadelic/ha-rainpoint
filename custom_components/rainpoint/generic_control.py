@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from aiorainpoint import (
+    UNCODED_VARIANT,
     RainPointApiError,
     get_catalog_entry,
     get_catalog_fingerprint,
@@ -46,7 +47,6 @@ from aiorainpoint import (
     is_ascii_declined,
     is_hand_written_model,
 )
-from aiorainpoint.product_catalog import UNCODED_VARIANT
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.valve import ValveEntity, ValveEntityFeature
 from homeassistant.core import CALLBACK_TYPE

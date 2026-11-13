@@ -6,17 +6,13 @@ import inspect
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiorainpoint import decode_hic801w
+from aiorainpoint import decode_hic801w, models
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.rainpoint.const import (
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
     HIC801W_STATION_COUNT,
-    MODEL_HIC801W,
-    MODEL_HTV210B,
-    MODEL_VALVE_245,
-    MODEL_VALVE_345,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, SILENT_DEBOUNCE_POLLS
 from custom_components.rainpoint.entity import LateEntityAdder, late_adders, register_late_adder
@@ -488,7 +484,7 @@ class TestNumberSetupEntry:
                     "mid": 2,
                     "addr": 3,
                     "sub_name": "HTV345",
-                    "model": MODEL_VALVE_345,
+                    "model": models.HTV345FRF,
                     "data": {"zones": {1: {}, 2: {}, 3: {}}},
                 }
             }
@@ -504,7 +500,7 @@ class TestNumberSetupEntry:
         added.assert_called_once()
         entities = added.call_args[0][0]
         assert [entity._zone_num for entity in entities] == [1, 2, 3]
-        assert all(entity._sensor_info["model"] == MODEL_VALVE_345 for entity in entities)
+        assert all(entity._sensor_info["model"] == models.HTV345FRF for entity in entities)
 
     @pytest.mark.asyncio
     async def test_setup_entry_skips_non_valve_models(self):
@@ -678,7 +674,7 @@ class TestNumberSetupEntry:
                     "hid": 10,
                     "mid": 20,
                     "addr": 1,
-                    "model": MODEL_HIC801W,
+                    "model": models.HIC801W,
                     "data": decode_hic801w(SAMPLE_HIC801W_IDLE_PAYLOAD),
                 }
             }
@@ -1201,7 +1197,7 @@ class TestSilentUnitGuardRealTimeline:
         await coordinator.async_refresh()
         entry = coordinator.data["sensors"][key]
         assert entry["data"]["type"] == SILENT_DATA_TYPE
-        assert entry["model"] == MODEL_HTV210B
+        assert entry["model"] == models.HTV210B
         assert captured == []
 
     @pytest.mark.asyncio
@@ -1451,7 +1447,7 @@ class TestDurationRefusalRealTimeline:
                 "deviceName": "d",
                 "productKey": "pk",
                 "homeName": "H",
-                "subDevices": [{"addr": 1, "name": "Hub A", "model": MODEL_VALVE_245, "softVer": "127"}],
+                "subDevices": [{"addr": 1, "name": "Hub A", "model": models.HTV245FRF, "softVer": "127"}],
             }
         ]
         client.get_multiple_device_status.return_value = make_valve_zone_status(zones_reported=True)
@@ -1834,7 +1830,7 @@ produced nothing" reading.
 """
 
 
-def _make_hic_entry(model=MODEL_HIC801W, payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_HIC_UNSET):
+def _make_hic_entry(model=models.HIC801W, payload=SAMPLE_HIC801W_IDLE_PAYLOAD, data=_HIC_UNSET):
     """Return a coordinator sensor entry for an HIC801W, decoded from `payload`."""
     entry = make_sensor_entry(
         hid=100,
@@ -1886,7 +1882,7 @@ class TestHicStationDurationBuilder:
 
     def test_another_model_builds_nothing(self):
         """The factory is dispatched on the model, so another model grows none."""
-        assert self._build(_make_hic_entry(model=MODEL_VALVE_245)) == []
+        assert self._build(_make_hic_entry(model=models.HTV245FRF)) == []
 
     def test_a_silent_controller_builds_nothing(self):
         """A controller the integration cannot reach is offered no setpoint."""

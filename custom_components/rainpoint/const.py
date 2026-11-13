@@ -1,51 +1,5 @@
-from aiorainpoint.models import (
-    HAND_WRITTEN_MODELS as HAND_WRITTEN_MODELS,
-    MODEL_CO2 as MODEL_CO2,
-    MODEL_DISPLAY_HUB as MODEL_DISPLAY_HUB,
-    MODEL_FLOWMETER as MODEL_FLOWMETER,
-    MODEL_HCS005FRF as MODEL_HCS005FRF,
-    MODEL_HCS008FRF as MODEL_HCS008FRF,
-    MODEL_HCS012ARF as MODEL_HCS012ARF,
-    MODEL_HCS014ARF as MODEL_HCS014ARF,
-    MODEL_HCS015ARF as MODEL_HCS015ARF,
-    MODEL_HCS015ARF_PLUS as MODEL_HCS015ARF_PLUS,
-    MODEL_HCS021FRF as MODEL_HCS021FRF,
-    MODEL_HCS024FRF_V1 as MODEL_HCS024FRF_V1,
-    MODEL_HCS026FRF as MODEL_HCS026FRF,
-    MODEL_HCS044FRF as MODEL_HCS044FRF,
-    MODEL_HCS0528ARF as MODEL_HCS0528ARF,
-    MODEL_HCS0530THO as MODEL_HCS0530THO,
-    MODEL_HIC801W as MODEL_HIC801W,
-    MODEL_HTP115FRF as MODEL_HTP115FRF,
-    MODEL_HTP160FRF as MODEL_HTP160FRF,
-    MODEL_HTV0540FRF as MODEL_HTV0540FRF,
-    MODEL_HTV113FRF as MODEL_HTV113FRF,
-    MODEL_HTV145FRF as MODEL_HTV145FRF,
-    MODEL_HTV157B as MODEL_HTV157B,
-    MODEL_HTV210B as MODEL_HTV210B,
-    MODEL_HTV213FRF as MODEL_HTV213FRF,
-    MODEL_HTV245FRF as MODEL_HTV245FRF,
-    MODEL_HTV345FRF as MODEL_HTV345FRF,
-    MODEL_HTV405FRF as MODEL_HTV405FRF,
-    MODEL_HTV445FRF as MODEL_HTV445FRF,
-    MODEL_HWS019WRF_V2 as MODEL_HWS019WRF_V2,
-    MODEL_MOISTURE_FULL as MODEL_MOISTURE_FULL,
-    MODEL_MOISTURE_SIMPLE as MODEL_MOISTURE_SIMPLE,
-    MODEL_POOL as MODEL_POOL,
-    MODEL_POOL_PLUS as MODEL_POOL_PLUS,
-    MODEL_RAIN as MODEL_RAIN,
-    MODEL_TEMPHUM as MODEL_TEMPHUM,
-    MODEL_VALVE_113 as MODEL_VALVE_113,
-    MODEL_VALVE_145 as MODEL_VALVE_145,
-    MODEL_VALVE_213 as MODEL_VALVE_213,
-    MODEL_VALVE_245 as MODEL_VALVE_245,
-    MODEL_VALVE_345 as MODEL_VALVE_345,
-    MODEL_VALVE_405 as MODEL_VALVE_405,
-    MODEL_VALVE_445 as MODEL_VALVE_445,
-    MODEL_VALVE_HUB as MODEL_VALVE_HUB,
-)
+from aiorainpoint import models
 
-# Display Hub model constant
 DOMAIN = "rainpoint"
 
 # Integration version
@@ -269,31 +223,8 @@ HIC801W_STATION_COUNT = 8
 # Membership here enrols a model in three things at once: valve.py and
 # number.py build its entities, and coordinator.py's
 # _preserve_recent_valve_command_state protects its command-versus-poll
-# staleness guard. Which write endpoint a zone commands through is a separate
-# question, decided by the catalog datapoint identity in aiorainpoint/trust.py, not by
-# this set.
-VALVE_MODELS = {
-    MODEL_VALVE_HUB,
-    MODEL_VALVE_113,
-    MODEL_VALVE_145,
-    MODEL_VALVE_213,
-    MODEL_VALVE_245,
-    MODEL_VALVE_345,
-    MODEL_VALVE_405,
-    MODEL_VALVE_445,
-    MODEL_HTV157B,
-    MODEL_HTP160FRF,
-    MODEL_HTP115FRF,
-    MODEL_HTV210B,
-    # MODEL_HIC801W is still deliberately absent, and station control shipping
-    # is what settled that rather than what changed it. This set means
-    # "zone-shaped valve model": every path it gates reads decoded["zones"],
-    # and the HIC801W carries no zones dict at all -- one aggregate record with
-    # a single running-station number instead. Enrolling it here would hand
-    # valve.py and number.py a model whose builders find no zones and emit
-    # nothing, and would put it through a staleness guard keyed on a mapping it
-    # does not have. Its control entities are built by its own station-shaped
-    # factories, dispatched on MODEL_HIC801W the way binary_sensor.py already
-    # dispatches its per-station entities, and its staleness guard is a branch
-    # of its own that preserves the whole aggregate record.
-}
+# staleness guard. Which write endpoint a zone commands through is the model
+# row's control_endpoint, not this set.
+VALVE_MODELS = frozenset(model for model, spec in models.MODELS.items() if spec.family in models.VALVE_FAMILIES)
+# The HIC801W stays out: it reports one running station rather than a zones
+# dict, so its control entities come from its own station-shaped factories.

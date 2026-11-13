@@ -27,9 +27,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiorainpoint import models
 
 from custom_components.rainpoint import binary_sensor as binary_sensor_module, coordinator as coordinator_module
-from custom_components.rainpoint.const import CONF_HIDS, DOMAIN, MODEL_HIC801W
+from custom_components.rainpoint.const import CONF_HIDS, DOMAIN
 from custom_components.rainpoint.coordinator import RainPointCoordinator
 from custom_components.rainpoint.diagnostic_sensors import (
     RainPointFirmwareVersionSensor,
@@ -67,7 +68,7 @@ def _hub_devices():
                 {
                     "addr": _SUB_ADDR,
                     "name": "Irrigation Controller",
-                    "model": MODEL_HIC801W,
+                    "model": models.HIC801W,
                     "modelCode": 279,
                     "softVer": "1.1.1026",
                 }
@@ -293,7 +294,7 @@ class TestHic801wWholeEntitySet:
     async def test_no_rssi_firmware_last_updated_or_unknown_fallback_entity_exists(self):
         """No per-sub-device RSSI, firmware or last-updated diagnostic, and no
         generic-fallback Unsupported sensor, exists anywhere in the union.
-        HIC801W is registered in HAND_WRITTEN_MODELS which locks it out of the
+        HIC801W is registered in models.HAND_WRITTEN_MODELS which locks it out of the
         generic and Unsupported-fallback paths entirely, and variant 279
         declares no STA_RSSI, so a diagnostic entity here would read available
         with no value while the real readings already exist on the 278 hub

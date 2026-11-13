@@ -5,12 +5,9 @@ from typing import Any
 
 from aiorainpoint import (
     decode_hic801w,
-    decode_htv145frf,
     decode_htv210b_dp_state,
-    decode_htv213frf_valve,
-    decode_valve_hub,
     encode_dp_duration_param,
-    has_bluetooth_control_identity,
+    models,
 )
 from homeassistant.components.valve import (
     ValveDeviceClass,
@@ -27,17 +24,6 @@ from .const import (
     CONF_GENERIC_CONTROL_ENABLED,
     DOMAIN,
     HIC801W_STATION_COUNT,
-    MODEL_HIC801W,
-    MODEL_HTP115FRF,
-    MODEL_HTP160FRF,
-    MODEL_HTV157B,
-    MODEL_VALVE_113,
-    MODEL_VALVE_145,
-    MODEL_VALVE_213,
-    MODEL_VALVE_245,
-    MODEL_VALVE_345,
-    MODEL_VALVE_405,
-    MODEL_VALVE_445,
     VALVE_MODELS,
 )
 from .coordinator import (
@@ -110,14 +96,11 @@ def _build_trusted_valve_entities(coordinator: RainPointCoordinator, key: str, i
     if data.get("type") == SILENT_DATA_TYPE:
         return []
 
-    # Endpoint selection is a function of the committed catalog's datapoint
-    # identity, never the model itself: a variant declaring the
-    # Bluetooth-backed control identity commands through
-    # RainPointDpValveEntity, every other admitted model through the RF
-    # RainPointValveEntity.
+    # The model row states its endpoint, so a catalog that fails to load cannot
+    # send a Bluetooth valve to controlWorkMode.
     entity_cls = (
         RainPointDpValveEntity
-        if has_bluetooth_control_identity(info.get("model"), info.get("model_code"))
+        if models.MODELS[info["model"]].control_endpoint == models.ControlEndpoint.WORK_MODE_DP
         else RainPointValveEntity
     )
 
@@ -154,7 +137,7 @@ def _build_hic801w_station_valves(coordinator: RainPointCoordinator, key: str, i
     a poll that built nothing and offers all eight on the poll the controller
     starts reporting.
     """
-    if info.get("model") != MODEL_HIC801W:
+    if info.get("model") != models.HIC801W:
         return []
     if (info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
         return []
@@ -362,19 +345,7 @@ class RainPointValveEntity(CoordinatorEntity[RainPointCoordinator], ValveEntity)
         device state without waiting for the next poll."""
         if not raw_state:
             return
-        model = self._sensor_info.get("model", "")
-        if model in (MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B, MODEL_HTP160FRF, MODEL_HTP115FRF):
-            decoded = decode_htv145frf(raw_state)
-        elif model in (
-            MODEL_VALVE_213,
-            MODEL_VALVE_245,
-            MODEL_VALVE_345,
-            MODEL_VALVE_405,
-            MODEL_VALVE_445,
-        ):
-            decoded = decode_htv213frf_valve(raw_state)
-        else:
-            decoded = decode_valve_hub(raw_state)
+        decoded = models.MODELS[self._sensor_info["model"]].decoder(raw_state)
         if not decoded:
             return
         current = dict(self.coordinator.data)

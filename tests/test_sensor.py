@@ -11,53 +11,25 @@ import pytest
 from aiorainpoint import (
     SINGLE_OUTLET_GALLONS_PER_COUNT,
     RainPointApiError,
+    decode_generic,
     decode_hic801w,
     decode_htv213frf_valve,
+    models,
 )
-from aiorainpoint.generic_decoder import decode_generic
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import UnitOfTime
 from homeassistant.helpers.entity import EntityCategory
 
-import custom_components.rainpoint.coordinator as _coord_module
 from custom_components.rainpoint import generic_control as generic_control_module, generic_entities as generic_entities_module
 from custom_components.rainpoint.const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     CONF_HIDS,
     DOMAIN,
     GENERIC_UNIQUE_ID_MARKER,
-    MODEL_CO2,
-    MODEL_DISPLAY_HUB,
-    MODEL_FLOWMETER,
-    MODEL_HCS005FRF,
-    MODEL_HCS015ARF,
-    MODEL_HCS024FRF_V1,
-    MODEL_HCS044FRF,
-    MODEL_HCS0528ARF,
-    MODEL_HIC801W,
-    MODEL_HTP115FRF,
-    MODEL_HTP160FRF,
-    MODEL_HTV157B,
-    MODEL_HTV210B,
-    MODEL_MOISTURE_FULL,
-    MODEL_MOISTURE_SIMPLE,
-    MODEL_POOL,
-    MODEL_POOL_PLUS,
-    MODEL_RAIN,
-    MODEL_TEMPHUM,
-    MODEL_VALVE_113,
-    MODEL_VALVE_145,
-    MODEL_VALVE_213,
-    MODEL_VALVE_245,
-    MODEL_VALVE_345,
-    MODEL_VALVE_405,
-    MODEL_VALVE_445,
-    MODEL_VALVE_HUB,
 )
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from custom_components.rainpoint.entity import late_adders, register_late_adder
 from custom_components.rainpoint.sensor import (
-    _MODEL_FACTORIES,
     _SENSOR_MODEL_ALIASES,
     DisplayHubReadingSensor,
     RainPointCatalogReadingsSensor,
@@ -109,6 +81,7 @@ from custom_components.rainpoint.sensor import (
     RainPointZoneWaterUsageSensor,
     _create_hub_entities,
     _create_sensor_entities,
+    _factory_for,
     _LateSensorEntityAdder,
     _make_co2_entities,
     _make_diagnostic_entities,
@@ -209,13 +182,13 @@ class TestAsyncSetupEntryDispatch:
 
     @pytest.mark.asyncio
     async def test_setup_entry_moisture_simple_creates_correct_entities(self):
-        """MODEL_MOISTURE_SIMPLE -> 1 moisture + 4 diagnostic = 5 entities + raw payload = 6 total."""
+        """models.HCS026FRF -> 1 moisture + 4 diagnostic = 5 entities + raw payload = 6 total."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_MOISTURE_SIMPLE,
+            model=models.HCS026FRF,
             sub_name="Soil 1",
             data={"type": "moisture_simple", "moisture_percent": 50, "rssi_dbm": -80, "battery_percent": 75},
         )
@@ -236,13 +209,13 @@ class TestAsyncSetupEntryDispatch:
 
     @pytest.mark.asyncio
     async def test_setup_entry_moisture_full_creates_correct_entities(self):
-        """MODEL_MOISTURE_FULL -> 3 reading sensors + 3 diagnostic + 1 raw payload = 7."""
+        """models.HCS021FRF -> 3 reading sensors + 3 diagnostic + 1 raw payload = 7."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_MOISTURE_FULL,
+            model=models.HCS021FRF,
             sub_name="Soil Full",
             data={
                 "type": "moisture_full",
@@ -269,13 +242,13 @@ class TestAsyncSetupEntryDispatch:
 
     @pytest.mark.asyncio
     async def test_setup_entry_rain_creates_4_rain_sensors(self):
-        """MODEL_RAIN -> 4 rain sensors + 1 raw payload + 1 catalog coverage = 6."""
+        """models.HCS012ARF -> 4 rain sensors + 1 raw payload + 1 catalog coverage = 6."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_RAIN,
+            model=models.HCS012ARF,
             sub_name="Rain Gauge",
             data={
                 "type": "rain",
@@ -303,13 +276,13 @@ class TestAsyncSetupEntryDispatch:
 
     @pytest.mark.asyncio
     async def test_setup_entry_display_hub_creates_reading_sensors(self):
-        """MODEL_DISPLAY_HUB -> 3 reading sensors (from readings dict) + 1 raw payload = 4."""
+        """models.HWS019WRF_V2 -> 3 reading sensors (from readings dict) + 1 raw payload = 4."""
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_DISPLAY_HUB,
+            model=models.HWS019WRF_V2,
             sub_name="Display Hub",
             data={
                 "type": "display_hub",
@@ -490,14 +463,14 @@ class TestAsyncSetupEntryDispatch:
                 hid=100,
                 mid=200,
                 addr=1,
-                model=MODEL_MOISTURE_SIMPLE,
+                model=models.HCS026FRF,
                 data={"type": "moisture_simple", "moisture_percent": 50, "rssi_dbm": -80, "battery_percent": 75},
             ),
             "100_200_2": make_sensor_entry(
                 hid=100,
                 mid=200,
                 addr=2,
-                model=MODEL_RAIN,
+                model=models.HCS012ARF,
                 data={"type": "rain", "rain_last_hour_mm": 0, "rain_last_24h_mm": 0, "rain_last_7d_mm": 0, "rain_total_mm": 0},
             ),
         }
@@ -711,7 +684,7 @@ class TestRainSensor:
         """window_map only covers the four canonical windows; __init__ still
         has to name any other window rather than defaulting to a missing name."""
         key = "100_200_1"
-        info = make_sensor_entry(hid=100, mid=200, addr=1, model=MODEL_RAIN, data={"type": "rain"})
+        info = make_sensor_entry(hid=100, mid=200, addr=1, model=models.HCS012ARF, data={"type": "rain"})
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={key: info}))
 
         sensor = RainPointRainSensor(coordinator, key, info, key, "rain_custom_mm", "rain custom window")
@@ -1496,8 +1469,8 @@ class TestHCSSensorDispatch:
     @pytest.mark.parametrize(
         ("model", "data", "expected_moisture_like"),
         [
-            (MODEL_HCS005FRF, {"moisture_percent": 50}, 1),
-            (MODEL_HCS024FRF_V1, {"moisture_percent": 50, "temperature_c": 20, "illuminance_lux": 1000}, 3),
+            (models.HCS005FRF, {"moisture_percent": 50}, 1),
+            (models.HCS024FRF_V1, {"moisture_percent": 50, "temperature_c": 20, "illuminance_lux": 1000}, 3),
         ],
     )
     async def test_hcs_moisture_like_models(self, model, data, expected_moisture_like):
@@ -1515,8 +1488,8 @@ class TestHCSSensorDispatch:
     @pytest.mark.parametrize(
         "model",
         [
-            MODEL_HCS015ARF,
-            MODEL_HCS0528ARF,
+            models.HCS015ARF,
+            models.HCS0528ARF,
         ],
     )
     async def test_hcs_pool_like_models(self, model):
@@ -1542,19 +1515,19 @@ class TestHCSSensorDispatch:
     @pytest.mark.parametrize(
         ("model", "count"),
         [
-            ("HCS010WRF", 10),  # MODEL_FLOWMETER -> 7 flow + 3 shared diagnostics + 1 raw
-            ("HCS0530THO", 5),  # MODEL_CO2 -> 5 + 1 raw
-            ("HCS014ARF", 6),  # MODEL_TEMPHUM -> 6 + 1 raw
+            ("HCS010WRF", 10),  # models.HCS008FRF -> 7 flow + 3 shared diagnostics + 1 raw
+            ("HCS0530THO", 5),  # models.HCS0530THO -> 5 + 1 raw
+            ("HCS014ARF", 6),  # models.HCS014ARF -> 6 + 1 raw
         ],
     )
     async def test_core_models_dispatch(self, model, count):
         """Core non-HCS-variant models also dispatch to their entity classes."""
-        from custom_components.rainpoint.const import MODEL_CO2, MODEL_FLOWMETER, MODEL_TEMPHUM
+        from aiorainpoint import models
 
         MODEL_TO_CONST = {
-            "HCS010WRF": MODEL_FLOWMETER,
-            "HCS0530THO": MODEL_CO2,
-            "HCS014ARF": MODEL_TEMPHUM,
+            "HCS010WRF": models.HCS008FRF,
+            "HCS0530THO": models.HCS0530THO,
+            "HCS014ARF": models.HCS014ARF,
         }
         real_model = MODEL_TO_CONST[model]
         sensor_key = "100_200_1"
@@ -1596,15 +1569,15 @@ class TestHCSSensorDispatch:
 
     @pytest.mark.asyncio
     async def test_pool_plus_creates_9_entities(self):
-        """MODEL_POOL_PLUS creates 9 reading sensors + 1 raw payload."""
-        from custom_components.rainpoint.const import MODEL_POOL_PLUS
+        """models.HCS015ARF_PLUS creates 9 reading sensors + 1 raw payload."""
+        from aiorainpoint import models
 
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_POOL_PLUS,
+            model=models.HCS015ARF_PLUS,
             sub_name="Pool+",
             data={
                 "pool_tempcurrent": 25,
@@ -1627,15 +1600,15 @@ class TestHCSSensorDispatch:
 
     @pytest.mark.asyncio
     async def test_pool_creates_its_one_reading_entity(self):
-        """MODEL_POOL creates 1 reading sensor + 1 raw payload."""
-        from custom_components.rainpoint.const import MODEL_POOL
+        """models.HCS0528ARF creates 1 reading sensor + 1 raw payload."""
+        from aiorainpoint import models
 
         sensor_key = "100_200_1"
         sensor_info = make_sensor_entry(
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_POOL,
+            model=models.HCS0528ARF,
             sub_name="Pool",
             data={"tempcurrent": 24, "battery_percent": 85},
         )
@@ -1655,7 +1628,7 @@ class TestHtvValveDiagnosticDispatch:
     """
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [MODEL_VALVE_213, MODEL_VALVE_245, MODEL_VALVE_345, MODEL_VALVE_405, MODEL_VALVE_445])
+    @pytest.mark.parametrize("model", [models.HTV213FRF, models.HTV245FRF, models.HTV345FRF, models.HTV405FRF, models.HTV445FRF])
     async def test_valve_family_creates_the_rssi_sensor_and_no_battery_reading(self, model):
         """A valve entry yields an RSSI sensor plus the raw payload sensor, and no battery."""
         sensor_key = "100_200_1"
@@ -1700,7 +1673,7 @@ class TestSingleOutletTimerDispatch:
         return captured
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_VALVE_145, MODEL_HTV157B, MODEL_HTP160FRF, MODEL_HTP115FRF])
+    @pytest.mark.parametrize("model", [models.HTV113FRF, models.HTV145FRF, models.HTV157B, models.HTP160FRF, models.HTP115FRF])
     async def test_creates_rssi_and_run_duration(self, model):
         """All four models yield the same three entities off one reported outlet."""
         captured = await self._setup(
@@ -1725,10 +1698,10 @@ class TestSingleOutletTimerDispatch:
         assert rssi[0].device_info["manufacturer"] == "RainPoint"
         assert duration[0].device_info["manufacturer"] == "RainPoint"
         # 1 RSSI + 1 run duration + 1 raw payload + 1 catalog coverage, plus Water Used on the HTV145FRF.
-        assert len(captured) == (5 if model == MODEL_VALVE_145 else 4)
+        assert len(captured) == (5 if model == models.HTV145FRF else 4)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("model", [MODEL_VALVE_113, MODEL_HTV157B, MODEL_HTP160FRF, MODEL_HTP115FRF])
+    @pytest.mark.parametrize("model", [models.HTV113FRF, models.HTV157B, models.HTP160FRF, models.HTP115FRF])
     async def test_no_water_usage_entity(self, model):
         """STA_LASTUSAGE is uncalibrated on these models, so no entity for it even when decoded.
 
@@ -1755,7 +1728,7 @@ class TestSingleOutletTimerDispatch:
         """The HTV145FRF's calibrated last-run usage becomes the zone's Water Used entity."""
         captured = await self._setup(
             self._timer_entry(
-                MODEL_VALVE_145,
+                models.HTV145FRF,
                 {
                     "type": "valve_hub",
                     "zones": {
@@ -1787,7 +1760,7 @@ class TestSingleOutletTimerDispatch:
         """A first frame without STA_LASTUSAGE must not lose the entity for the session; it reads unknown."""
         captured = await self._setup(
             self._timer_entry(
-                MODEL_VALVE_145,
+                models.HTV145FRF,
                 {"type": "valve_hub", "zones": {1: {"open": False, "duration_seconds": 0}}, "rssi_dbm": -62},
             )
         )
@@ -1807,7 +1780,7 @@ class TestSingleOutletTimerDispatch:
         """
         captured = await self._setup(
             self._timer_entry(
-                MODEL_HTV157B,
+                models.HTV157B,
                 {"type": "valve_hub", "zones": {1: {"open": False, "duration_seconds": 0}}, "rssi_dbm": -90, "battery_flag": 2},
             )
         )
@@ -1824,7 +1797,7 @@ class TestSingleOutletTimerDispatch:
         errored before building one.
         """
         captured = await self._setup(
-            self._timer_entry(MODEL_VALVE_145, {"type": "valve_hub", "zones": zones, "rssi_dbm": -62, "battery_percent": 100})
+            self._timer_entry(models.HTV145FRF, {"type": "valve_hub", "zones": zones, "rssi_dbm": -62, "battery_percent": 100})
         )
 
         assert [e for e in captured if isinstance(e, RainPointZoneRunDurationSensor)] == []
@@ -1840,7 +1813,7 @@ class TestZoneWaterUsageSensor:
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_VALVE_245,
+            model=models.HTV245FRF,
             sub_name="Valve",
             data={"type": "valve_hub", "zones": zones, "rssi_dbm": -37, "battery_percent": 100},
         )
@@ -1888,7 +1861,7 @@ class TestZoneWaterUsageSensor:
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_VALVE_245,
+            model=models.HTV245FRF,
             sub_name="Valve",
             data={"type": "valve_hub", "rssi_dbm": -37, "battery_percent": 100},
         )
@@ -1963,7 +1936,7 @@ class TestZoneRunDurationSensor:
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_VALVE_245,
+            model=models.HTV245FRF,
             sub_name="Valve",
             data={"type": "valve_hub", "zones": zones, "rssi_dbm": -37, "battery_percent": 100},
         )
@@ -2041,7 +2014,7 @@ class TestZoneRunDurationSensor:
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_VALVE_245,
+            model=models.HTV245FRF,
             sub_name="Valve",
             data={"type": "valve_hub", "rssi_dbm": -37, "battery_percent": 100},
         )
@@ -2119,7 +2092,7 @@ class TestWiderValveFamilyUsageEntities:
     @pytest.mark.asyncio
     async def test_htv345_gets_one_usage_entity_per_zone(self):
         """The 3-zone capture carries usage records, so all three read a value."""
-        usage = await self._setup(MODEL_VALVE_345, SAMPLE_HTV345_TLV_PAYLOAD)
+        usage = await self._setup(models.HTV345FRF, SAMPLE_HTV345_TLV_PAYLOAD)
         assert len(usage) == 3
         assert [e.native_value for e in usage] == [0.0, 0.0, 0.0]
 
@@ -2131,7 +2104,7 @@ class TestWiderValveFamilyUsageEntities:
         unknown says "this zone reports no usage", where a missing entity
         would read as "this zone was not reported at all".
         """
-        usage = await self._setup(MODEL_VALVE_405, SAMPLE_HTV405_TLV_PAYLOAD)
+        usage = await self._setup(models.HTV405FRF, SAMPLE_HTV405_TLV_PAYLOAD)
         assert len(usage) == 4
         assert all(e.native_value is None for e in usage)
         assert all(e.extra_state_attributes["last_usage_counts"] is None for e in usage)
@@ -2139,7 +2112,7 @@ class TestWiderValveFamilyUsageEntities:
     @pytest.mark.asyncio
     async def test_htv445_reads_usage_on_the_one_zone_that_reported_it(self):
         """The HTV445FRF capture carries usage on zone 4 only, so the other three read zero."""
-        usage = await self._setup(MODEL_VALVE_445, SAMPLE_HTV445_TLV_PAYLOAD)
+        usage = await self._setup(models.HTV445FRF, SAMPLE_HTV445_TLV_PAYLOAD)
         assert len(usage) == 4
         assert [e.native_value for e in usage] == [0.0, 0.0, 0.0, pytest.approx(0.232)]
         assert [e.extra_state_attributes["last_usage_counts"] for e in usage] == [0, 0, 0, 116]
@@ -2170,7 +2143,7 @@ class TestWiderValveFamilyRunDurationEntities:
     @pytest.mark.asyncio
     async def test_htv345_gets_one_duration_entity_per_zone_in_ascending_order(self):
         """The 3-zone capture yields three duration entities, numbered 1 through 3, all idle."""
-        durations = await self._setup(MODEL_VALVE_345, SAMPLE_HTV345_TLV_PAYLOAD)
+        durations = await self._setup(models.HTV345FRF, SAMPLE_HTV345_TLV_PAYLOAD)
         assert len(durations) == 3
         assert [e._zone_num for e in durations] == [1, 2, 3]
         assert [e.native_value for e in durations] == [0, 0, 0]
@@ -2178,7 +2151,7 @@ class TestWiderValveFamilyRunDurationEntities:
     @pytest.mark.asyncio
     async def test_htv405_gets_one_duration_entity_per_zone_in_ascending_order(self):
         """The 4-zone capture yields four duration entities, numbered 1 through 4, all idle, no gap and no extra."""
-        durations = await self._setup(MODEL_VALVE_405, SAMPLE_HTV405_TLV_PAYLOAD)
+        durations = await self._setup(models.HTV405FRF, SAMPLE_HTV405_TLV_PAYLOAD)
         assert len(durations) == 4
         assert [e._zone_num for e in durations] == [1, 2, 3, 4]
         assert [e.native_value for e in durations] == [0, 0, 0, 0]
@@ -2186,7 +2159,7 @@ class TestWiderValveFamilyRunDurationEntities:
     @pytest.mark.asyncio
     async def test_htv445_gets_one_duration_entity_per_zone_in_ascending_order(self):
         """The HTV445FRF capture yields four duration entities, numbered 1 through 4, all idle."""
-        durations = await self._setup(MODEL_VALVE_445, SAMPLE_HTV445_TLV_PAYLOAD)
+        durations = await self._setup(models.HTV445FRF, SAMPLE_HTV445_TLV_PAYLOAD)
         assert len(durations) == 4
         assert [e._zone_num for e in durations] == [1, 2, 3, 4]
         assert [e.native_value for e in durations] == [0, 0, 0, 0]
@@ -2215,7 +2188,7 @@ class TestZoneRunDurationAcrossAFailedPoll:
             "deviceName": "d",
             "productKey": "pk",
             "homeName": "H",
-            "subDevices": [{"addr": cls._ADDR, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"}],
+            "subDevices": [{"addr": cls._ADDR, "name": "Valve", "model": models.HTV245FRF, "softVer": "127"}],
         }
 
     @classmethod
@@ -2303,7 +2276,7 @@ class TestTheStubsFailedPollContract:
             "deviceName": "d",
             "productKey": "pk",
             "homeName": "H",
-            "subDevices": [{"addr": cls._ADDR, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"}],
+            "subDevices": [{"addr": cls._ADDR, "name": "Valve", "model": models.HTV245FRF, "softVer": "127"}],
         }
 
     @classmethod
@@ -2444,7 +2417,7 @@ class TestRunDurationUniqueIdDisjointness:
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_VALVE_245,
+            model=models.HTV245FRF,
             sub_name="Valve",
             data={
                 "type": "valve_hub",
@@ -2514,7 +2487,7 @@ class TestZoneRunDurationLateArrival:
             "deviceName": "d",
             "productKey": "pk",
             "homeName": "H",
-            "subDevices": [{"addr": addr, "name": "Valve", "model": MODEL_VALVE_245, "softVer": "127"}],
+            "subDevices": [{"addr": addr, "name": "Valve", "model": models.HTV245FRF, "softVer": "127"}],
         }
 
     @staticmethod
@@ -2567,7 +2540,7 @@ class TestHtv210bDispatch:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HTV210B,
+            model=models.HTV210B,
             sub_name="BT Valve",
             data={"type": "valve_hub", "zones": zones, "rssi_dbm": -76, "battery_percent": 100},
         )
@@ -2619,7 +2592,7 @@ class TestHtv210bDispatch:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HTV210B,
+            model=models.HTV210B,
             sub_name="BT Valve",
             data={"type": "valve_hub", "rssi_dbm": -76, "battery_percent": 100},
         )
@@ -2645,7 +2618,7 @@ class TestHic801wDispatch:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HIC801W,
+            model=models.HIC801W,
             sub_name="Irrigation Controller",
             data={
                 "type": "irrigation_controller",
@@ -2742,7 +2715,7 @@ class TestHicCurrentStationSensor:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HIC801W,
+            model=models.HIC801W,
             sub_name="Irrigation Controller",
             data=None
             if current_station is _HIC801W_DATA_MISSING
@@ -2784,7 +2757,7 @@ class TestHicRunTimingSensors:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HIC801W,
+            model=models.HIC801W,
             sub_name="Irrigation Controller",
             data=decoded,
         )
@@ -2845,7 +2818,7 @@ class TestHicRunTimingSensors:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HIC801W,
+            model=models.HIC801W,
             sub_name="Irrigation Controller",
             data={"type": "irrigation_controller", "run_ends_at": "not-a-timestamp"},
         )
@@ -2918,7 +2891,7 @@ class TestHicProgramStationSensors:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HIC801W,
+            model=models.HIC801W,
             sub_name="Irrigation Controller",
             data=decoded,
         )
@@ -3005,10 +2978,10 @@ class TestSilentSensorDispatch:
 
     @pytest.mark.asyncio
     async def test_htv210b_silent_entry_yields_not_reporting_not_the_factory_pair(self):
-        """MODEL_HTV210B has a factory (_make_htv210b_entities), but a silent entry
+        """models.HTV210B has a factory (_make_htv210b_entities), but a silent entry
         must never reach it: the silent dispatch runs first, so no battery/RSSI
         pair, no zone sensors, and no Raw Payload sensor appear."""
-        captured = await self._setup(self._silent_entry(MODEL_HTV210B))
+        captured = await self._setup(self._silent_entry(models.HTV210B))
 
         assert len(captured) == 1
         assert isinstance(captured[0], RainPointNotReportingSensor)
@@ -3164,7 +3137,7 @@ class TestZoneStateSensor:
             hid=100,
             mid=200,
             addr=3,
-            model=MODEL_HTV210B,
+            model=models.HTV210B,
             sub_name="BT Valve",
             data={"type": "valve_hub", "zones": zones, "rssi_dbm": -76, "battery_percent": 100},
         )
@@ -3236,7 +3209,7 @@ def _silent_wrapper_hub_record():
     Empty identity fields make is_hub_record return False, so no hub entities
     are created and the captured entity list holds sub-device entities only.
     """
-    return make_silent_wrapper_hub_record(model=MODEL_HTV210B)
+    return make_silent_wrapper_hub_record(model=models.HTV210B)
 
 
 class TestSilentEntityAppearsWithinTheSession:
@@ -3345,13 +3318,13 @@ class TestLateSensorEntityAdder:
             hid=100,
             mid=200,
             addr=1,
-            model=MODEL_MOISTURE_SIMPLE,
+            model=models.HCS026FRF,
             sub_name="Soil",
             data={"type": "moisture", "moisture_percent": 42},
         )
 
     @staticmethod
-    def _silent_entry(model=MODEL_HTV210B):
+    def _silent_entry(model=models.HTV210B):
         """A silent entry for the same key."""
         return make_sensor_entry(
             hid=100,
@@ -3769,9 +3742,8 @@ class TestFlowMeterEndToEnd:
     @pytest.mark.asyncio
     async def test_captured_frame_reaches_every_flow_entity(self):
         """Decode the real payload, run the real platform setup, read the states back."""
-        from aiorainpoint import decode_flow_meter
+        from aiorainpoint import decode_flow_meter, models
 
-        from custom_components.rainpoint.const import MODEL_FLOWMETER
         from tests.payload_samples import FLOWMETER_IDLE_HEX
 
         sensor_key = "233182_318806_1"
@@ -3779,7 +3751,7 @@ class TestFlowMeterEndToEnd:
             hid=233182,
             mid=318806,
             addr=1,
-            model=MODEL_FLOWMETER,
+            model=models.HCS008FRF,
             sub_name="Water Flow Meter",
             data=decode_flow_meter(FLOWMETER_IDLE_HEX),
         )
@@ -3804,9 +3776,8 @@ class TestFlowMeterEndToEnd:
     @pytest.mark.asyncio
     async def test_no_flow_entity_reads_unknown_on_a_complete_frame(self):
         """A complete frame must leave nothing unknown, which is the state the placeholder left them all in."""
-        from aiorainpoint import decode_flow_meter
+        from aiorainpoint import decode_flow_meter, models
 
-        from custom_components.rainpoint.const import MODEL_FLOWMETER
         from tests.payload_samples import FLOWMETER_FLOWING_HEX
 
         sensor_key = "233182_318806_1"
@@ -3814,7 +3785,7 @@ class TestFlowMeterEndToEnd:
             hid=233182,
             mid=318806,
             addr=1,
-            model=MODEL_FLOWMETER,
+            model=models.HCS008FRF,
             sub_name="Water Flow Meter",
             data=decode_flow_meter(FLOWMETER_FLOWING_HEX),
         )
@@ -3845,23 +3816,23 @@ class TestEveryDecodableModelIsServed:
         {
             # Its frame carries no signal record, and nothing confirms its zone
             # durations behave like the other hubs' run duration.
-            MODEL_VALVE_HUB,
+            models.HTV0540FRF,
         }
     )
 
     @staticmethod
     def _decodable_models() -> set:
-        """Every model reaching a hand-written decode.
-
-        MODEL_DISPLAY_HUB is joined in because `_decode_subdevice_payload`
-        dispatches it as a named special case rather than through the registry.
-        """
-        return set(_coord_module.DECODER_REGISTRY) | {MODEL_DISPLAY_HUB}
+        """Every model reaching a hand-written decode."""
+        return set(models.MODELS)
 
     @staticmethod
     def _has_factory(model: str) -> bool:
         """Resolve aliases the way the platform does before looking the model up."""
-        return _SENSOR_MODEL_ALIASES.get(model, model) in _MODEL_FACTORIES
+        return _factory_for(_SENSOR_MODEL_ALIASES.get(model, model)) is not None
+
+    def test_a_record_with_no_model_has_no_factory(self):
+        """A sub-device record missing its model resolves to no factory."""
+        assert _factory_for(None) is None
 
     def test_no_decodable_model_silently_builds_nothing(self):
         """Necessary but not sufficient: a factory can still return []."""
@@ -3883,7 +3854,7 @@ class TestEveryDecodableModelIsServed:
 
     def test_an_unserved_model_really_does_build_no_readings(self):
         """Pins what the platform produces, which the map check cannot see."""
-        info = {"data": {"type": "valve_hub", "zones": {}}, "model": MODEL_VALVE_HUB, "model_code": None}
+        info = {"data": {"type": "valve_hub", "zones": {}}, "model": models.HTV0540FRF, "model_code": None}
 
         built = _create_sensor_entities(MagicMock(), "100_200_1", info, generic_enabled=False)
 
@@ -4333,7 +4304,7 @@ class TestDisplayHubReadingSensorRealInit:
     def test_real_init_sets_unique_id_name_and_device_info(self):
         """DisplayHubReadingSensor's real __init__ sets unique_id, name and device_info from its own args."""
         info = make_sensor_entry(
-            hid=50, mid=51, addr=1, model=MODEL_DISPLAY_HUB, data={"type": "display_hub", "readings": {"temp": "707"}}
+            hid=50, mid=51, addr=1, model=models.HWS019WRF_V2, data={"type": "display_hub", "readings": {"temp": "707"}}
         )
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={"50_51_1": info}))
 
@@ -4405,7 +4376,7 @@ class TestMakeRainEntities:
             "rain_last_7d_mm": 42.0,
             "rain_total_mm": 100.0,
         }
-        info = make_sensor_entry(hid=70, mid=71, addr=1, model=MODEL_RAIN, data=data)
+        info = make_sensor_entry(hid=70, mid=71, addr=1, model=models.HCS012ARF, data=data)
         coordinator = _make_mock_coordinator(make_coordinator_data(sensors={base_slug: info}))
 
         entities = _make_rain_entities(coordinator, base_slug, info, base_slug)
@@ -4447,7 +4418,7 @@ class TestFactoryEntityWiring:
     def test_make_diagnostic_entities(self):
         """_make_diagnostic_entities wires RSSI, firmware and last-updated to the real data."""
         key, info, coordinator = self._coordinator_and_info(
-            81, 82, 1, MODEL_HCS044FRF, {"rssi_dbm": -55, "device_timestamp": "2024-01-01T00:00:00+00:00"}
+            81, 82, 1, models.HCS044FRF, {"rssi_dbm": -55, "device_timestamp": "2024-01-01T00:00:00+00:00"}
         )
         entities = _make_diagnostic_entities(coordinator, key, info, key)
         assert len(entities) == 3
@@ -4465,7 +4436,7 @@ class TestFactoryEntityWiring:
             83,
             84,
             1,
-            MODEL_MOISTURE_SIMPLE,
+            models.HCS026FRF,
             {
                 "type": "moisture_simple",
                 "moisture_percent": 33,
@@ -4492,7 +4463,7 @@ class TestFactoryEntityWiring:
             85,
             86,
             1,
-            MODEL_MOISTURE_FULL,
+            models.HCS021FRF,
             {
                 "type": "moisture_full",
                 "moisture_percent": 44,
@@ -4525,7 +4496,7 @@ class TestFactoryEntityWiring:
             87,
             88,
             1,
-            MODEL_TEMPHUM,
+            models.HCS014ARF,
             {
                 "tempcurrent": 20,
                 "temphigh": 25,
@@ -4556,7 +4527,7 @@ class TestFactoryEntityWiring:
             89,
             90,
             1,
-            MODEL_FLOWMETER,
+            models.HCS008FRF,
             {
                 "flowrate": 1.1,
                 "flowcurrentused": 2.2,
@@ -4582,7 +4553,7 @@ class TestFactoryEntityWiring:
     def test_make_co2_entities(self):
         """_make_co2_entities wires all five CO2 readings to the real data, in order."""
         key, info, coordinator = self._coordinator_and_info(
-            91, 92, 1, MODEL_CO2, {"co2": 600, "co2low": 400, "co2high": 800, "co2temp": 22, "co2humidity": 45}
+            91, 92, 1, models.HCS0530THO, {"co2": 600, "co2low": 400, "co2high": 800, "co2temp": 22, "co2humidity": 45}
         )
         entities = _make_co2_entities(coordinator, key, info, key)
         assert len(entities) == 5
@@ -4600,7 +4571,7 @@ class TestFactoryEntityWiring:
 
     def test_make_pool_entities(self):
         """_make_pool_entities wires the single pool temperature reading to the real data."""
-        key, info, coordinator = self._coordinator_and_info(93, 94, 1, MODEL_POOL, {"tempcurrent": 27})
+        key, info, coordinator = self._coordinator_and_info(93, 94, 1, models.HCS0528ARF, {"tempcurrent": 27})
         entities = _make_pool_entities(coordinator, key, info, key)
         assert len(entities) == 1
         self._assert_all_wired(entities, key, coordinator)
@@ -4612,7 +4583,7 @@ class TestFactoryEntityWiring:
             95,
             96,
             1,
-            MODEL_POOL_PLUS,
+            models.HCS015ARF_PLUS,
             {
                 "pool_tempcurrent": 27,
                 "pool_temphigh": 29,
@@ -4645,7 +4616,7 @@ class TestFactoryEntityWiring:
 
     def test_make_hcs_moisture_only_entities(self):
         """_make_hcs_moisture_only_entities wires the single simple moisture reading to the real data."""
-        key, info, coordinator = self._coordinator_and_info(97, 98, 1, MODEL_HCS005FRF, {"moisture_percent": 55})
+        key, info, coordinator = self._coordinator_and_info(97, 98, 1, models.HCS005FRF, {"moisture_percent": 55})
         entities = _make_hcs_moisture_only_entities(coordinator, key, info, key)
         assert len(entities) == 1
         self._assert_all_wired(entities, key, coordinator)
@@ -4655,7 +4626,7 @@ class TestFactoryEntityWiring:
     def test_make_hcs_multisensor_entities(self):
         """_make_hcs_multisensor_entities wires moisture, temperature and illuminance to the real data."""
         key, info, coordinator = self._coordinator_and_info(
-            99, 100, 1, MODEL_HCS024FRF_V1, {"moisture_percent": 66, "temperature_c": 19.0, "illuminance_lux": 300}
+            99, 100, 1, models.HCS024FRF_V1, {"moisture_percent": 66, "temperature_c": 19.0, "illuminance_lux": 300}
         )
         entities = _make_hcs_multisensor_entities(coordinator, key, info, key)
         assert len(entities) == 3
@@ -4671,7 +4642,7 @@ class TestFactoryEntityWiring:
     def test_make_display_hub_entities(self):
         """_make_display_hub_entities builds one entity per reading key and reads its real value."""
         key, info, coordinator = self._coordinator_and_info(
-            101, 102, 1, MODEL_DISPLAY_HUB, {"type": "display_hub", "readings": {"temp": "707", "humidity": "42"}}
+            101, 102, 1, models.HWS019WRF_V2, {"type": "display_hub", "readings": {"temp": "707", "humidity": "42"}}
         )
         entities = _make_display_hub_entities(coordinator, key, info, key)
         assert len(entities) == 2
@@ -4681,7 +4652,7 @@ class TestFactoryEntityWiring:
 
     def test_make_display_hub_entities_with_no_readings_key_yields_no_entities(self):
         """readings defaults to {}, not None: iterating it must never raise."""
-        key, info, coordinator = self._coordinator_and_info(103, 104, 1, MODEL_DISPLAY_HUB, {"type": "display_hub"})
+        key, info, coordinator = self._coordinator_and_info(103, 104, 1, models.HWS019WRF_V2, {"type": "display_hub"})
         entities = _make_display_hub_entities(coordinator, key, info, key)
         assert entities == []
 

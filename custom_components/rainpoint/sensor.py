@@ -12,6 +12,7 @@ from aiorainpoint import (
     get_catalog_entry,
     get_catalog_variant_codes,
     is_ascii_payload,
+    models,
     parse_entries,
     split_prefix,
 )
@@ -34,32 +35,6 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_GENERIC_ENTITIES_ENABLED,
     DOMAIN,
-    MODEL_CO2,
-    MODEL_DISPLAY_HUB,
-    MODEL_FLOWMETER,
-    # New HCS sensor models
-    MODEL_HCS005FRF,
-    MODEL_HCS015ARF,
-    MODEL_HCS024FRF_V1,
-    MODEL_HCS044FRF,
-    MODEL_HIC801W,
-    MODEL_HTP115FRF,
-    MODEL_HTP160FRF,
-    MODEL_HTV157B,
-    MODEL_HTV210B,
-    MODEL_MOISTURE_FULL,
-    MODEL_MOISTURE_SIMPLE,
-    MODEL_POOL,
-    MODEL_POOL_PLUS,
-    MODEL_RAIN,
-    MODEL_TEMPHUM,
-    MODEL_VALVE_113,
-    MODEL_VALVE_145,
-    MODEL_VALVE_213,
-    MODEL_VALVE_245,
-    MODEL_VALVE_345,
-    MODEL_VALVE_405,
-    MODEL_VALVE_445,
 )
 from .coordinator import (
     NO_STATUS_PAYLOAD_MARKER,
@@ -101,7 +76,7 @@ _ICON_DURATION = "mdi:timer-outline"
 # below stay flat: each variant is rebound to its base model before the if/elif
 # runs, so we don't repeat identical entity-creation blocks per variant.
 _SENSOR_MODEL_ALIASES: dict[str, str] = {
-    MODEL_HCS015ARF: MODEL_POOL,
+    models.HCS015ARF: models.HCS0528ARF,
 }
 
 
@@ -398,7 +373,7 @@ def _make_hcs_moisture_only_entities(coordinator, key, info, base_slug):
 def _make_hcs_multisensor_entities(coordinator, key, info, base_slug):
     """Multi-sensor (moisture + temperature + illuminance).
 
-    Distinct from MODEL_MOISTURE_FULL: this group does not emit the generic
+    Distinct from models.HCS021FRF: this group does not emit the generic
     RSSI, battery, firmware, and last-updated diagnostic entities.
     """
     return [
@@ -420,33 +395,42 @@ def _make_unknown_entities(coordinator, key, info, base_slug):
 # Aliased models (see _SENSOR_MODEL_ALIASES) are resolved to their canonical
 # model before lookup, so they share factories with their base model.
 _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
-    MODEL_DISPLAY_HUB: _make_display_hub_entities,
-    MODEL_MOISTURE_SIMPLE: _make_moisture_simple_entities,
-    MODEL_MOISTURE_FULL: _make_moisture_full_entities,
-    MODEL_RAIN: _make_rain_entities,
-    MODEL_TEMPHUM: _make_temphum_entities,
-    MODEL_FLOWMETER: _make_flowmeter_entities,
-    MODEL_CO2: _make_co2_entities,
-    MODEL_POOL: _make_pool_entities,
-    MODEL_POOL_PLUS: _make_pool_plus_entities,
-    MODEL_HCS005FRF: _make_hcs_moisture_only_entities,
-    MODEL_HCS024FRF_V1: _make_hcs_multisensor_entities,
+    models.HWS019WRF_V2: _make_display_hub_entities,
+    models.HCS026FRF: _make_moisture_simple_entities,
+    models.HCS021FRF: _make_moisture_full_entities,
+    models.HCS012ARF: _make_rain_entities,
+    models.HCS014ARF: _make_temphum_entities,
+    models.HCS008FRF: _make_flowmeter_entities,
+    models.HCS0530THO: _make_co2_entities,
+    models.HCS0528ARF: _make_pool_entities,
+    models.HCS015ARF_PLUS: _make_pool_plus_entities,
+    models.HCS005FRF: _make_hcs_moisture_only_entities,
+    models.HCS024FRF_V1: _make_hcs_multisensor_entities,
     # Diagnostics only: the wet/dry reading is a binary sensor, and the frame's
     # other two datapoints are unproven and go unread.
-    MODEL_HCS044FRF: _make_diagnostic_entities,
-    MODEL_VALVE_113: _make_single_outlet_timer_entities,
-    MODEL_VALVE_145: _make_htv145frf_entities,
-    MODEL_HTV157B: _make_single_outlet_timer_entities,
-    MODEL_HTP160FRF: _make_single_outlet_timer_entities,
-    MODEL_HTP115FRF: _make_single_outlet_timer_entities,
-    MODEL_VALVE_213: _make_htv_valve_diagnostic_entities,
-    MODEL_VALVE_245: _make_htv_valve_diagnostic_entities,
-    MODEL_VALVE_345: _make_htv_valve_diagnostic_entities,
-    MODEL_VALVE_405: _make_htv_valve_diagnostic_entities,
-    MODEL_VALVE_445: _make_htv_valve_diagnostic_entities,
-    MODEL_HTV210B: _make_htv210b_entities,
-    MODEL_HIC801W: _make_hic801w_entities,
+    models.HCS044FRF: _make_diagnostic_entities,
+    # Overrides its family's factory for the water-used sensor.
+    models.HTV145FRF: _make_htv145frf_entities,
 }
+
+# Valve and controller models resolve by family when no model row matches. The
+# HTV0540FRF valve hub matches neither, so it gets only Raw Payload.
+_FAMILY_FACTORIES: dict[models.Family, Callable[..., list]] = {
+    models.Family.SINGLE_OUTLET_TIMER: _make_single_outlet_timer_entities,
+    models.Family.ZONE_VALVE: _make_htv_valve_diagnostic_entities,
+    models.Family.BT_VALVE: _make_htv210b_entities,
+    models.Family.STATION_CONTROLLER: _make_hic801w_entities,
+}
+
+
+def _factory_for(model: str | None) -> Callable[..., list] | None:
+    """Return the model's own factory, else its family's, else None."""
+    if model is None:
+        return None
+    factory = _MODEL_FACTORIES.get(model)
+    if factory is None and (spec := models.MODELS.get(model)) is not None:
+        factory = _FAMILY_FACTORIES.get(spec.family)
+    return factory
 
 
 def _create_hub_entities(coordinator, hubs_cfg):
@@ -496,7 +480,7 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
 
     if (info.get("data") or {}).get("type") == SILENT_DATA_TYPE:
         # Must run before the factory lookup: a silent entry has no payload of
-        # any kind, but MODEL_HTV210B -- the device this guard was written for --
+        # any kind, but models.HTV210B -- the device this guard was written for --
         # HAS a factory (_make_htv210b_entities), and reaching it here would
         # emit a signal sensor that reads available with a native_value of
         # None, exactly the "looks wired up while reading nothing" outcome this
@@ -505,7 +489,7 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
         # is nothing for either to hold.
         return [RainPointNotReportingSensor(coordinator, key, info, base_slug)]
 
-    factory = _MODEL_FACTORIES.get(model)
+    factory = _factory_for(model)
     if factory is not None:
         entities = list(factory(coordinator, key, info, base_slug))
         # Only on the served path: RainPointUnknownSensor already carries the
@@ -1763,7 +1747,7 @@ class RainPointZoneWaterUsageSensor(RainPointZoneSensorBase):
 
     The value is a converted flow count, not a metered volume: the device
     reports a raw count and the gallons-per-count factor is calibrated from a
-    single RainPoint-app reading per model family (see aiorainpoint/decoders.py).
+    single RainPoint-app reading per model family (see aiorainpoint/_decoders.py).
     Two consequences follow, and both are deliberate.
 
     There is no device_class. SensorDeviceClass.WATER accepts only the TOTAL
@@ -2055,7 +2039,7 @@ class RainPointHicRunEndsAtSensor(RainPointHic801wSensorBase):
     ways and must never be arithmetic on each other's terms.
 
     The decoder's run_ends_at is a deliberately naive local wall-clock ISO
-    string (aiorainpoint/decoders.py's decode_packed_timestamp docstring), and Home
+    string (aiorainpoint/_decoders.py's decode_packed_timestamp docstring), and Home
     Assistant raises ValueError on a naive datetime for a TIMESTAMP sensor
     (homeassistant/components/sensor/__init__.py:620-624). dt_util.as_local
     attaches Home Assistant's own configured timezone to a naive input

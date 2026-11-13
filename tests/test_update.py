@@ -1,7 +1,7 @@
 """Tests for the hub firmware update platform (update.py) and its client call.
 
 Feature-scoped rather than module-scoped: the behaviour is one round trip that
-spans ``aiorainpoint/client.py``'s ``get_hub_firmware_info`` and the entity that renders
+spans ``aiorainpoint/_client.py``'s ``get_hub_firmware_info`` and the entity that renders
 its two possible shapes, and splitting it would put the payload fixtures in one
 file and the assertions about them in another.
 
