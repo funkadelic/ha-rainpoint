@@ -4,6 +4,20 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.27.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.26.1...v1.27.0) (2026-11-13)
 
+### What's new
+
+**Nothing changes for you**
+
+This release updates aiorainpoint to 0.3.0. The integration now gets how to read and control each device model from the model list in aiorainpoint, instead of keeping its own copy. Your devices and entities stay as they are, and there is nothing to set up.
+
+### What's new in aiorainpoint 0.3.0
+
+**One list of supported models**
+
+Each model the library supports now has a single entry that says how to read its data, what kind of device it is and, for valves and controllers, which unit its run time uses and how to open and close it. Adding a new model starts with one new entry there. Every supported model's readings are also tested against saved samples, so an update that changes what your device reports gets caught before it ships.
+
+As always, if your device is missing support, please [submit a ticket](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) so that it can be added.
+
 
 ### Fixed
 
