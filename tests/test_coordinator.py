@@ -3838,6 +3838,23 @@ class TestTrackOrphanedKeys:
             "subDevices": [{"addr": addr, "model": "HTV210B", "name": f"Sub{addr}", "softVer": "1.0"} for addr in addrs],
         }
 
+    def test_device_delete_waits_out_the_orphan_window_poll_by_poll(self):
+        """A key seen this session stays short of the window until its thirtieth
+        consecutive absence; a key never seen this session is never held."""
+        coord, _ = _make_coord()
+        short = _coord_module.RainPointCoordinator.keys_short_of_orphan_window
+
+        _TRACK_ORPHANS(coord, [self._hub(addrs=(1,))])
+        assert short(coord) == frozenset({self.KEY})
+
+        for _ in range(_coord_module.ORPHANED_KEY_DEBOUNCE_POLLS - 1):
+            _TRACK_ORPHANS(coord, [self._hub()])
+            assert short(coord) == frozenset({self.KEY})
+
+        _TRACK_ORPHANS(coord, [self._hub()])
+        assert short(coord) == frozenset()
+        assert "100_200_9" not in short(coord)
+
     def test_the_boundary_is_the_thirtieth_consecutive_absence(self):
         """Pinned in both directions, reading the constant rather than the
         literal 30: one short of the threshold does not age out, and the
@@ -8106,3 +8123,9 @@ class TestStateSignatureAgainstCapturedPayloads:
                 }
 
         assert leaks == set()
+
+
+def test_provisionally_absent_hub_keys_formats_each_windowed_hub():
+    """Each (hid, mid) inside its absence window is published as "{hid}_{mid}"."""
+    fake = types.SimpleNamespace(_hub_absent_poll_counts={(1, 10): 1, (2, 20): 2})
+    assert _coord_module.RainPointCoordinator.provisionally_absent_hub_keys(fake) == frozenset({"1_10", "2_20"})

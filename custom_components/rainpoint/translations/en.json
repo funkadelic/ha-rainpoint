@@ -117,5 +117,16 @@
         }
       }
     }
+  },
+  "exceptions": {
+    "remove_device_still_listed": {
+      "message": "This device is still on your RainPoint account, so it can't be removed. Remove it in the RainPoint app first."
+    },
+    "remove_device_recently_gone": {
+      "message": "RainPoint stopped listing this device recently. It can be removed once it has been missing for about an hour."
+    },
+    "remove_device_unconfirmed": {
+      "message": "The integration couldn't confirm this device is gone. Try again after the next update."
+    }
   }
 }

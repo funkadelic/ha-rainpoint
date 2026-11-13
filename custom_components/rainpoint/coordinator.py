@@ -2412,6 +2412,20 @@ class RainPointCoordinator(DataUpdateCoordinator):
         """
         return self._last_enumerated_sensor_keys
 
+    def provisionally_absent_hub_keys(self) -> frozenset[str]:
+        """Return "{hid}_{mid}" for every hub still inside its absence window."""
+        return frozenset(f"{hid}_{mid}" for hid, mid in self._hub_absent_poll_counts)
+
+    def keys_short_of_orphan_window(self) -> frozenset[str]:
+        """Return keys seen this session that have not aged out as orphans.
+
+        A key never seen this session is absent here, so a device already gone
+        before startup is not held to a window it never started.
+        """
+        return frozenset(
+            key for key in self._last_poll_sensor_keys if self._orphaned_key_poll_counts.get(key, 0) < ORPHANED_KEY_DEBOUNCE_POLLS
+        )
+
     def _sync_silent_device_issues(
         self,
         decoded_sensors: dict[str, dict],
