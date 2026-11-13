@@ -1223,7 +1223,7 @@ class TestAsyncRemoveConfigEntryDevice:
     """The device page's Delete is allowed only for a device the last poll did not list."""
 
     @staticmethod
-    async def _call(identifier, enumerated, hubs, provisional=frozenset(), *, loaded=True):
+    async def _call(identifier, enumerated, hubs, provisional=frozenset(), pending=frozenset(), *, loaded=True):
         from custom_components.rainpoint import async_remove_config_entry_device
 
         hass = _make_hass()
@@ -1231,6 +1231,7 @@ class TestAsyncRemoveConfigEntryDevice:
         coordinator = SimpleNamespace(
             enumerated_sensor_keys=lambda: enumerated,
             provisionally_absent_hub_keys=lambda: provisional,
+            keys_short_of_orphan_window=lambda: pending,
             data={"hubs": hubs},
         )
         if loaded:
@@ -1266,6 +1267,14 @@ class TestAsyncRemoveConfigEntryDevice:
     async def test_verdict(self, identifier, enumerated, hubs, provisional, expected):
         """Each identifier shape gets the verdict its enumeration supports."""
         assert await self._call(identifier, enumerated, hubs, provisional) is expected
+
+    @pytest.mark.parametrize(
+        ("identifier", "expected"), [((DOMAIN, "1_10_3"), False), ((DOMAIN, "hub_1_10"), False), ((DOMAIN, "1_10_4"), True)]
+    )
+    @pytest.mark.asyncio
+    async def test_a_key_short_of_the_orphan_window_holds(self, identifier, expected):
+        """A departed key still inside the Repairs card's window holds itself and its hub."""
+        assert await self._call(identifier, frozenset(), [], pending=frozenset({"1_10_3"})) is expected
 
     @pytest.mark.asyncio
     async def test_unreadable_coordinator_refuses(self):

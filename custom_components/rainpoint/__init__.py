@@ -2987,7 +2987,8 @@ async def async_remove_config_entry_device(hass: HomeAssistant, entry: ConfigEnt
 
     A live device would be recreated on the next reload, so anything still
     enumerated, under a hub inside its absence window (an outage, not a
-    departure), or behind a lookup that cannot answer, refuses.
+    departure), short of the Repairs card's orphan window, or behind a lookup
+    that cannot answer, refuses.
     """
     key = _domain_sensor_key(device_entry) or ""
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("coordinator")
@@ -2995,6 +2996,7 @@ async def async_remove_config_entry_device(hass: HomeAssistant, entry: ConfigEnt
     try:
         hubs = coordinator.data["hubs"]
         provisional = coordinator.provisionally_absent_hub_keys()
+        pending = coordinator.keys_short_of_orphan_window()
     except Exception:
         return False
     if not key or enumerated is None or not isinstance(hubs, list):
@@ -3003,9 +3005,9 @@ async def async_remove_config_entry_device(hass: HomeAssistant, entry: ConfigEnt
     if hub is None:
         if key.startswith(HUB_IDENTIFIER_PREFIX):
             return False
-        return key not in enumerated and key.rsplit("_", 1)[0] not in provisional
+        return key not in enumerated | pending and key.rsplit("_", 1)[0] not in provisional
     hid, mid = hub
-    listed = enumerated | provisional | {f"{h.get('hid')}_{h.get('mid')}" for h in hubs if isinstance(h, dict)}
+    listed = enumerated | provisional | pending | {f"{h.get('hid')}_{h.get('mid')}" for h in hubs if isinstance(h, dict)}
     # A legacy hub_{hid} row (mid None) matches any key under that hid.
     return not any(k.split("_")[0] == hid and (mid is None or k.split("_")[1:2] == [mid]) for k in listed)
 
