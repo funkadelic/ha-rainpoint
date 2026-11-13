@@ -1219,6 +1219,61 @@ class TestAsyncRemoveEntry:
         withdraw.assert_called_once_with(hass, entry.entry_id)
 
 
+class TestAsyncRemoveConfigEntryDevice:
+    """The device page's Delete is allowed only for a device the last poll did not list."""
+
+    @staticmethod
+    def _call(identifier, enumerated, hubs, *, loaded=True):
+        from custom_components.rainpoint import async_remove_config_entry_device
+
+        hass = _make_hass()
+        entry = _make_entry()
+        coordinator = SimpleNamespace(enumerated_sensor_keys=lambda: enumerated, data={"hubs": hubs})
+        if loaded:
+            hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coordinator}}}
+        device = SimpleNamespace(identifiers={identifier} if identifier else set())
+        return asyncio.run(async_remove_config_entry_device(hass, entry, device))
+
+    @pytest.mark.parametrize(
+        ("identifier", "enumerated", "hubs", "expected"),
+        [
+            # Sub-devices: allowed only once the enumeration omits the key.
+            ((DOMAIN, "1_10_3"), frozenset({"1_10_1"}), [], True),
+            ((DOMAIN, "1_10_1"), frozenset({"1_10_1"}), [], False),
+            ((DOMAIN, "1_10_3"), None, [], False),
+            # Hubs: refused while the hub record or any of its sub-devices is still listed.
+            ((DOMAIN, "hub_1_20"), frozenset({"1_10_1"}), [{"hid": 1, "mid": 10}], True),
+            ((DOMAIN, "hub_1_10"), frozenset(), [{"hid": 1, "mid": 10}], False),
+            ((DOMAIN, "hub_1_10"), frozenset({"1_10_1"}), [], False),
+            ((DOMAIN, "hub_1_10"), frozenset(), "not a list", True),
+            # A row this integration did not identify is never ours to drop.
+            (("other", "1_10_3"), frozenset(), [], False),
+            (None, frozenset(), [], False),
+        ],
+    )
+    def test_verdict(self, identifier, enumerated, hubs, expected):
+        """Each identifier shape gets the verdict its enumeration supports."""
+        assert self._call(identifier, enumerated, hubs) is expected
+
+    def test_unreadable_hubs_refuse(self):
+        """A hub lookup that raises refuses rather than allowing the delete."""
+        from custom_components.rainpoint import async_remove_config_entry_device
+
+        hass = _make_hass()
+        entry = _make_entry()
+        coordinator = MagicMock()
+        coordinator.enumerated_sensor_keys.return_value = frozenset()
+        type(coordinator).data = property(lambda _self: (_ for _ in ()).throw(RuntimeError("boom")))
+        hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coordinator}}}
+        device = SimpleNamespace(identifiers={(DOMAIN, "hub_1_10")})
+
+        assert asyncio.run(async_remove_config_entry_device(hass, entry, device)) is False
+
+    def test_unloaded_entry_refuses(self):
+        """No coordinator means no enumeration, so nothing is deletable."""
+        assert self._call((DOMAIN, "1_10_3"), frozenset(), [], loaded=False) is False
+
+
 class TestPlatformsListSymmetry:
     """The button platform is registered, and setup/unload stay symmetric by construction."""
 

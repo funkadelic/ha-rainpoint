@@ -2982,6 +2982,26 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def async_remove_config_entry_device(hass: HomeAssistant, entry: ConfigEntry, device_entry: dr.DeviceEntry) -> bool:
+    """Allow the device page's Delete only for a device RainPoint no longer lists.
+
+    A live device would be recreated on the next reload, so anything still
+    enumerated, or any lookup that cannot answer, refuses.
+    """
+    key = _domain_sensor_key(device_entry)
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("coordinator")
+    enumerated = _enumerated_keys_or_none(coordinator)
+    if key is None or enumerated is None:
+        return False
+    if not key.startswith(HUB_IDENTIFIER_PREFIX):
+        return key not in enumerated
+    hub_key = key.removeprefix(HUB_IDENTIFIER_PREFIX)
+    hubs = _read_current_hubs(coordinator)
+    if hubs is None or any(f"{hub.get('hid')}_{hub.get('mid')}" == hub_key for hub in hubs):
+        return False
+    return not any(sub_key.startswith(f"{hub_key}_") for sub_key in enumerated)
+
+
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Withdraw this entry's leftover-entity cards as the entry is removed.
 
