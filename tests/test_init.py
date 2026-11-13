@@ -1223,7 +1223,7 @@ class TestAsyncRemoveConfigEntryDevice:
     """The device page's Delete is allowed only for a device the last poll did not list."""
 
     @staticmethod
-    def _call(identifier, enumerated, hubs, *, loaded=True):
+    async def _call(identifier, enumerated, hubs, *, loaded=True):
         from custom_components.rainpoint import async_remove_config_entry_device
 
         hass = _make_hass()
@@ -1232,7 +1232,7 @@ class TestAsyncRemoveConfigEntryDevice:
         if loaded:
             hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coordinator}}}
         device = SimpleNamespace(identifiers={identifier} if identifier else set())
-        return asyncio.run(async_remove_config_entry_device(hass, entry, device))
+        return await async_remove_config_entry_device(hass, entry, device)
 
     @pytest.mark.parametrize(
         ("identifier", "enumerated", "hubs", "expected"),
@@ -1251,11 +1251,13 @@ class TestAsyncRemoveConfigEntryDevice:
             (None, frozenset(), [], False),
         ],
     )
-    def test_verdict(self, identifier, enumerated, hubs, expected):
+    @pytest.mark.asyncio
+    async def test_verdict(self, identifier, enumerated, hubs, expected):
         """Each identifier shape gets the verdict its enumeration supports."""
-        assert self._call(identifier, enumerated, hubs) is expected
+        assert await self._call(identifier, enumerated, hubs) is expected
 
-    def test_unreadable_hubs_refuse(self):
+    @pytest.mark.asyncio
+    async def test_unreadable_hubs_refuse(self):
         """A hub lookup that raises refuses rather than allowing the delete."""
         from custom_components.rainpoint import async_remove_config_entry_device
 
@@ -1267,11 +1269,12 @@ class TestAsyncRemoveConfigEntryDevice:
         hass.data = {DOMAIN: {entry.entry_id: {"coordinator": coordinator}}}
         device = SimpleNamespace(identifiers={(DOMAIN, "hub_1_10")})
 
-        assert asyncio.run(async_remove_config_entry_device(hass, entry, device)) is False
+        assert await async_remove_config_entry_device(hass, entry, device) is False
 
-    def test_unloaded_entry_refuses(self):
+    @pytest.mark.asyncio
+    async def test_unloaded_entry_refuses(self):
         """No coordinator means no enumeration, so nothing is deletable."""
-        assert self._call((DOMAIN, "1_10_3"), frozenset(), [], loaded=False) is False
+        assert await self._call((DOMAIN, "1_10_3"), frozenset(), [], loaded=False) is False
 
 
 class TestPlatformsListSymmetry:
