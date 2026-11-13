@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.27.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.26.1...v1.27.0) (2026-11-13)
+
+
+### Fixed
+
+* **deps:** bump aiorainpoint to 0.3.0 ([#339](https://github.com/funkadelic/ha-rainpoint/issues/339)) ([29b531c](https://github.com/funkadelic/ha-rainpoint/commit/29b531ced61fa1e303ababa6ee984164ae4e106b))
+
 ## [1.26.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.26.0...v1.26.1) (2026-11-11)
 
 ### What's new
