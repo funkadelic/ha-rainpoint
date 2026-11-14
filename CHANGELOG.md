@@ -4,6 +4,24 @@ All notable changes to the RainPoint Cloud integration will be documented in thi
 
 ## [1.27.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.27.0...v1.27.1) (2026-11-14)
 
+### What's new
+
+**Remove devices that have left your account**
+
+A hub or device that is gone from your RainPoint account can now be removed from Home Assistant: open its device page, open the three-dot menu and choose **Remove device**. If the device is still on your account, Home Assistant tells you why it can't be removed. A device that left while Home Assistant was running can be removed after about an hour, the same wait the Repairs card uses.
+
+**Device pages no longer show a wrong serial number**
+
+RainPoint doesn't report serial numbers, so the Serial number field on RainPoint device pages is now empty. Hubs used to show their MAC address there and other devices an internal ID, and both are cleared on the first update after you upgrade.
+
+### What's new in aiorainpoint 0.3.2
+
+**Fixes for devices that report in the older text format**
+
+Valves that use this format no longer show idle zones as open, and a running zone shows its real run time. Those valves and soil sensors now show their battery state, a rain gauge using the format reads its rainfall, and a flow meter using it no longer fails.
+
+As always, if your device is missing support, please [submit a ticket](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) so that it can be added.
+
 
 ### Fixed
 
