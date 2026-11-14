@@ -311,10 +311,10 @@ class TestBuildSubDeviceInfo:
         info = build_sub_device_info(self._info())
         assert info["sw_version"] == "1.4"
 
-    def test_serial_number_is_the_mid_addr_pair(self):
-        """Sub-devices have no manufacturer serial, so the stable pair stands in for one."""
+    def test_no_serial_number_is_reported(self):
+        """The cloud carries no manufacturer serial, so the device page shows none."""
         info = build_sub_device_info(self._info(mid=200, addr=7))
-        assert info["serial_number"] == "200_7"
+        assert "serial_number" not in info
 
     async def test_links_to_the_parent_hub_when_hub_paired(self, hass):
         """A sub-device carried by a real hub links to the hub's registry row."""

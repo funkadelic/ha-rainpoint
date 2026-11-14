@@ -115,10 +115,8 @@ def build_sub_device_info(sensor_info: dict, platform: EntityPlatform | None = N
     number.py, generic_control.py); sensor.py and diagnostic_sensors.py were
     later collapsed onto entity.py's shared RainPointSubDeviceEntity base.
 
-    serial_number is the mid/addr pair rather than a manufacturer serial, which the
-    status payloads do not carry. It is the same identity the entity unique IDs
-    are built from, so it is stable across restarts and re-pairings that keep
-    the device in place.
+    No serial_number: the status payloads carry no manufacturer serial, and the
+    {mid}_{addr} key that used to fill it read as one on the device page.
 
     A cloud-unnamed sub-device's fallback name is computed here, once, as
     "{model} {addr}", falling back further to "Device {addr}" when the record
@@ -200,7 +198,6 @@ def build_sub_device_info(sensor_info: dict, platform: EntityPlatform | None = N
         model=model or "Unknown",
         model_id=model_id,
         sw_version=sensor_info.get("firmware_version"),
-        serial_number=f"{mid}_{addr}",
         **optional,
     )
 

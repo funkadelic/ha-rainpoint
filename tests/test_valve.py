@@ -121,7 +121,7 @@ class TestValveProperties:
         valve.platform, hub_id = platform_with_hub(hass)
         info = valve.device_info
         assert info["sw_version"] == "1.0"
-        assert info["serial_number"] == "200_1"
+        assert "serial_number" not in info
         assert registered_parent_id(valve.platform, info) == hub_id
 
     """Tests for RainPointValveEntity properties."""
@@ -2288,7 +2288,7 @@ class TestHicStationValveAvailability:
         valve = _make_station_valve()
         valve.platform, hub_id = platform_with_hub(hass)
         info = valve.device_info
-        assert info["serial_number"] == "200_3"
+        assert "serial_number" not in info
         assert registered_parent_id(valve.platform, info) == hub_id
 
 

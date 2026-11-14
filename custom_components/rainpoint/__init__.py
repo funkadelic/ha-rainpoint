@@ -720,6 +720,23 @@ def _reported_device_fields(key: str, sensors: Mapping, hub_records: Mapping) ->
     return fields
 
 
+def _carries_stale_serial(key: str, row) -> bool:
+    """True when the row's serial is one an older release wrote and none is written now.
+
+    The cloud has no manufacturer serial. Hubs used to get their MAC there and
+    sub-devices their {mid}_{addr} key; only those exact values are cleared,
+    so a serial another integration put on a shared row is left alone.
+    """
+    serial = getattr(row, "serial_number", None)
+    if not serial:
+        return False
+    if key.startswith(HUB_IDENTIFIER_PREFIX):
+        return any(
+            kind == dr.CONNECTION_NETWORK_MAC and value == str(serial).lower() for kind, value in getattr(row, "connections", ())
+        )
+    return key.split("_", 1)[-1] == serial
+
+
 def _refresh_device_registry_fields(hass: HomeAssistant, entry: ConfigEntry, coordinator) -> None:
     """Write the firmware version, name and model the cloud now reports onto the device row.
 
@@ -734,7 +751,8 @@ def _refresh_device_registry_fields(hass: HomeAssistant, entry: ConfigEntry, coo
     same install shows two versions at once and the stale one is the headline.
 
     sw_version and name are swept, plus a sub-device's model and model_id, which
-    follow the cloud's retail name. hw_version is not swept.
+    follow the cloud's retail name. hw_version is not swept. A serial number an
+    older release wrote is cleared.
 
     Writing name does not overwrite an owner who renamed the device in Home
     Assistant, and that is Home Assistant's arbitration rather than a check
@@ -799,6 +817,8 @@ def _refresh_device_registry_fields(hass: HomeAssistant, entry: ConfigEntry, coo
                 for field, value in _reported_device_fields(key, sensors, hub_records).items()
                 if (value or field == "model_id") and value != getattr(row, field, None)
             }
+            if _carries_stale_serial(key, row):
+                changed["serial_number"] = None
             if not changed:
                 continue
 

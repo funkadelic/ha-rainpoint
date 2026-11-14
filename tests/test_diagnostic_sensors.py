@@ -92,7 +92,7 @@ class TestRainPointRSSISensor:
         entity = self._make()
         entity.platform, hub_id = platform_with_hub(hass)
         info = entity.device_info
-        assert info["serial_number"] == "200_1"
+        assert "serial_number" not in info
         assert registered_parent_id(entity.platform, info) == hub_id
 
 
@@ -156,7 +156,7 @@ class TestRainPointFirmwareVersionSensor:
 
         info = sensor.device_info
 
-        assert info["serial_number"] == "200_1"
+        assert "serial_number" not in info
 
 
 class TestRainPointLastUpdatedSensor:
@@ -207,7 +207,7 @@ class TestRainPointLastUpdatedSensor:
 
         info = sensor.device_info
 
-        assert info["serial_number"] == "200_1"
+        assert "serial_number" not in info
 
     def test_native_value_handles_z_suffix(self):
         """native_value should handle 'Z' UTC suffix in timestamp."""
@@ -284,7 +284,7 @@ class TestRainPointDeviceIDSensor:
 
         info = sensor.device_info
 
-        assert info["serial_number"] == "200_1"
+        assert "serial_number" not in info
 
     def test_native_value_from_decoded_data_device_id(self):
         """Long device_id inside decoded `data` dict is returned (covers decoded-data loop)."""
