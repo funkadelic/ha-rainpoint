@@ -2,6 +2,15 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.27.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.27.0...v1.27.1) (2026-11-14)
+
+
+### Fixed
+
+* allow deleting a device RainPoint no longer lists ([#342](https://github.com/funkadelic/ha-rainpoint/issues/342)) ([4e54e92](https://github.com/funkadelic/ha-rainpoint/commit/4e54e92833b985f0bb621d6d32f57a2459c16257))
+* **deps:** bump aiorainpoint to 0.3.2 ([#344](https://github.com/funkadelic/ha-rainpoint/issues/344)) ([8f14449](https://github.com/funkadelic/ha-rainpoint/commit/8f14449290c70dd82c29a3dfeb713111a6f6a5b6))
+* stop reporting a MAC or internal key as a device's serial number ([#345](https://github.com/funkadelic/ha-rainpoint/issues/345)) ([0b64bb5](https://github.com/funkadelic/ha-rainpoint/commit/0b64bb5df5741b2edc0257d4021d7b163daaf1a4))
+
 ## [1.27.0](https://github.com/funkadelic/ha-rainpoint/compare/v1.26.1...v1.27.0) (2026-11-13)
 
 ### What's new
