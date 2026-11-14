@@ -150,6 +150,7 @@ class TestNumberEntity:
         number = _make_number()
         number.platform, hub_id = platform_with_hub(hass)
         info = number.device_info
+        assert any(value.endswith("_200_1") for _, value in info["identifiers"])
         assert "serial_number" not in info
         assert registered_parent_id(number.platform, info) == hub_id
 

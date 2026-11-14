@@ -4229,8 +4229,14 @@ class TestDeviceRegistryFieldRefresh:
         rows[0].serial_number = "A8:46:74:BB:91:F0"
         rows[0].connections = {("mac", "a8:46:74:bb:91:f0")}
         rows[1].serial_number = f"{self.MID}_{self.ADDR}"
+        # A hub row shared with another integration through the MAC: its serial is that integration's.
         foreign = SimpleNamespace(
-            id="foreign-row", identifiers={(DOMAIN, "100_555_9")}, serial_number="SN-123", name=None, sw_version=None
+            id="foreign-row",
+            identifiers={(DOMAIN, "hub_100_777"), ("other_integration", "router-1")},
+            connections={("mac", "a8:46:74:bb:91:f0")},
+            serial_number="SN-123",
+            name=None,
+            sw_version=None,
         )
         rows.append(foreign)
         writes, async_get, async_entries = self._make_device_registry(rows)

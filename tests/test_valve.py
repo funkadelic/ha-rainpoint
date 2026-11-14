@@ -121,6 +121,7 @@ class TestValveProperties:
         valve.platform, hub_id = platform_with_hub(hass)
         info = valve.device_info
         assert info["sw_version"] == "1.0"
+        assert any(value.endswith("_200_1") for _, value in info["identifiers"])
         assert "serial_number" not in info
         assert registered_parent_id(valve.platform, info) == hub_id
 
@@ -2288,6 +2289,7 @@ class TestHicStationValveAvailability:
         valve = _make_station_valve()
         valve.platform, hub_id = platform_with_hub(hass)
         info = valve.device_info
+        assert any(value.endswith("_200_3") for _, value in info["identifiers"])
         assert "serial_number" not in info
         assert registered_parent_id(valve.platform, info) == hub_id
 

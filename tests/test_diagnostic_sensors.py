@@ -156,6 +156,7 @@ class TestRainPointFirmwareVersionSensor:
 
         info = sensor.device_info
 
+        assert any(value.endswith("_200_1") for _, value in info["identifiers"])
         assert "serial_number" not in info
 
 
@@ -207,6 +208,7 @@ class TestRainPointLastUpdatedSensor:
 
         info = sensor.device_info
 
+        assert any(value.endswith("_200_1") for _, value in info["identifiers"])
         assert "serial_number" not in info
 
     def test_native_value_handles_z_suffix(self):
@@ -284,6 +286,7 @@ class TestRainPointDeviceIDSensor:
 
         info = sensor.device_info
 
+        assert any(value.endswith("_200_1") for _, value in info["identifiers"])
         assert "serial_number" not in info
 
     def test_native_value_from_decoded_data_device_id(self):
