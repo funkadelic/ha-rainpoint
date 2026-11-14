@@ -904,7 +904,7 @@ class TestRainPointGenericValveConstruction:
         assert info["identifiers"] == {(DOMAIN, "100_200_1")}
         assert info["manufacturer"] == "RainPoint"
         assert info["model"] == ANCHOR_MODEL
-        assert info["serial_number"] == "200_1"
+        assert "serial_number" not in info
         assert registered_parent_id(entity.platform, info) == hub_id
 
     def test_icon_is_the_control_marker_icon(self):

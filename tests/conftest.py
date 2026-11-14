@@ -649,6 +649,7 @@ class _DeviceInfo(dict):
 
 
 sys.modules["homeassistant.helpers.device_registry"].DeviceInfo = _DeviceInfo
+sys.modules["homeassistant.helpers.device_registry"].CONNECTION_NETWORK_MAC = "mac"
 
 
 # Both classes are defined at the top of this file, next to the

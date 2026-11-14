@@ -4221,6 +4221,41 @@ class TestDeviceRegistryFieldRefresh:
             assert len(writes) == 2
 
     @pytest.mark.asyncio
+    async def test_serials_an_older_release_wrote_are_cleared_once(self):
+        """The hub's MAC and the sub-device's {mid}_{addr} leave the serial field
+        on the first sweep and are not written again; a foreign serial stays."""
+        coordinator, hass, entry = self._build_coordinator(["1.1.1041", "127"])
+        rows = self._rows()
+        rows[0].serial_number = "A8:46:74:BB:91:F0"
+        rows[0].connections = {("mac", "a8:46:74:bb:91:f0")}
+        rows[1].serial_number = f"{self.MID}_{self.ADDR}"
+        # A hub row shared with another integration through the MAC: its serial is that integration's.
+        foreign = SimpleNamespace(
+            id="foreign-row",
+            identifiers={(DOMAIN, "hub_100_777"), ("other_integration", "router-1")},
+            connections={("mac", "a8:46:74:bb:91:f0")},
+            serial_number="SN-123",
+            name=None,
+            sw_version=None,
+        )
+        rows.append(foreign)
+        writes, async_get, async_entries = self._make_device_registry(rows)
+
+        await coordinator.async_config_entry_first_refresh()
+
+        with (
+            patch("custom_components.rainpoint.dr.async_get", side_effect=async_get),
+            patch("custom_components.rainpoint.dr.async_entries_for_config_entry", side_effect=async_entries),
+        ):
+            _refresh_device_registry_fields_on_updates(hass, entry, coordinator)
+
+            assert writes == [("hub-row", {"serial_number": None}), ("sub-row", {"serial_number": None})]
+            assert foreign.serial_number == "SN-123"
+
+            await coordinator.async_refresh()
+            assert len(writes) == 2
+
+    @pytest.mark.asyncio
     async def test_a_silent_sub_device_still_has_its_firmware_refreshed(self):
         """The silent device drives its own timeline rather than borrowing the
         reporting one's.

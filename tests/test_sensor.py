@@ -845,12 +845,12 @@ class TestSensorBaseProperties:
         identifiers = sensor.device_info["identifiers"]
         assert (DOMAIN, "100_200_1") in identifiers
 
-    def test_device_info_carries_firmware_and_serial(self):
+    def test_device_info_carries_firmware_and_identity(self):
         """Firmware and a stable device id reach the sensor's device page."""
         sensor = self._make_base()
         info = sensor.device_info
         assert info["sw_version"] == "1.0.0"
-        assert info["serial_number"] == "200_1"
+        assert "serial_number" not in info
 
     async def test_device_info_links_to_the_hub(self, hass):
         """The device row links to the hub row by registry id."""
