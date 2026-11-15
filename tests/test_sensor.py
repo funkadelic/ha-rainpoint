@@ -3839,7 +3839,7 @@ class TestEveryDecodableModelIsServed:
 
         assert unserved - self.KNOWN_UNSERVED == set(), (
             f"{sorted(unserved - self.KNOWN_UNSERVED)} decode but have no reading entities. "
-            "Add a factory to _MODEL_FACTORIES, or an alias, or list the model in "
+            "Add a factory to _MODEL_FACTORIES, or list the model in "
             "KNOWN_UNSERVED with the reason."
         )
 
