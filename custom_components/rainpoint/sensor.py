@@ -71,14 +71,6 @@ _LOGGER = logging.getLogger(__name__)
 _ICON_WATER = "mdi:water"
 _ICON_DURATION = "mdi:timer-outline"
 
-# HCS device variants that share an entity layout with one of the canonical
-# RainPoint sensor models. Resolving through this map lets the dispatch chain
-# below stay flat: each variant is rebound to its base model before the if/elif
-# runs, so we don't repeat identical entity-creation blocks per variant.
-_SENSOR_MODEL_ALIASES: dict[str, str] = {
-    models.HCS015ARF: models.HCS0528ARF,
-}
-
 
 def _slugify(text: str) -> str:
     text = text.lower()
@@ -391,9 +383,7 @@ def _make_unknown_entities(coordinator, key, info, base_slug):
     return []
 
 
-# Maps canonical sensor model to a factory that yields its entity list.
-# Aliased models (see _SENSOR_MODEL_ALIASES) are resolved to their canonical
-# model before lookup, so they share factories with their base model.
+# Maps a sensor model to a factory that yields its entity list.
 _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     models.HWS019WRF_V2: _make_display_hub_entities,
     models.HCS026FRF: _make_moisture_simple_entities,
@@ -403,6 +393,7 @@ _MODEL_FACTORIES: dict[str, Callable[..., list]] = {
     models.HCS008FRF: _make_flowmeter_entities,
     models.HCS0530THO: _make_co2_entities,
     models.HCS0528ARF: _make_pool_entities,
+    models.HCS015ARF: _make_pool_entities,  # shares the HCS0528ARF layout
     models.HCS015ARF_PLUS: _make_pool_plus_entities,
     models.HCS005FRF: _make_hcs_moisture_only_entities,
     models.HCS024FRF_V1: _make_hcs_multisensor_entities,
@@ -462,8 +453,7 @@ def _create_sensor_entities(coordinator, key, info, generic_enabled: bool = Fals
     which the Unsupported diagnostic already covers for models without one.
     Always appends a per-device raw-payload diagnostic entity at the end.
     """
-    raw_model = info.get("model")
-    model = _SENSOR_MODEL_ALIASES.get(raw_model, raw_model)
+    model = info.get("model")
     hid = info.get("hid", "")
     mid = info.get("mid", "")
     addr = info.get("addr", "")

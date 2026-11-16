@@ -30,7 +30,6 @@ from custom_components.rainpoint.const import (
 from custom_components.rainpoint.coordinator import SILENT_DATA_TYPE, RainPointCoordinator
 from custom_components.rainpoint.entity import late_adders, register_late_adder
 from custom_components.rainpoint.sensor import (
-    _SENSOR_MODEL_ALIASES,
     DisplayHubReadingSensor,
     RainPointCatalogReadingsSensor,
     RainPointCO2HighSensor,
@@ -3827,8 +3826,8 @@ class TestEveryDecodableModelIsServed:
 
     @staticmethod
     def _has_factory(model: str) -> bool:
-        """Resolve aliases the way the platform does before looking the model up."""
-        return _factory_for(_SENSOR_MODEL_ALIASES.get(model, model)) is not None
+        """Look the model up the way the platform does."""
+        return _factory_for(model) is not None
 
     def test_a_record_with_no_model_has_no_factory(self):
         """A sub-device record missing its model resolves to no factory."""
@@ -3840,7 +3839,7 @@ class TestEveryDecodableModelIsServed:
 
         assert unserved - self.KNOWN_UNSERVED == set(), (
             f"{sorted(unserved - self.KNOWN_UNSERVED)} decode but have no reading entities. "
-            "Add a factory to _MODEL_FACTORIES, or an alias, or list the model in "
+            "Add a factory to _MODEL_FACTORIES, or list the model in "
             "KNOWN_UNSERVED with the reason."
         )
 
