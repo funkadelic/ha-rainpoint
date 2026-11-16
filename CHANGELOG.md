@@ -2,6 +2,18 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.27.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.27.1...v1.27.2) (2026-11-16)
+
+
+### Fixed
+
+* **deps:** bump aiorainpoint to 0.3.3 ([#349](https://github.com/funkadelic/ha-rainpoint/issues/349)) ([2cf561f](https://github.com/funkadelic/ha-rainpoint/commit/2cf561f2050f240f537fff8a1ef08184bfeb440c))
+
+
+### Changed
+
+* drop the sensor model alias map ([#346](https://github.com/funkadelic/ha-rainpoint/issues/346)) ([c6da3e4](https://github.com/funkadelic/ha-rainpoint/commit/c6da3e4848059e10f70c7f20c31abd6dc40fd663))
+
 ## [1.27.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.27.0...v1.27.1) (2026-11-14)
 
 ### What's new
