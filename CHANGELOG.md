@@ -2,6 +2,36 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.27.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.27.1...v1.27.2) (2026-11-16)
+
+### What's new
+
+**HCS015ARF+ readings now show up**
+
+This release updates aiorainpoint to 0.3.3, which fixes the HCS015ARF+ pool sensor. Your devices and entities stay as they are, and there is nothing to set up.
+
+### What's new in aiorainpoint 0.3.3
+
+**HCS015ARF+ pool, air and humidity readings**
+
+The HCS015ARF+ now reports pool temperature, air temperature and humidity, each with its high and low, instead of showing unknown. The readings appear on the next update after you upgrade.
+
+### Thanks
+
+Thanks to **@WilkoHeuten** for the HCS015ARF+ captures and matching app readings, which made this fix possible.
+
+As always, if your device is missing support, please [submit a ticket](https://github.com/funkadelic/ha-rainpoint/issues/new?template=new_device.yml) so that it can be added.
+
+
+### Fixed
+
+* **deps:** bump aiorainpoint to 0.3.3 ([#349](https://github.com/funkadelic/ha-rainpoint/issues/349)) ([2cf561f](https://github.com/funkadelic/ha-rainpoint/commit/2cf561f2050f240f537fff8a1ef08184bfeb440c))
+
+
+### Changed
+
+* drop the sensor model alias map ([#346](https://github.com/funkadelic/ha-rainpoint/issues/346)) ([c6da3e4](https://github.com/funkadelic/ha-rainpoint/commit/c6da3e4848059e10f70c7f20c31abd6dc40fd663))
+
 ## [1.27.1](https://github.com/funkadelic/ha-rainpoint/compare/v1.27.0...v1.27.1) (2026-11-14)
 
 ### What's new
