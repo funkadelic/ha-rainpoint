@@ -2,6 +2,13 @@
 
 All notable changes to the RainPoint Cloud integration will be documented in this file.
 
+## [1.27.3](https://github.com/funkadelic/ha-rainpoint/compare/v1.27.2...v1.27.3) (2026-11-16)
+
+
+### Other Changes
+
+* mark the HTP115FRF as validated on hardware ([#350](https://github.com/funkadelic/ha-rainpoint/issues/350)) ([75e734c](https://github.com/funkadelic/ha-rainpoint/commit/75e734c8cdb35af1ec97c397a0fabc034db68403))
+
 ## [1.27.2](https://github.com/funkadelic/ha-rainpoint/compare/v1.27.1...v1.27.2) (2026-11-16)
 
 ### What's new
